@@ -24,7 +24,6 @@
 - **Automation and Scripts**: Create, modify, delete, enable/disable, and trigger Home Assistant automations
 - **Helper Entity Management**: Create, modify, and delete input_boolean, input_number, input_select, input_text, input_datetime, and input_button entities
 
-
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -33,10 +32,10 @@
 
 ### Installation
 
-1. **Install uv** 
+1. **Install uv**
 
-uv is a Python package manager (Python installation not required)
-Follow instructions at https://docs.astral.sh/uv/getting-started/installation/
+   uv is a Python package manager (Python installation not required)
+   Follow instructions at https://docs.astral.sh/uv/getting-started/installation/
 
 2. **Clone the repository**
    ```bash
@@ -48,7 +47,7 @@ Follow instructions at https://docs.astral.sh/uv/getting-started/installation/
 
 ### mcp.json format (Claude Desktop, VSCode, etc.)
 
-Linux/WSL/MacOs:
+Linux/WSL/macOS:
 ```json
 {
   "mcpServers": {
@@ -58,7 +57,7 @@ Linux/WSL/MacOs:
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assitant_profile"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
       }
     }
 
@@ -76,7 +75,7 @@ Windows:
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assitant_profile"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
       }
     }
 
@@ -84,7 +83,7 @@ Windows:
 }
 ```
 
-### Claude code
+### Claude Code
 
 ```bash
 cd homeassistant-mcp
@@ -92,7 +91,6 @@ uv sync
 claude mcp add homeassistant-mcp -- uv --directory /path/to/homeassistant-mcp --env HOMEASSISTANT_URL=http://localhost:8123 --env HOMEASSISTANT_TOKEN=your_token run fastmcp run
 claude mcp add-json homeassistant-mcp '{"type":"stdio","command":"uv","args":["--directory","/path/to/homeassistant-mcp","run","fastmcp","run"],"env":{"HOMEASSISTANT_URL":"http://localhost:8123","HOMEASSISTANT_TOKEN":"your_token"}}'
 ```
-
 
 ### Remote mode (for compatibility with remote mcp)
 
@@ -102,20 +100,20 @@ claude mcp add-json homeassistant-mcp '{"type":"stdio","command":"uv","args":["-
    # Edit .env with your Home Assistant details:
    HOMEASSISTANT_URL=http://localhost:8123
    HOMEASSISTANT_TOKEN=your_token
-  ```
+   ```
+
 2. **Start the server**
 ```bash
 uv run fastmcp run --transport streamable-http --port 8086
 ```
 
-Server will be avaiable at http://127.0.0.1:8086/mcp
-
+Server will be available at http://127.0.0.1:8086/mcp
 
 ## Online clients (Claude.ai, ChatGPT.com, ...)
 
 > WARNING! This is not the most secure way of connecting those providers. Use this setup at your own risk. Anybody figuring out how to do it properly is welcome to contribute to this project. Check out https://gofastmcp.com/servers/auth/authentication for more information. 
 
-This setup consist of an https tunnel with cloudflared tunnel.
+This setup consists of an HTTPS tunnel with cloudflared tunnel.
 
 1. **Install cloudflared** See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
 
@@ -125,7 +123,7 @@ This setup consist of an https tunnel with cloudflared tunnel.
    # Edit .env with your Home Assistant details:
    HOMEASSISTANT_URL=http://localhost:8123
    HOMEASSISTANT_TOKEN=your_token
-  ```
+   ```
 
 3. **Run the MCP server**
 
@@ -135,7 +133,7 @@ uv run fastmcp run --transport streamable-http --port 8086 --path __my_secret_ke
 
 > Replace the path parameter with a secret value!
 
-3. **Start the tunnel**
+4. **Start the tunnel**
 
 ```bash
 cloudflared tunnel --url http://localhost:8086
@@ -143,14 +141,12 @@ cloudflared tunnel --url http://localhost:8086
 
 You will find the base url in your output. It will look like this: https://abc-def-ghi.trycloudflare.com
 
-Append the your secret path and use the url in the online provider (Claude.ai and such)
+Append your secret path and use the url in the online provider (Claude.ai and such)
 
 The url should look like : https://abc-def-ghi.trycloudflare.com/__my_secret_key_that_should_not_be_shared_with_anyone__
 
 For Claude.AI: https://support.anthropic.com/en/articles/11176164-pre-built-web-connectors-using-remote-mcp
 ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chatgpt (untested)
-
-
 
 ## 🛠️ Available Tools
 
@@ -217,7 +213,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [ ] Home Assistant addon
 - [ ] Home Assistant WebSocket event streaming
 - [ ] Integration with [Home Assistant MCP Server](https://www.home-assistant.io/integrations/mcp_server)
-- Open an issuer to add more!
+- Open an issue to add more!
 
 ## 📄 License
 
