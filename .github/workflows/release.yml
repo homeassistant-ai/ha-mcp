@@ -1,0 +1,112 @@
+name: Release & Publish
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Semantic versioning and release creation
+  semantic-release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to push commits and tags
+      id-token: write  # Required for trusted publishing
+    outputs:
+      released: ${{ steps.semantic.outputs.released }}
+      version: ${{ steps.semantic.outputs.version }}
+      major: ${{ steps.semantic.outputs.major }}
+      minor: ${{ steps.semantic.outputs.minor }}
+      patch: ${{ steps.semantic.outputs.patch }}
+
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Python Semantic Release
+      id: semantic
+      uses: python-semantic-release/python-semantic-release@v9.10.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        root_options: "-vv"
+
+  # Build and publish to PyPI
+  # DISABLED: Repository access issues with private repo in GitHub Actions
+  # build-and-publish:
+  #   name: Build & Publish to PyPI
+  #   runs-on: ubuntu-latest
+  #   needs: semantic-release
+  #   if: needs.semantic-release.outputs.released == 'true'
+  #   environment: release
+  #   permissions:
+  #     id-token: write  # For trusted publishing to PyPI
+
+  #   steps:
+  #   - uses: actions/checkout@v5
+  #     with:
+  #       ref: master  # Use master branch to get latest changes from semantic release
+  #       fetch-depth: 0
+  #       token: ${{ secrets.GITHUB_TOKEN }}
+
+  #   - name: Install uv
+  #     uses: astral-sh/setup-uv@v6
+  #     with:
+  #       version: "latest"
+
+  #   - name: Set up Python
+  #     run: uv python install ${{ env.PYTHON_VERSION }}
+
+  #   - name: Install dependencies
+  #     run: uv sync --all-extras --dev
+
+  #   - name: Build package
+  #     run: uv build
+
+  #   - name: Publish to PyPI
+  #     uses: pypa/gh-action-pypi-publish@release/v1
+  #     with:
+  #       attestations: true
+  #       print-hash: true
+
+  # Create GitHub Release with artifacts
+  # DISABLED: Repository access issues with private repo in GitHub Actions
+  # github-release:
+  #   name: Create GitHub Release
+  #   runs-on: ubuntu-latest
+  #   needs: [semantic-release, build-and-publish]
+  #   if: needs.semantic-release.outputs.released == 'true'
+
+  #   steps:
+  #   - uses: actions/checkout@v5
+  #     with:
+  #       ref: master  # Use master branch to get latest changes from semantic release
+  #       fetch-depth: 0
+  #       token: ${{ secrets.GITHUB_TOKEN }}
+
+  #   - name: Install uv
+  #     uses: astral-sh/setup-uv@v6
+
+  #   - name: Set up Python
+  #     run: uv python install ${{ env.PYTHON_VERSION }}
+
+  #   - name: Build package
+  #     run: uv build
+
+  #   - name: Create GitHub Release
+  #     uses: softprops/action-gh-release@v2
+  #     with:
+  #       tag_name: v${{ needs.semantic-release.outputs.version }}
+  #       name: Release v${{ needs.semantic-release.outputs.version }}
+  #       files: |
+  #         dist/*.whl
+  #         dist/*.tar.gz
+  #       generate_release_notes: true
+  #       make_latest: true
+  #     env:
+  #       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

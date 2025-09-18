@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "auth_provider.homeassistant",
+  "data": {
+    "users": [
+      {
+        "username": "mcp",
+        "password": "JDJiJDEyJDdnSk00ZDdLZlhiSUJ6TEpxb1JIbXVpdmp2NTJEN3JkRkhZL2tQazc1NXVBT0tZUk9LbXVL"
+      }
+    ]
+  }
+}

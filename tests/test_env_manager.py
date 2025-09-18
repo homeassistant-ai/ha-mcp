@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""
+Home Assistant MCP Test Environment Manager
+
+Interactive test environment for Home Assistant MCP Server development.
+Uses testcontainers to manage a Home Assistant instance for testing.
+"""
+
+import logging
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import requests
+from testcontainers.core.container import DockerContainer
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)8s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+class HomeAssistantTestEnvironment:
+    """Manages a containerized Home Assistant test environment."""
+
+    def __init__(self):
+        self.container: DockerContainer | None = None
+        self.ha_url: str | None = None
+        self.ha_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6iTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
+        self.test_user = "mcp"
+        self.test_password = "mcp"
+
+    def _setup_config_directory(self) -> Path:
+        """Set up Home Assistant configuration directory."""
+        import tempfile
+        import shutil
+
+        # Create temporary directory for HA config
+        config_dir = Path(tempfile.mkdtemp(prefix="ha_test_env_"))
+
+        # Find initial_test_state directory
+        test_root = Path(__file__).parent
+        initial_state_paths = [
+            test_root / "initial_test_state",
+            test_root / "setup" / "homeassistant" / "initial_test_state",
+            test_root.parent / "initial_test_state",
+        ]
+
+        initial_state_dir = None
+        for path in initial_state_paths:
+            if path.exists():
+                initial_state_dir = path
+                break
+
+        if not initial_state_dir:
+            raise FileNotFoundError(
+                "Could not find initial_test_state directory. Checked:\n"
+                + "\n".join(f"  - {p}" for p in initial_state_paths)
+            )
+
+        # Copy initial test state to config directory
+        logger.info(f"📁 Setting up config from: {initial_state_dir}")
+        for item in initial_state_dir.iterdir():
+            if item.is_file():
+                shutil.copy2(item, config_dir)
+            elif item.is_dir():
+                shutil.copytree(item, config_dir / item.name)
+
+        # Set proper permissions
+        os.chmod(config_dir, 0o755)
+        for item in config_dir.rglob("*"):
+            if item.is_file():
+                os.chmod(item, 0o644)
+            elif item.is_dir():
+                os.chmod(item, 0o755)
+
+        logger.info(f"📂 Config directory prepared: {config_dir}")
+        return config_dir
+
+    def start_container(self) -> None:
+        """Start the Home Assistant container."""
+        if self.container:
+            logger.warning("Container is already running")
+            return
+
+        logger.info("🐳 Starting Home Assistant test container...")
+
+        # Set up config directory
+        config_dir = self._setup_config_directory()
+
+        # Create and start container
+        self.container = (
+            DockerContainer("ghcr.io/home-assistant/home-assistant:stable")
+            .with_bind_ports(8123, None)  # Random host port
+            .with_volume_mapping(str(config_dir), "/config", "rw")
+            .with_env("TZ", "UTC")
+            .with_kwargs(privileged=True)
+        )
+
+        self.container.start()
+
+        # Get connection details
+        host_port = self.container.get_exposed_port(8123)
+        self.ha_url = f"http://localhost:{host_port}"
+
+        logger.info(
+            f"🚀 Container started: {self.container.get_container_host_ip()}:{host_port}"
+        )
+        logger.info(f"🌐 Home Assistant URL: {self.ha_url}")
+
+        # Wait for Home Assistant to be ready
+        self._wait_for_home_assistant()
+
+    def _wait_for_home_assistant(self, timeout: int = 120) -> None:
+        """Wait for Home Assistant to be ready."""
+        logger.info("⏳ Waiting for Home Assistant to become ready...")
+
+        start_time = time.time()
+        attempts = 0
+
+        while time.time() - start_time < timeout:
+            attempts += 1
+            try:
+                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                if response.status_code == 200:
+                    config = response.json()
+                    logger.info(
+                        f"✅ Home Assistant ready! Version: {config.get('version', 'unknown')}"
+                    )
+                    logger.info(
+                        f"🏠 Components loaded: {len(config.get('components', []))}"
+                    )
+                    return
+            except requests.RequestException:
+                pass
+
+            if attempts % 6 == 0:  # Every 30 seconds
+                logger.info(f"⏳ Still waiting... ({attempts * 5}s elapsed)")
+
+            time.sleep(5)
+
+        raise TimeoutError(f"Home Assistant not ready after {timeout}s")
+
+    def stop_container(self) -> None:
+        """Stop and clean up the container."""
+        if not self.container:
+            logger.warning("No container to stop")
+            return
+
+        logger.info("🛑 Stopping Home Assistant container...")
+        self.container.stop()
+        self.container = None
+        self.ha_url = None
+        logger.info("✅ Container stopped and cleaned up")
+
+    def run_tests(self) -> None:
+        """Run all E2E tests against the running container."""
+        if not self.ha_url:
+            logger.error("❌ No container running. Start container first.")
+            return
+
+        logger.info("🧪 Running E2E tests...")
+
+        # Set environment variables for tests
+        env = os.environ.copy()
+        env["HOMEASSISTANT_URL"] = self.ha_url
+        env["HOMEASSISTANT_TOKEN"] = self.ha_token
+
+        # Run pytest
+        cmd = [sys.executable, "-m", "pytest", "tests/src/e2e/", "-v", "--tb=short"]
+
+        try:
+            result = subprocess.run(cmd, env=env, cwd=Path(__file__).parent.parent)
+            if result.returncode == 0:
+                logger.info("✅ All tests passed!")
+            else:
+                logger.warning(f"⚠️ Tests completed with exit code: {result.returncode}")
+        except KeyboardInterrupt:
+            logger.info("🛑 Test run interrupted by user")
+        except Exception as e:
+            logger.error(f"❌ Error running tests: {e}")
+
+    def print_status(self) -> None:
+        """Print current environment status."""
+        print("\n" + "=" * 70)
+        print("🏠 HOME ASSISTANT MCP TEST ENVIRONMENT")
+        print("=" * 70)
+
+        if self.container and self.ha_url:
+            print(f"🌐 Home Assistant URL: {self.ha_url}")
+            print(f"👤 Test User: {self.test_user}")
+            print(f"🔐 Test Password: {self.test_password}")
+            print(f"🔑 API Token: {self.ha_token[:20]}...")
+            print("🐳 Container Status: Running")
+            print("📊 API Health: ", end="")
+
+            try:
+                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                if response.status_code == 200:
+                    print("✅ Ready")
+                else:
+                    print(f"⚠️ Status {response.status_code}")
+            except:
+                print("❌ Not accessible")
+        else:
+            print("🐳 Container Status: Not running")
+
+        print("=" * 70)
+
+
+def show_menu() -> str:
+    """Show interactive menu and return user choice."""
+    print("\n📋 MENU:")
+    print("1) Run all E2E tests")
+    print("2) Stop container and exit")
+    print("3) Show environment status")
+
+    while True:
+        choice = input("\nChoose option (1-3): ").strip()
+        if choice in ["1", "2", "3"]:
+            return choice
+        print("❌ Invalid choice. Please enter 1, 2, or 3.")
+
+
+def main():
+    """Main entry point for the test environment manager."""
+    print("🚀 Home Assistant MCP Test Environment Manager")
+    print("=" * 50)
+
+    env = HomeAssistantTestEnvironment()
+
+    try:
+        # Start the container
+        env.start_container()
+        env.print_status()
+
+        # Interactive menu loop
+        while True:
+            choice = show_menu()
+
+            if choice == "1":
+                env.run_tests()
+            elif choice == "2":
+                env.stop_container()
+                print("👋 Goodbye!")
+                break
+            elif choice == "3":
+                env.print_status()
+
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted by user")
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+    finally:
+        # Cleanup
+        if env.container:
+            env.stop_container()
+
+
+if __name__ == "__main__":
+    main()

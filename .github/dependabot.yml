@@ -1,0 +1,94 @@
+version: 2
+updates:
+  # Python dependencies (uv/pip)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    assignees:
+      - "julienld"
+    reviewers:
+      - "julienld"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "auto-merge"  # Since all PRs now run E2E tests
+    # Group related dependency updates
+    groups:
+      fastmcp:
+        patterns:
+          - "fastmcp*"
+          - "mcp*"
+      testing:
+        patterns:
+          - "pytest*"
+          - "testcontainers*"
+          - "coverage*"
+          - "mock*"
+      linting:
+        patterns:
+          - "black*"
+          - "ruff*"
+          - "isort*"
+          - "mypy*"
+          - "bandit*"
+          - "safety*"
+      homeassistant:
+        patterns:
+          - "homeassistant*"
+          - "websockets*"
+          - "httpx*"
+          - "pydantic*"
+    # Ignore specific updates if needed
+    ignore:
+      # Example: Pin major versions that might break compatibility
+      - dependency-name: "homeassistant*"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    assignees:
+      - "julienld"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "github-actions"
+      - "dependencies"
+      - "auto-merge"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Docker dependencies (if using Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    assignees:
+      - "julienld"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "docker"
+      - "dependencies"

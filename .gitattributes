@@ -1,0 +1,7 @@
+# Treat haconfig directory as binary (no merging)
+tests/initial_test_state/** binary merge=ours
+
+# Home Assistant database files should not be merged
+*.db binary merge=ours
+*.db-shm binary merge=ours 
+*.db-wal binary merge=ours
