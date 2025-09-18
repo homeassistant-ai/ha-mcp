@@ -75,20 +75,3 @@ updates:
         patterns:
           - "*"
 
-  # Docker dependencies (if using Dockerfile)
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-      time: "09:00"
-      timezone: "UTC"
-    open-pull-requests-limit: 5
-    assignees:
-      - "julienld"
-    commit-message:
-      prefix: "docker"
-      include: "scope"
-    labels:
-      - "docker"
-      - "dependencies"
