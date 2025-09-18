@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v1.0.1 (2025-09-18)
+
+### Fixes
+
+* fix: remove Docker ecosystem from dependabot config
+
+The project doesn't use Docker, only Python and GitHub Actions.
+This fixes the Dependabot error about missing Dockerfile.
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+via [Happy](https://happy.engineering)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Co-Authored-By: Happy <yesreply@happy.engineering> ([`b393282`](https://github.com/homeassistant-mcp/homeassistant-mcp/commit/b393282f7e5774ea706f364b27ff522e4af800a8))
+
+
 ## v1.0.0 (2025-09-18)
 
 ### Unknown
