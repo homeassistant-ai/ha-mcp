@@ -1,4 +1,6 @@
 name: PR Validation Pipeline
+permissions:
+  contents: read
 
 on:
   pull_request:
