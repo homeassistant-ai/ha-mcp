@@ -1,11 +1,22 @@
-# The Unofficial and Awesome Home Assistant MCP Server
+<div align="center">
+  <img src="homeassistant-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
-[![Test Suite](https://img.shields.io/badge/Tests-E2E%20%2B%20Integration-brightgreen)](tests/)
-[![MCP Version](https://img.shields.io/badge/MCP-1.12.0-blue)](https://modelcontextprotocol.io/)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://python.org)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.10.5-orange)](https://github.com/jlowin/fastmcp)
+  # The Unofficial and Awesome Home Assistant MCP Server
 
-> A comprehensive Model Context Protocol (MCP) server that enables AI assistants to interact with Home Assistant. Using natural language, control smart home devices, query states, execute services and manage your automations.
+  <p align="center">
+    <a href="tests/"><img src="https://img.shields.io/badge/Tests-E2E%20%2B%20Integration-brightgreen" alt="Test Suite"></a>
+    <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-1.12.0-blue" alt="MCP Version"></a>
+    <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python"></a>
+    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/FastMCP-2.10.5-orange" alt="FastMCP"></a>
+  </p>
+
+  <p align="center">
+    <em>A comprehensive Model Context Protocol (MCP) server that enables AI assistants to interact with Home Assistant.<br>
+    Using natural language, control smart home devices, query states, execute services and manage your automations.</em>
+  </p>
+</div>
+
+---
 
 ## ✨ Features
 
