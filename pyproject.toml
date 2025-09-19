@@ -208,5 +208,5 @@ major_on_zero = true
 allow_zero_version = false
 
 # Branch and tag configuration
-branch = "main"
+branch = "master"
 upload_to_vcs_release = true
