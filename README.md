@@ -171,35 +171,47 @@ ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chatgpt 
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_get_state` | Get entity state with attributes and context | `ha_get_state("light.living_room")` |
-| `ha_call_service` | Execute any Home Assistant service | `ha_call_service("light", "turn_on", {"entity_id": "light.all"})` |
-| `ha_get_services` | List available services by domain | `ha_get_services("light")` |
-| `ha_get_config` | Get Home Assistant configuration | `ha_get_config()` |
-| `ha_get_events` | List available event types | `ha_get_events()` |
-| `ha_fire_event` | Fire custom events | `ha_fire_event("custom_event", {"data": "value"})` |
+| `ha_call_service` | Execute any Home Assistant service (universal control) | `ha_call_service("light", "turn_on", {"entity_id": "light.all"})` |
+
+### Device Control Tools
+| Tool | Description | Example |
+|------|-------------|---------|
+| `ha_bulk_control` | Control multiple devices with WebSocket verification | `ha_bulk_control([{"entity_id": "light.all", "action": "turn_on"}])` |
+| `ha_get_operation_status` | Check status of device operations | `ha_get_operation_status("operation_id")` |
+| `ha_get_bulk_status` | Check status of multiple operations | `ha_get_bulk_status(["op1", "op2"])` |
+
+### Convenience Tools
+| Tool | Description | Example |
+|------|-------------|---------|
+| `ha_activate_scene` | Activate a Home Assistant scene | `ha_activate_scene("scene.movie_time")` |
+| `ha_get_weather` | Get current weather information | `ha_get_weather()` |
+| `ha_get_energy` | Get energy usage information | `ha_get_energy()` |
 
 ### Helper Entity Management Tools
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_manage_helper` | Create/modify/delete 6 types of helpers | `ha_manage_helper("create", "input_boolean", {"name": "test"})` |
-| `ha_get_helpers` | List all helper entities by type | `ha_get_helpers("input_boolean")` |
 
 ### Script Management Tools
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_manage_script` | Full script lifecycle management | `ha_manage_script("create", "test_script", {"sequence": []})` |
-| `ha_get_scripts` | List all available scripts | `ha_get_scripts()` |
 
 ### Automation Management Tools
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_manage_automation` | Complete automation lifecycle | `ha_manage_automation("create", "test_auto", {"trigger": []})` |
-| `ha_get_automations` | List all automations with metadata | `ha_get_automations()` |
 
 ### Template & Data Tools
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_eval_template` | Evaluate Jinja2 templates | `ha_eval_template("{{ states('sensor.temperature') }}")` |
 | `ha_get_logbook` | Access historical logbook entries | `ha_get_logbook("2024-01-01", "light.living_room")` |
+
+### Documentation Tools
+| Tool | Description | Example |
+|------|-------------|---------|
+| `ha_get_domain_docs` | Get Home Assistant domain documentation | `ha_get_domain_docs("light")` |
 
 
 ## 🤝 Contributing
