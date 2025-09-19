@@ -68,11 +68,3 @@ To update the baseline Home Assistant configuration:
 4. **Shutdown**: Choose option 2 in menu
 5. **Save state**: Copy files from displayed temp directory to `tests/initial_test_state/`
 6. **Update token**: Replace token in `tests/test_env_manager.py` `ha_token` variable
-
-## ⚡ Performance
-
-- **Basic tests**: ~30-60s
-- **All E2E tests**: ~20-45m
-- **Container startup**: ~30-60s
-
-Use `-m "not slow"` for faster development iterations.
