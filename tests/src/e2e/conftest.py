@@ -399,19 +399,13 @@ class TestDataFactory:
         config = {
             "alias": f"Test {name} E2E",
             "description": f"E2E test automation - {name} - safe to delete",
-            "triggers": [{"platform": "time", "at": "06:00:00"}],
-            "actions": [
+            "trigger": [{"platform": "time", "at": "06:00:00"}],
+            "action": [
                 {"service": "light.turn_on", "target": {"entity_id": "light.bed_light"}}
             ],
             "initial_state": False,  # Start disabled for safety
             "mode": "single",
         }
-
-        # Handle singular/plural conversion for Home Assistant API
-        if "trigger" in overrides:
-            config["triggers"] = overrides.pop("trigger")
-        if "action" in overrides:
-            config["actions"] = overrides.pop("action")
 
         config.update(overrides)
         return config
