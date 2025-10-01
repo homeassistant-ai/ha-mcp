@@ -71,29 +71,31 @@ cp .env.example .env
 ### Testing Commands
 
 #### End-to-End (E2E) Tests
+
+**IMPORTANT: Test paths corrected in v1.0.3+**
+- E2E tests are in `tests/src/e2e/` NOT `tests/e2e/`
+- Test runner is at `tests/src/e2e/run_tests.py`
+
 ```bash
-# Prerequisites: Docker test environment must be running on port 8124
-# Start test environment: cd tests/ && docker compose up -d
+# Prerequisites: Tests use testcontainers - Docker daemon must be running
+# No manual container setup needed - tests auto-create fresh HA instances
 
-# Run all E2E tests
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py
+# Run all E2E tests (uses testcontainers)
+HAMCP_ENV_FILE=tests/.env.test uv run python tests/src/e2e/run_tests.py
 
-# Run fast tests only (excludes slow tests)
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py fast
+# Run fast tests only (excludes @pytest.mark.slow tests)
+HAMCP_ENV_FILE=tests/.env.test uv run python tests/src/e2e/run_tests.py fast
 
-# Run specific test scenarios
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py automation    # Automation lifecycle
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py device       # Device control
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py script       # Script orchestration
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py helper       # Helper integration
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py error        # Error handling
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/e2e/run_tests.py scenarios    # All scenarios
+# Run using pytest directly (recommended for development)
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/ -v --tb=short
 
-# Run using pytest directly
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/e2e/ -v --tb=short
+# Run single test
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py::TestAutomationLifecycle::test_basic_automation_lifecycle -v
 
-# Run single E2E test
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/e2e/scenarios/test_automation_lifecycle.py::TestAutomationLifecycle::test_basic_automation_lifecycle -v
+# Run specific test category
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/automation/ -v
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/scripts/ -v
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/error_handling/ -v
 ```
 
 ### Code Quality Commands
@@ -232,3 +234,107 @@ Home Assistant MCP Server - Current Structure
 - **Parallel Operations**: Bulk device control supports parallel execution
 - **Fuzzy Search Caching**: Search results cached for improved performance
 - **WebSocket Persistence**: Single WebSocket connection reused across operations
+
+## 🔍 Home Assistant API Research
+
+**Finding undocumented Home Assistant APIs:**
+
+When implementing new features that require Home Assistant API endpoints not in the official docs:
+
+1. **Use GitHub code search** with `gh` CLI (don't clone the massive home-assistant/core repo):
+   ```bash
+   # Example: Finding helper list endpoint
+   gh api /search/code \
+     -X GET \
+     -f q="helper list websocket repo:home-assistant/core" \
+     -f per_page=5 \
+     --jq '.items[] | {name: .name, path: .path, url: .html_url}'
+   ```
+
+2. **Search patterns that work well:**
+   - WebSocket endpoints: `"{entity_type}/list" "websocket" repo:home-assistant/core`
+   - REST endpoints: `"api_routes" "{domain}" repo:home-assistant/core`
+   - Component internals: `"class {ComponentName}" repo:home-assistant/core`
+
+3. **Example discoveries:**
+   - Found `{helper_type}/list` websocket endpoint in `collection.py`
+   - Pattern: `DictStorageCollectionWebsocket` provides `list` endpoint for collection types
+   - Applies to: input_boolean, input_number, input_select, input_text, input_datetime, input_button
+
+**Key insight:** Home Assistant's collection-based components (helpers, scripts, automations) follow consistent patterns. If one has a feature, others likely do too.
+
+## 🧪 Test Development Patterns
+
+**Common test pitfalls and solutions:**
+
+### FastMCP Parameter Validation vs Tool Validation
+
+**Problem:** Tests that validate "missing required parameter" will fail with FastMCP.
+
+**Why:** FastMCP validates required parameters at schema level BEFORE tool code runs.
+
+**Solution:** Don't test for missing required parameters - FastMCP handles this automatically.
+
+```python
+# ❌ BAD - This will fail with FastMCP validation error
+async def test_error_handling():
+    result = await mcp.call_tool_failure(
+        "ha_config_get_script",
+        {},  # Missing required script_id
+        expected_error="script_id is required"
+    )
+
+# ✅ GOOD - Test tool's internal validation
+async def test_error_handling():
+    result = await mcp.call_tool_failure(
+        "ha_config_get_script",
+        {"script_id": "nonexistent"},  # Valid params, invalid data
+        expected_error="not found"
+    )
+```
+
+### Test Data Factory Pattern
+
+**Use `test_data_factory` fixture** for creating test configs:
+
+```python
+# Automation config factory
+config = test_data_factory.automation_config(
+    "Morning Routine",
+    trigger=[{"platform": "time", "at": "07:00:00"}],
+    action=[{"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}]
+)
+```
+
+**Important:** Home Assistant API uses **singular** field names:
+- `trigger` NOT `triggers`
+- `action` NOT `actions`
+- TestDataFactory now returns singular fields (fixed in v1.0.3)
+
+### Parameter Structure Updates After API Refactoring
+
+When refactoring action-based APIs to split functions:
+
+**Before (action-based):**
+```python
+await mcp.call_tool("ha_manage_helper", {
+    "action": "create",
+    "helper_type": "input_boolean",
+    "name": "test_bool"
+})
+```
+
+**After (split functions):**
+```python
+await mcp.call_tool("ha_config_set_helper", {
+    "helper_type": "input_boolean",
+    "name": "test_bool"
+    # No 'action' parameter - implicit in function name
+})
+```
+
+**Test updates needed:**
+1. Remove `action` parameter from calls
+2. Update tool names
+3. For delete operations: only keep domain-specific params (no `name=""` cruft)
+4. Use automated transformation where possible (sed scripts, bulk find/replace)
