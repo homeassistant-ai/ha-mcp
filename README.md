@@ -45,7 +45,7 @@
 
 1. **Install uv**
 
-   uv is a Python package manager (Python installation not required)
+   uv is a Python package manager (Python installation not required).
    Follow instructions at https://docs.astral.sh/uv/getting-started/installation/
 
 2. **Clone the repository**
@@ -122,7 +122,7 @@ Server will be available at http://127.0.0.1:8086/mcp
 
 ## Online clients (Claude.ai, ChatGPT.com, ...)
 
-> WARNING! This is not the most secure way of connecting those providers. Use this setup at your own risk. Anybody figuring out how to do it properly is welcome to contribute to this project. Check out https://gofastmcp.com/servers/auth/authentication for more information. 
+> **WARNING!** This is not the most secure way of connecting those providers. Use this setup at your own risk. Anybody figuring out how to do it properly is welcome to contribute to this project. Check out https://gofastmcp.com/servers/auth/authentication for more information. 
 
 This setup consists of an HTTPS tunnel with cloudflared tunnel.
 
@@ -154,10 +154,10 @@ You will find the base url in your output. It will look like this: https://abc-d
 
 Append your secret path and use the url in the online provider (Claude.ai and such)
 
-The url should look like : https://abc-def-ghi.trycloudflare.com/__my_secret_key_that_should_not_be_shared_with_anyone__
+The url should look like: https://abc-def-ghi.trycloudflare.com/__my_secret_key_that_should_not_be_shared_with_anyone__
 
 For Claude.AI: https://support.anthropic.com/en/articles/11176164-pre-built-web-connectors-using-remote-mcp
-ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chatgpt (untested)
+For ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chatgpt (untested)
 
 ## 🛠️ Available Tools
 
@@ -226,17 +226,12 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [x] Core infrastructure and HTTP client
 - [x] FastMCP integration with OpenAPI auto-generation
 - [x] Smart search tools with fuzzy matching
-- [x] Optimized tool documentation to reduce tool call errors.
+- [x] Optimized tool documentation to reduce tool call errors
 - [x] WebSocket async device control
 - [x] Convenience tools for scenes and automations
 - [x] Comprehensive test suite
 
-### Future Enhancements 🔮
-- [ ] Docker image for enhanced security, isolation and distribution
-- [ ] Home Assistant addon
-- [ ] Home Assistant WebSocket event streaming
-- [ ] Integration with [Home Assistant MCP Server](https://www.home-assistant.io/integrations/mcp_server)
-- Open an issue to add more!
+For future enhancements and planned features, see the [Development Roadmap](https://github.com/homeassistant-mcp/homeassistant-mcp/wiki) in our wiki.
 
 ## 📄 License
 
