@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="homeassistant-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
@@ -50,8 +50,8 @@
 
 2. **Clone the repository**
    ```bash
-   git clone https://github.com/homeassistant-mcp/homeassistant-mcp
-   cd homeassistant-mcp
+   git clone https://github.com/homeassistant-ai/ha-mcp
+   cd ha-mcp
    ```
 
 ## Client Configuration
@@ -63,8 +63,8 @@ Linux/WSL/macOS:
 {
   "mcpServers": {
 
-    "homeassistant-mcp": {
-      "command": "path/to/homeassistant-mcp/run_mcp_server.sh",
+    "Home Assistant": {
+      "command": "path/to/ha-mcp/run_mcp_server.sh",
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
@@ -81,8 +81,8 @@ Windows:
 {
   "mcpServers": {
 
-    "homeassistant-mcp": {
-      "command": "C:\\path\\to\\homeassistant-mcp\\run_mcp_server.bat",
+    "Home Assistant": {
+      "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
@@ -97,10 +97,10 @@ Windows:
 ### Claude Code
 
 ```bash
-cd homeassistant-mcp
+cd ha-mcp
 uv sync
-claude mcp add homeassistant-mcp -- uv --directory /path/to/homeassistant-mcp --env HOMEASSISTANT_URL=http://localhost:8123 --env HOMEASSISTANT_TOKEN=your_token run fastmcp run
-claude mcp add-json homeassistant-mcp '{"type":"stdio","command":"uv","args":["--directory","/path/to/homeassistant-mcp","run","fastmcp","run"],"env":{"HOMEASSISTANT_URL":"http://localhost:8123","HOMEASSISTANT_TOKEN":"your_token"}}'
+claude mcp add ha-mcp -- uv --directory /path/to/ha-mcp --env HOMEASSISTANT_URL=http://localhost:8123 --env HOMEASSISTANT_TOKEN=your_token run fastmcp run
+claude mcp add-json ha-mcp '{"type":"stdio","command":"uv","args":["--directory","/path/to/ha-mcp","run","fastmcp","run"],"env":{"HOMEASSISTANT_URL":"http://localhost:8123","HOMEASSISTANT_TOKEN":"your_token"}}'
 ```
 
 ### Remote mode (for compatibility with remote mcp)
@@ -231,7 +231,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [x] Convenience tools for scenes and automations
 - [x] Comprehensive test suite
 
-For future enhancements and planned features, see the [Development Roadmap](https://github.com/homeassistant-mcp/homeassistant-mcp/wiki) in our wiki.
+For future enhancements and planned features, see the [Development Roadmap](https://github.com/homeassistant-ai/ha-mcp/wiki) in our wiki.
 
 ## 📄 License
 

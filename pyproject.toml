@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "homeassistant-mcp"
+name = "ha-mcp"
 version = "1.0.3"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
@@ -52,19 +52,19 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/homeassistant-mcp/homeassistant-mcp"
-"Bug Tracker" = "https://github.com/homeassistant-mcp/homeassistant-mcp/issues"
-"Repository" = "https://github.com/homeassistant-mcp/homeassistant-mcp"
+"Homepage" = "https://github.com/homeassistant-ai/ha-mcp"
+"Bug Tracker" = "https://github.com/homeassistant-ai/ha-mcp/issues"
+"Repository" = "https://github.com/homeassistant-ai/ha-mcp"
 
 [project.scripts]
-homeassistant-mcp = "homeassistant_mcp.__main__:main"
+ha-mcp = "ha_mcp.__main__:main"
 hamcp-test-env = "tests.test_env_manager:main"
 
 [tool.setuptools.packages.find]
 where = ["src", "tests"]
 
 [tool.setuptools.package-data]
-homeassistant_mcp = ["py.typed"]
+ha_mcp = ["py.typed"]
 
 [tool.black]
 line-length = 88
@@ -88,7 +88,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["homeassistant_mcp"]
+known_first_party = ["ha_mcp"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -187,7 +187,7 @@ dev = [
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 version_variables = [
-    "src/homeassistant_mcp/__init__.py:__version__",
+    "src/ha_mcp/__init__.py:__version__",
 ]
 build_command = ""
 dist_path = "dist/"

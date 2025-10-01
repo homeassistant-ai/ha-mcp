@@ -31,6 +31,24 @@ git add . && git commit -m "your changes"
 - User must explicitly request push/PR operations
 - Commit locally first, then ask user for next steps
 
+## 📝 Updating This File (AGENTS.md)
+
+**When to update AGENTS.md:**
+
+1. **After discovering workflow improvements** - Document patterns that work well
+2. **When solving non-obvious problems** - Add to relevant sections for future reference
+3. **Before completing a PR** - Ask user: "Should we add anything to AGENTS.md?"
+4. **Automatic updates** - If improvement is obviously beneficial, update proactively
+
+**What to document:**
+- API discovery techniques that worked
+- Test patterns that solved problems
+- Configuration gotchas and solutions
+- Tool design patterns learned
+- Build/deployment lessons
+
+**Rule of thumb:** If you struggled with something, document it so next time is easier!
+
 # Home Assistant MCP Server
 
 A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems through REST API and WebSocket connections. The project provides fuzzy search, real-time monitoring, and AI-optimized device control with comprehensive test coverage.
@@ -46,10 +64,10 @@ uv sync
 uv sync --group dev
 
 # Run the main MCP server (20+ tools)
-uv run homeassistant-mcp
+uv run ha-mcp
 
 # Or run directly via module
-uv run python -m homeassistant_mcp
+uv run python -m ha_mcp
 ```
 
 ### Configuration
@@ -161,26 +179,26 @@ The codebase follows a modular architecture with clear separation of concerns:
 
 ```
 Home Assistant MCP Server - Current Structure
-├── Core Server (/src/homeassistant_mcp/)
+├── Core Server (/src/ha_mcp/)
 │   ├── server.py              # Main server implementation with FastMCP
 │   ├── __main__.py            # FastMCP entrypoint (dual CLI/FastMCP support)
 │   └── config.py              # Configuration management with Pydantic
-├── Client Layer (/src/homeassistant_mcp/client/)
+├── Client Layer (/src/ha_mcp/client/)
 │   ├── rest_client.py         # HTTP REST API client
 │   ├── websocket_client.py    # WebSocket client for real-time monitoring
 │   └── websocket_listener.py  # Background WebSocket listener service
-├── Tools Layer (/src/homeassistant_mcp/tools/)
+├── Tools Layer (/src/ha_mcp/tools/)
 │   ├── registry.py            # Centralized tool registration
 │   ├── smart_search.py        # Fuzzy entity search and AI tools
 │   ├── device_control.py      # Smart device control with WebSocket verification
 │   ├── convenience.py         # Scene/automation/weather convenience tools
 │   └── enhanced.py            # Enhanced tool implementations
-├── Resources Layer (/src/homeassistant_mcp/resources/)
+├── Resources Layer (/src/ha_mcp/resources/)
 │   └── manager.py             # MCP resource management
-├── Prompts Layer (/src/homeassistant_mcp/prompts/)
+├── Prompts Layer (/src/ha_mcp/prompts/)
 │   ├── manager.py             # MCP prompt templates
 │   └── enhanced.py            # Enhanced prompts
-└── Utils Layer (/src/homeassistant_mcp/utils/)
+└── Utils Layer (/src/ha_mcp/utils/)
     ├── fuzzy_search.py        # Fuzzy matching engine with fuzzywuzzy
     ├── domain_handlers.py     # Home Assistant domain-specific logic
     ├── operation_manager.py   # Async operation management
@@ -338,3 +356,69 @@ await mcp.call_tool("ha_config_set_helper", {
 2. Update tool names
 3. For delete operations: only keep domain-specific params (no `name=""` cruft)
 4. Use automated transformation where possible (sed scripts, bulk find/replace)
+
+## 🔄 Package Renaming Best Practices
+
+**Learned from homeassistant-mcp → ha-mcp rename (v2.0.0):**
+
+### When to Rename (Timing Matters!)
+- ✅ **Before first PyPI publish** - No users to break
+- ✅ **Before public release** - Clean start
+- ❌ After users exist - Requires migration strategy and deprecation
+
+### Complete Rename Checklist
+
+**1. Package Infrastructure:**
+- [ ] `pyproject.toml` - `name = "new-name"`
+- [ ] `pyproject.toml` - `[project.scripts]` CLI command
+- [ ] `pyproject.toml` - `[tool.setuptools.package-data]`
+- [ ] `pyproject.toml` - `[tool.isort] known_first_party`
+- [ ] `pyproject.toml` - `[tool.semantic_release] version_variables`
+
+**2. Source Code:**
+- [ ] Rename directory: `git mv src/old_name src/new_name`
+- [ ] Update all imports: `sed -i 's/from old_name/from new_name/g'`
+- [ ] Update config defaults (server names, etc.)
+
+**3. Build Artifacts & Configs:**
+- [ ] Delete old `.egg-info/` directory
+- [ ] Update `fastmcp.json` path
+- [ ] Update `.env.example` references
+- [ ] Rebuild: `uv sync` (auto-updates `uv.lock`)
+
+**4. Documentation:**
+- [ ] README.md - Clone URLs, examples
+- [ ] AGENTS.md/CLAUDE.md - Architecture diagrams, commands
+- [ ] Logo/assets filenames
+- [ ] Run scripts (`.sh`, `.bat`)
+
+**5. Verification:**
+```bash
+# Search for old references
+grep -r "old-name" --include="*.md" --include="*.py" --include="*.toml" --include="*.json"
+
+# Test build
+uv sync
+uv run new-name --help
+
+# Verify package name in lock
+grep "^name = " uv.lock | grep new-name
+```
+
+### Python Package Naming Convention
+- **Package name** (PyPI): Use hyphens `my-package`
+- **Module name** (imports): Use underscores `my_package`
+- **CLI command**: Use hyphens `my-package`
+
+**Example:**
+```toml
+[project]
+name = "ha-mcp"  # PyPI package
+
+[project.scripts]
+ha-mcp = "ha_mcp.__main__:main"  # CLI → module
+```
+
+### Semantic Versioning for Renames
+- Major bump (2.0.0): Use `feat!:` with `BREAKING CHANGE:` in commit
+- Provides clear signal to users that this is incompatible

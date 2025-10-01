@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
     # MCP Server configuration
-    mcp_server_name: str = Field("homeassistant-mcp", alias="MCP_SERVER_NAME")
+    mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
     mcp_server_version: str = Field("0.1.0", alias="MCP_SERVER_VERSION")
 
     # Environment configuration

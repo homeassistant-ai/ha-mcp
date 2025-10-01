@@ -14,7 +14,7 @@ This fixes the Dependabot error about missing Dockerfile.
 via [Happy](https://happy.engineering)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering> ([`b393282`](https://github.com/homeassistant-mcp/homeassistant-mcp/commit/b393282f7e5774ea706f364b27ff522e4af800a8))
+Co-Authored-By: Happy <yesreply@happy.engineering> ([`b393282`](https://github.com/homeassistant-ai/ha-mcp/commit/b393282f7e5774ea706f364b27ff522e4af800a8))
 
 
 ## v1.0.0 (2025-09-18)
@@ -35,4 +35,4 @@ Complete MCP server implementation with 20+ tools for Home Assistant control:
 via [Happy](https://happy.engineering)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
-Co-Authored-By: Happy <yesreply@happy.engineering> ([`fcec5b2`](https://github.com/homeassistant-mcp/homeassistant-mcp/commit/fcec5b28c3bfe8eff904d5073484b82ebea86987))
+Co-Authored-By: Happy <yesreply@happy.engineering> ([`fcec5b2`](https://github.com/homeassistant-ai/ha-mcp/commit/fcec5b28c3bfe8eff904d5073484b82ebea86987))

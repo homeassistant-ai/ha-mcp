@@ -12,5 +12,5 @@ export UV_PROJECT_ENVIRONMENT=".venv.linux"
 #echo "Installing dependencies with uv project workflow..."
 uv sync -q
 
-#echo "Running homeassistant-mcp entry point..."
-uv run -q homeassistant-mcp
+#echo "Running ha-mcp entry point..."
+uv run -q ha-mcp
