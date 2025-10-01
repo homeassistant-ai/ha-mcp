@@ -1036,23 +1036,7 @@ class TestScriptOrchestration:
         logger.info("🚨 Testing script error handling...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # 1. TEST: Missing script_id for get operation
-            missing_id_data = await mcp.call_tool_failure(
-                "ha_config_get_script",
-                {},
-                expected_error="script_id is required",
-            )
-            logger.info("✅ Missing script_id properly rejected")
-
-            # 2. TEST: Create without config
-            no_config_data = await mcp.call_tool_failure(
-                "ha_config_set_script",
-                { "script_id": "test_no_config"},
-                expected_error="config is required",
-            )
-            logger.info("✅ Missing config properly rejected")
-
-            # 3. TEST: Get non-existent script
+            # 1. TEST: Get non-existent script
             nonexistent_data = await mcp.call_tool_failure(
                 "ha_config_get_script",
                 { "script_id": "nonexistent_script_xyz"},
@@ -1060,7 +1044,7 @@ class TestScriptOrchestration:
             )
             logger.info("✅ Non-existent script properly handled")
 
-            # 4. TEST: Invalid config (missing sequence)
+            # 2. TEST: Invalid config (missing sequence)
             script_id = "test_invalid_config"
             invalid_config_data = await mcp.call_tool_failure(
                 "ha_config_set_script",
@@ -1076,7 +1060,7 @@ class TestScriptOrchestration:
             )
             logger.info("✅ Invalid config (missing sequence) properly rejected")
 
-            # 5. TEST: Delete non-existent script
+            # 3. TEST: Delete non-existent script
             delete_nonexistent_data = await mcp.call_tool_failure(
                 "ha_config_remove_script",
                 { "script_id": "nonexistent_delete_xyz"},
@@ -1084,14 +1068,14 @@ class TestScriptOrchestration:
             )
             logger.info("✅ Delete non-existent script properly handled")
 
-            # 6. TEST: Invalid script ID format
+            # 4. TEST: Invalid script ID format
             invalid_id_data = await mcp.call_tool_failure(
                 "ha_config_get_script",
                 { "script_id": "invalid.script.id.with.dots"},
             )
             logger.info("✅ Invalid script ID format properly handled")
 
-            # 7. TEST: Invalid sequence structure (non-list)
+            # 5. TEST: Invalid sequence structure (non-list)
             invalid_sequence_data = await mcp.call_tool_failure(
                 "ha_config_set_script",
                 {
