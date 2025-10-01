@@ -186,8 +186,8 @@ class TestHelperIntegration:
             "ha_config_remove_helper",
             {
                 "helper_type": "input_boolean",
-                "name": "",
-                "helper_id": helper_name},
+                "helper_id": helper_name
+            },
         )
 
         delete_data = parse_mcp_result(delete_result)
@@ -364,8 +364,8 @@ class TestHelperIntegration:
             "ha_config_remove_helper",
             {
                 "helper_type": "input_number",
-                "name": "",
-                "helper_id": helper_name},
+                "helper_id": helper_name
+            },
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), (
@@ -481,8 +481,8 @@ class TestHelperIntegration:
             "ha_config_remove_helper",
             {
                 "helper_type": "input_select",
-                "name": "",
-                "helper_id": helper_name},
+                "helper_id": helper_name
+            },
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), (
@@ -603,8 +603,8 @@ class TestHelperIntegration:
             "ha_config_remove_helper",
             {
                 "helper_type": "input_text",
-                "name": "",
-                "helper_id": helper_name},
+                "helper_id": helper_name
+            },
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), (
@@ -631,7 +631,6 @@ class TestHelperIntegration:
 
             # 1. CREATE: DateTime helper with specific mode
             create_params = {
-                "action": "create",
                 "helper_type": "input_datetime",
                 "name": helper_name,
                 "icon": "mdi:calendar-clock",
@@ -727,8 +726,8 @@ class TestHelperIntegration:
                 "ha_config_remove_helper",
                 {
                     "helper_type": "input_datetime",
-                    "name": "",
-                    "helper_id": helper_name},
+                    "helper_id": helper_name
+                },
             )
             delete_data = parse_mcp_result(delete_result)
             assert delete_data.get("success"), (
@@ -837,8 +836,8 @@ class TestHelperIntegration:
             "ha_config_remove_helper",
             {
                 "helper_type": "input_button",
-                "name": "",
-                "helper_id": helper_name},
+                "helper_id": helper_name
+            },
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), (
@@ -891,7 +890,7 @@ class TestHelperIntegration:
         # 1. CREATE: Bulk creation of helpers
         logger.info(f"🚀 Creating {len(helpers_to_create)} helpers...")
         for helper_type, helper_id, config in helpers_to_create:
-            create_params = {"action": "create", "helper_type": helper_type}
+            create_params = {"helper_type": helper_type}
             create_params.update(config)  # Merge config parameters directly
             create_result = await mcp_client.call_tool(
                 "ha_config_set_helper", create_params
@@ -955,8 +954,8 @@ class TestHelperIntegration:
                 "ha_config_remove_helper",
                 {
                     "helper_type": helper_type,
-                    "name": "",
-                    "helper_id": helper_id},
+                    "helper_id": helper_id
+                },
             )
 
             delete_data = parse_mcp_result(delete_result)
