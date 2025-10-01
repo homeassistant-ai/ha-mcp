@@ -419,9 +419,8 @@ class TestErrorHandling:
         try:
             missing_name_result = await self._safe_tool_call(
                 mcp_client,
-                "ha_manage_helper",
+                "ha_config_set_helper",
                 {
-                    "action": "create",
                     "helper_type": "input_boolean",
                     # Missing name - should fail at FastMCP validation level
                 },
@@ -457,12 +456,10 @@ class TestErrorHandling:
         logger.info("🔧 Testing invalid helper type...")
         invalid_type_result = await self._safe_tool_call(
             mcp_client,
-            "ha_manage_helper",
+            "ha_config_set_helper",
             {
-                "action": "create",
                 "helper_type": "nonexistent_type",
-                "name": "Test Invalid Type",
-            },
+                "name": "Test Invalid Type"},
         )
 
         invalid_type_data = parse_mcp_result(invalid_type_result)
@@ -479,16 +476,14 @@ class TestErrorHandling:
         logger.info("🔢 Testing input_number constraint violations...")
         invalid_range_result = await self._safe_tool_call(
             mcp_client,
-            "ha_manage_helper",
+            "ha_config_set_helper",
             {
-                "action": "create",
                 "helper_type": "input_number",
                 "name": "Test Invalid Range",
                 "min_value": 100.0,
                 "max_value": 50.0,  # max_value < min_value - should fail validation
                 "step": 1.0,
-                "mode": "slider",
-            },
+                "mode": "slider"},
         )
 
         invalid_range_data = parse_mcp_result(invalid_range_result)
@@ -503,13 +498,11 @@ class TestErrorHandling:
         logger.info("📋 Testing input_select with empty options...")
         empty_options_result = await self._safe_tool_call(
             mcp_client,
-            "ha_manage_helper",
+            "ha_config_set_helper",
             {
-                "action": "create",
                 "helper_type": "input_select",
                 "name": "Test Empty Options",
-                "options": [],
-            },
+                "options": []},
         )
 
         empty_options_data = parse_mcp_result(empty_options_result)
@@ -524,14 +517,12 @@ class TestErrorHandling:
         logger.info("📅 Testing input_datetime without date or time...")
         no_date_time_result = await self._safe_tool_call(
             mcp_client,
-            "ha_manage_helper",
+            "ha_config_set_helper",
             {
-                "action": "create",
                 "helper_type": "input_datetime",
                 "name": "Test No Date Time",
                 "has_date": False,
-                "has_time": False,
-            },
+                "has_time": False},
         )
 
         no_date_time_data = parse_mcp_result(no_date_time_result)
@@ -661,12 +652,10 @@ class TestErrorHandling:
             try:
                 result = await _safe_tool_call_standalone(
                     mcp_client,
-                    "ha_manage_helper",
+                    "ha_config_set_helper",
                     {
-                        "action": "create",
                         "helper_type": helper_type,
-                        "name": helper_name,
-                    },
+                        "name": helper_name},
                 )
                 data = parse_mcp_result(result)
                 if data.get("success"):

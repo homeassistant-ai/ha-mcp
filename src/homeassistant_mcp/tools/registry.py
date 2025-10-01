@@ -8,9 +8,10 @@ import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Union, cast
+from typing import Annotated, Any, Literal, Union, cast
 
 import httpx
+from pydantic import Field
 
 from ..utils.usage_logger import log_tool_call
 
@@ -667,26 +668,181 @@ class ToolsRegistry:
 
         @self.mcp.tool
         @log_tool_usage
-        async def ha_manage_helper(
-            action: str,
-            helper_type: str,
-            name: str,
-            helper_id: str | None = None,
-            icon: str | None = None,
-            area_id: str | None = None,
-            labels: str | list[str] | None = None,
-            min_value: float | None = None,
-            max_value: float | None = None,
-            step: float | None = None,
-            unit_of_measurement: str | None = None,
-            options: str | list[str] | None = None,
-            initial: str | None = None,
-            mode: str | None = None,
-            has_date: bool | None = None,
-            has_time: bool | None = None,
+        async def ha_config_list_helpers(
+            helper_type: Annotated[
+                Literal[
+                    "input_button",
+                    "input_boolean",
+                    "input_select",
+                    "input_number",
+                    "input_text",
+                    "input_datetime",
+                ],
+                Field(description="Type of helper entity to list"),
+            ],
         ) -> dict[str, Any]:
             """
-            Manage Home Assistant helpers - create, update, and delete helper entities for automation and UI control.
+            List all Home Assistant helpers of a specific type with their configurations.
+
+            Returns complete configuration for all helpers of the specified type including:
+            - ID, name, icon
+            - Type-specific settings (min/max for input_number, options for input_select, etc.)
+            - Area and label assignments
+
+            SUPPORTED HELPER TYPES:
+            - input_button: Virtual buttons
+            - input_boolean: Toggle switches
+            - input_select: Dropdown lists
+            - input_number: Numeric sliders/input boxes
+            - input_text: Text input fields
+            - input_datetime: Date/time pickers
+
+            EXAMPLES:
+            - List all number helpers: ha_config_list_helpers("input_number")
+            - List all booleans: ha_config_list_helpers("input_boolean")
+            - List all selects: ha_config_list_helpers("input_select")
+
+            **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
+
+            For detailed helper documentation, use: ha_get_domain_docs("input_number"), etc.
+            """
+            try:
+                # Use the websocket list endpoint for the helper type
+                message: dict[str, Any] = {
+                    "type": f"{helper_type}/list",
+                }
+
+                result = await self.client.send_websocket_message(message)
+
+                if result.get("success"):
+                    items = result.get("result", [])
+                    return {
+                        "success": True,
+                        "helper_type": helper_type,
+                        "count": len(items),
+                        "helpers": items,
+                        "message": f"Found {len(items)} {helper_type} helper(s)",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Failed to list helpers: {result.get('error', 'Unknown error')}",
+                        "helper_type": helper_type,
+                    }
+
+            except Exception as e:
+                logger.error(f"Error listing helpers: {e}")
+                return {
+                    "success": False,
+                    "error": f"Failed to list {helper_type} helpers: {str(e)}",
+                    "helper_type": helper_type,
+                    "suggestions": [
+                        "Check Home Assistant connection",
+                        "Verify WebSocket connection is active",
+                        "Use ha_search_entities(domain_filter='input_*') as alternative",
+                    ],
+                }
+
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_set_helper(
+            helper_type: Annotated[
+                Literal[
+                    "input_button",
+                    "input_boolean",
+                    "input_select",
+                    "input_number",
+                    "input_text",
+                    "input_datetime",
+                ],
+                Field(description="Type of helper entity to create or update"),
+            ],
+            name: Annotated[str, Field(description="Display name for the helper")],
+            helper_id: Annotated[
+                str | None,
+                Field(
+                    description="Helper ID for updates (e.g., 'my_button' or 'input_button.my_button'). If not provided, creates a new helper.",
+                    default=None,
+                ),
+            ] = None,
+            icon: Annotated[
+                str | None,
+                Field(
+                    description="Material Design Icon (e.g., 'mdi:bell', 'mdi:toggle-switch')",
+                    default=None,
+                ),
+            ] = None,
+            area_id: Annotated[
+                str | None,
+                Field(description="Area/room ID to assign the helper to", default=None),
+            ] = None,
+            labels: Annotated[
+                str | list[str] | None,
+                Field(description="Labels to categorize the helper", default=None),
+            ] = None,
+            min_value: Annotated[
+                float | None,
+                Field(
+                    description="Minimum value (input_number) or minimum length (input_text)",
+                    default=None,
+                ),
+            ] = None,
+            max_value: Annotated[
+                float | None,
+                Field(
+                    description="Maximum value (input_number) or maximum length (input_text)",
+                    default=None,
+                ),
+            ] = None,
+            step: Annotated[
+                float | None,
+                Field(description="Step/increment value for input_number", default=None),
+            ] = None,
+            unit_of_measurement: Annotated[
+                str | None,
+                Field(
+                    description="Unit of measurement for input_number (e.g., '°C', '%', 'W')",
+                    default=None,
+                ),
+            ] = None,
+            options: Annotated[
+                str | list[str] | None,
+                Field(
+                    description="List of options for input_select (required for input_select)",
+                    default=None,
+                ),
+            ] = None,
+            initial: Annotated[
+                str | None,
+                Field(
+                    description="Initial value for the helper (input_select, input_text, input_boolean, input_datetime)",
+                    default=None,
+                ),
+            ] = None,
+            mode: Annotated[
+                str | None,
+                Field(
+                    description="Display mode: 'box'/'slider' for input_number, 'text'/'password' for input_text",
+                    default=None,
+                ),
+            ] = None,
+            has_date: Annotated[
+                bool | None,
+                Field(
+                    description="Include date component for input_datetime", default=None
+                ),
+            ] = None,
+            has_time: Annotated[
+                bool | None,
+                Field(
+                    description="Include time component for input_datetime", default=None
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            """
+            Create or update Home Assistant helper entities for automation and UI control.
+
+            Creates a new helper if helper_id is not provided, or updates an existing helper if helper_id is provided.
 
             SUPPORTED HELPER TYPES (6/29 total Home Assistant helpers):
             - input_button: Virtual buttons for triggering automations
@@ -696,17 +852,14 @@ class ToolsRegistry:
             - input_select: Dropdown selection lists
             - input_text: Text input fields
 
-            ACTIONS: 'create', 'update', 'delete'
-
             EXAMPLES:
-            - Create button: ha_manage_helper("create", "input_button", "My Button", icon="mdi:bell")
-            - Create boolean: ha_manage_helper("create", "input_boolean", "My Switch", icon="mdi:toggle-switch")
-            - Create select: ha_manage_helper("create", "input_select", "My Options", options=["opt1", "opt2", "opt3"])
-            - Create number: ha_manage_helper("create", "input_number", "Temperature", min_value=0, max_value=100, step=0.5, unit_of_measurement="°C")
-            - Create datetime: ha_manage_helper("create", "input_datetime", "My DateTime", has_date=True, has_time=True, initial="2023-12-25 09:00:00")
-            - Create date-only: ha_manage_helper("create", "input_datetime", "My Date", has_date=True, has_time=False, initial="2023-12-25")
-            - Update helper: ha_manage_helper("update", "input_button", "New Name", helper_id="my_button", area_id="living_room", labels=["automation"])
-            - Delete helper: ha_manage_helper("delete", "input_button", "", helper_id="my_button")
+            - Create button: ha_config_set_helper("input_button", "My Button", icon="mdi:bell")
+            - Create boolean: ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
+            - Create select: ha_config_set_helper("input_select", "My Options", options=["opt1", "opt2", "opt3"])
+            - Create number: ha_config_set_helper("input_number", "Temperature", min_value=0, max_value=100, step=0.5, unit_of_measurement="°C")
+            - Create datetime: ha_config_set_helper("input_datetime", "My DateTime", has_date=True, has_time=True, initial="2023-12-25 09:00:00")
+            - Create date-only: ha_config_set_helper("input_datetime", "My Date", has_date=True, has_time=False, initial="2023-12-25")
+            - Update helper: ha_config_set_helper("input_button", "New Name", helper_id="my_button", area_id="living_room", labels=["automation"])
 
             OTHER HOME ASSISTANT HELPERS (not yet supported):
             Mathematical: bayesian, derivative, filter, integration, min_max, random, statistics, threshold, trend, utility_meter
@@ -729,204 +882,10 @@ class ToolsRegistry:
                 except ValueError as e:
                     return {"success": False, "error": f"Invalid list parameter: {e}"}
 
-                if action not in ["create", "update", "delete"]:
-                    return {
-                        "success": False,
-                        "error": "Invalid action. Must be 'create', 'update', or 'delete'",
-                        "valid_actions": ["create", "update", "delete"],
-                    }
+                # Determine if this is a create or update based on helper_id
+                action = "update" if helper_id else "create"
 
-                if helper_type not in [
-                    "input_button",
-                    "input_boolean",
-                    "input_select",
-                    "input_number",
-                    "input_text",
-                    "input_datetime",
-                ]:
-                    return {
-                        "success": False,
-                        "error": f"Unsupported helper type: {helper_type}",
-                        "supported_types": [
-                            "input_button",
-                            "input_boolean",
-                            "input_select",
-                            "input_number",
-                            "input_text",
-                            "input_datetime",
-                        ],
-                    }
-
-                if action == "delete":
-                    if not helper_id:
-                        return {
-                            "success": False,
-                            "error": "helper_id is required for delete action",
-                        }
-
-                    # Convert helper_id to full entity_id if needed
-                    entity_id = (
-                        helper_id
-                        if helper_id.startswith(helper_type)
-                        else f"{helper_type}.{helper_id}"
-                    )
-
-                    # Try to get unique_id with retry logic to handle race conditions
-                    unique_id = None
-                    registry_result = None
-                    max_retries = 3
-
-                    for attempt in range(max_retries):
-                        logger.info(
-                            f"Getting entity registry for: {entity_id} (attempt {attempt + 1}/{max_retries})"
-                        )
-
-                        # Check if entity exists via state API first (faster check)
-                        try:
-                            state_check = await self.client.get_state(entity_id)
-                            if not state_check:
-                                # Entity doesn't exist in state, wait a bit for registration
-                                if attempt < max_retries - 1:
-                                    wait_time = 0.5 * (
-                                        2**attempt
-                                    )  # Exponential backoff: 0.5s, 1s, 2s
-                                    logger.debug(
-                                        f"Entity {entity_id} not found in state, waiting {wait_time}s before retry..."
-                                    )
-                                    await asyncio.sleep(wait_time)
-                                    continue
-                        except Exception as e:
-                            logger.debug(f"State check failed for {entity_id}: {e}")
-
-                        # Try registry lookup
-                        registry_msg: dict[str, Any] = {
-                            "type": "config/entity_registry/get",
-                            "entity_id": entity_id,
-                        }
-
-                        try:
-                            registry_result = await self.client.send_websocket_message(
-                                registry_msg
-                            )
-
-                            if registry_result.get("success"):
-                                entity_entry = registry_result.get("result", {})
-                                unique_id = entity_entry.get("unique_id")
-                                if unique_id:
-                                    logger.info(
-                                        f"Found unique_id: {unique_id} for {entity_id}"
-                                    )
-                                    break
-
-                            # If registry lookup failed but we haven't exhausted retries, wait and try again
-                            if attempt < max_retries - 1:
-                                wait_time = 0.5 * (2**attempt)  # Exponential backoff
-                                logger.debug(
-                                    f"Registry lookup failed for {entity_id}, waiting {wait_time}s before retry..."
-                                )
-                                await asyncio.sleep(wait_time)
-
-                        except Exception as e:
-                            logger.warning(
-                                f"Registry lookup attempt {attempt + 1} failed: {e}"
-                            )
-                            if attempt < max_retries - 1:
-                                wait_time = 0.5 * (2**attempt)
-                                await asyncio.sleep(wait_time)
-
-                    # Fallback strategy 1: Try deletion with helper_id directly if unique_id not found
-                    if not unique_id:
-                        logger.info(
-                            f"Could not find unique_id for {entity_id}, trying direct deletion with helper_id"
-                        )
-
-                        # Try deleting using helper_id directly (fallback approach)
-                        delete_msg: dict[str, Any] = {
-                            "type": f"{helper_type}/delete",
-                            f"{helper_type}_id": helper_id,
-                        }
-
-                        logger.info(
-                            f"Sending fallback WebSocket delete message: {delete_msg}"
-                        )
-                        result = await self.client.send_websocket_message(delete_msg)
-
-                        if result.get("success"):
-                            return {
-                                "success": True,
-                                "action": "delete",
-                                "helper_type": helper_type,
-                                "helper_id": helper_id,
-                                "entity_id": entity_id,
-                                "method": "fallback_direct_id",
-                                "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
-                            }
-
-                        # Fallback strategy 2: Check if entity was already deleted
-                        try:
-                            final_state_check = await self.client.get_state(entity_id)
-                            if not final_state_check:
-                                logger.info(
-                                    f"Entity {entity_id} no longer exists, considering deletion successful"
-                                )
-                                return {
-                                    "success": True,
-                                    "action": "delete",
-                                    "helper_type": helper_type,
-                                    "helper_id": helper_id,
-                                    "entity_id": entity_id,
-                                    "method": "already_deleted",
-                                    "message": f"Helper {helper_id} was already deleted or never properly registered",
-                                }
-                        except Exception:
-                            pass
-
-                        # Final fallback failed
-                        return {
-                            "success": False,
-                            "error": f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
-                            "helper_id": helper_id,
-                            "entity_id": entity_id,
-                            "suggestion": "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
-                        }
-
-                    # Delete helper using unique_id (correct API from docs)
-                    delete_message: dict[str, Any] = {
-                        "type": f"{helper_type}/delete",
-                        f"{helper_type}_id": unique_id,
-                    }
-
-                    logger.info(f"Sending WebSocket delete message: {delete_message}")
-                    result = await self.client.send_websocket_message(delete_message)
-                    logger.info(f"WebSocket delete response: {result}")
-
-                    if result.get("success"):
-                        return {
-                            "success": True,
-                            "action": "delete",
-                            "helper_type": helper_type,
-                            "helper_id": helper_id,
-                            "entity_id": entity_id,
-                            "unique_id": unique_id,
-                            "method": "standard",
-                            "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
-                        }
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        # Handle specific HA error messages
-                        if isinstance(error_msg, dict):
-                            error_msg = error_msg.get("message", str(error_msg))
-
-                        return {
-                            "success": False,
-                            "error": f"Failed to delete helper: {error_msg}",
-                            "helper_id": helper_id,
-                            "entity_id": entity_id,
-                            "unique_id": unique_id,
-                            "suggestion": "Make sure the helper exists and is not being used by automations or scripts",
-                        }
-
-                elif action == "create":
+                if action == "create":
                     if not name:
                         return {
                             "success": False,
@@ -1148,40 +1107,280 @@ class ToolsRegistry:
                     "helper_type": helper_type,
                     "suggestions": [
                         "Check Home Assistant connection",
-                        "Verify helper_id exists for update/delete operations",
+                        "Verify helper_id exists for update operations",
                         "Ensure required parameters are provided for the helper type",
                     ],
                 }
 
-            # This should never be reached due to the action validation above
-            return {
-                "success": False,
-                "error": f"Invalid action: {action}",
-                "action": action,
-                "helper_type": helper_type,
-            }
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_remove_helper(
+            helper_type: Annotated[
+                Literal[
+                    "input_button",
+                    "input_boolean",
+                    "input_select",
+                    "input_number",
+                    "input_text",
+                    "input_datetime",
+                ],
+                Field(description="Type of helper entity to delete"),
+            ],
+            helper_id: Annotated[
+                str,
+                Field(
+                    description="Helper ID to delete (e.g., 'my_button' or 'input_button.my_button')"
+                ),
+            ],
+        ) -> dict[str, Any]:
+            """
+            Delete a Home Assistant helper entity.
+
+            SUPPORTED HELPER TYPES:
+            - input_button, input_boolean, input_select, input_number, input_text, input_datetime
+
+            EXAMPLES:
+            - Delete button: ha_config_remove_helper("input_button", "my_button")
+            - Delete number: ha_config_remove_helper("input_number", "input_number.temperature_offset")
+
+            **WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.
+            Use ha_search_entities() to verify the helper exists before attempting to delete it.
+            """
+            try:
+                # Convert helper_id to full entity_id if needed
+                entity_id = (
+                    helper_id
+                    if helper_id.startswith(helper_type)
+                    else f"{helper_type}.{helper_id}"
+                )
+
+                # Try to get unique_id with retry logic to handle race conditions
+                unique_id = None
+                registry_result = None
+                max_retries = 3
+
+                for attempt in range(max_retries):
+                    logger.info(
+                        f"Getting entity registry for: {entity_id} (attempt {attempt + 1}/{max_retries})"
+                    )
+
+                    # Check if entity exists via state API first (faster check)
+                    try:
+                        state_check = await self.client.get_state(entity_id)
+                        if not state_check:
+                            # Entity doesn't exist in state, wait a bit for registration
+                            if attempt < max_retries - 1:
+                                wait_time = 0.5 * (
+                                    2**attempt
+                                )  # Exponential backoff: 0.5s, 1s, 2s
+                                logger.debug(
+                                    f"Entity {entity_id} not found in state, waiting {wait_time}s before retry..."
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                    except Exception as e:
+                        logger.debug(f"State check failed for {entity_id}: {e}")
+
+                    # Try registry lookup
+                    registry_msg: dict[str, Any] = {
+                        "type": "config/entity_registry/get",
+                        "entity_id": entity_id,
+                    }
+
+                    try:
+                        registry_result = await self.client.send_websocket_message(
+                            registry_msg
+                        )
+
+                        if registry_result.get("success"):
+                            entity_entry = registry_result.get("result", {})
+                            unique_id = entity_entry.get("unique_id")
+                            if unique_id:
+                                logger.info(
+                                    f"Found unique_id: {unique_id} for {entity_id}"
+                                )
+                                break
+
+                        # If registry lookup failed but we haven't exhausted retries, wait and try again
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)  # Exponential backoff
+                            logger.debug(
+                                f"Registry lookup failed for {entity_id}, waiting {wait_time}s before retry..."
+                            )
+                            await asyncio.sleep(wait_time)
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Registry lookup attempt {attempt + 1} failed: {e}"
+                        )
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            await asyncio.sleep(wait_time)
+
+                # Fallback strategy 1: Try deletion with helper_id directly if unique_id not found
+                if not unique_id:
+                    logger.info(
+                        f"Could not find unique_id for {entity_id}, trying direct deletion with helper_id"
+                    )
+
+                    # Try deleting using helper_id directly (fallback approach)
+                    delete_msg: dict[str, Any] = {
+                        "type": f"{helper_type}/delete",
+                        f"{helper_type}_id": helper_id,
+                    }
+
+                    logger.info(
+                        f"Sending fallback WebSocket delete message: {delete_msg}"
+                    )
+                    result = await self.client.send_websocket_message(delete_msg)
+
+                    if result.get("success"):
+                        return {
+                            "success": True,
+                            "action": "delete",
+                            "helper_type": helper_type,
+                            "helper_id": helper_id,
+                            "entity_id": entity_id,
+                            "method": "fallback_direct_id",
+                            "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
+                        }
+
+                    # Fallback strategy 2: Check if entity was already deleted
+                    try:
+                        final_state_check = await self.client.get_state(entity_id)
+                        if not final_state_check:
+                            logger.info(
+                                f"Entity {entity_id} no longer exists, considering deletion successful"
+                            )
+                            return {
+                                "success": True,
+                                "action": "delete",
+                                "helper_type": helper_type,
+                                "helper_id": helper_id,
+                                "entity_id": entity_id,
+                                "method": "already_deleted",
+                                "message": f"Helper {helper_id} was already deleted or never properly registered",
+                            }
+                    except Exception:
+                        pass
+
+                    # Final fallback failed
+                    return {
+                        "success": False,
+                        "error": f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
+                        "helper_id": helper_id,
+                        "entity_id": entity_id,
+                        "suggestion": "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
+                    }
+
+                # Delete helper using unique_id (correct API from docs)
+                delete_message: dict[str, Any] = {
+                    "type": f"{helper_type}/delete",
+                    f"{helper_type}_id": unique_id,
+                }
+
+                logger.info(f"Sending WebSocket delete message: {delete_message}")
+                result = await self.client.send_websocket_message(delete_message)
+                logger.info(f"WebSocket delete response: {result}")
+
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "action": "delete",
+                        "helper_type": helper_type,
+                        "helper_id": helper_id,
+                        "entity_id": entity_id,
+                        "unique_id": unique_id,
+                        "method": "standard",
+                        "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
+                    }
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    # Handle specific HA error messages
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+
+                    return {
+                        "success": False,
+                        "error": f"Failed to delete helper: {error_msg}",
+                        "helper_id": helper_id,
+                        "entity_id": entity_id,
+                        "unique_id": unique_id,
+                        "suggestion": "Make sure the helper exists and is not being used by automations or scripts",
+                    }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Helper deletion failed: {str(e)}",
+                    "helper_type": helper_type,
+                    "helper_id": helper_id,
+                    "suggestions": [
+                        "Check Home Assistant connection",
+                        "Verify helper_id exists using ha_search_entities()",
+                        "Ensure helper is not being used by automations or scripts",
+                    ],
+                }
 
         @self.mcp.tool
         @log_tool_usage
-        async def ha_manage_script(
-            action: str,
-            script_id: str | None = None,
-            config: str | dict[str, Any] | None = None,
+        async def ha_config_get_script(
+            script_id: Annotated[
+                str, Field(description="Script identifier (e.g., 'morning_routine')")
+            ],
         ) -> dict[str, Any]:
-            """Manage Home Assistant scripts - get, create, update, or delete script configurations.
+            """
+            Retrieve Home Assistant script configuration.
 
-            Args:
-                action: Action to perform ('get', 'create', 'update', 'delete')
-                script_id: Script identifier - required for all actions
-                config: Script configuration object - required for create/update
+            Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 
-            Actions:
-                - 'get': Retrieve script configuration
-                - 'create': Create new script
-                - 'update': Update existing script
-                - 'delete': Delete script
+            EXAMPLES:
+            - Get script: ha_config_get_script("morning_routine")
+            - Get script: ha_config_get_script("backup_script")
 
-            Required config fields (for create/update):
+            For detailed script configuration help, use: ha_get_domain_docs("script")
+            """
+            try:
+                config_result = await self.client.get_script_config(script_id)
+                return {
+                    "success": True,
+                    "action": "get",
+                    "script_id": script_id,
+                    "config": config_result,
+                }
+            except Exception as e:
+                logger.error(f"Error getting script: {e}")
+                return {
+                    "success": False,
+                    "action": "get",
+                    "script_id": script_id,
+                    "error": str(e),
+                    "suggestions": [
+                        "Verify script_id exists using ha_search_entities(domain_filter='script')",
+                        "Check Home Assistant connection",
+                        "Use ha_get_domain_docs('script') for configuration help",
+                    ],
+                }
+
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_set_script(
+            script_id: Annotated[
+                str, Field(description="Script identifier (e.g., 'morning_routine')")
+            ],
+            config: Annotated[
+                str | dict[str, Any],
+                Field(
+                    description="Script configuration dictionary with 'sequence' (required) and optional fields like 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
+                ),
+            ],
+        ) -> dict[str, Any]:
+            """
+            Create or update a Home Assistant script.
+
+            Creates a new script or updates an existing one with the provided configuration.
+
+            Required config fields:
                 - sequence: List of actions to execute
 
             Optional config fields:
@@ -1192,66 +1391,60 @@ class ToolsRegistry:
                 - max: Maximum concurrent executions (for queued/parallel modes)
                 - fields: Input parameters for the script
 
-            IMPORTANT: The 'config' parameter must be passed as a proper dictionary/object,
-            NOT as a JSON string. Do not escape quotes or stringify the configuration.
+            IMPORTANT: The 'config' parameter must be passed as a proper dictionary/object.
 
-            Examples:
-                Get script:
-                ha_manage_script("get", script_id="morning_routine")
+            EXAMPLES:
 
-                Create basic delay script:
-                ha_manage_script("create", script_id="wait_script", config={
-                    "sequence": [{"delay": {"seconds": 5}}],
-                    "alias": "Wait 5 Seconds",
-                    "description": "Simple delay script"
-                })
+            Create basic delay script:
+            ha_config_set_script("wait_script", {
+                "sequence": [{"delay": {"seconds": 5}}],
+                "alias": "Wait 5 Seconds",
+                "description": "Simple delay script"
+            })
 
-                Create service call script:
-                ha_manage_script("create", script_id="blink_light", config={
-                    "sequence": [
-                        {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
-                        {"delay": {"seconds": 2}},
-                        {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}}
-                    ],
-                    "alias": "Light Blink",
-                    "mode": "single"
-                })
+            Create service call script:
+            ha_config_set_script("blink_light", {
+                "sequence": [
+                    {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
+                    {"delay": {"seconds": 2}},
+                    {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}}
+                ],
+                "alias": "Light Blink",
+                "mode": "single"
+            })
 
-                Create script with parameters:
-                ha_manage_script("create", script_id="backup_script", config={
-                    "alias": "Backup with Reference",
-                    "description": "Create backup with optional reference parameter",
-                    "fields": {
-                        "reference": {
-                            "name": "Reference",
-                            "description": "Optional reference for backup identification",
-                            "selector": {"text": None}
+            Create script with parameters:
+            ha_config_set_script("backup_script", {
+                "alias": "Backup with Reference",
+                "description": "Create backup with optional reference parameter",
+                "fields": {
+                    "reference": {
+                        "name": "Reference",
+                        "description": "Optional reference for backup identification",
+                        "selector": {"text": None}
+                    }
+                },
+                "sequence": [
+                    {
+                        "action": "hassio.backup_partial",
+                        "data": {
+                            "compressed": False,
+                            "homeassistant": True,
+                            "homeassistant_exclude_database": True,
+                            "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}"
                         }
-                    },
-                    "sequence": [
-                        {
-                            "action": "hassio.backup_partial",
-                            "data": {
-                                "compressed": False,
-                                "homeassistant": True,
-                                "homeassistant_exclude_database": True,
-                                "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}"
-                            }
-                        }
-                    ]
-                })
+                    }
+                ]
+            })
 
-                Update script:
-                ha_manage_script("update", script_id="morning_routine", config={
-                    "sequence": [
-                        {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                        {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-                    ],
-                    "alias": "Updated Morning Routine"
-                })
-
-                Delete script:
-                ha_manage_script("delete", script_id="old_script")
+            Update script:
+            ha_config_set_script("morning_routine", {
+                "sequence": [
+                    {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
+                    {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
+                ],
+                "alias": "Updated Morning Routine"
+            })
 
             For detailed script configuration help, use: ha_get_domain_docs("script")
 
@@ -1259,76 +1452,48 @@ class ToolsRegistry:
             features like conditions, variables, parallel execution, and service call options.
             """
             try:
-                if action not in ["get", "create", "update", "delete"]:
+                # Parse JSON config if provided as string
+                try:
+                    parsed_config = parse_json_param(config, "config")
+                except ValueError as e:
                     return {
                         "success": False,
-                        "error": "Invalid action. Must be 'get', 'create', 'update', or 'delete'",
-                        "valid_actions": ["get", "create", "update", "delete"],
+                        "error": f"Invalid config parameter: {e}",
+                        "provided_config_type": type(config).__name__,
                     }
 
-                if not script_id:
+                # Ensure config is a dict
+                if parsed_config is None or not isinstance(parsed_config, dict):
                     return {
                         "success": False,
-                        "error": "script_id is required for all actions",
+                        "error": "Config parameter must be a JSON object",
+                        "provided_type": type(parsed_config).__name__,
                     }
 
-                if action == "get":
-                    config_result = await self.client.get_script_config(script_id)
+                config_dict = cast(dict[str, Any], parsed_config)
+
+                if "sequence" not in config_dict:
                     return {
-                        "success": True,
-                        "action": "get",
-                        "script_id": script_id,
-                        "config": config_result,
+                        "success": False,
+                        "error": "config must include 'sequence' field",
+                        "required_fields": ["sequence"],
                     }
 
-                elif action in ["create", "update"]:
-                    if not config:
-                        return {
-                            "success": False,
-                            "error": f"config is required for {action} action",
-                            "required_fields": ["sequence"],
-                        }
-
-                    # Parse JSON config if provided as string
-                    try:
-                        parsed_config = parse_json_param(config, "config")
-                    except ValueError as e:
-                        return {
-                            "success": False,
-                            "error": f"Invalid config parameter: {e}",
-                            "provided_config_type": type(config).__name__,
-                        }
-
-                    # Ensure config is a dict
-                    if parsed_config is None or not isinstance(parsed_config, dict):
-                        return {
-                            "success": False,
-                            "error": "Config parameter must be a JSON object",
-                            "provided_type": type(parsed_config).__name__,
-                        }
-
-                    config_dict = cast(dict[str, Any], parsed_config)
-                    result = await self.client.upsert_script_config(config_dict, script_id)
-                    return {
-                        "success": True,
-                        "action": action,
-                        **result,
-                        "config_provided": config_dict,
-                    }
-
-                elif action == "delete":
-                    result = await self.client.delete_script_config(script_id)
-                    return {"success": True, "action": "delete", **result}
+                result = await self.client.upsert_script_config(config_dict, script_id)
+                return {
+                    "success": True,
+                    **result,
+                    "config_provided": config_dict,
+                }
 
             except Exception as e:
-                logger.error(f"Error managing script: {e}")
+                logger.error(f"Error upserting script: {e}")
                 return {
                     "success": False,
-                    "action": action,
                     "script_id": script_id,
                     "error": str(e),
                     "suggestions": [
-                        "Ensure config includes 'sequence' field for create/update",
+                        "Ensure config includes 'sequence' field",
                         "Validate sequence actions syntax",
                         "Check entity_ids exist if using service calls",
                         "Use ha_search_entities(domain_filter='script') to find scripts",
@@ -1336,279 +1501,146 @@ class ToolsRegistry:
                     ],
                 }
 
-            # This should never be reached due to the action validation above
-            return {
-                "success": False,
-                "error": f"Invalid action: {action}",
-                "action": action,
-                "script_id": script_id,
-            }
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_remove_script(
+            script_id: Annotated[
+                str, Field(description="Script identifier to delete (e.g., 'old_script')")
+            ],
+        ) -> dict[str, Any]:
+            """
+            Delete a Home Assistant script.
+
+            EXAMPLES:
+            - Delete script: ha_config_remove_script("old_script")
+            - Delete script: ha_config_remove_script("temporary_script")
+
+            **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
+            """
+            try:
+                result = await self.client.delete_script_config(script_id)
+                return {"success": True, "action": "delete", **result}
+            except Exception as e:
+                logger.error(f"Error deleting script: {e}")
+                return {
+                    "success": False,
+                    "action": "delete",
+                    "script_id": script_id,
+                    "error": str(e),
+                    "suggestions": [
+                        "Verify script_id exists using ha_search_entities(domain_filter='script')",
+                        "Check if script is being used by automations",
+                        "Use ha_get_domain_docs('script') for configuration help",
+                    ],
+                }
 
         @self.mcp.tool
         @log_tool_usage
-        async def ha_manage_automation(
-            action: str,
-            identifier: str | None = None,
-            config: str | dict[str, Any] | None = None,
+        async def ha_config_get_automation(
+            identifier: Annotated[
+                str,
+                Field(
+                    description="Automation entity_id (e.g., 'automation.morning_routine') or unique_id"
+                ),
+            ],
         ) -> dict[str, Any]:
             """
-            Comprehensive Home Assistant automation management with full configuration support.
+            Retrieve Home Assistant automation configuration.
 
-            This tool provides complete CRUD operations for Home Assistant automations with extensive documentation
-            and examples covering all automation capabilities from basic time-based triggers to advanced templating.
+            Returns the complete configuration including triggers, conditions, actions, and mode settings.
 
-            **ACTIONS:**
-            - 'get': Retrieve automation configuration
-            - 'create': Create new automation (identifier optional, generates unique_id if not provided)
-            - 'update': Update existing automation (requires identifier)
-            - 'delete': Delete automation (requires identifier)
+            EXAMPLES:
+            - Get automation: ha_config_get_automation("automation.morning_routine")
+            - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
 
-            **PARAMETERS:**
-            - action: Operation to perform
-            - identifier: Automation entity_id (automation.name) or unique_id - required for get/update/delete
-            - config: Complete automation configuration dictionary - required for create/update
+            For comprehensive automation documentation, use: ha_get_domain_docs("automation")
+            """
+            try:
+                config_result = await self.client.get_automation_config(identifier)
+                return {
+                    "success": True,
+                    "action": "get",
+                    "identifier": identifier,
+                    "config": config_result,
+                }
+            except Exception as e:
+                # Handle 404 errors gracefully (often used to verify deletion)
+                error_str = str(e)
+                if (
+                    "404" in error_str
+                    or "not found" in error_str.lower()
+                    or "entity not found" in error_str.lower()
+                ):
+                    logger.debug(
+                        f"Automation {identifier} not found (expected for deletion verification)"
+                    )
+                    return {
+                        "success": False,
+                        "action": "get",
+                        "identifier": identifier,
+                        "error": f"Automation {identifier} does not exist",
+                        "reason": "not_found",
+                    }
 
-            **AUTOMATION CONFIGURATION STRUCTURE:**
+                logger.error(f"Error getting automation: {e}")
+                return {
+                    "success": False,
+                    "action": "get",
+                    "identifier": identifier,
+                    "error": str(e),
+                    "suggestions": [
+                        "Verify automation exists using ha_search_entities(domain_filter='automation')",
+                        "Check Home Assistant connection",
+                        "Use ha_get_domain_docs('automation') for configuration help",
+                    ],
+                }
 
-            **Required Fields:**
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_set_automation(
+            config: Annotated[
+                str | dict[str, Any],
+                Field(
+                    description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'"
+                ),
+            ],
+            identifier: Annotated[
+                str | None,
+                Field(
+                    description="Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.",
+                    default=None,
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            """
+            Create or update a Home Assistant automation.
+
+            Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
+
+            REQUIRED CONFIG FIELDS:
             - alias: Human-readable automation name
-            - trigger: List of trigger conditions that start the automation
-            - action: List of actions to execute when triggered
+            - trigger: List of trigger conditions (time, state, event, etc.)
+            - action: List of actions to execute
 
-            **Optional Fields:**
-            - description: Detailed automation description
+            OPTIONAL CONFIG FIELDS:
+            - description: Detailed description
             - condition: Additional conditions that must be met
-            - mode: Execution behavior ('single', 'restart', 'queued', 'parallel')
+            - mode: 'single' (default), 'restart', 'queued', 'parallel'
             - max: Maximum concurrent executions (for queued/parallel modes)
             - initial_state: Whether automation starts enabled (true/false)
-            - variables: Define variables for use in automation
+            - variables: Variables for use in automation
 
-            **COMPREHENSIVE TRIGGER TYPES:**
+            BASIC EXAMPLES:
 
-            **Time-Based Triggers:**
-            ```python
-            # Time trigger - specific time
-            {"platform": "time", "at": "07:30:00"}
-            {"platform": "time", "at": ["06:00:00", "20:00:00"]}  # Multiple times
-
-            # Time pattern - periodic execution
-            {"platform": "time_pattern", "minutes": 15}  # Every 15 minutes
-            {"platform": "time_pattern", "hours": 2}     # Every 2 hours
-            {"platform": "time_pattern", "seconds": "/30"} # Every 30 seconds
-
-            # Sun-based triggers
-            {"platform": "sun", "event": "sunrise"}
-            {"platform": "sun", "event": "sunset", "offset": "-00:30:00"}  # 30 min before
-            ```
-
-            **State-Based Triggers:**
-            ```python
-            # Entity state change
-            {"platform": "state", "entity_id": "light.living_room", "to": "on"}
-            {"platform": "state", "entity_id": "sensor.temperature", "above": 25}
-            {"platform": "state", "entity_id": "binary_sensor.door", "from": "off", "to": "on"}
-
-            # Numeric state with templates
-            {"platform": "numeric_state", "entity_id": "sensor.humidity", "below": 30}
-            {"platform": "numeric_state", "entity_id": "sensor.battery",
-             "below": 20, "for": {"minutes": 5}}  # Must stay below for 5 min
-            ```
-
-            **Event Triggers:**
-            ```python
-            # Device events (buttons, switches)
-            {"platform": "device", "device_id": "abc123", "domain": "zha",
-             "type": "remote_button_short_press", "subtype": "turn_on"}
-
-            # Generic events
-            {"platform": "event", "event_type": "automation_reloaded"}
-            {"platform": "event", "event_type": "call_service",
-             "event_data": {"domain": "light", "service": "turn_on"}}
-            ```
-
-            **Zone & Location Triggers:**
-            ```python
-            # Geographic zone entry/exit
-            {"platform": "zone", "entity_id": "person.john", "zone": "zone.home", "event": "enter"}
-            {"platform": "zone", "entity_id": "device_tracker.phone", "zone": "zone.work", "event": "leave"}
-
-            # Geographic location
-            {"platform": "geo_location", "source": "nsw_rural_fire_service_feed", "zone": "zone.home", "event": "enter"}
-            ```
-
-            **Template Triggers:**
-            ```python
-            # Advanced template-based triggers
-            {"platform": "template", "value_template": "{{ states('sensor.temperature') | float > 25 }}"}
-            {"platform": "template",
-             "value_template": "{{ is_state('binary_sensor.workday', 'on') and now().hour == 7 }}"}
-            ```
-
-            **COMPREHENSIVE CONDITION TYPES:**
-
-            **State Conditions:**
-            ```python
-            # Simple state checks
-            {"condition": "state", "entity_id": "light.bedroom", "state": "off"}
-            {"condition": "state", "entity_id": "person.john", "state": "home", "for": {"minutes": 10}}
-
-            # Numeric conditions
-            {"condition": "numeric_state", "entity_id": "sensor.temperature", "above": 20}
-            {"condition": "numeric_state", "entity_id": "sensor.humidity", "below": 70, "above": 30}
-            ```
-
-            **Time Conditions:**
-            ```python
-            # Time-based conditions
-            {"condition": "time", "after": "22:00:00", "before": "06:00:00"}  # Night time
-            {"condition": "time", "weekday": ["mon", "tue", "wed", "thu", "fri"]}  # Weekdays
-
-            # Sun conditions
-            {"condition": "sun", "after": "sunset"}
-            {"condition": "sun", "before": "sunrise", "after_offset": "-01:00:00"}
-            ```
-
-            **Template Conditions:**
-            ```python
-            # Advanced template conditions
-            {"condition": "template", "value_template": "{{ states('sensor.battery') | int > 20 }}"}
-            {"condition": "template",
-             "value_template": "{{ is_state('binary_sensor.workday', 'on') and now().weekday() < 5 }}"}
-            ```
-
-            **Device Conditions:**
-            ```python
-            # Device-specific conditions
-            {"condition": "device", "device_id": "abc123", "domain": "binary_sensor",
-             "entity_id": "binary_sensor.motion", "type": "is_off"}
-            ```
-
-            **Zone Conditions:**
-            ```python
-            # Location-based conditions
-            {"condition": "zone", "entity_id": "person.john", "zone": "zone.home"}
-            {"condition": "zone", "entity_id": "device_tracker.phone", "zone": "zone.work"}
-            ```
-
-            **COMPREHENSIVE ACTION TYPES:**
-
-            **Service Call Actions:**
-            ```python
-            # Basic service calls
-            {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}}
-            {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"},
-             "data": {"temperature": 22}}
-
-            # Service calls with templates
-            {"service": "notify.mobile_app", "data": {
-                "message": "Temperature is {{ states('sensor.temperature') }}°C",
-                "title": "Home Status"
-            }}
-            ```
-
-            **Control Flow Actions:**
-            ```python
-            # Delays and waits
-            {"delay": {"seconds": 30}}
-            {"delay": {"minutes": 5}}
-            {"delay": "00:02:00"}  # 2 minutes
-
-            # Wait for state changes
-            {"wait_for_trigger": [
-                {"platform": "state", "entity_id": "binary_sensor.door", "to": "on"}
-            ], "timeout": "00:05:00"}
-
-            # Wait for templates
-            {"wait_template": "{{ is_state('light.bedroom', 'on') }}", "timeout": "00:01:00"}
-            ```
-
-            **Conditional Actions:**
-            ```python
-            # If-then-else logic
-            {"if": [{"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"}],
-             "then": [{"service": "light.turn_on", "target": {"entity_id": "light.porch"}}],
-             "else": [{"service": "light.turn_off", "target": {"entity_id": "light.porch"}}]}
-
-            # Choose between multiple options
-            {"choose": [
-                {"conditions": [{"condition": "state", "entity_id": "sensor.season", "state": "winter"}],
-                 "sequence": [{"service": "climate.set_temperature", "data": {"temperature": 22}}]},
-                {"conditions": [{"condition": "state", "entity_id": "sensor.season", "state": "summer"}],
-                 "sequence": [{"service": "climate.set_temperature", "data": {"temperature": 18}}]}
-             ],
-             "default": [{"service": "climate.set_temperature", "data": {"temperature": 20}}]}
-            ```
-
-            **Loop Actions:**
-            ```python
-            # Repeat actions
-            {"repeat": {
-                "count": 3,
-                "sequence": [
-                    {"service": "light.toggle", "target": {"entity_id": "light.living_room"}},
-                    {"delay": {"seconds": 1}}
-                ]
-            }}
-
-            # Repeat while condition is true
-            {"repeat": {
-                "while": [{"condition": "state", "entity_id": "binary_sensor.motion", "state": "on"}],
-                "sequence": [{"delay": {"seconds": 30}}]
-            }}
-            ```
-
-            **Parallel Actions:**
-            ```python
-            # Execute actions simultaneously
-            {"parallel": [
-                [{"service": "light.turn_on", "target": {"area_id": "living_room"}}],
-                [{"service": "media_player.play_media", "target": {"entity_id": "media_player.speakers"},
-                  "data": {"media_content_type": "music", "media_content_id": "spotify:playlist:123"}}]
-            ]}
-            ```
-
-            **EXECUTION MODES:**
-            - **single** (default): Only one instance runs, new triggers ignored while running
-            - **restart**: Stop current instance and start new one when triggered
-            - **queued**: Queue up to 'max' instances, execute sequentially
-            - **parallel**: Run up to 'max' instances simultaneously
-
-            **TEMPLATE VARIABLES:**
-
-            **Trigger Variables (available in actions/conditions):**
-            - `trigger.platform`: Type of trigger (time, state, etc.)
-            - `trigger.entity_id`: Entity that triggered (for state/numeric_state triggers)
-            - `trigger.from_state`: Previous state object
-            - `trigger.to_state`: New state object
-            - `trigger.for`: Duration state was maintained
-            - `trigger.now`: Timestamp when trigger fired
-
-            **State Object Variables:**
-            - `trigger.to_state.state`: Entity's new state value
-            - `trigger.to_state.attributes`: All entity attributes
-            - `trigger.to_state.last_changed`: When state last changed
-            - `trigger.to_state.last_updated`: When state was last updated
-
-            **This Context:**
-            - `this.entity_id`: The automation's own entity ID
-            - `this.state`: Current automation state (on/off)
-            - `this.attributes`: Automation attributes (last_triggered, etc.)
-
-            **BASIC EXAMPLES:**
-
-            **Simple Time-Based Automation:**
-            ```python
-            ha_manage_automation("create", config={
+            Simple time-based automation:
+            ha_config_set_automation({
                 "alias": "Morning Lights",
-                "description": "Turn on lights every morning at 7 AM",
                 "trigger": [{"platform": "time", "at": "07:00:00"}],
                 "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
             })
-            ```
 
-            **Motion-Activated Lighting:**
-            ```python
-            ha_manage_automation("create", config={
+            Motion-activated lighting with condition:
+            ha_config_set_automation({
                 "alias": "Motion Light",
                 "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
                 "condition": [{"condition": "sun", "after": "sunset"}],
@@ -1619,217 +1651,79 @@ class ToolsRegistry:
                 ],
                 "mode": "restart"
             })
-            ```
 
-            **ADVANCED EXAMPLES:**
+            Update existing automation:
+            ha_config_set_automation(
+                identifier="automation.morning_routine",
+                config={
+                    "alias": "Updated Morning Routine",
+                    "trigger": [{"platform": "time", "at": "06:30:00"}],
+                    "action": [
+                        {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
+                        {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
+                    ]
+                }
+            )
 
-            **Climate Control with Multiple Conditions:**
-            ```python
-            ha_manage_automation("create", config={
-                "alias": "Smart Climate Control",
-                "trigger": [
-                    {"platform": "numeric_state", "entity_id": "sensor.temperature", "above": 25},
-                    {"platform": "state", "entity_id": "binary_sensor.presence", "to": "on"}
-                ],
-                "condition": [
-                    {"condition": "time", "after": "08:00:00", "before": "22:00:00"},
-                    {"condition": "state", "entity_id": "climate.living_room", "state": "off"}
-                ],
-                "action": [
-                    {"service": "climate.turn_on", "target": {"entity_id": "climate.living_room"}},
-                    {"service": "climate.set_temperature", "target": {"entity_id": "climate.living_room"},
-                     "data": {"temperature": 22}}
-                ]
-            })
-            ```
+            TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
+            CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
+            ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
-            **Advanced Security Automation:**
-            ```python
-            ha_manage_automation("create", config={
-                "alias": "Security Alert System",
-                "trigger": [{"platform": "state", "entity_id": "binary_sensor.door", "to": "on"}],
-                "condition": [
-                    {"condition": "state", "entity_id": "alarm_control_panel.home", "state": "armed_away"},
-                    {"condition": "template", "value_template": "{{ not is_state('person.owner', 'home') }}"}
-                ],
-                "action": [
-                    {"service": "alarm_control_panel.alarm_trigger", "target": {"entity_id": "alarm_control_panel.home"}},
-                    {"service": "light.turn_on", "target": {"area_id": "all"}, "data": {"brightness_pct": 100}},
-                    {"service": "notify.mobile_app", "data": {
-                        "message": "SECURITY ALERT: Door opened at {{ now().strftime('%H:%M:%S') }}",
-                        "title": "Home Security",
-                        "data": {"priority": "high", "ttl": 0}
-                    }}
-                ],
-                "mode": "single"
-            })
-            ```
+            For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
+            - Use: ha_get_domain_docs("automation")
+            - Or visit: https://www.home-assistant.io/docs/automation/
 
-            **Dynamic Response Automation:**
-            ```python
-            ha_manage_automation("create", config={
-                "alias": "Adaptive Lighting",
-                "trigger": [{"platform": "sun", "event": "sunset", "offset": "-00:30:00"}],
-                "variables": {
-                    "brightness": "{{ 80 if is_state('binary_sensor.tv', 'on') else 60 }}",
-                    "color_temp": "{{ 2700 if now().hour > 20 else 3000 }}"
-                },
-                "action": [
-                    {"service": "light.turn_on", "target": {"area_id": "living_room"}, "data": {
-                        "brightness_pct": "{{ brightness }}",
-                        "color_temp_kelvin": "{{ color_temp }}"
-                    }},
-                    {"service": "notify.family", "data": {
-                        "message": "Evening lights activated with {{ brightness }}% brightness"
-                    }}
-                ]
-            })
-            ```
-
-            **MANAGEMENT EXAMPLES:**
-
-            **Get automation:**
-            ```python
-            ha_manage_automation("get", identifier="automation.morning_routine")
-            ha_manage_automation("get", identifier="my_unique_automation_id")  # By unique_id
-            ```
-
-            **Update automation:**
-            ```python
-            ha_manage_automation("update", identifier="automation.morning_routine", config={
-                "alias": "Updated Morning Routine",
-                "trigger": [{"platform": "time", "at": "06:30:00"}],  # Changed time
-                "action": [
-                    {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                    {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"},
-                     "data": {"temperature": 22}}  # Added climate control
-                ]
-            })
-            ```
-
-            **Delete automation:**
-            ```python
-            ha_manage_automation("delete", identifier="automation.old_automation")
-            ```
-
-            **TROUBLESHOOTING TIPS:**
-            - Use ha_get_state() to verify entity_ids exist and check their current states
-            - Use ha_search_entities() to find correct entity_ids for your automations
-            - Use ha_eval_template() to test Jinja2 template expressions before using them in automations
-            - Search for similar existing automations with ha_search_entities(domain_filter='automation') for inspiration
-            - Use description fields to document automation purpose and logic
-
-            **For complete automation documentation:** ha_get_domain_docs("automation")
-            **For template syntax help:** https://www.home-assistant.io/docs/configuration/templating/
-            **For service reference:** Use ha_call_service() with different domains to explore available services
+            TROUBLESHOOTING:
+            - Use ha_get_state() to verify entity_ids exist
+            - Use ha_search_entities() to find correct entity_ids
+            - Use ha_eval_template() to test Jinja2 templates before using in automations
+            - Use ha_search_entities(domain_filter='automation') to find existing automations
             """
             try:
-                if action not in ["get", "create", "update", "delete"]:
+                # Parse JSON config if provided as string
+                try:
+                    parsed_config = parse_json_param(config, "config")
+                except ValueError as e:
                     return {
                         "success": False,
-                        "error": "Invalid action. Must be 'get', 'create', 'update', or 'delete'",
-                        "valid_actions": ["get", "create", "update", "delete"],
+                        "error": f"Invalid config parameter: {e}",
+                        "provided_config_type": type(config).__name__,
                     }
 
-                if action == "get":
-                    if not identifier:
-                        return {
-                            "success": False,
-                            "error": "identifier is required for get action",
-                        }
-
-                    config_result = await self.client.get_automation_config(identifier)
+                # Ensure config is a dict
+                if parsed_config is None or not isinstance(parsed_config, dict):
                     return {
-                        "success": True,
-                        "action": "get",
-                        "identifier": identifier,
-                        "config": config_result,
+                        "success": False,
+                        "error": "Config parameter must be a JSON object",
+                        "provided_type": type(parsed_config).__name__,
                     }
 
-                elif action in ["create", "update"]:
-                    if not config:
-                        return {
-                            "success": False,
-                            "error": f"config is required for {action} action",
-                            "required_fields": ["alias", "trigger", "action"],
-                        }
+                config_dict = cast(dict[str, Any], parsed_config)
 
-                    # Parse JSON config if provided as string
-                    try:
-                        parsed_config = parse_json_param(config, "config")
-                    except ValueError as e:
-                        return {
-                            "success": False,
-                            "error": f"Invalid config parameter: {e}",
-                            "provided_config_type": type(config).__name__,
-                        }
-
-                    # Ensure config is a dict
-                    if parsed_config is None or not isinstance(parsed_config, dict):
-                        return {
-                            "success": False,
-                            "error": "Config parameter must be a JSON object",
-                            "provided_type": type(parsed_config).__name__,
-                        }
-
-                    if action == "update" and not identifier:
-                        return {
-                            "success": False,
-                            "error": "identifier is required for update action",
-                        }
-
-                    config_dict = cast(dict[str, Any], parsed_config)
-                    result = await self.client.upsert_automation_config(
-                        config_dict, identifier
-                    )
+                # Validate required fields
+                required_fields = ["alias", "trigger", "action"]
+                missing_fields = [f for f in required_fields if f not in config_dict]
+                if missing_fields:
                     return {
-                        "success": True,
-                        "action": action,
-                        **result,
-                        "config_provided": config_dict,
+                        "success": False,
+                        "error": f"Missing required fields: {', '.join(missing_fields)}",
+                        "required_fields": required_fields,
+                        "missing_fields": missing_fields,
                     }
 
-                elif action == "delete":
-                    if not identifier:
-                        return {
-                            "success": False,
-                            "error": "identifier is required for delete action",
-                        }
-
-                    result = await self.client.delete_automation_config(identifier)
-                    return {"success": True, "action": "delete", **result}
-
-                # This should never be reached due to the action validation above
+                result = await self.client.upsert_automation_config(
+                    config_dict, identifier
+                )
                 return {
-                    "success": False,
-                    "error": f"Invalid action: {action}",
-                    "action": action,
-                    "identifier": identifier,
+                    "success": True,
+                    **result,
+                    "config_provided": config_dict,
                 }
 
             except Exception as e:
-                # Handle 404 errors gracefully for 'get' action (often used to verify deletion)
-                error_str = str(e)
-                if action == "get" and (
-                    "404" in error_str
-                    or "not found" in error_str.lower()
-                    or "entity not found" in error_str.lower()
-                ):
-                    logger.debug(
-                        f"Automation {identifier} not found (expected for deletion verification)"
-                    )
-                    return {
-                        "success": False,
-                        "action": action,
-                        "identifier": identifier,
-                        "error": f"Automation {identifier} does not exist",
-                        "reason": "not_found",
-                    }
-
-                logger.error(f"Error managing automation: {e}")
+                logger.error(f"Error upserting automation: {e}")
                 return {
                     "success": False,
-                    "action": action,
                     "identifier": identifier,
                     "error": str(e),
                     "suggestions": [
@@ -1837,7 +1731,43 @@ class ToolsRegistry:
                         "Ensure required fields: alias, trigger, action",
                         "Use entity_id format: automation.morning_routine or unique_id",
                         "Use ha_search_entities(domain_filter='automation') to find automations",
-                        "Use ha_get_domain_docs('automation') for configuration help",
+                        "Use ha_get_domain_docs('automation') for comprehensive configuration help",
+                    ],
+                }
+
+        @self.mcp.tool
+        @log_tool_usage
+        async def ha_config_remove_automation(
+            identifier: Annotated[
+                str,
+                Field(
+                    description="Automation entity_id (e.g., 'automation.old_automation') or unique_id to delete"
+                ),
+            ],
+        ) -> dict[str, Any]:
+            """
+            Delete a Home Assistant automation.
+
+            EXAMPLES:
+            - Delete automation: ha_config_remove_automation("automation.old_automation")
+            - Delete by unique_id: ha_config_remove_automation("my_unique_id")
+
+            **WARNING:** Deleting an automation removes it permanently from your Home Assistant configuration.
+            """
+            try:
+                result = await self.client.delete_automation_config(identifier)
+                return {"success": True, "action": "delete", **result}
+            except Exception as e:
+                logger.error(f"Error deleting automation: {e}")
+                return {
+                    "success": False,
+                    "action": "delete",
+                    "identifier": identifier,
+                    "error": str(e),
+                    "suggestions": [
+                        "Verify automation exists using ha_search_entities(domain_filter='automation')",
+                        "Use entity_id format: automation.morning_routine or unique_id",
+                        "Check Home Assistant connection",
                     ],
                 }
 
