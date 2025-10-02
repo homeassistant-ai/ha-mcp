@@ -348,9 +348,21 @@ class ToolsRegistry:
 
         @self.mcp.tool
         @log_tool_usage
-        async def ha_get_overview() -> dict[str, Any]:
-            """Get AI-friendly system overview with intelligent categorization."""
-            result = await self.smart_tools.get_system_overview()
+        async def ha_get_overview(
+            detail_level: Annotated[
+                Literal["minimal", "standard", "detailed", "full"],
+                Field(
+                    default="standard",
+                    description="Level of detail: 'minimal' (~300 tokens), 'standard' (~700 tokens, default), 'detailed' (~5500 tokens), 'full' (~8800 tokens)",
+                ),
+            ] = "standard",
+        ) -> dict[str, Any]:
+            """Get AI-friendly system overview with intelligent categorization.
+
+            Use 'standard' (default) for general discovery. Use 'minimal' for quick checks.
+            Use 'detailed' for domain analysis. Use 'full' for complete service catalog.
+            """
+            result = await self.smart_tools.get_system_overview(detail_level)
             return cast(dict[str, Any], result)
 
         @self.mcp.tool

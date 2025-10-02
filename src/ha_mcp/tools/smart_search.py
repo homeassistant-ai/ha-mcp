@@ -205,12 +205,21 @@ class SmartSearchTools:
                 ],
             }
 
-    async def get_system_overview(self) -> dict[str, Any]:
+    async def get_system_overview(
+        self, detail_level: str = "standard"
+    ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
 
+        Args:
+            detail_level: Level of detail to return:
+                - "minimal": Just counts and AI insights (~300 tokens)
+                - "standard": Counts + controllable devices + top domains (~700 tokens) [DEFAULT]
+                - "detailed": Full domain stats without service catalog (~5,500 tokens)
+                - "full": Everything including service catalog (~8,800 tokens)
+
         Returns:
-            Comprehensive system overview optimized for AI understanding
+            System overview optimized for AI understanding at requested detail level
         """
         try:
             # Get all entities and services
@@ -291,56 +300,124 @@ class SmartSearchTools:
                 # Fallback for unexpected format
                 total_services = 0
 
-            return {
-                "success": True,
-                "total_entities": len(entities),
-                "entity_summary": domain_stats,
-                "controllable_devices": {
-                    k: v
-                    for k, v in domain_stats.items()
-                    if k in ["light", "switch", "climate", "media_player", "cover"]
-                },
-                "system_summary": {
+            # Build AI insights
+            ai_insights = {
+                "most_common_domains": [domain for domain, _ in sorted_domains[:5]],
+                "controllable_devices": [
+                    domain
+                    for domain in domain_stats.keys()
+                    if domain in ["light", "switch", "climate", "media_player", "cover"]
+                ],
+                "monitoring_sensors": [
+                    domain
+                    for domain in domain_stats.keys()
+                    if domain in ["sensor", "binary_sensor", "camera"]
+                ],
+                "automation_ready": "automation" in domain_stats
+                and domain_stats["automation"]["count"] > 0,
+            }
+
+            # Domain counts (sorted by count)
+            domain_counts = {
+                domain: stats["count"]
+                for domain, stats in sorted_domains
+            }
+
+            # Controllable devices summary
+            controllable_devices = {
+                k: {
+                    "count": v["count"],
+                    "states_summary": v["states"],
+                }
+                for k, v in domain_stats.items()
+                if k in ["light", "switch", "climate", "media_player", "cover"]
+            }
+
+            # Return based on detail level
+            if detail_level == "minimal":
+                return {
+                    "success": True,
                     "total_entities": len(entities),
                     "total_domains": len(domain_stats),
-                    "total_services": total_services,
                     "total_areas": len(area_stats),
+                    "domain_counts": domain_counts,
+                    "controllable_domains": sorted(controllable_devices.keys()),
+                    "ai_insights": ai_insights,
+                }
+
+            elif detail_level == "standard":
+                return {
+                    "success": True,
+                    "system_summary": {
+                        "total_entities": len(entities),
+                        "total_domains": len(domain_stats),
+                        "total_services": total_services,
+                        "total_areas": len(area_stats),
+                    },
+                    "domain_counts": domain_counts,
+                    "controllable_devices": controllable_devices,
                     "top_domains": [
                         {
                             "domain": domain,
                             "count": stats["count"],
-                            "sample_entities": stats["sample_entities"],
+                            "sample_entity": stats["sample_entities"][0]
+                            if stats["sample_entities"]
+                            else None,
                         }
-                        for domain, stats in sorted_domains[:10]
+                        for domain, stats in sorted_domains[:5]
                     ],
-                },
-                "domain_analysis": domain_stats,
-                "area_analysis": area_stats,
-                "device_types": device_types,
-                "service_availability": service_stats,
-                "ai_insights": {
-                    "most_common_domains": [domain for domain, _ in sorted_domains[:5]],
-                    "controllable_devices": [
-                        domain
-                        for domain in domain_stats.keys()
-                        if domain
-                        in ["light", "switch", "climate", "media_player", "cover"]
-                    ],
-                    "monitoring_sensors": [
-                        domain
-                        for domain in domain_stats.keys()
-                        if domain in ["sensor", "binary_sensor", "camera"]
-                    ],
-                    "automation_ready": "automation" in domain_stats
-                    and domain_stats["automation"]["count"] > 0,
-                },
-                "usage_recommendations": [
-                    "Use call_service() for device control",
-                    "Use smart_entity_search() for finding specific devices",
-                    "Use get_entities_by_area() for room-based control",
-                    "Check automation domain for existing automations",
-                ],
-            }
+                    "ai_insights": ai_insights,
+                }
+
+            elif detail_level == "detailed":
+                # Add sample entities back to controllable devices
+                controllable_detailed = {
+                    k: {
+                        "count": v["count"],
+                        "states_summary": v["states"],
+                        "sample_entities": v["sample_entities"][:2],  # 2 samples
+                    }
+                    for k, v in domain_stats.items()
+                    if k in ["light", "switch", "climate", "media_player", "cover"]
+                }
+
+                return {
+                    "success": True,
+                    "system_summary": {
+                        "total_entities": len(entities),
+                        "total_domains": len(domain_stats),
+                        "total_services": total_services,
+                        "total_areas": len(area_stats),
+                    },
+                    "domain_stats": {
+                        domain: {
+                            "count": stats["count"],
+                            "states_summary": stats["states"],
+                            "sample_entities": stats["sample_entities"][:2],  # 2 samples
+                        }
+                        for domain, stats in sorted_domains
+                    },
+                    "controllable_devices": controllable_detailed,
+                    "area_analysis": area_stats,
+                    "device_types": device_types,
+                    "ai_insights": ai_insights,
+                }
+
+            else:  # "full"
+                return {
+                    "success": True,
+                    "system_summary": {
+                        "total_entities": len(entities),
+                        "total_domains": len(domain_stats),
+                        "total_services": total_services,
+                        "total_areas": len(area_stats),
+                    },
+                    "domain_stats": domain_stats,  # Full stats with 3 samples
+                    "area_analysis": area_stats,
+                    "device_types": device_types,
+                    "service_availability": service_stats,
+                    "ai_insights": ai_insights,
+                }
 
         except Exception as e:
             logger.error(f"Error in get_system_overview: {e}")
