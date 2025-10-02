@@ -357,68 +357,30 @@ await mcp.call_tool("ha_config_set_helper", {
 3. For delete operations: only keep domain-specific params (no `name=""` cruft)
 4. Use automated transformation where possible (sed scripts, bulk find/replace)
 
-## 🔄 Package Renaming Best Practices
+## 📦 Semantic Versioning with semantic-release
 
-**Learned from homeassistant-mcp → ha-mcp rename (v2.0.0):**
+**Commit message format controls version bumps:**
 
-### When to Rename (Timing Matters!)
-- ✅ **Before first PyPI publish** - No users to break
-- ✅ **Before public release** - Clean start
-- ❌ After users exist - Requires migration strategy and deprecation
-
-### Complete Rename Checklist
-
-**1. Package Infrastructure:**
-- [ ] `pyproject.toml` - `name = "new-name"`
-- [ ] `pyproject.toml` - `[project.scripts]` CLI command
-- [ ] `pyproject.toml` - `[tool.setuptools.package-data]`
-- [ ] `pyproject.toml` - `[tool.isort] known_first_party`
-- [ ] `pyproject.toml` - `[tool.semantic_release] version_variables`
-
-**2. Source Code:**
-- [ ] Rename directory: `git mv src/old_name src/new_name`
-- [ ] Update all imports: `sed -i 's/from old_name/from new_name/g'`
-- [ ] Update config defaults (server names, etc.)
-
-**3. Build Artifacts & Configs:**
-- [ ] Delete old `.egg-info/` directory
-- [ ] Update `fastmcp.json` path
-- [ ] Update `.env.example` references
-- [ ] Rebuild: `uv sync` (auto-updates `uv.lock`)
-
-**4. Documentation:**
-- [ ] README.md - Clone URLs, examples
-- [ ] AGENTS.md/CLAUDE.md - Architecture diagrams, commands
-- [ ] Logo/assets filenames
-- [ ] Run scripts (`.sh`, `.bat`)
-
-**5. Verification:**
 ```bash
-# Search for old references
-grep -r "old-name" --include="*.md" --include="*.py" --include="*.toml" --include="*.json"
+# Patch bump (1.0.0 → 1.0.1)
+fix: bug description
+perf: performance improvement
+refactor: code refactoring
 
-# Test build
-uv sync
-uv run new-name --help
+# Minor bump (1.0.0 → 1.1.0)
+feat: new feature description
 
-# Verify package name in lock
-grep "^name = " uv.lock | grep new-name
+# Major bump (1.0.0 → 2.0.0)
+feat!: breaking change description
+# OR
+feat: description
+
+BREAKING CHANGE: explanation of breaking change
+
+# No version bump
+chore: maintenance task
+docs: documentation update
+test: test changes
 ```
 
-### Python Package Naming Convention
-- **Package name** (PyPI): Use hyphens `my-package`
-- **Module name** (imports): Use underscores `my_package`
-- **CLI command**: Use hyphens `my-package`
-
-**Example:**
-```toml
-[project]
-name = "ha-mcp"  # PyPI package
-
-[project.scripts]
-ha-mcp = "ha_mcp.__main__:main"  # CLI → module
-```
-
-### Semantic Versioning for Renames
-- Major bump (2.0.0): Use `feat!:` with `BREAKING CHANGE:` in commit
-- Provides clear signal to users that this is incompatible
+**Configuration location:** `pyproject.toml` under `[tool.semantic_release]`
