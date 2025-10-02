@@ -989,6 +989,7 @@ async def test_helper_search_and_discovery(mcp_client):
         "input_button",
     ]
 
+    helpers_found = False
     for domain in helper_domains:
         logger.info(f"🔍 Searching for {domain} helpers...")
         search_result = await mcp_client.call_tool(
@@ -1013,6 +1014,7 @@ async def test_helper_search_and_discovery(mcp_client):
 
         # If helpers exist, verify their structure
         if results:
+            helpers_found = True
             first_helper = results[0]
             assert "entity_id" in first_helper, (
                 f"Missing entity_id in {domain} helper: {first_helper}"
@@ -1022,17 +1024,20 @@ async def test_helper_search_and_discovery(mcp_client):
             )
             logger.info(f"✅ Sample {domain} helper: {first_helper.get('entity_id')}")
 
-    # Get system overview to see helper information
+    # Get system overview to see helper information (use standard level for full domain listing)
     logger.info("🔍 Getting system overview...")
-    overview_result = await mcp_client.call_tool("ha_get_overview")
+    overview_result = await mcp_client.call_tool("ha_get_overview", {"detail_level": "standard"})
     overview_data = parse_mcp_result(overview_result)
 
-    # Should have helper information in overview
-    overview_text = str(overview_data).lower()
-    assert "input_" in overview_text or "helper" in overview_text, (
-        "System overview should include helper information"
-    )
-    logger.info("✅ System overview includes helper data")
+    # If helpers were found, they should appear in overview
+    if helpers_found:
+        overview_text = str(overview_data).lower()
+        assert "input_" in overview_text or "helper" in overview_text, (
+            "System overview should include helper information when helpers exist"
+        )
+        logger.info("✅ System overview includes helper data")
+    else:
+        logger.info("ℹ️ No helpers found in test environment, skipping overview validation")
 
     logger.info("✅ Helper search and discovery tests completed")
 

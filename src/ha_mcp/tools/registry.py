@@ -348,9 +348,49 @@ class ToolsRegistry:
 
         @self.mcp.tool
         @log_tool_usage
-        async def ha_get_overview() -> dict[str, Any]:
-            """Get AI-friendly system overview with intelligent categorization."""
-            result = await self.smart_tools.get_system_overview()
+        async def ha_get_overview(
+            detail_level: Annotated[
+                Literal["minimal", "standard", "full"],
+                Field(
+                    default="standard",
+                    description=(
+                        "Level of detail - "
+                        "'minimal': 10 random entities per domain (friendly_name only); "
+                        "'standard': ALL entities per domain (friendly_name only, default); "
+                        "'full': ALL entities with entity_id + friendly_name + state"
+                    ),
+                ),
+            ] = "standard",
+            max_entities_per_domain: Annotated[
+                int | None,
+                Field(
+                    default=None,
+                    description="Override max entities per domain (None = all). Minimal defaults to 10.",
+                ),
+            ] = None,
+            include_state: Annotated[
+                bool | None,
+                Field(
+                    default=None,
+                    description="Include state field for entities (None = auto based on level). Full defaults to True.",
+                ),
+            ] = None,
+            include_entity_id: Annotated[
+                bool | None,
+                Field(
+                    default=None,
+                    description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            """Get AI-friendly system overview with intelligent categorization.
+
+            Returns comprehensive system information at the requested detail level.
+            Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+            """
+            result = await self.smart_tools.get_system_overview(
+                detail_level, max_entities_per_domain, include_state, include_entity_id
+            )
             return cast(dict[str, Any], result)
 
         @self.mcp.tool
