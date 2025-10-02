@@ -1022,9 +1022,9 @@ async def test_helper_search_and_discovery(mcp_client):
             )
             logger.info(f"✅ Sample {domain} helper: {first_helper.get('entity_id')}")
 
-    # Get system overview to see helper information
+    # Get system overview to see helper information (use detailed level for full domain listing)
     logger.info("🔍 Getting system overview...")
-    overview_result = await mcp_client.call_tool("ha_get_overview")
+    overview_result = await mcp_client.call_tool("ha_get_overview", {"detail_level": "detailed"})
     overview_data = parse_mcp_result(overview_result)
 
     # Should have helper information in overview
