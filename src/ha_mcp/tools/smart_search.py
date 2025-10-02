@@ -206,16 +206,23 @@ class SmartSearchTools:
             }
 
     async def get_system_overview(
-        self, detail_level: str = "standard"
+        self,
+        detail_level: str = "standard",
+        max_entities_per_domain: int | None = None,
+        include_state: bool | None = None,
+        include_entity_id: bool | None = None,
     ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
 
         Args:
             detail_level: Level of detail to return:
-                - "minimal": Domain counts, controllable devices summary, top 5 domains with 1 sample
-                - "standard": All domain stats with state distributions + 2 samples per domain [DEFAULT]
-                - "full": Everything from standard + complete service catalog
+                - "minimal": 10 random entities per domain (friendly_name only)
+                - "standard": ALL entities per domain (friendly_name only) [DEFAULT]
+                - "full": ALL entities with full details (entity_id, friendly_name, state)
+            max_entities_per_domain: Override max entities per domain (None = all)
+            include_state: Override whether to include state field
+            include_entity_id: Override whether to include entity_id field
 
         Returns:
             System overview optimized for AI understanding at requested detail level
@@ -224,6 +231,14 @@ class SmartSearchTools:
             # Get all entities and services
             entities = await self.client.get_states()
             services = await self.client.get_services()
+
+            # Determine defaults based on detail_level
+            if max_entities_per_domain is None:
+                max_entities_per_domain = 10 if detail_level == "minimal" else None
+            if include_state is None:
+                include_state = detail_level == "full"
+            if include_entity_id is None:
+                include_entity_id = detail_level == "full"
 
             # Analyze entities by domain
             domain_stats: dict[str, dict[str, Any]] = {}
@@ -234,32 +249,33 @@ class SmartSearchTools:
                 entity_id = entity["entity_id"]
                 domain = entity_id.split(".")[0]
                 attributes = entity.get("attributes", {})
+                state = entity.get("state", "unknown")
 
                 # Domain statistics
                 if domain not in domain_stats:
                     domain_stats[domain] = {
                         "count": 0,
-                        "states": {},
-                        "sample_entities": [],
+                        "states_summary": {},
+                        "all_entities": [],  # Store all entities
                     }
 
                 domain_stats[domain]["count"] += 1
 
                 # State distribution
-                state = entity.get("state", "unknown")
-                if state not in domain_stats[domain]["states"]:
-                    domain_stats[domain]["states"][state] = 0
-                domain_stats[domain]["states"][state] += 1
+                if state not in domain_stats[domain]["states_summary"]:
+                    domain_stats[domain]["states_summary"][state] = 0
+                domain_stats[domain]["states_summary"][state] += 1
 
-                # Sample entities (first 3 per domain)
-                if len(domain_stats[domain]["sample_entities"]) < 3:
-                    domain_stats[domain]["sample_entities"].append(
-                        {
-                            "entity_id": entity_id,
-                            "friendly_name": attributes.get("friendly_name", entity_id),
-                            "state": state,
-                        }
-                    )
+                # Store all entities (we'll filter later)
+                entity_data = {
+                    "friendly_name": attributes.get("friendly_name", entity_id),
+                }
+                if include_entity_id:
+                    entity_data["entity_id"] = entity_id
+                if include_state:
+                    entity_data["state"] = state
+
+                domain_stats[domain]["all_entities"].append(entity_data)
 
                 # Area analysis
                 area_id = attributes.get("area_id")
@@ -316,98 +332,54 @@ class SmartSearchTools:
                 and domain_stats["automation"]["count"] > 0,
             }
 
-            # Domain counts (sorted by count)
-            domain_counts = {
-                domain: stats["count"]
-                for domain, stats in sorted_domains
+            # Prepare domain stats with entity filtering and truncation info
+            import random
+
+            formatted_domain_stats = {}
+            for domain, stats in sorted_domains:
+                all_entities = stats["all_entities"]
+
+                # Apply max_entities_per_domain limit
+                if max_entities_per_domain and len(all_entities) > max_entities_per_domain:
+                    # Random selection for minimal
+                    if detail_level == "minimal":
+                        selected_entities = random.sample(all_entities, max_entities_per_domain)
+                    else:
+                        # Take first N for other levels
+                        selected_entities = all_entities[:max_entities_per_domain]
+                    truncated = True
+                else:
+                    selected_entities = all_entities
+                    truncated = False
+
+                formatted_domain_stats[domain] = {
+                    "count": stats["count"],
+                    "states_summary": stats["states_summary"],
+                    "entities": selected_entities,
+                    "truncated": truncated,
+                }
+
+            # Build base response
+            base_response = {
+                "success": True,
+                "system_summary": {
+                    "total_entities": len(entities),
+                    "total_domains": len(domain_stats),
+                    "total_services": total_services,
+                    "total_areas": len(area_stats),
+                },
+                "domain_stats": formatted_domain_stats,
+                "ai_insights": ai_insights,
             }
 
-            # Controllable devices summary
-            controllable_devices = {
-                k: {
-                    "count": v["count"],
-                    "states_summary": v["states"],
-                }
-                for k, v in domain_stats.items()
-                if k in ["light", "switch", "climate", "media_player", "cover"]
-            }
+            # Add level-specific fields
+            if detail_level == "full":
+                # Full: Add area analysis, device types, and service catalog
+                base_response["area_analysis"] = area_stats
+                base_response["device_types"] = device_types
+                base_response["service_availability"] = service_stats
 
-            # Return based on detail level
-            if detail_level == "minimal":
-                # Minimal: domain counts + controllable summary + top 5 samples
-                return {
-                    "success": True,
-                    "system_summary": {
-                        "total_entities": len(entities),
-                        "total_domains": len(domain_stats),
-                        "total_services": total_services,
-                        "total_areas": len(area_stats),
-                    },
-                    "domain_counts": domain_counts,
-                    "controllable_devices": controllable_devices,
-                    "top_domains": [
-                        {
-                            "domain": domain,
-                            "count": stats["count"],
-                            "sample_entity": stats["sample_entities"][0]
-                            if stats["sample_entities"]
-                            else None,
-                        }
-                        for domain, stats in sorted_domains[:5]
-                    ],
-                    "ai_insights": ai_insights,
-                }
-
-            elif detail_level == "standard":
-                # Standard: Full domain stats with 2 samples each (DEFAULT)
-                controllable_detailed = {
-                    k: {
-                        "count": v["count"],
-                        "states_summary": v["states"],
-                        "sample_entities": v["sample_entities"][:2],  # 2 samples
-                    }
-                    for k, v in domain_stats.items()
-                    if k in ["light", "switch", "climate", "media_player", "cover"]
-                }
-
-                return {
-                    "success": True,
-                    "system_summary": {
-                        "total_entities": len(entities),
-                        "total_domains": len(domain_stats),
-                        "total_services": total_services,
-                        "total_areas": len(area_stats),
-                    },
-                    "domain_stats": {
-                        domain: {
-                            "count": stats["count"],
-                            "states_summary": stats["states"],
-                            "sample_entities": stats["sample_entities"][:2],  # 2 samples
-                        }
-                        for domain, stats in sorted_domains
-                    },
-                    "controllable_devices": controllable_detailed,
-                    "area_analysis": area_stats,
-                    "device_types": device_types,
-                    "ai_insights": ai_insights,
-                }
-
-            else:  # "full"
-                # Full: Everything including service catalog
-                return {
-                    "success": True,
-                    "system_summary": {
-                        "total_entities": len(entities),
-                        "total_domains": len(domain_stats),
-                        "total_services": total_services,
-                        "total_areas": len(area_stats),
-                    },
-                    "domain_stats": domain_stats,  # Full stats with 3 samples
-                    "area_analysis": area_stats,
-                    "device_types": device_types,
-                    "service_availability": service_stats,
-                    "ai_insights": ai_insights,
-                }
+            return base_response
 
         except Exception as e:
             logger.error(f"Error in get_system_overview: {e}")

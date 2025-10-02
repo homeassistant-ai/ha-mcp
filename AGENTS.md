@@ -31,6 +31,29 @@ git add . && git commit -m "your changes"
 - User must explicitly request push/PR operations
 - Commit locally first, then ask user for next steps
 
+## 🔄 PR Default Workflow
+
+**Standard workflow when user requests PR submission:**
+
+1. **Update tests** - Check if tests need updates for your changes
+2. **Commit and push** - Commit all changes and push to feature branch
+3. **Wait 3 minutes** - GitHub Actions tests take ~2-3 minutes to run
+4. **Check PR status** - Run `gh pr checks <PR-number>` to verify all checks pass
+5. **Fix failures** - If tests fail, fix issues and repeat from step 2
+6. **Report to user** - Inform user of test results
+
+```bash
+# Example workflow
+git add -A && git commit -m "feat: description" && git push
+sleep 180  # Wait 3 minutes
+gh pr checks 8  # Check status
+```
+
+**Test failure handling:**
+- Check logs: `gh run view <run-id> --log-failed`
+- Fix code and push again
+- Tests auto-run on every push
+
 ## 📝 Updating This File (AGENTS.md)
 
 **When to update AGENTS.md:**
