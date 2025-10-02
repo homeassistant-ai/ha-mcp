@@ -1,6 +1,6 @@
 """Home Assistant MCP Server."""
 
-from homeassistant_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
+from ha_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
 
 # Create server instance once
 _server = HomeAssistantSmartMCPServer()

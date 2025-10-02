@@ -23,9 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fastmcp import Client
 
-from homeassistant_mcp.client import HomeAssistantClient
-from homeassistant_mcp.config import get_global_settings
-from homeassistant_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp.client import HomeAssistantClient
+from ha_mcp.config import get_global_settings
+from ha_mcp.server import HomeAssistantSmartMCPServer
 
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
