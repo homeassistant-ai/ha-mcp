@@ -242,7 +242,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[Home Assistant](https://home-assistant.io/)**: Amazing smart home platform (!)
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
-
----
-
-**Built with ❤️ with Claude**
+- **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
