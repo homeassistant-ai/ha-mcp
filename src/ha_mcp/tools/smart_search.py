@@ -213,10 +213,9 @@ class SmartSearchTools:
 
         Args:
             detail_level: Level of detail to return:
-                - "minimal": Just counts and AI insights (~300 tokens)
-                - "standard": Counts + controllable devices + top domains (~700 tokens) [DEFAULT]
-                - "detailed": Full domain stats without service catalog (~5,500 tokens)
-                - "full": Everything including service catalog (~8,800 tokens)
+                - "minimal": Domain counts, controllable devices summary, top 5 domains with 1 sample
+                - "standard": All domain stats with state distributions + 2 samples per domain [DEFAULT]
+                - "full": Everything from standard + complete service catalog
 
         Returns:
             System overview optimized for AI understanding at requested detail level
@@ -335,17 +334,7 @@ class SmartSearchTools:
 
             # Return based on detail level
             if detail_level == "minimal":
-                return {
-                    "success": True,
-                    "total_entities": len(entities),
-                    "total_domains": len(domain_stats),
-                    "total_areas": len(area_stats),
-                    "domain_counts": domain_counts,
-                    "controllable_domains": sorted(controllable_devices.keys()),
-                    "ai_insights": ai_insights,
-                }
-
-            elif detail_level == "standard":
+                # Minimal: domain counts + controllable summary + top 5 samples
                 return {
                     "success": True,
                     "system_summary": {
@@ -369,8 +358,8 @@ class SmartSearchTools:
                     "ai_insights": ai_insights,
                 }
 
-            elif detail_level == "detailed":
-                # Add sample entities back to controllable devices
+            elif detail_level == "standard":
+                # Standard: Full domain stats with 2 samples each (DEFAULT)
                 controllable_detailed = {
                     k: {
                         "count": v["count"],
@@ -404,6 +393,7 @@ class SmartSearchTools:
                 }
 
             else:  # "full"
+                # Full: Everything including service catalog
                 return {
                     "success": True,
                     "system_summary": {

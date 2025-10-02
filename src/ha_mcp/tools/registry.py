@@ -350,17 +350,22 @@ class ToolsRegistry:
         @log_tool_usage
         async def ha_get_overview(
             detail_level: Annotated[
-                Literal["minimal", "standard", "detailed", "full"],
+                Literal["minimal", "standard", "full"],
                 Field(
                     default="standard",
-                    description="Level of detail: 'minimal' (~300 tokens), 'standard' (~700 tokens, default), 'detailed' (~5500 tokens), 'full' (~8800 tokens)",
+                    description=(
+                        "Level of detail - "
+                        "'minimal': domain counts + controllable devices + top 5 samples; "
+                        "'standard': all domain stats with state distributions + 2 samples (default); "
+                        "'full': standard + complete service catalog"
+                    ),
                 ),
             ] = "standard",
         ) -> dict[str, Any]:
             """Get AI-friendly system overview with intelligent categorization.
 
-            Use 'standard' (default) for general discovery. Use 'minimal' for quick checks.
-            Use 'detailed' for domain analysis. Use 'full' for complete service catalog.
+            Returns comprehensive system information at the requested detail level.
+            Use 'standard' (default) for most queries. Use 'full' when service information is needed.
             """
             result = await self.smart_tools.get_system_overview(detail_level)
             return cast(dict[str, Any], result)
