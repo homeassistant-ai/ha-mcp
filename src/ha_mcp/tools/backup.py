@@ -13,7 +13,7 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import HomeAssistantWebSocketClient
-from .helpers import get_backup_hint_text, get_connected_ws_client
+from .helpers import get_backup_hint_text, get_connected_ws_client, log_tool_usage
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -336,8 +336,6 @@ def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient) -> None:
         mcp: FastMCP server instance
         client: Home Assistant REST client
     """
-    from ..utils.usage_logger import log_tool_usage
-
     # Generate dynamic backup description based on BACKUP_HINT config
     backup_hint_text = get_backup_hint_text()
     backup_create_description = f"""Create a fast Home Assistant backup (local only).

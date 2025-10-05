@@ -4,9 +4,12 @@ Reusable helper functions for MCP tools.
 Centralized utilities that can be shared across multiple tool implementations.
 """
 
+import functools
+import time
 from typing import Any
 
 from ..client.websocket_client import HomeAssistantWebSocketClient
+from ..utils.usage_logger import log_tool_call
 
 
 async def get_connected_ws_client(
@@ -52,3 +55,43 @@ def get_backup_hint_text() -> str:
         "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",  # Same as normal for now, will auto-detect in future
     }
     return hints.get(hint, hints["normal"])
+
+
+def log_tool_usage(func: Any) -> Any:
+    """
+    Decorator to automatically log MCP tool usage.
+
+    Tracks execution time, success/failure, and response size for all tool calls.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        start_time = time.time()
+        tool_name = func.__name__
+        success = True
+        error_message = None
+        response_size = None
+
+        try:
+            result = await func(*args, **kwargs)
+            if isinstance(result, str):
+                response_size = len(result.encode("utf-8"))
+            elif hasattr(result, "__len__"):
+                response_size = len(str(result).encode("utf-8"))
+            return result
+        except Exception as e:
+            success = False
+            error_message = str(e)
+            raise
+        finally:
+            execution_time_ms = (time.time() - start_time) * 1000
+            log_tool_call(
+                tool_name=tool_name,
+                parameters=kwargs,
+                execution_time_ms=execution_time_ms,
+                success=success,
+                error_message=error_message,
+                response_size_bytes=response_size,
+            )
+
+    return wrapper
