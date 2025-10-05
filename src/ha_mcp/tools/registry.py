@@ -646,69 +646,10 @@ class ToolsRegistry:
 
     def _register_convenience_tools(self) -> None:
         """Register convenience tools for scenes, automations, and more."""
+        from .backup import register_backup_tools
 
-        # Helper function to create and connect WebSocket client
-        async def _get_connected_ws_client() -> tuple[Any | None, dict[str, Any] | None]:
-            """
-            Create and connect a WebSocket client.
-
-            Returns:
-                Tuple of (ws_client, error_dict). If connection fails, ws_client is None and error_dict contains error info.
-            """
-            from ..client.websocket_client import HomeAssistantWebSocketClient
-
-            ws_client = HomeAssistantWebSocketClient(
-                self.client.base_url, self.client.token
-            )
-            connected = await ws_client.connect()
-            if not connected:
-                return None, {
-                    "success": False,
-                    "error": "Failed to connect to Home Assistant WebSocket",
-                    "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
-                }
-            return ws_client, None
-
-        # Helper function to generate backup hint text based on config
-        def _get_backup_hint_text() -> str:
-            """Generate dynamic backup hint text based on BACKUP_HINT config."""
-            from ..config import get_global_settings
-            settings = get_global_settings()
-            hint = getattr(settings, 'backup_hint', 'normal')
-
-            hints = {
-                'strong': "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
-                'normal': "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
-                'weak': "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
-                'auto': "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed."  # Same as normal for now, will auto-detect in future
-            }
-            return hints.get(hint, hints['normal'])
-
-        # Generate dynamic backup description
-        backup_hint_text = _get_backup_hint_text()
-        backup_create_description = f"""Create a fast Home Assistant backup (local only).
-
-**What's Included:**
-- Home Assistant configuration (core settings)
-- All add-ons
-- SSL certificates
-- Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
-
-**Password:** Uses Home Assistant's default backup password (if configured)
-
-**Storage:** Local only (hassio.local agent)
-
-**Duration:** Typically takes several seconds to complete (without database)
-
-**When to Use:**
-{backup_hint_text}
-
-**Example Usage:**
-- Before deleting device: ha_backup_create("Before_Device_Delete")
-- Before modifying system settings: ha_backup_create("Pre_System_Change")
-- Quick safety backup: ha_backup_create()
-
-**Returns:** Backup ID and job status"""
+        # Register backup tools from backup.py module
+        register_backup_tools(self.mcp, self.client)
 
         @self.mcp.tool
         async def ha_activate_scene(scene_name: str) -> dict[str, Any]:
@@ -777,83 +718,6 @@ class ToolsRegistry:
                     "period": f"{hours_back} hours back from {end_dt.isoformat()}",
                 }
                 return await add_timezone_metadata(self.client, error_data)
-
-        @self.mcp.tool(description=backup_create_description)
-        @log_tool_usage
-        async def ha_backup_create(
-            name: Annotated[
-                str | None,
-                Field(
-                    description="Backup name (auto-generated if not provided, e.g., 'MCP_Backup_2025-10-05_04:30')",
-                    default=None,
-                ),
-            ] = None,
-        ) -> dict[str, Any]:
-            from .backup import create_backup
-            return await create_backup(self.client, name)
-
-        @self.mcp.tool(
-            annotations={
-                "destructiveHint": True,
-            }
-        )
-        @log_tool_usage
-        async def ha_backup_restore(
-            backup_id: Annotated[
-                str,
-                Field(
-                    description="Backup ID to restore (e.g., 'dd7550ed' from backup list or ha_backup_create result)"
-                ),
-            ],
-            restore_database: Annotated[
-                bool,
-                Field(
-                    description="Restore database (default: false for config-only restore)",
-                    default=False,
-                ),
-            ] = False,
-        ) -> dict[str, Any]:
-            """
-            Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
-
-            **⚠️ WARNING - DESTRUCTIVE OPERATION ⚠️**
-
-            **This tool restarts Home Assistant and restores configuration to a previous state.**
-
-            **IMPORTANT CONSIDERATIONS:**
-            1. **Try undo operations first** - Often you can just reverse what you did:
-               - Deleted automation? Recreate it with ha_config_set_automation
-               - Modified script? Use ha_config_set_script to fix it
-               - Most config changes can be rolled back without using restore
-
-            2. **Safety mechanism:** A NEW backup is automatically created BEFORE restore
-               - This allows you to rollback the restore if needed
-               - You can restore from this pre-restore backup if something goes wrong
-
-            3. **What gets restored:**
-               - Home Assistant configuration (automations, scripts, etc.)
-               - Add-ons (if they were in the backup)
-               - Optional: Database - historical sensor data, statistics, state history (set restore_database=true)
-
-            4. **Side effects:**
-               - Home Assistant will RESTART during restore
-               - Any changes made after the backup was created will be LOST
-               - Temporary disconnection from all integrations during restart
-
-            **Recommended workflow:**
-            1. Try to undo your changes manually first
-            2. If you must restore, use the most recent backup
-            3. Set restore_database=false unless you need historical data
-            4. Expect a restart and temporary downtime
-
-            **Example Usage:**
-            - Restore config only: ha_backup_restore("dd7550ed")
-            - Full restore with DB: ha_backup_restore("dd7550ed", restore_database=true)
-
-            **Returns:** Restore job status
-            """
-            from .backup import restore_backup
-            return await restore_backup(self.client, backup_id, restore_database)
 
         @self.mcp.tool
         @log_tool_usage

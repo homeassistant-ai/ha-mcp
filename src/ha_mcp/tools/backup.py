@@ -7,36 +7,18 @@ Provides backup creation and restoration capabilities with safety mechanisms.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Annotated
+
+from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import HomeAssistantWebSocketClient
+from .helpers import get_backup_hint_text, get_connected_ws_client
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
-
-
-async def _get_connected_ws_client(
-    base_url: str, token: str
-) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:
-    """
-    Create and connect a WebSocket client.
-
-    Args:
-        base_url: Home Assistant base URL
-        token: Authentication token
-
-    Returns:
-        Tuple of (ws_client, error_dict). If connection fails, ws_client is None.
-    """
-    ws_client = HomeAssistantWebSocketClient(base_url, token)
-    connected = await ws_client.connect()
-    if not connected:
-        return None, {
-            "success": False,
-            "error": "Failed to connect to Home Assistant WebSocket",
-            "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
-        }
-    return ws_client, None
 
 
 async def _get_backup_password(
@@ -89,7 +71,7 @@ async def create_backup(
 
     try:
         # Connect to WebSocket
-        ws_client, error = await _get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error:
             return error
 
@@ -235,7 +217,7 @@ async def restore_backup(
 
     try:
         # Connect to WebSocket
-        ws_client, error = await _get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error:
             return error
 
@@ -344,3 +326,116 @@ async def restore_backup(
                 await ws_client.disconnect()
             except:
                 pass  # Ignore errors during cleanup
+
+
+def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient) -> None:
+    """
+    Register backup and restore tools with the MCP server.
+
+    Args:
+        mcp: FastMCP server instance
+        client: Home Assistant REST client
+    """
+    from ..utils.usage_logger import log_tool_usage
+
+    # Generate dynamic backup description based on BACKUP_HINT config
+    backup_hint_text = get_backup_hint_text()
+    backup_create_description = f"""Create a fast Home Assistant backup (local only).
+
+**What's Included:**
+- Home Assistant configuration (core settings)
+- All add-ons
+- SSL certificates
+- Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
+
+**Password:** Uses Home Assistant's default backup password (if configured)
+
+**Storage:** Local only (hassio.local agent)
+
+**Duration:** Typically takes several seconds to complete (without database)
+
+**When to Use:**
+{backup_hint_text}
+
+**Example Usage:**
+- Before deleting device: ha_backup_create("Before_Device_Delete")
+- Before modifying system settings: ha_backup_create("Pre_System_Change")
+- Quick safety backup: ha_backup_create()
+
+**Returns:** Backup ID and job status"""
+
+    @mcp.tool(description=backup_create_description)
+    @log_tool_usage
+    async def ha_backup_create(
+        name: Annotated[
+            str | None,
+            Field(
+                description="Backup name (auto-generated if not provided, e.g., 'MCP_Backup_2025-10-05_04:30')",
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Create a fast Home Assistant backup (local only)."""
+        return await create_backup(client, name)
+
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+        }
+    )
+    @log_tool_usage
+    async def ha_backup_restore(
+        backup_id: Annotated[
+            str,
+            Field(
+                description="Backup ID to restore (e.g., 'dd7550ed' from backup list or ha_backup_create result)"
+            ),
+        ],
+        restore_database: Annotated[
+            bool,
+            Field(
+                description="Restore database (default: false for config-only restore)",
+                default=False,
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """
+        Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
+
+        **⚠️ WARNING - DESTRUCTIVE OPERATION ⚠️**
+
+        **This tool restarts Home Assistant and restores configuration to a previous state.**
+
+        **IMPORTANT CONSIDERATIONS:**
+        1. **Try undo operations first** - Often you can just reverse what you did:
+           - Deleted automation? Recreate it with ha_config_set_automation
+           - Modified script? Use ha_config_set_script to fix it
+           - Most config changes can be rolled back without using restore
+
+        2. **Safety mechanism:** A NEW backup is automatically created BEFORE restore
+           - This allows you to rollback the restore if needed
+           - You can restore from this pre-restore backup if something goes wrong
+
+        3. **What gets restored:**
+           - Home Assistant configuration (automations, scripts, etc.)
+           - Add-ons (if they were in the backup)
+           - Optional: Database - historical sensor data, statistics, state history (set restore_database=true)
+
+        4. **Side effects:**
+           - Home Assistant will RESTART during restore
+           - Any changes made after the backup was created will be LOST
+           - Temporary disconnection from all integrations during restart
+
+        **Recommended workflow:**
+        1. Try to undo your changes manually first
+        2. If you must restore, use the most recent backup
+        3. Set restore_database=false unless you need historical data
+        4. Expect a restart and temporary downtime
+
+        **Example Usage:**
+        - Restore config only: ha_backup_restore("dd7550ed")
+        - Full restore with DB: ha_backup_restore("dd7550ed", restore_database=true)
+
+        **Returns:** Restore job status
+        """
+        return await restore_backup(client, backup_id, restore_database)
