@@ -718,36 +718,41 @@ class ToolsRegistry:
             ] = None,
         ) -> dict[str, Any]:
             """
-            Create a fast Home Assistant backup (local only, encrypted).
-
-            **Purpose:** Quick backup before making configuration changes. Useful as a safety measure before
-            modifying or deleting automations, scripts, helpers, or other configuration entities.
+            Create a fast Home Assistant backup (local only).
 
             **What's Included:**
             - Home Assistant configuration (core settings)
             - All add-ons
             - SSL certificates
-            - Database is EXCLUDED for faster backup (several seconds vs minutes)
+            - Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
 
-            **Encryption:** Uses Home Assistant's default backup password for your instance
+            **Password:** Uses Home Assistant's default backup password (if configured)
 
             **Storage:** Local only (hassio.local agent)
 
             **Duration:** Typically takes several seconds to complete (without database)
 
-            **IMPORTANT:** This backup can be run before any modify or delete operation. While it takes
-            several seconds, it provides a safety net for configuration changes.
+            **When to Use (configurable via BACKUP_HINT env var):**
+            - Run before operations that CANNOT be undone (e.g., deleting devices, system changes)
+            - Most configuration changes (automations, scripts, etc.) can be rolled back without restore
+            - Users with daily backups configured may not need this for most operations
 
             **Example Usage:**
-            - Before modifying automation: ha_backup_create("Before_Automation_Change")
-            - Before deleting helper: ha_backup_create("Pre_Helper_Delete")
+            - Before deleting device: ha_backup_create("Before_Device_Delete")
+            - Before modifying system settings: ha_backup_create("Pre_System_Change")
             - Quick safety backup: ha_backup_create()
 
             **Returns:** Backup ID and job status
             """
-            try:
-                from ..client.websocket_client import HomeAssistantWebSocketClient
+            # Get backup hint configuration
+            from ..config import get_global_settings
+            settings = get_global_settings()
+            backup_hint = getattr(settings, 'backup_hint', 'normal')
 
+            from ..client.websocket_client import HomeAssistantWebSocketClient
+            ws_client = None
+
+            try:
                 # Get WebSocket client using same URL/token as REST client
                 ws_client = HomeAssistantWebSocketClient(
                     self.client.base_url, self.client.token
@@ -846,7 +851,7 @@ class ToolsRegistry:
                                     "size_bytes": created_backup.get("agents", {}).get("hassio.local", {}).get("size"),
                                     "status": "Backup completed successfully",
                                     "duration_seconds": waited,
-                                    "note": "Backup is encrypted with your Home Assistant's default password",
+                                    "note": "Backup uses your Home Assistant's default backup password",
                                 }
                             else:
                                 # Backup completed but not found in list yet
@@ -879,6 +884,13 @@ class ToolsRegistry:
                     "error": f"Failed to create backup: {str(e)}",
                     "suggestion": "Check Home Assistant connection and backup configuration",
                 }
+            finally:
+                # Always disconnect WebSocket
+                if ws_client:
+                    try:
+                        await ws_client.disconnect()
+                    except:
+                        pass  # Ignore errors during cleanup
 
         @self.mcp.tool(
             annotations={
@@ -912,16 +924,16 @@ class ToolsRegistry:
             1. **Try undo operations first** - Often you can just reverse what you did:
                - Deleted automation? Recreate it with ha_config_set_automation
                - Modified script? Use ha_config_set_script to fix it
-               - Changed helper? Update it with ha_config_set_helper
+               - Most config changes can be rolled back without using restore
 
             2. **Safety mechanism:** A NEW backup is automatically created BEFORE restore
                - This allows you to rollback the restore if needed
                - You can restore from this pre-restore backup if something goes wrong
 
             3. **What gets restored:**
-               - Home Assistant configuration (automations, scripts, helpers, etc.)
+               - Home Assistant configuration (automations, scripts, etc.)
                - Add-ons (if they were in the backup)
-               - Optional: Database (set restore_database=true)
+               - Optional: Database - historical sensor data, statistics, state history (set restore_database=true)
 
             4. **Side effects:**
                - Home Assistant will RESTART during restore
@@ -931,7 +943,7 @@ class ToolsRegistry:
             **Recommended workflow:**
             1. Try to undo your changes manually first
             2. If you must restore, use the most recent backup
-            3. Set restore_database=false unless you need state history
+            3. Set restore_database=false unless you need historical data
             4. Expect a restart and temporary downtime
 
             **Example Usage:**
@@ -940,9 +952,10 @@ class ToolsRegistry:
 
             **Returns:** Restore job status
             """
-            try:
-                from ..client.websocket_client import HomeAssistantWebSocketClient
+            from ..client.websocket_client import HomeAssistantWebSocketClient
+            ws_client = None
 
+            try:
                 # Get WebSocket client using same URL/token as REST client
                 ws_client = HomeAssistantWebSocketClient(
                     self.client.base_url, self.client.token
@@ -1055,6 +1068,13 @@ class ToolsRegistry:
                     "error": f"Failed to restore backup: {str(e)}",
                     "suggestion": "Check Home Assistant connection and backup availability",
                 }
+            finally:
+                # Always disconnect WebSocket
+                if ws_client:
+                    try:
+                        await ws_client.disconnect()
+                    except:
+                        pass  # Ignore errors during cleanup
 
         @self.mcp.tool
         @log_tool_usage
