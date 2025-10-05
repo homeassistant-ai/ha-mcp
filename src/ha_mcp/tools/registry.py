@@ -638,6 +638,47 @@ class ToolsRegistry:
     def _register_convenience_tools(self) -> None:
         """Register convenience tools for scenes, automations, and more."""
 
+        # Helper function to generate backup hint text based on config
+        def _get_backup_hint_text() -> str:
+            """Generate dynamic backup hint text based on BACKUP_HINT config."""
+            from ..config import get_global_settings
+            settings = get_global_settings()
+            hint = getattr(settings, 'backup_hint', 'normal')
+
+            hints = {
+                'strong': "Run this backup before ANY modify or delete operation. While most configuration changes can be rolled back, a backup provides the safest approach for users who prefer maximum safety.",
+                'normal': "Run before operations that CANNOT be undone (e.g., deleting devices, system changes). Most configuration changes (automations, scripts, etc.) can be rolled back without restore. Users with daily backups configured may not need this for most operations.",
+                'weak': "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
+                'auto': "Run before operations that CANNOT be undone (e.g., deleting devices, system changes). Most configuration changes (automations, scripts, etc.) can be rolled back without restore. Users with daily backups configured may not need this for most operations."  # Same as normal for now
+            }
+            return hints.get(hint, hints['normal'])
+
+        # Generate dynamic backup description
+        backup_hint_text = _get_backup_hint_text()
+        backup_create_description = f"""Create a fast Home Assistant backup (local only).
+
+**What's Included:**
+- Home Assistant configuration (core settings)
+- All add-ons
+- SSL certificates
+- Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
+
+**Password:** Uses Home Assistant's default backup password (if configured)
+
+**Storage:** Local only (hassio.local agent)
+
+**Duration:** Typically takes several seconds to complete (without database)
+
+**When to Use:**
+{backup_hint_text}
+
+**Example Usage:**
+- Before deleting device: ha_backup_create("Before_Device_Delete")
+- Before modifying system settings: ha_backup_create("Pre_System_Change")
+- Quick safety backup: ha_backup_create()
+
+**Returns:** Backup ID and job status"""
+
         @self.mcp.tool
         async def ha_activate_scene(scene_name: str) -> dict[str, Any]:
             """Activate a Home Assistant scene by name or entity ID."""
@@ -706,7 +747,7 @@ class ToolsRegistry:
                 }
                 return await add_timezone_metadata(self.client, error_data)
 
-        @self.mcp.tool
+        @self.mcp.tool(description=backup_create_description)
         @log_tool_usage
         async def ha_backup_create(
             name: Annotated[
@@ -717,38 +758,6 @@ class ToolsRegistry:
                 ),
             ] = None,
         ) -> dict[str, Any]:
-            """
-            Create a fast Home Assistant backup (local only).
-
-            **What's Included:**
-            - Home Assistant configuration (core settings)
-            - All add-ons
-            - SSL certificates
-            - Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
-
-            **Password:** Uses Home Assistant's default backup password (if configured)
-
-            **Storage:** Local only (hassio.local agent)
-
-            **Duration:** Typically takes several seconds to complete (without database)
-
-            **When to Use (configurable via BACKUP_HINT env var):**
-            - Run before operations that CANNOT be undone (e.g., deleting devices, system changes)
-            - Most configuration changes (automations, scripts, etc.) can be rolled back without restore
-            - Users with daily backups configured may not need this for most operations
-
-            **Example Usage:**
-            - Before deleting device: ha_backup_create("Before_Device_Delete")
-            - Before modifying system settings: ha_backup_create("Pre_System_Change")
-            - Quick safety backup: ha_backup_create()
-
-            **Returns:** Backup ID and job status
-            """
-            # Get backup hint configuration
-            from ..config import get_global_settings
-            settings = get_global_settings()
-            backup_hint = getattr(settings, 'backup_hint', 'normal')
-
             from ..client.websocket_client import HomeAssistantWebSocketClient
             ws_client = None
 
