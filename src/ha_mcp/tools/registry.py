@@ -746,10 +746,19 @@ class ToolsRegistry:
             **Returns:** Backup ID and job status
             """
             try:
-                from ..client.websocket_client import get_websocket_client
+                from ..client.websocket_client import HomeAssistantWebSocketClient
 
-                # Get WebSocket client
-                ws_client = await get_websocket_client()
+                # Get WebSocket client using same URL/token as REST client
+                ws_client = HomeAssistantWebSocketClient(
+                    self.client.base_url, self.client.token
+                )
+                connected = await ws_client.connect()
+                if not connected:
+                    return {
+                        "success": False,
+                        "error": "Failed to connect to Home Assistant WebSocket",
+                        "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
+                    }
 
                 # Get backup configuration (includes default password)
                 backup_config = await ws_client.send_command("backup/config/info")
@@ -932,10 +941,19 @@ class ToolsRegistry:
             **Returns:** Restore job status
             """
             try:
-                from ..client.websocket_client import get_websocket_client
+                from ..client.websocket_client import HomeAssistantWebSocketClient
 
-                # Get WebSocket client
-                ws_client = await get_websocket_client()
+                # Get WebSocket client using same URL/token as REST client
+                ws_client = HomeAssistantWebSocketClient(
+                    self.client.base_url, self.client.token
+                )
+                connected = await ws_client.connect()
+                if not connected:
+                    return {
+                        "success": False,
+                        "error": "Failed to connect to Home Assistant WebSocket",
+                        "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
+                    }
 
                 # Verify backup exists
                 backup_info = await ws_client.send_command("backup/info")
