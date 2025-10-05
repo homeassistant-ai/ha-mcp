@@ -142,6 +142,10 @@ class TestBackupTools:
         and provides helpful error messages, WITHOUT actually performing a restore.
 
         Marked as slow because we test the safety backup creation flow.
+
+        TODO: Actual restore testing would be valuable but tricky to implement.
+        Would need to verify system state before/after restore, handle HA restart,
+        and ensure test environment can recover. See GitHub wiki tech debt section.
         """
 
         logger.info("🔄 Testing backup restore validation...")

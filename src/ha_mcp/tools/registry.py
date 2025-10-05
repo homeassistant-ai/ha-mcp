@@ -1,5 +1,14 @@
 """
 Tools registry for Smart MCP Server - manages registration of all MCP tools.
+
+TODO: This file is getting very large (1100+ lines). Split into separate modules:
+- tools/backup.py - Backup/restore tools
+- tools/config.py - Configuration management tools (automations, scripts, helpers)
+- tools/device_control.py - Device control tools
+- tools/search.py - Entity search and discovery tools
+- tools/system.py - System info, weather, energy, etc.
+
+See GitHub wiki tech debt section for detailed refactoring plan.
 """
 
 import asyncio
@@ -638,6 +647,28 @@ class ToolsRegistry:
     def _register_convenience_tools(self) -> None:
         """Register convenience tools for scenes, automations, and more."""
 
+        # Helper function to create and connect WebSocket client
+        async def _get_connected_ws_client() -> tuple[Any | None, dict[str, Any] | None]:
+            """
+            Create and connect a WebSocket client.
+
+            Returns:
+                Tuple of (ws_client, error_dict). If connection fails, ws_client is None and error_dict contains error info.
+            """
+            from ..client.websocket_client import HomeAssistantWebSocketClient
+
+            ws_client = HomeAssistantWebSocketClient(
+                self.client.base_url, self.client.token
+            )
+            connected = await ws_client.connect()
+            if not connected:
+                return None, {
+                    "success": False,
+                    "error": "Failed to connect to Home Assistant WebSocket",
+                    "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
+                }
+            return ws_client, None
+
         # Helper function to generate backup hint text based on config
         def _get_backup_hint_text() -> str:
             """Generate dynamic backup hint text based on BACKUP_HINT config."""
@@ -646,10 +677,10 @@ class ToolsRegistry:
             hint = getattr(settings, 'backup_hint', 'normal')
 
             hints = {
-                'strong': "Run this backup before ANY modify or delete operation. While most configuration changes can be rolled back, a backup provides the safest approach for users who prefer maximum safety.",
-                'normal': "Run before operations that CANNOT be undone (e.g., deleting devices, system changes). Most configuration changes (automations, scripts, etc.) can be rolled back without restore. Users with daily backups configured may not need this for most operations.",
+                'strong': "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
+                'normal': "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
                 'weak': "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
-                'auto': "Run before operations that CANNOT be undone (e.g., deleting devices, system changes). Most configuration changes (automations, scripts, etc.) can be rolled back without restore. Users with daily backups configured may not need this for most operations."  # Same as normal for now
+                'auto': "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed."  # Same as normal for now, will auto-detect in future
             }
             return hints.get(hint, hints['normal'])
 
@@ -758,21 +789,13 @@ class ToolsRegistry:
                 ),
             ] = None,
         ) -> dict[str, Any]:
-            from ..client.websocket_client import HomeAssistantWebSocketClient
             ws_client = None
 
             try:
-                # Get WebSocket client using same URL/token as REST client
-                ws_client = HomeAssistantWebSocketClient(
-                    self.client.base_url, self.client.token
-                )
-                connected = await ws_client.connect()
-                if not connected:
-                    return {
-                        "success": False,
-                        "error": "Failed to connect to Home Assistant WebSocket",
-                        "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
-                    }
+                # Connect to WebSocket
+                ws_client, error = await _get_connected_ws_client()
+                if error:
+                    return error
 
                 # Get backup configuration (includes default password)
                 backup_config = await ws_client.send_command("backup/config/info")
@@ -961,21 +984,13 @@ class ToolsRegistry:
 
             **Returns:** Restore job status
             """
-            from ..client.websocket_client import HomeAssistantWebSocketClient
             ws_client = None
 
             try:
-                # Get WebSocket client using same URL/token as REST client
-                ws_client = HomeAssistantWebSocketClient(
-                    self.client.base_url, self.client.token
-                )
-                connected = await ws_client.connect()
-                if not connected:
-                    return {
-                        "success": False,
-                        "error": "Failed to connect to Home Assistant WebSocket",
-                        "suggestion": "Check Home Assistant connection and ensure WebSocket API is available",
-                    }
+                # Connect to WebSocket
+                ws_client, error = await _get_connected_ws_client()
+                if error:
+                    return error
 
                 # Verify backup exists
                 backup_info = await ws_client.send_command("backup/info")
