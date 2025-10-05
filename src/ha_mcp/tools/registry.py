@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal, Union, cast
 import httpx
 from pydantic import Field
 
-from ..utils.usage_logger import log_tool_call
+from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
 
@@ -108,40 +108,6 @@ async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, 
         }
 
 
-def log_tool_usage(func: Any) -> Any:
-    """Decorator to automatically log MCP tool usage."""
-
-    @functools.wraps(func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        start_time = time.time()
-        tool_name = func.__name__
-        success = True
-        error_message = None
-        response_size = None
-
-        try:
-            result = await func(*args, **kwargs)
-            if isinstance(result, str):
-                response_size = len(result.encode("utf-8"))
-            elif hasattr(result, "__len__"):
-                response_size = len(str(result).encode("utf-8"))
-            return result
-        except Exception as e:
-            success = False
-            error_message = str(e)
-            raise
-        finally:
-            execution_time_ms = (time.time() - start_time) * 1000
-            log_tool_call(
-                tool_name=tool_name,
-                parameters=kwargs,
-                execution_time_ms=execution_time_ms,
-                success=success,
-                error_message=error_message,
-                response_size_bytes=response_size,
-            )
-
-    return wrapper
 
 
 class ToolsRegistry:
@@ -637,6 +603,10 @@ class ToolsRegistry:
 
     def _register_convenience_tools(self) -> None:
         """Register convenience tools for scenes, automations, and more."""
+        from .backup import register_backup_tools
+
+        # Register backup tools from backup.py module
+        register_backup_tools(self.mcp, self.client)
 
         @self.mcp.tool
         async def ha_activate_scene(scene_name: str) -> dict[str, Any]:

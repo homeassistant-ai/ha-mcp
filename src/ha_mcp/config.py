@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
 
+    # Backup tool configuration
+    backup_hint: str = Field("normal", alias="BACKUP_HINT")
+
     # WebSocket configuration (essential for async operations)
     enable_websocket: bool = Field(True, alias="ENABLE_WEBSOCKET")
 
@@ -100,6 +103,15 @@ class Settings(BaseSettings):
         if v.upper() not in valid_levels:
             raise ValueError(f"Log level must be one of {valid_levels}")
         return v.upper()
+
+    @field_validator("backup_hint")
+    @classmethod
+    def validate_backup_hint(cls, v: str) -> str:
+        """Ensure backup hint is valid."""
+        valid_hints = ["strong", "normal", "weak", "auto"]
+        if v.lower() not in valid_hints:
+            raise ValueError(f"Backup hint must be one of {valid_hints}")
+        return v.lower()
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="allow"
