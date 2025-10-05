@@ -1,14 +1,5 @@
 """
 Tools registry for Smart MCP Server - manages registration of all MCP tools.
-
-TODO: This file is getting very large (1100+ lines). Split into separate modules:
-- tools/backup.py - Backup/restore tools
-- tools/config.py - Configuration management tools (automations, scripts, helpers)
-- tools/device_control.py - Device control tools
-- tools/search.py - Entity search and discovery tools
-- tools/system.py - System info, weather, energy, etc.
-
-See GitHub wiki tech debt section for detailed refactoring plan.
 """
 
 import asyncio

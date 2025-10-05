@@ -68,8 +68,7 @@ Linux/WSL/macOS:
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile",
-        "BACKUP_HINT": "normal"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
       }
     }
 
@@ -87,8 +86,7 @@ Windows:
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile",
-        "BACKUP_HINT": "normal"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
       }
     }
 
@@ -96,13 +94,15 @@ Windows:
 }
 ```
 
-#### Optional Configuration
+### Optional Configuration
 
-- **`BACKUP_HINT`**: Controls how the `ha_backup_create` tool describes when to use backups
-  - `strong`: Suggests backup before the FIRST modification of day/session (for very cautious users)
-  - `normal`: Suggests backup only before operations that CANNOT be undone (default, recommended)
-  - `weak`: Rarely suggests backups (only if explicitly requested)
-  - `auto`: Currently same as `normal`, will auto-detect in future
+**`BACKUP_HINT`** - Controls backup tool recommendation behavior:
+- `strong`: Suggests backup before the FIRST modification of day/session (for very cautious users)
+- `normal`: Suggests backup only before operations that CANNOT be undone (default, recommended)
+- `weak`: Rarely suggests backups (only if explicitly requested)
+- `auto`: Currently same as `normal`, will auto-detect in future
+
+Add to `env` section: `"BACKUP_HINT": "normal"`
 
 ### Claude Code
 

@@ -13,12 +13,33 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import HomeAssistantWebSocketClient
-from .helpers import get_backup_hint_text, get_connected_ws_client, log_tool_usage
+from .helpers import get_connected_ws_client, log_tool_usage
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
+
+
+def _get_backup_hint_text() -> str:
+    """
+    Generate dynamic backup hint text based on BACKUP_HINT config.
+
+    Returns:
+        Backup hint text appropriate for the configured hint level.
+    """
+    from ..config import get_global_settings
+
+    settings = get_global_settings()
+    hint = getattr(settings, "backup_hint", "normal")
+
+    hints = {
+        "strong": "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
+        "normal": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
+        "weak": "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
+        "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",  # Same as normal for now, will auto-detect in future
+    }
+    return hints.get(hint, hints["normal"])
 
 
 async def _get_backup_password(
@@ -337,7 +358,7 @@ def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient) -> None:
         client: Home Assistant REST client
     """
     # Generate dynamic backup description based on BACKUP_HINT config
-    backup_hint_text = get_backup_hint_text()
+    backup_hint_text = _get_backup_hint_text()
     backup_create_description = f"""Create a fast Home Assistant backup (local only).
 
 **What's Included:**
