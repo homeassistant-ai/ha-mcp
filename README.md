@@ -18,6 +18,10 @@
 
 ---
 
+<div align="center">
+  <img src="img/Animation3.webp" alt="Home Assistant MCP Demo" width="800"/>
+</div>
+
 ## ✨ Features
 
 ### 🔍 Discover, Search and Query
