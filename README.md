@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
