@@ -18,9 +18,9 @@
 
 ---
 
-<div align="center">
-  <img src="img/Animation3.webp" alt="Home Assistant MCP Demo" width="800"/>
-</div>
+![Home Assistant MCP Demo](img/demo.webp)
+
+---
 
 ## ✨ Features
 
