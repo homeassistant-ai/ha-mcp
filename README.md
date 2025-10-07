@@ -20,7 +20,7 @@
 
 ![Home Assistant MCP Demo](img/demo.webp)
 
-**[Watch full demo on YouTube →](https://youtu.be/eCO93KfSvIM)**
+**[YouTube version →](https://youtu.be/eCO93KfSvIM)**
 
 ---
 
