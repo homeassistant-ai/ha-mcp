@@ -12,13 +12,13 @@ RUN apk add --no-cache \
 # Set up working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt ./
+# Copy requirements from parent and install dependencies
+COPY ../requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY src ./src
-COPY pyproject.toml README.md LICENSE ./
+# Copy source code from parent directory
+COPY ../src ./src
+COPY ../pyproject.toml ../README.md ../LICENSE ./
 
 # Install the package
 RUN pip3 install --no-cache-dir -e .
