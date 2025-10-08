@@ -1,0 +1,9 @@
+# Build configuration for Home Assistant add-on
+# Defines base images for different architectures
+
+build_from:
+  aarch64: "ghcr.io/home-assistant/aarch64-base-python:3.11-alpine3.19"
+  amd64: "ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.19"
+  armhf: "ghcr.io/home-assistant/armhf-base-python:3.11-alpine3.19"
+  armv7: "ghcr.io/home-assistant/armv7-base-python:3.11-alpine3.19"
+  i386: "ghcr.io/home-assistant/i386-base-python:3.11-alpine3.19"

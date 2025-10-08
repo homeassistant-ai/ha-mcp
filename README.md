@@ -48,7 +48,45 @@
 
 - **Long-lived access token** from Home Assistant user profile - Security tab
 
-### Installation
+### Installation Options
+
+Choose one of the following installation methods:
+
+#### Option 1: Home Assistant Add-on (Recommended)
+
+The easiest way to use ha-mcp with Home Assistant. Zero configuration required!
+
+1. Add this repository to your Home Assistant add-on store
+2. Install the "Home Assistant MCP Server" add-on
+3. Configure optional settings (backup hint)
+4. Start the add-on
+
+For detailed add-on documentation, see [homeassistant-addon/README.md](homeassistant-addon/README.md)
+
+#### Option 2: Docker Container
+
+Run ha-mcp as a standalone Docker container alongside Home Assistant:
+
+```bash
+# Build the image
+docker build -t homeassistant-ai/ha-mcp:latest .
+
+# Run with docker-compose (recommended)
+docker-compose up -d
+
+# Or run standalone
+docker run -d \
+  --name ha-mcp \
+  -e HOMEASSISTANT_URL=http://your-ha:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  homeassistant-ai/ha-mcp:latest
+```
+
+See [docker-compose.yml](docker-compose.yml) for a complete example running alongside Home Assistant.
+
+#### Option 3: Development Installation (uv)
+
+For development or if you prefer running directly:
 
 1. **Install uv**
 

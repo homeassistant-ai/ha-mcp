@@ -1,0 +1,26 @@
+name: "Home Assistant MCP Server"
+description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
+version: "2.2.0"
+slug: "ha-mcp"
+url: "https://github.com/homeassistant-ai/ha-mcp"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+init: false
+startup: application
+boot: manual
+# Enable access to Supervisor API for auto-discovery
+hassio_api: true
+hassio_role: default
+# Enable access to Home Assistant API
+homeassistant_api: true
+# Options for user configuration
+options:
+  backup_hint: "normal"
+schema:
+  backup_hint: list(strong|normal|weak|auto)
+# Add-on will run on stdio for MCP communication
+stdin: true
