@@ -195,6 +195,31 @@ ls -la tests/data/test_environment_state_*.json
 # - Sensors: Many available for monitoring tests
 ```
 
+### Home Assistant Add-on Repository Requirements
+
+**Critical File**: `repository.yaml` at project root
+
+This file is **required** for Home Assistant to recognize the repository as an add-on repository. Without it, the add-on will not appear in the add-on store.
+
+**Structure**:
+```yaml
+name: Home Assistant MCP Server
+url: 'https://github.com/homeassistant-ai/ha-mcp'
+maintainer: Julien <github@qc-h.net>
+```
+
+**Required files for add-on**:
+- `repository.yaml` - Repository metadata (root level)
+- `homeassistant-addon/config.yaml` - Add-on configuration
+- `homeassistant-addon/Dockerfile` - Container build instructions
+- `homeassistant-addon/start.py` - Startup script
+- `homeassistant-addon/README.md` - Add-on documentation
+- `homeassistant-addon/DOCS.md` - Detailed documentation
+
+**Version sync**: The version in `homeassistant-addon/config.yaml` must match `pyproject.toml` version.
+
+**Documentation**: Official Home Assistant add-on docs at https://developers.home-assistant.io/docs/add-ons/
+
 ## Architecture Overview
 
 ### Core Components Architecture
