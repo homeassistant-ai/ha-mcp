@@ -54,4 +54,5 @@ docs/
 # Docker
 docker-compose*.yml
 Dockerfile.*
-homeassistant-addon/
+# homeassistant-addon/ - needed for addon Docker tests
+homeassistant-addon/*.md
