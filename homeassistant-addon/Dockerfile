@@ -2,6 +2,9 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # Install uv and required build tools
+# uv version pinned - Dependabot will create PRs for updates
+# Python version comes from HA base image (see build.yaml)
+ENV UV_VERSION=0.9.0
 RUN apk add --no-cache \
     curl \
     gcc \
@@ -9,7 +12,7 @@ RUN apk add --no-cache \
     musl-dev \
     libffi-dev \
     openssl-dev \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh \
     && mv /root/.cargo/bin/uv /usr/local/bin/uv
 
 # Set up working directory
