@@ -17,7 +17,6 @@ class TestAddonStructure:
         required_files = [
             "config.yaml",
             "Dockerfile",
-            "build.yaml",
             "start.py",
             "README.md",
             "DOCS.md",
@@ -43,18 +42,6 @@ class TestAddonStructure:
         # Verify architectures
         expected_archs = ["amd64", "aarch64", "armhf", "armv7", "i386"]
         assert all(arch in config["arch"] for arch in expected_archs)
-
-    def test_build_yaml_valid(self):
-        """Verify build.yaml contains proper base images."""
-        with open(f"{ADDON_DIR}/build.yaml") as f:
-            build = yaml.safe_load(f)
-
-        assert "build_from" in build
-        for arch in ["amd64", "aarch64", "armhf", "armv7", "i386"]:
-            assert arch in build["build_from"]
-            # Now using uv Alpine images instead of HA base images
-            assert "uv:" in build["build_from"][arch]
-            assert "python3.11" in build["build_from"][arch]
 
     def test_start_script_executable(self):
         """Verify start.py has executable permissions."""

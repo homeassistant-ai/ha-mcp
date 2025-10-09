@@ -2,9 +2,9 @@
 # Uses same uv base as standalone for consistency
 # Python 3.11 - Security support until 2027-10
 # No bashio needed - pure Python startup script
+# Multi-platform uv image supports all HA architectures automatically
 
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM ghcr.io/astral-sh/uv:0.9.0-python3.11-alpine3.20
 
 WORKDIR /app
 
