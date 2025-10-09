@@ -18,7 +18,7 @@ class TestAddonStructure:
             "config.yaml",
             "Dockerfile",
             "build.yaml",
-            "run.sh",
+            "start.py",
             "README.md",
             "DOCS.md",
         ]
@@ -52,16 +52,19 @@ class TestAddonStructure:
         assert "build_from" in build
         for arch in ["amd64", "aarch64", "armhf", "armv7", "i386"]:
             assert arch in build["build_from"]
-            assert "base-python:3.11" in build["build_from"][arch]
+            # Now using uv Alpine images instead of HA base images
+            assert "uv:" in build["build_from"][arch]
+            assert "python3.11" in build["build_from"][arch]
 
-    def test_run_script_executable(self):
-        """Verify run.sh has executable permissions."""
-        run_sh = f"{ADDON_DIR}/run.sh"
-        st = os.stat(run_sh)
-        assert st.st_mode & stat.S_IXUSR, "run.sh must be executable"
+    def test_start_script_executable(self):
+        """Verify start.py has executable permissions."""
+        start_py = f"{ADDON_DIR}/start.py"
+        st = os.stat(start_py)
+        assert st.st_mode & stat.S_IXUSR, "start.py must be executable"
 
-    def test_run_script_has_shebang(self):
-        """Verify run.sh has proper shebang."""
-        with open(f"{ADDON_DIR}/run.sh") as f:
+    def test_start_script_has_shebang(self):
+        """Verify start.py has proper shebang."""
+        with open(f"{ADDON_DIR}/start.py") as f:
             first_line = f.readline()
-        assert first_line.startswith("#!"), "run.sh missing shebang"
+        assert first_line.startswith("#!"), "start.py missing shebang"
+        assert "python" in first_line.lower(), "start.py shebang must reference python"

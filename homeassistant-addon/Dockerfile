@@ -1,21 +1,11 @@
+# Home Assistant MCP Server Add-on
+# Uses same uv base as standalone for consistency
+# Python 3.11 - Security support until 2027-10
+# No bashio needed - pure Python startup script
+
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install uv and required build tools
-# uv version pinned - Dependabot will create PRs for updates
-# Python version comes from HA base image (see build.yaml)
-ENV UV_VERSION=0.9.0
-RUN apk add --no-cache \
-    curl \
-    gcc \
-    g++ \
-    musl-dev \
-    libffi-dev \
-    openssl-dev \
-    && curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh \
-    && mv /root/.cargo/bin/uv /usr/local/bin/uv
-
-# Set up working directory
 WORKDIR /app
 
 # Copy project files from parent directory
@@ -25,9 +15,9 @@ COPY ../src ./src
 # Install dependencies and project with uv
 RUN uv pip install --system --no-cache .
 
-# Copy run script
-COPY run.sh /
-RUN chmod a+x /run.sh
+# Copy Python startup script
+COPY start.py /
+RUN chmod a+x /start.py
 
 # Labels
 LABEL \
@@ -37,4 +27,4 @@ LABEL \
     io.hass.type="addon" \
     io.hass.arch="${BUILD_ARCH}"
 
-CMD [ "/run.sh" ]
+CMD ["python3", "/start.py"]
