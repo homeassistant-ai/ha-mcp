@@ -14,14 +14,20 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 1. Add this repository to your Home Assistant add-on store
 2. Install the "Home Assistant MCP Server" add-on
-3. Start the add-on
-4. Configure your AI assistant (Claude Desktop, etc.) to connect via stdio
+3. Configure the add-on (see below)
+4. Start the add-on
+5. Configure your AI assistant to connect via HTTP to the exposed port
 
 ## Configuration
 
 ```yaml
 backup_hint: normal
+port: 9583
 ```
+
+### port
+
+HTTP port for MCP communication (default: 9583). The add-on runs in streamable-http mode.
 
 ### backup_hint
 

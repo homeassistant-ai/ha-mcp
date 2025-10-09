@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "2.3.1"
+version: "1.0.0"
 slug: "ha-mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
@@ -16,10 +16,15 @@ hassio_api: true
 hassio_role: default
 # Enable access to Home Assistant API
 homeassistant_api: true
+# Use pre-built Docker images
+image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
 options:
   backup_hint: "normal"
+  port: 9583
 schema:
   backup_hint: list(strong|normal|weak|auto)
-# Add-on will run on stdio for MCP communication
-stdin: true
+  port: port
+# Add-on exposes HTTP port for MCP communication
+ports:
+  9583/tcp: 9583

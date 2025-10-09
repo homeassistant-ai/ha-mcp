@@ -30,14 +30,25 @@ class TestAddonStructure:
         with open(f"{ADDON_DIR}/config.yaml") as f:
             config = yaml.safe_load(f)
 
-        required_fields = ["name", "description", "version", "slug", "arch"]
+        required_fields = ["name", "description", "version", "slug", "arch", "image"]
         for field in required_fields:
             assert field in config, f"Missing required field: {field}"
 
+        # Verify add-on uses independent versioning (not tied to MCP server version)
+        assert config["version"] == "1.0.0", "Add-on should use version 1.0.0"
+
         # Verify essential configurations
-        assert config["stdin"] is True, "stdin must be true for MCP"
         assert config["hassio_api"] is True, "hassio_api required for Supervisor"
         assert config["homeassistant_api"] is True, "homeassistant_api required"
+
+        # Verify image field uses per-architecture naming
+        assert config["image"] == "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}", \
+            "image field must use per-architecture naming with {arch} placeholder"
+
+        # Verify port configuration
+        assert "ports" in config, "ports section required for HTTP transport"
+        assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
+        assert config["options"]["port"] == 9583, "default port should be 9583"
 
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
