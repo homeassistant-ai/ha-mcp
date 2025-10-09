@@ -1,27 +1,26 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install required build tools
+# Install uv and required build tools
 RUN apk add --no-cache \
+    curl \
     gcc \
     g++ \
     musl-dev \
     libffi-dev \
-    openssl-dev
+    openssl-dev \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.cargo/bin/uv /usr/local/bin/uv
 
 # Set up working directory
 WORKDIR /app
 
-# Copy requirements from parent and install dependencies
-COPY ../requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-# Copy source code from parent directory
+# Copy project files from parent directory
+COPY ../pyproject.toml ./
 COPY ../src ./src
-COPY ../pyproject.toml ../README.md ../LICENSE ./
 
-# Install the package
-RUN pip3 install --no-cache-dir -e .
+# Install dependencies and project with uv
+RUN uv pip install --system --no-cache .
 
 # Copy run script
 COPY run.sh /
