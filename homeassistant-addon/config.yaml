@@ -4,11 +4,10 @@ version: "2.2.0"
 slug: "ha-mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
-  - aarch64
-  - amd64
-  - armhf
-  - armv7
-  - i386
+  - aarch64  # 64-bit ARM (Raspberry Pi 4+, modern ARM devices)
+  - amd64    # 64-bit x86 (most PCs and servers)
+  # Note: 32-bit platforms (armhf, armv7, i386) not supported
+  # uv base image only provides amd64 and arm64 builds
 init: false
 startup: application
 boot: manual
