@@ -2,8 +2,6 @@
 
 AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
-Control and manage your Home Assistant setup using natural language through AI assistants like Claude.
-
 ## Features
 
 - **20+ MCP Tools** for device control, automation management, and system queries
@@ -16,8 +14,8 @@ Control and manage your Home Assistant setup using natural language through AI a
 
 1. Add this repository to your Home Assistant add-on store
 2. Install the "Home Assistant MCP Server" add-on
-3. Configure your backup hint preference (optional)
-4. Start the add-on
+3. Start the add-on
+4. Configure your AI assistant (Claude Desktop, etc.) to connect via stdio
 
 ## Configuration
 
@@ -25,27 +23,16 @@ Control and manage your Home Assistant setup using natural language through AI a
 backup_hint: normal
 ```
 
-### Option: `backup_hint`
+### backup_hint
 
-Controls when the MCP server recommends creating backups:
+Controls when backups are suggested before operations:
 
-- `strong`: Before the first modification of day/session
+- `strong`: Before first modification of session
 - `normal`: Before operations that cannot be undone (default)
 - `weak`: Rarely suggests backups
 - `auto`: Intelligent detection (future)
 
-## Usage
-
-Once started, the add-on runs an MCP server that your AI assistant can connect to.
-
-Configure your MCP client (Claude Desktop, etc.) to use this add-on's stdio interface.
-
 ## Support
 
-For issues and feature requests, visit:
-https://github.com/homeassistant-ai/ha-mcp/issues
-
-## Documentation
-
-Full documentation available at:
-https://github.com/homeassistant-ai/ha-mcp
+- **Issues**: https://github.com/homeassistant-ai/ha-mcp/issues
+- **Documentation**: https://github.com/homeassistant-ai/ha-mcp
