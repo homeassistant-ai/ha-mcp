@@ -65,24 +65,23 @@ For detailed add-on documentation, see [homeassistant-addon/README.md](homeassis
 
 #### Option 2: Docker Container
 
-Run ha-mcp as a standalone Docker container alongside Home Assistant:
+Run ha-mcp as a standalone Docker container alongside Home Assistant.
 
-```bash
-# Build the image
-docker build -t homeassistant-ai/ha-mcp:latest .
+**Add to your existing docker-compose.yml:**
 
-# Run with docker-compose (recommended)
-docker-compose up -d
-
-# Or run standalone
-docker run -d \
-  --name ha-mcp \
-  -e HOMEASSISTANT_URL=http://your-ha:8123 \
-  -e HOMEASSISTANT_TOKEN=your_token \
-  homeassistant-ai/ha-mcp:latest
+```yaml
+services:
+  ha-mcp:
+    build: https://github.com/homeassistant-ai/ha-mcp.git
+    environment:
+      - HOMEASSISTANT_URL=http://homeassistant:8123  # or your HA IP
+      - HOMEASSISTANT_TOKEN=${HA_TOKEN}
+    restart: unless-stopped
 ```
 
-See [docker-compose.yml](docker-compose.yml) for a complete example running alongside Home Assistant.
+Then create `.env` file with your token and run `docker-compose up -d ha-mcp`
+
+See [docker-compose.yml](docker-compose.yml) for detailed example with comments.
 
 #### Option 3: Development Installation (uv)
 

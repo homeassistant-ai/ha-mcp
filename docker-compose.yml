@@ -1,63 +1,38 @@
-# Docker Compose configuration for running Home Assistant MCP alongside Home Assistant
-# This demonstrates the standalone Docker deployment running side-by-side with HA
-
-version: '3.8'
+# Example: Add Home Assistant MCP to your existing docker-compose.yml
+# Copy the 'ha-mcp' service below and add it to your services section
 
 services:
-  homeassistant:
-    image: homeassistant/home-assistant:stable
-    container_name: homeassistant
-    privileged: true
-    restart: unless-stopped
-    environment:
-      - TZ=America/New_York
-    volumes:
-      - ./ha_config:/config
-    ports:
-      - "8123:8123"
-    networks:
-      - ha-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+  # If you already have Home Assistant running, you can reference it:
+  # homeassistant:
+  #   image: homeassistant/home-assistant:stable
+  #   ... your existing HA config ...
 
+  # Add this service to your existing docker-compose.yml:
   ha-mcp:
     build:
       context: .
       dockerfile: Dockerfile
     image: homeassistant-ai/ha-mcp:latest
     container_name: ha-mcp-server
-    depends_on:
-      homeassistant:
-        condition: service_healthy
     environment:
-      # Use homeassistant as hostname (Docker network DNS)
+      # Point to your Home Assistant instance
+      # If HA is in same compose file, use service name: http://homeassistant:8123
+      # If HA is external, use: http://your-ha-ip:8123
       - HOMEASSISTANT_URL=http://homeassistant:8123
       # Set your Home Assistant long-lived access token
       - HOMEASSISTANT_TOKEN=${HA_TOKEN}
       # Optional: Configure backup hint behavior
       - BACKUP_HINT=normal
     restart: unless-stopped
-    networks:
-      - ha-network
-    # MCP servers typically run via stdio, not network ports
-    # If you need to expose network services, uncomment:
-    # ports:
-    #   - "8080:8080"
+    # If using same compose file as HA, add to HA's network:
+    # networks:
+    #   - your-ha-network
 
-networks:
-  ha-network:
-    driver: bridge
-
-# To use this docker-compose.yml:
-# 1. Create a .env file with: HA_TOKEN=your_long_lived_access_token
-# 2. Run: docker-compose up -d
-# 3. Connect your MCP client (Claude Desktop, etc.) to the ha-mcp container
+# Usage:
+# 1. Create .env file: HA_TOKEN=your_long_lived_access_token
+# 2. Add ha-mcp service to your docker-compose.yml
+# 3. Run: docker-compose up -d ha-mcp
+# 4. Connect your MCP client to the ha-mcp container
 #
-# To get a Home Assistant token:
-# 1. Go to your Home Assistant profile
-# 2. Scroll to "Long-Lived Access Tokens"
-# 3. Click "Create Token"
-# 4. Copy the token to your .env file
+# Get a Home Assistant token:
+# Profile → Long-Lived Access Tokens → Create Token

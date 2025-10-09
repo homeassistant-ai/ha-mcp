@@ -1,7 +1,7 @@
 # Home Assistant MCP Server - Production Docker Image
-# Standalone deployment without uv dependency
+# Uses uv for fast, reliable Python package management
 
-FROM python:3.11-slim
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \
@@ -10,22 +10,14 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install with pip
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy source code
+# Copy project files
+COPY pyproject.toml ./
 COPY src/ ./src/
-COPY pyproject.toml README.md LICENSE ./
 
-# Install package in editable mode
-RUN pip install --no-cache-dir -e .
+# Install dependencies and project with uv
+# --no-cache: Don't cache downloaded packages
+# --system: Install into system Python (not a virtual environment)
+RUN uv pip install --system --no-cache .
 
 # Create non-root user for security
 RUN groupadd -r mcpuser && useradd -r -g mcpuser mcpuser && \
@@ -36,9 +28,6 @@ USER mcpuser
 ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
     BACKUP_HINT="normal"
-
-# Expose port for MCP server (if needed in future)
-EXPOSE 8080
 
 # Run the MCP server
 CMD ["ha-mcp"]
