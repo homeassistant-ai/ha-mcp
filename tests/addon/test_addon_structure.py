@@ -39,9 +39,14 @@ class TestAddonStructure:
         assert config["hassio_api"] is True, "hassio_api required for Supervisor"
         assert config["homeassistant_api"] is True, "homeassistant_api required"
 
-        # Verify architectures
-        expected_archs = ["amd64", "aarch64", "armhf", "armv7", "i386"]
+        # Verify architectures (only 64-bit platforms supported by uv image)
+        expected_archs = ["amd64", "aarch64"]
         assert all(arch in config["arch"] for arch in expected_archs)
+
+        # Verify 32-bit platforms are not included
+        unsupported_archs = ["armhf", "armv7", "i386"]
+        assert not any(arch in config["arch"] for arch in unsupported_archs), \
+            "32-bit platforms not supported by uv base image"
 
     def test_start_script_executable(self):
         """Verify start.py has executable permissions."""
