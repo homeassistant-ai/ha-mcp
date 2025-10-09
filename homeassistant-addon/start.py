@@ -25,6 +25,7 @@ def main() -> int:
     config_file = Path("/data/options.json")
     backup_hint = "normal"  # default
     port = 9583  # default
+    path = "/mcp"  # default
 
     if config_file.exists():
         try:
@@ -32,11 +33,13 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             port = config.get("port", 9583)
+            path = config.get("path", "/mcp")
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
     log_info(f"Backup hint mode: {backup_hint}")
     log_info(f"HTTP port: {port}")
+    log_info(f"MCP path: {path}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -52,7 +55,12 @@ def main() -> int:
 
     log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
     log_info("Authentication configured via Supervisor token")
-    log_info(f"Launching ha-mcp in HTTP mode on 0.0.0.0:{port}...")
+    log_info(f"Launching ha-mcp in HTTP mode on 0.0.0.0:{port}{path}")
+    log_info("")
+    log_info("=" * 70)
+    log_info(f"MCP Server URL: http://<home-assistant-ip>:{port}{path}")
+    log_info("=" * 70)
+    log_info("")
 
     # Replace current process with fastmcp in streamable-http mode
     os.execvp(
@@ -66,6 +74,8 @@ def main() -> int:
             "0.0.0.0",
             "--port",
             str(port),
+            "--path",
+            path,
         ],
     )
 

@@ -50,6 +50,10 @@ class TestAddonStructure:
         assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
         assert config["options"]["port"] == 9583, "default port should be 9583"
 
+        # Verify path configuration
+        assert config["options"]["path"] == "/mcp", "default path should be /mcp"
+        assert "path" in config["schema"], "schema must include path field"
+
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
         assert all(arch in config["arch"] for arch in expected_archs)

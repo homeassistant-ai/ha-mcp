@@ -22,9 +22,11 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   backup_hint: "normal"
   port: 9583
+  path: "/mcp"
 schema:
   backup_hint: list(strong|normal|weak|auto)
   port: port
+  path: str
 # Add-on exposes HTTP port for MCP communication
 ports:
   9583/tcp: 9583
