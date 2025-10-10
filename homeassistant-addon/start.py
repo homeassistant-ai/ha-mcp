@@ -72,23 +72,27 @@ def main() -> int:
     log_info("=" * 70)
     log_info("")
 
-    # Replace current process with fastmcp in streamable-http mode
-    os.execvp(
-        "fastmcp",
-        [
-            "fastmcp",
-            "run",
-            "ha_mcp",
-            "--transport",
-            "streamable-http",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            str(port),
-            "--path",
-            path,
-        ],
-    )
+    # Import and run MCP server directly
+    try:
+        log_info("Importing ha_mcp module...")
+        from ha_mcp.__main__ import mcp
+
+        log_info("Starting MCP server...")
+        mcp.run(
+            transport="streamable-http",
+            host="0.0.0.0",
+            port=port,
+            path=path,
+            log_level="info",
+        )
+    except Exception as e:
+        log_error(f"Failed to start MCP server: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
