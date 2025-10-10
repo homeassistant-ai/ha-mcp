@@ -54,6 +54,11 @@ class TestAddonStructure:
         assert config["options"]["path"] == "/mcp", "default path should be /mcp"
         assert "path" in config["schema"], "schema must include path field"
 
+        # Verify authentication configuration
+        assert "require_auth" in config["options"], "options must include require_auth field"
+        assert config["options"]["require_auth"] is False, "default require_auth should be false"
+        assert "require_auth" in config["schema"], "schema must include require_auth field"
+
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
         assert all(arch in config["arch"] for arch in expected_archs)

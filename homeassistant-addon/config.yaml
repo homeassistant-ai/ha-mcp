@@ -23,10 +23,12 @@ options:
   backup_hint: "normal"
   port: 9583
   path: "/mcp"
+  require_auth: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   port: port
   path: str
+  require_auth: bool
 # Add-on exposes HTTP port for MCP communication
 ports:
   9583/tcp: 9583
