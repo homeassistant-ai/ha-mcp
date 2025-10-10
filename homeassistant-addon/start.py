@@ -26,6 +26,7 @@ def main() -> int:
     backup_hint = "normal"  # default
     port = 9583  # default
     path = "/mcp"  # default
+    require_auth = False  # default
 
     if config_file.exists():
         try:
@@ -34,12 +35,14 @@ def main() -> int:
             backup_hint = config.get("backup_hint", "normal")
             port = config.get("port", 9583)
             path = config.get("path", "/mcp")
+            require_auth = config.get("require_auth", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
     log_info(f"Backup hint mode: {backup_hint}")
     log_info(f"HTTP port: {port}")
     log_info(f"MCP path: {path}")
+    log_info(f"Require authentication: {require_auth}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -55,6 +58,13 @@ def main() -> int:
 
     log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
     log_info("Authentication configured via Supervisor token")
+
+    # Configure MCP authentication if required
+    if require_auth:
+        log_info("MCP Authentication: ENABLED (HA token validation)")
+        os.environ["FASTMCP_SERVER_AUTH"] = "ha_mcp.auth.ha_token_verifier.HATokenVerifier"
+    else:
+        log_info("MCP Authentication: DISABLED (use secret path for security)")
     log_info(f"Launching ha-mcp in HTTP mode on 0.0.0.0:{port}{path}")
     log_info("")
     log_info("=" * 70)
