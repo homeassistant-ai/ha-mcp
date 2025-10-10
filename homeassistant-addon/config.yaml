@@ -1,7 +1,7 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "1.0.0"
-slug: "ha-mcp"
+version: "2.5.3"
+slug: "ha_mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
   - aarch64  # 64-bit ARM (Raspberry Pi 4+, modern ARM devices)

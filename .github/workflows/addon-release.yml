@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'homeassistant-addon/**'
+      - 'pyproject.toml'
       - '.github/workflows/addon-release.yml'
   workflow_dispatch:
 
@@ -32,6 +33,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+
+    - name: Sync version from pyproject.toml to config.yaml
+      run: |
+        VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "Package version: $VERSION"
+        sed -i "s/^version: \".*\"/version: \"$VERSION\"/" homeassistant-addon/config.yaml
+        echo "Updated config.yaml to version $VERSION"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
