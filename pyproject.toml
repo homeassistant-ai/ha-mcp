@@ -185,14 +185,14 @@ dev = [
 
 # Semantic versioning configuration
 [tool.semantic_release]
-version_toml = [
-    "pyproject.toml:project.version",
-    "homeassistant-addon/config.yaml:version",
-]
+version_toml = ["pyproject.toml:project.version"]
 version_variables = [
     "src/ha_mcp/__init__.py:__version__",
 ]
-build_command = ""
+build_command = """
+VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = \"\\(.*\\)\"/\\1/')
+sed -i "s/^version: \\\".*\\\"/version: \\\"$VERSION\\\"/" homeassistant-addon/config.yaml
+"""
 dist_path = "dist/"
 upload_to_PyPI = true
 upload_to_release = true
