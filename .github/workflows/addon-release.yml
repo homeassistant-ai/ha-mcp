@@ -1,12 +1,12 @@
 name: Build & Publish Add-on Images
 
 on:
-  push:
+  # Trigger after semantic-release completes
+  workflow_run:
+    workflows: ["Release & Publish"]
+    types: [completed]
     branches: [ main, master ]
-    paths:
-      - 'homeassistant-addon/**'
-      - 'pyproject.toml'
-      - '.github/workflows/addon-release.yml'
+  # Also support manual dispatch
   workflow_dispatch:
 
 env:
@@ -17,6 +17,8 @@ jobs:
   build-addon:
     name: Build Add-on Image (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    # Only run if Release & Publish workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       packages: write
