@@ -78,6 +78,7 @@ def main() -> int:
         [
             "fastmcp",
             "run",
+            "ha_mcp",
             "--transport",
             "streamable-http",
             "--host",
