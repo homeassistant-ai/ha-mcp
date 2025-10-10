@@ -16,6 +16,8 @@ hassio_api: true
 hassio_role: default
 # Enable access to Home Assistant API
 homeassistant_api: true
+# Enable host network mode for local network access
+host_network: true
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
