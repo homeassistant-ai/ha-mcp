@@ -58,17 +58,18 @@ class TestAddonStartup:
 
     def test_addon_startup_logs(self, container):
         """Test that add-on produces expected startup logs."""
-        # Configure wait strategy for startup message
+        # Configure wait strategy for server actually starting
         container.waiting_for(
-            LogMessageWaitStrategy("MCP Server URL:").with_startup_timeout(30)
+            LogMessageWaitStrategy("Starting MCP server").with_startup_timeout(30)
         )
 
         # Start container
         container.start()
 
         try:
-            # Get logs
-            logs = container.get_logs()[0].decode("utf-8")
+            # Get logs (both stdout and stderr)
+            stdout, stderr = container.get_logs()
+            logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
 
             # Verify expected log messages
             assert "[INFO] Starting Home Assistant MCP Server..." in logs
@@ -84,8 +85,16 @@ class TestAddonStartup:
             assert "[INFO] Launching ha-mcp in HTTP mode on 0.0.0.0:9583/mcp" in logs
             assert "MCP Server URL: http://<home-assistant-ip>:9583/mcp" in logs
 
+            # Verify debug messages
+            assert "[INFO] Importing ha_mcp module..." in logs
+            assert "[INFO] Starting MCP server..." in logs
+
+            # Verify FastMCP started successfully
+            assert "Starting MCP server 'ha-mcp'" in logs
+            assert "Uvicorn running on http://0.0.0.0:9583" in logs
+
             # Should not have errors
-            assert "[ERROR]" not in logs or "No server specification" not in logs
+            assert "[ERROR] Failed to start MCP server:" not in logs
 
         finally:
             container.stop()
