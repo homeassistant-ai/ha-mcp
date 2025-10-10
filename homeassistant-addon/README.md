@@ -39,6 +39,8 @@ URL path for the MCP endpoint (default: /mcp).
 
 Example: `http://192.168.1.100:9583/mcp`
 
+**Security Note**: If your Home Assistant is on an untrusted network or accessible from the internet, use a secret path value instead of the default `/mcp` (e.g., `/my-secret-mcp-endpoint-8a7f3b2c`). This provides an additional layer of security through obscurity.
+
 ### backup_hint
 
 Controls when backups are suggested before operations:
