@@ -8,15 +8,15 @@ FROM ghcr.io/astral-sh/uv:python3.11-bookworm
 
 WORKDIR /app
 
-# Copy project files from parent directory
-COPY ../pyproject.toml ./
-COPY ../src ./src
+# Copy project files from project root
+COPY pyproject.toml ./
+COPY src ./src
 
 # Install dependencies and project with uv
 RUN uv pip install --system --no-cache .
 
 # Copy Python startup script
-COPY start.py /
+COPY homeassistant-addon/start.py /
 RUN chmod a+x /start.py
 
 # Labels
