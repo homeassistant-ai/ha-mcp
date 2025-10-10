@@ -4,7 +4,7 @@
 # No bashio needed - pure Python startup script
 # Multi-platform uv image supports all HA architectures automatically
 
-FROM ghcr.io/astral-sh/uv:0.9.0-python3.11-alpine3.20
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm
 
 WORKDIR /app
 
