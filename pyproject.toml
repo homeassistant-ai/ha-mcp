@@ -185,7 +185,10 @@ dev = [
 
 # Semantic versioning configuration
 [tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
+version_toml = [
+    "pyproject.toml:project.version",
+    "homeassistant-addon/config.yaml:version",
+]
 version_variables = [
     "src/ha_mcp/__init__.py:__version__",
 ]
