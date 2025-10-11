@@ -12,7 +12,7 @@
   </p>
 
   <p align="center">
-    <img src="https://img.shields.io/pypi/pyversions/ha-mcp" alt="Python Version">
+    <img src="https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fhomeassistant-ai%2Fha-mcp%2Fmaster%2Fpyproject.toml" alt="Python Version">
     <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/Built%20with-FastMCP-purple" alt="Built with FastMCP"></a>
   </p>
 
