@@ -15,6 +15,7 @@ WORKDIR /app
 # Copy project files
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY fastmcp.json fastmcp-http.json ./
 
 # Install dependencies and project with uv
 # --no-cache: Don't cache downloaded packages
@@ -31,8 +32,7 @@ ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
     BACKUP_HINT="normal"
 
-# Default: Run in stdio mode (for MCP clients like Claude Desktop)
-# Override CMD to run in streamable-http mode (for remote/web clients)
-# Example: docker run ... ha-mcp python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+# Default: Run in stdio mode using fastmcp.json
+# For HTTP mode, override with: docker run ... ha-mcp fastmcp run fastmcp-http.json
 ENTRYPOINT ["uv", "run", "--no-project"]
-CMD ["ha-mcp"]
+CMD ["fastmcp", "run", "fastmcp.json"]

@@ -18,12 +18,6 @@ jobs:
       id-token: write      # Required for trusted publishing
       pull-requests: write # Required to create pull requests
       issues: write        # Required for GitHub releases
-    outputs:
-      released: ${{ steps.semantic.outputs.released }}
-      version: ${{ steps.semantic.outputs.version }}
-      major: ${{ steps.semantic.outputs.major }}
-      minor: ${{ steps.semantic.outputs.minor }}
-      patch: ${{ steps.semantic.outputs.patch }}
 
     steps:
     - uses: actions/checkout@v5

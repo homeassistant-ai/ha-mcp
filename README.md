@@ -59,9 +59,9 @@ Choose the installation method that best fits your setup:
 **Advantages:**
 - ✅ One-click installation
 - ✅ Automatic updates
-- ✅ Built-in authentication
+- ✅ Secure by default (auto-generated secret paths)
 - ✅ No external dependencies
-- ✅ Network accessible by default
+- ✅ Built-in authentication via Supervisor
 
 **Installation Steps:**
 
@@ -76,118 +76,39 @@ Choose the installation method that best fits your setup:
 
 2. **Install the add-on** from the add-on store
 
-3. **Configure** (optional):
-   - `backup_hint`: Control backup recommendations (`normal`, `strong`, `weak`)
-   - `port`: HTTP port (default: `9583`)
-   - `path`: MCP endpoint path (default: `/mcp`)
-   - `require_auth`: Enable MCP authentication (default: `false`)
+3. **Start the add-on**
 
-4. **Start the add-on** and check logs
+4. **Check the logs** for your unique MCP server URL:
 
-5. **Connect from AI clients:**
+   ```
+   🔐 MCP Server URL: http://192.168.1.100:9583/a1b2c3d4e5f6...
 
-<details>
-<summary><b>📱 Claude Desktop / MCP Clients</b></summary>
+      Secret Path: /a1b2c3d4e5f6g7h8...
 
-Add to your `mcp.json` or Claude Desktop configuration:
+      ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
+   ```
+
+5. **Configure your AI client** with the complete URL from the logs
+
+**Example Configuration (Claude Desktop):**
 
 ```json
 {
   "mcpServers": {
     "home-assistant": {
-      "url": "http://<your-home-assistant-ip>:9583/mcp",
+      "url": "http://192.168.1.100:9583/a1b2c3d4e5f6g7h8...",
       "transport": "http"
     }
   }
 }
 ```
 
-Replace `<your-home-assistant-ip>` with your Home Assistant's local IP address (e.g., `192.168.1.100`).
+Replace the URL with the one from your add-on logs.
 
-</details>
-
-<details>
-<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
-
-**⚠️ Security Warning:** Remote access exposes your setup to the internet. Always use a secret path.
-
-1. **Configure secret path** in add-on settings:
-   ```yaml
-   path: "/__your_secret_path_here__"
-   ```
-
-2. **Set up Cloudflare Tunnel:**
-   ```bash
-   # Install cloudflared
-   # See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-
-   cloudflared tunnel --url http://localhost:9583
-   ```
-
-3. **Use the URL:** `https://abc-def.trycloudflare.com/__your_secret_path_here__`
-
-4. **Configure in web clients:**
-   - [Claude.ai setup](https://support.anthropic.com/en/articles/11176164-pre-built-web-connectors-using-remote-mcp)
-   - [ChatGPT setup](https://help.openai.com/en/articles/11487775-connectors-in-chatgpt)
-
-</details>
-
-<details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add-json home-assistant '{
-  "url": "http://<your-home-assistant-ip>:9583/mcp",
-  "transport": "http"
-}'
-```
-
-Replace `<your-home-assistant-ip>` with your Home Assistant's IP address.
-
-</details>
-
-#### 🌐 Remote Access with Cloudflared Addon (Recommended)
-
-**Best for:** Secure remote access without port forwarding or manual cloudflared setup
-
-If you need to access your HA MCP server remotely (for Claude.ai, ChatGPT, etc.), use the **Cloudflared addon** instead of manual tunnel setup. It's easier, more secure, and centrally managed.
-
-**Why use Cloudflared addon:**
-- ✅ No port forwarding required
-- ✅ Automatic DNS management (if you have a domain)
-- ✅ Manages all your Home Assistant services in one place
-- ✅ Optional Cloudflare Zero Trust authentication
-- ✅ Quick tunnels available (no domain required)
-
-**Setup:**
-
-1. **Install Cloudflared addon:**
-
-   [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
-
-2. **Configure the addon** to expose HA MCP:
-
-   Add to Cloudflared addon configuration:
-   ```yaml
-   additional_hosts:
-     - hostname: ha-mcp.yourdomain.com
-       service: http://localhost:9583
-   ```
-
-   **Note:** If you don't have a domain, Cloudflared addon supports quick tunnels (temporary URLs) - check the addon documentation for details.
-
-3. **Configure secret path** in HA MCP addon for security:
-   ```yaml
-   # HA MCP addon configuration
-   path: "/__your_secret_path__"
-   ```
-
-4. **Use in web clients:**
-   ```
-   https://ha-mcp.yourdomain.com/__your_secret_path__
-   ```
-
-**See also:** [Cloudflared addon documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md)
+**Security:**
+- Addon generates a unique 512-bit random path on first start
+- The secret path is persisted and reused across restarts
+- No manual configuration needed - secure by default!
 
 ---
 
@@ -240,7 +161,7 @@ docker run -d \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your_long_lived_token \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
-  python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+  fastmcp run fastmcp-http.json
 ```
 
 **Client Configuration:**
@@ -268,6 +189,7 @@ docker run -d \
 
 1. **Run with secret path:**
    ```bash
+   # For custom secret paths, use the python -c approach:
    docker run -d \
      --name ha-mcp \
      -p 8086:8086 \
@@ -312,9 +234,7 @@ services:
       HOMEASSISTANT_URL: http://homeassistant.local:8123
       HOMEASSISTANT_TOKEN: your_long_lived_token
       BACKUP_HINT: normal
-    command: >
-      python -c "from ha_mcp.__main__ import mcp;
-      mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+    command: fastmcp run fastmcp-http.json
     restart: unless-stopped
 ```
 

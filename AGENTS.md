@@ -192,7 +192,7 @@ docker run -d --name ha-mcp \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
-  python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+  fastmcp run fastmcp-http.json
 
 # Check logs
 docker logs ha-mcp -f
@@ -203,8 +203,8 @@ docker stop ha-mcp && docker rm ha-mcp
 
 **Key features:**
 - **ENTRYPOINT**: `uv run --no-project` (runs commands with system packages)
-- **Default CMD**: `ha-mcp` (stdio mode)
-- **Override CMD**: Pass `python -c "from ha_mcp.__main__ import mcp; mcp.run(...)"` for HTTP mode
+- **Default CMD**: `fastmcp run fastmcp.json` (stdio mode)
+- **HTTP mode**: Override with `fastmcp run fastmcp-http.json`
 
 #### Local Docker Build
 
@@ -224,7 +224,7 @@ docker run -d --name ha-mcp-local \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ha-mcp:local \
-  python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+  fastmcp run fastmcp-http.json
 ```
 
 #### Docker Test Environment (for E2E tests)
