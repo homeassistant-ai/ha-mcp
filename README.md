@@ -57,11 +57,8 @@ Choose the installation method that best fits your setup:
 **Best for:** Users running Home Assistant OS or Supervised
 
 **Advantages:**
-- ✅ One-click installation
+- ✅ 5 clicks installation
 - ✅ Automatic updates
-- ✅ Secure by default (auto-generated secret paths)
-- ✅ No external dependencies
-- ✅ Built-in authentication via Supervisor
 
 **Installation Steps:**
 
@@ -76,60 +73,32 @@ Choose the installation method that best fits your setup:
 
 2. **Install the add-on** from the add-on store
 
-3. **Start the add-on**
-
-4. **Check the logs** for your unique MCP server URL:
-
-   ```
-   🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
-
-      Secret Path: /private_zctpwlX7ZkIAr7oqdfLPxw
-
-      ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
-   ```
-
-5. **Configure your AI client** with the complete URL from the logs
-
-**Example Configuration (Claude Desktop):**
-
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
-      "transport": "http"
-    }
-  }
-}
-```
-
-Replace the URL with the one from your add-on logs.
-
-**Security:**
-- Addon generates a unique 128-bit random path on first start
-- The secret path is persisted and reused across restarts
-- No manual configuration needed - secure by default!
+3. **Navigate to the add-on** and follow the [configuration instructions in the add-on documentation](homeassistant-addon/DOCS.md)
 
 ---
 
-### Method 2: Docker Container
+### Method 2: Container (when Docker is available)
 
-**Best for:** Users with Docker/Podman setup or running Home Assistant Container
+**Best for:** Recommended for Home Assistant Container
 
 **Advantages:**
 - ✅ Isolated environment
-- ✅ Easy updates via image tags
-- ✅ Supports both stdio and HTTP modes
-- ✅ Platform independent
 
 **Get a long-lived token:** Home Assistant → Profile → Security → Long-Lived Access Tokens
 
-#### Option A: stdio mode (for Claude Desktop, VSCode, etc.)
+**Run the container:**
 
 ```bash
-# Pull the image
-docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
+docker run --rm \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_long_lived_token \
+  ghcr.io/homeassistant-ai/ha-mcp:latest
 ```
+
+**Client Configuration:**
+
+<details>
+<summary><b>📱 Claude Desktop</b></summary>
 
 Add to your `mcp.json`:
 ```json
@@ -139,8 +108,8 @@ Add to your `mcp.json`:
       "command": "docker",
       "args": [
         "run",
-        "--rm", "-i",
-        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+        "--rm",
+        "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
         "ghcr.io/homeassistant-ai/ha-mcp:latest"
       ]
@@ -149,35 +118,22 @@ Add to your `mcp.json`:
 }
 ```
 
-**Note:** Use `host.docker.internal` to access Home Assistant from Docker on the same machine.
-
-#### Option B: HTTP mode (for Claude Code, remote clients, web)
-
-```bash
-# Run the server in HTTP mode
-docker run -d \
-  --name ha-mcp \
-  -p 8086:8086 \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_long_lived_token \
-  ghcr.io/homeassistant-ai/ha-mcp:latest \
-  fastmcp run fastmcp-http.json
-```
-
-**Client Configuration:**
+</details>
 
 <details>
-<summary><b>📱 Claude Desktop / MCP Clients</b></summary>
+<summary><b>💻 Claude Code</b></summary>
 
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "url": "http://localhost:8086/mcp",
-      "transport": "http"
-    }
-  }
-}
+```bash
+claude mcp add-json home-assistant '{
+  "command": "docker",
+  "args": [
+    "run",
+    "--rm",
+    "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
+    "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
+    "ghcr.io/homeassistant-ai/ha-mcp:latest"
+  ]
+}'
 ```
 
 </details>
@@ -187,62 +143,45 @@ docker run -d \
 
 **⚠️ Security Warning:** Remote access exposes your setup to the internet. Always use a secret path.
 
-1. **Run with secret path:**
-   ```bash
-   # For custom secret paths, use the python -c approach:
-   docker run -d \
-     --name ha-mcp \
-     -p 8086:8086 \
-     -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-     -e HOMEASSISTANT_TOKEN=your_token \
-     ghcr.io/homeassistant-ai/ha-mcp:latest \
-     python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086, path='/__my_secret__')"
+1. **Create a docker-compose.yml:**
+   ```yaml
+   version: '3.8'
+   services:
+     ha-mcp:
+       image: ghcr.io/homeassistant-ai/ha-mcp:latest
+       container_name: ha-mcp
+       ports:
+         - "8086:8086"
+       environment:
+         HOMEASSISTANT_URL: http://homeassistant.local:8123
+         HOMEASSISTANT_TOKEN: your_long_lived_token
+       command: python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086, path='/__my_secret__')"
+       restart: unless-stopped
+
+     cloudflared:
+       image: cloudflare/cloudflared:latest
+       command: tunnel --url http://ha-mcp:8086
+       depends_on:
+         - ha-mcp
    ```
 
-2. **Set up Cloudflare Tunnel:**
+2. **Start the services:**
    ```bash
-   cloudflared tunnel --url http://localhost:8086
+   docker compose up -d
    ```
 
-3. **Use:** `https://abc-def.trycloudflare.com/__my_secret__`
+3. **Check cloudflared logs for your URL:**
+   ```bash
+   docker compose logs cloudflared
+   ```
+
+4. **Use:** `https://abc-def.trycloudflare.com/__my_secret__`
 
 </details>
-
-<details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add-json home-assistant '{
-  "url": "http://localhost:8086/mcp",
-  "transport": "http"
-}'
-```
-
-</details>
-
-**Docker Compose example:**
-
-```yaml
-version: '3.8'
-services:
-  ha-mcp:
-    image: ghcr.io/homeassistant-ai/ha-mcp:latest
-    container_name: ha-mcp
-    ports:
-      - "8086:8086"
-    environment:
-      HOMEASSISTANT_URL: http://homeassistant.local:8123
-      HOMEASSISTANT_TOKEN: your_long_lived_token
-      BACKUP_HINT: normal
-    command: fastmcp run fastmcp-http.json
-    restart: unless-stopped
-```
 
 ---
 
-### Method 3: Python/UV Installation
-
-**Best for:** Users who prefer local installation or want bleeding-edge features
+### Method 3: Python+UV (When Docker is not available)
 
 **Prerequisites:**
 - Python 3.11+
@@ -267,11 +206,12 @@ services:
    # Edit .env with your Home Assistant URL and token
    ```
 
-4. **Choose your mode:**
+**Client Configuration:**
 
-#### stdio mode (Claude Desktop, VSCode, etc.)
+<details>
+<summary><b>📱 Claude Desktop</b></summary>
 
-Add to your MCP client config:
+Add to your `mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -290,48 +230,6 @@ Add to your MCP client config:
 }
 ```
 
-#### HTTP mode (Claude Code, remote clients, web)
-
-```bash
-# Start the server
-uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086)"
-```
-
-**Client Configuration:**
-
-<details>
-<summary><b>📱 Claude Desktop / MCP Clients</b></summary>
-
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "url": "http://localhost:8086/mcp",
-      "transport": "http"
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
-
-**⚠️ Security Warning:** Use a secret path for remote access.
-
-1. **Run with secret path:**
-   ```bash
-   uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086, path='/__my_secret__')"
-   ```
-
-2. **Set up Cloudflare Tunnel:**
-   ```bash
-   cloudflared tunnel --url http://localhost:8086
-   ```
-
-3. **Use:** `https://abc-def.trycloudflare.com/__my_secret__`
-
 </details>
 
 <details>
@@ -339,10 +237,39 @@ uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable
 
 ```bash
 claude mcp add-json home-assistant '{
-  "url": "http://localhost:8086/mcp",
-  "transport": "http"
+  "command": "uv",
+  "args": [
+    "--directory", "/path/to/ha-mcp",
+    "run", "ha-mcp"
+  ],
+  "env": {
+    "HOMEASSISTANT_URL": "http://localhost:8123",
+    "HOMEASSISTANT_TOKEN": "your_token"
+  }
 }'
 ```
+
+</details>
+
+<details>
+<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
+
+**⚠️ Security Warning:** Remote access exposes your setup to the internet. Always use a secret path.
+
+1. **Download cloudflared binary:**
+   - Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+2. **Start the MCP server with secret path:**
+   ```bash
+   uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086, path='/__my_secret__')"
+   ```
+
+3. **In another terminal, start Cloudflare Tunnel:**
+   ```bash
+   cloudflared tunnel --url http://localhost:8086
+   ```
+
+4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
 
 </details>
 
