@@ -4,6 +4,7 @@ import os
 import stat
 import yaml
 import pytest
+import toml
 
 
 ADDON_DIR = "homeassistant-addon"
@@ -34,8 +35,12 @@ class TestAddonStructure:
         for field in required_fields:
             assert field in config, f"Missing required field: {field}"
 
-        # Verify add-on uses independent versioning (not tied to MCP server version)
-        assert config["version"] == "1.0.0", "Add-on should use version 1.0.0"
+        # Verify add-on version matches package version (synced by semantic-release)
+        with open("pyproject.toml") as f:
+            pyproject = toml.load(f)
+        expected_version = pyproject["project"]["version"]
+        assert config["version"] == expected_version, \
+            f"Add-on version {config['version']} should match package version {expected_version}"
 
         # Verify essential configurations
         assert config["hassio_api"] is True, "hassio_api required for Supervisor"
