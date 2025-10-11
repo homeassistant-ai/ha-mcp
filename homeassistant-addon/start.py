@@ -3,6 +3,7 @@
 
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -17,32 +18,83 @@ def log_error(message: str) -> None:
     print(f"[ERROR] {message}", file=sys.stderr, flush=True)
 
 
+def generate_secret_path() -> str:
+    """Generate a secure random path with 128-bit entropy.
+
+    Format: /private_<22-char-urlsafe-token>
+    Example: /private_zctpwlX7ZkIAr7oqdfLPxw
+    """
+    return "/private_" + secrets.token_urlsafe(16)
+
+
+def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
+    """Get existing secret path or create a new one.
+
+    Args:
+        data_dir: Path to the /data directory
+        custom_path: Optional custom path from config (overrides auto-generated)
+
+    Returns:
+        The secret path to use
+    """
+    secret_file = data_dir / "secret_path.txt"
+
+    # If custom path is provided, use it and update the stored path
+    if custom_path and custom_path.strip():
+        path = custom_path.strip()
+        if not path.startswith("/"):
+            path = "/" + path
+        log_info(f"Using custom secret path from configuration")
+        # Update stored path for consistency
+        secret_file.write_text(path)
+        return path
+
+    # Check if we have a stored secret path
+    if secret_file.exists():
+        try:
+            stored_path = secret_file.read_text().strip()
+            if stored_path:
+                log_info(f"Using existing auto-generated secret path")
+                return stored_path
+        except Exception as e:
+            log_error(f"Failed to read stored secret path: {e}")
+
+    # Generate new secret path
+    new_path = generate_secret_path()
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(new_path)
+        log_info(f"Generated new secret path with 128-bit entropy")
+        return new_path
+    except Exception as e:
+        log_error(f"Failed to save secret path: {e}")
+        # Return the path anyway - it will work for this session
+        return new_path
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
 
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
+    data_dir = Path("/data")
     backup_hint = "normal"  # default
-    port = 9583  # default
-    path = "/mcp"  # default
-    require_auth = False  # default
+    custom_secret_path = ""  # default
 
     if config_file.exists():
         try:
             with open(config_file) as f:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
-            port = config.get("port", 9583)
-            path = config.get("path", "/mcp")
-            require_auth = config.get("require_auth", False)
+            custom_secret_path = config.get("secret_path", "")
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
+    # Generate or retrieve secret path
+    secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
+
     log_info(f"Backup hint mode: {backup_hint}")
-    log_info(f"HTTP port: {port}")
-    log_info(f"MCP path: {path}")
-    log_info(f"Require authentication: {require_auth}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -59,17 +111,18 @@ def main() -> int:
     log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
     log_info("Authentication configured via Supervisor token")
 
-    # Configure MCP authentication if required
-    if require_auth:
-        log_info("MCP Authentication: ENABLED (HA token validation)")
-        os.environ["FASTMCP_SERVER_AUTH"] = "ha_mcp.auth.ha_token_verifier.HATokenVerifier"
-    else:
-        log_info("MCP Authentication: DISABLED (use secret path for security)")
-    log_info(f"Launching ha-mcp in HTTP mode on 0.0.0.0:{port}{path}")
+    # Fixed port (internal container port)
+    port = 9583
+
     log_info("")
-    log_info("=" * 70)
-    log_info(f"MCP Server URL: http://<home-assistant-ip>:{port}{path}")
-    log_info("=" * 70)
+    log_info("=" * 80)
+    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:9583{secret_path}")
+    log_info("")
+    log_info(f"   Secret Path: {secret_path}")
+    log_info("")
+    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
+    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
+    log_info("=" * 80)
     log_info("")
 
     # Import and run MCP server directly
@@ -82,7 +135,7 @@ def main() -> int:
             transport="streamable-http",
             host="0.0.0.0",
             port=port,
-            path=path,
+            path=secret_path,
             log_level="info",
         )
     except Exception as e:

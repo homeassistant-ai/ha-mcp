@@ -23,14 +23,22 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
 options:
   backup_hint: "normal"
-  port: 9583
-  path: "/mcp"
-  require_auth: false
+  secret_path: ""
 schema:
-  backup_hint: list(strong|normal|weak|auto)
-  port: port
-  path: str
-  require_auth: bool
-# Add-on exposes HTTP port for MCP communication
+  backup_hint:
+    required: false
+    advanced: true
+    default: "normal"
+    description: "Controls when backups are suggested before operations."
+    options:
+      - "strong"
+      - "normal"
+      - "weak"
+      - "auto"
+  secret_path:
+    required: false
+    advanced: true
+    description: "Custom secret path (overrides auto-generated). Leave empty for auto-generation."
+# Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

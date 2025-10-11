@@ -1,0 +1,33 @@
+name: SemVer Release
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Semantic versioning and release creation
+  semantic-release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # Required to push commits and tags
+      id-token: write      # Required for trusted publishing
+      pull-requests: write # Required to create pull requests
+      issues: write        # Required for GitHub releases
+
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Python Semantic Release
+      id: semantic
+      uses: python-semantic-release/python-semantic-release@v10.4.1
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        verbosity: "2"
