@@ -10,7 +10,13 @@
   ![Supports aarch64 Architecture][aarch64-shield]
   ![Supports amd64 Architecture][amd64-shield]
 
-  [![Github Actions][github-actions-shield]][github-actions]
+  [![E2E Tests][e2e-shield]][e2e-tests]
+  [![CodeQL][codeql-shield]][codeql]
+  [![Dependabot][dependabot-shield]][dependabot]
+
+  [![Docker Publish][docker-shield]][docker-publish]
+  [![Add-on Publish][addon-shield]][addon-publish]
+
   ![Project Maintenance][maintenance-shield]
   [![GitHub Activity][commits-shield]][commits]
 
@@ -555,8 +561,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [license-shield]: https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg?style=for-the-badge
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg?style=for-the-badge
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg?style=for-the-badge
-[github-actions-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/validation.yml?branch=master&label=CI&style=for-the-badge
-[github-actions]: https://github.com/homeassistant-ai/ha-mcp/actions
+[e2e-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests&style=for-the-badge
+[e2e-tests]: https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml
+[codeql-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/codeql.yml?branch=master&label=CodeQL&style=for-the-badge
+[codeql]: https://github.com/homeassistant-ai/ha-mcp/actions/workflows/github-code-scanning/codeql
+[dependabot-shield]: https://img.shields.io/badge/dependabot-enabled-025e8c?style=for-the-badge&logo=dependabot
+[dependabot]: https://github.com/homeassistant-ai/ha-mcp/actions/workflows/dependabot/dependabot-updates
+[docker-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/docker-publish.yml?branch=master&label=Docker&style=for-the-badge
+[docker-publish]: https://github.com/homeassistant-ai/ha-mcp/actions/workflows/docker-publish.yml
+[addon-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/addon-publish.yml?branch=master&label=Add-on&style=for-the-badge
+[addon-publish]: https://github.com/homeassistant-ai/ha-mcp/actions/workflows/addon-publish.yml
 [maintenance-shield]: https://img.shields.io/maintenance/yes/2025.svg?style=for-the-badge
 [commits-shield]: https://img.shields.io/github/commit-activity/m/homeassistant-ai/ha-mcp.svg?style=for-the-badge
 [commits]: https://github.com/homeassistant-ai/ha-mcp/commits/master

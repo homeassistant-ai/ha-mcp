@@ -1,0 +1,54 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      # Only run on code changes, not documentation
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - 'homeassistant-addon/**'
+      - '.github/workflows/e2e-tests.yml'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+
+jobs:
+  # Comprehensive E2E validation for main branch
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run full E2E test suite
+      run: |
+        echo "🚀 Running full E2E test suite with 3 workers..."
+        uv run pytest tests/src/e2e/ \
+          -n3 \
+          --tb=short \
+          -v
+        echo "✅ Full E2E test suite passed"
+      env:
+        HOMEASSISTANT_URL: "http://localhost:8123"
+        HOMEASSISTANT_TOKEN: "test-token"
