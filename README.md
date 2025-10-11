@@ -3,6 +3,17 @@
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
+  [![GitHub Release][releases-shield]][releases]
+  ![Project Stage][project-stage-shield]
+  [![License][license-shield]](LICENSE.md)
+
+  ![Supports aarch64 Architecture][aarch64-shield]
+  ![Supports amd64 Architecture][amd64-shield]
+
+  [![Github Actions][github-actions-shield]][github-actions]
+  ![Project Maintenance][maintenance-shield]
+  [![GitHub Activity][commits-shield]][commits]
+
   <p align="center">
     <a href="tests/"><img src="https://img.shields.io/badge/Tests-E2E%20%2B%20Integration-brightgreen" alt="Test Suite"></a>
     <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-1.12.0-blue" alt="MCP Version"></a>
@@ -141,6 +152,49 @@ claude mcp add-json home-assistant '{
 Replace `<your-home-assistant-ip>` with your Home Assistant's IP address.
 
 </details>
+
+#### 🌐 Remote Access with Cloudflared Addon (Recommended)
+
+**Best for:** Secure remote access without port forwarding or manual cloudflared setup
+
+If you need to access your HA MCP server remotely (for Claude.ai, ChatGPT, etc.), use the **Cloudflared addon** instead of manual tunnel setup. It's easier, more secure, and centrally managed.
+
+**Why use Cloudflared addon:**
+- ✅ No port forwarding required
+- ✅ Automatic DNS management (if you have a domain)
+- ✅ Manages all your Home Assistant services in one place
+- ✅ Optional Cloudflare Zero Trust authentication
+- ✅ Quick tunnels available (no domain required)
+
+**Setup:**
+
+1. **Install Cloudflared addon:**
+
+   [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
+
+2. **Configure the addon** to expose HA MCP:
+
+   Add to Cloudflared addon configuration:
+   ```yaml
+   additional_hosts:
+     - hostname: ha-mcp.yourdomain.com
+       service: http://localhost:9583
+   ```
+
+   **Note:** If you don't have a domain, Cloudflared addon supports quick tunnels (temporary URLs) - check the addon documentation for details.
+
+3. **Configure secret path** in HA MCP addon for security:
+   ```yaml
+   # HA MCP addon configuration
+   path: "/__your_secret_path__"
+   ```
+
+4. **Use in web clients:**
+   ```
+   https://ha-mcp.yourdomain.com/__your_secret_path__
+   ```
+
+**See also:** [Cloudflared addon documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md)
 
 ---
 
@@ -493,3 +547,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
+
+<!-- Badge References -->
+[releases-shield]: https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp?style=for-the-badge
+[releases]: https://github.com/homeassistant-ai/ha-mcp/releases
+[project-stage-shield]: https://img.shields.io/badge/project%20stage-production%20ready-brightgreen.svg?style=for-the-badge
+[license-shield]: https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg?style=for-the-badge
+[aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg?style=for-the-badge
+[amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg?style=for-the-badge
+[github-actions-shield]: https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/validation.yml?branch=master&label=CI&style=for-the-badge
+[github-actions]: https://github.com/homeassistant-ai/ha-mcp/actions
+[maintenance-shield]: https://img.shields.io/maintenance/yes/2025.svg?style=for-the-badge
+[commits-shield]: https://img.shields.io/github/commit-activity/m/homeassistant-ai/ha-mcp.svg?style=for-the-badge
+[commits]: https://github.com/homeassistant-ai/ha-mcp/commits/master
