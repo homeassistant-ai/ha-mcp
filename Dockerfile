@@ -31,5 +31,8 @@ ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
     BACKUP_HINT="normal"
 
-# Run the MCP server
+# Default: Run in stdio mode (for MCP clients like Claude Desktop)
+# Override CMD to run in streamable-http mode (for remote/web clients)
+# Example: docker run -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... ha-mcp fastmcp run --transport streamable-http --port 8086
+ENTRYPOINT ["uv", "run"]
 CMD ["ha-mcp"]

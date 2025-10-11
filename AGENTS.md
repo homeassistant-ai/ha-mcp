@@ -153,7 +153,82 @@ uv run ruff check --fix src/ tests/
 uv run mypy src/
 ```
 
-### Docker Test Environment
+### Docker Commands
+
+#### Production Docker Image (ghcr.io/homeassistant-ai/ha-mcp)
+
+**Built automatically** via GitHub Actions on every release.
+
+**Default mode: stdio** (for MCP clients like Claude Desktop)
+```bash
+# Pull the latest image
+docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
+
+# Run in stdio mode (default)
+docker run --rm -i \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ghcr.io/homeassistant-ai/ha-mcp:latest
+
+# Use in mcp.json for Claude Desktop:
+{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i",
+               "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+               "-e", "HOMEASSISTANT_TOKEN=your_token",
+               "ghcr.io/homeassistant-ai/ha-mcp:latest"]
+    }
+  }
+}
+```
+
+**HTTP mode** (for Claude Code, remote clients)
+```bash
+# Run in streamable-http mode
+docker run -d --name ha-mcp \
+  -p 8086:8086 \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  fastmcp run --transport streamable-http --host 0.0.0.0 --port 8086
+
+# Check logs
+docker logs ha-mcp -f
+
+# Stop and remove
+docker stop ha-mcp && docker rm ha-mcp
+```
+
+**Key features:**
+- **ENTRYPOINT**: `uv run` (allows passing any fastmcp arguments)
+- **Default CMD**: `ha-mcp` (stdio mode)
+- **Override CMD**: Pass `fastmcp run --transport streamable-http ...` for HTTP mode
+
+#### Local Docker Build
+
+```bash
+# Build locally from source
+docker build -t ha-mcp:local .
+
+# Run in stdio mode
+docker run --rm -i \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ha-mcp:local
+
+# Run in HTTP mode
+docker run -d --name ha-mcp-local \
+  -p 8086:8086 \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ha-mcp:local \
+  fastmcp run --transport streamable-http --host 0.0.0.0 --port 8086
+```
+
+#### Docker Test Environment (for E2E tests)
+
 ```bash
 # Initialize and start test Home Assistant instance
 cd tests/
@@ -161,7 +236,7 @@ cd tests/
 docker compose up -d             # Start container on port 8124
 docker logs homeassistant-test -f  # Watch startup logs
 
-# Test API connectivity 
+# Test API connectivity
 curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6iTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac" http://localhost:8124/api/config
 
 # Reset environment to initial state
