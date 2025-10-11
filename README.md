@@ -31,7 +31,7 @@
 ## ✨ Features
 
 ### 🔍 Discover, Search and Query
-- **Fuzzy Entity Search**: Comprehensive search with typo tolerance
+- **Fuzzy Entity Search**: Comprehensive search with similar words tolerance
 - **AI-Optimized System Overview**: Complete system analysis showing entity counts, areas, and device status
 - **Intelligent Entity Matching**: Advanced search across all Home Assistant entities with partial name matching
 - **Template Evaluation**: Evaluate Home Assistant templates for dynamic data processing and calculations
@@ -54,15 +54,17 @@ Choose the installation method that best fits your setup:
 
 ### Method 1: Home Assistant Add-on (Recommended)
 
-**Best for:** Users running Home Assistant OS or Supervised
+**Best for:** Users running Home Assistant OS
 
 **Advantages:**
 - ✅ 5 clicks installation
+- ✅ Isolated environment
 - ✅ Automatic updates
+- ✅ Part of your Home Assistant Setup
 
 **Installation Steps:**
 
-1. **Add the repository** to your Home Assistant instance:
+1. **Click the button to add the repository** to your Home Assistant instance:
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
@@ -71,29 +73,24 @@ Choose the installation method that best fits your setup:
    https://github.com/homeassistant-ai/ha-mcp
    ```
 
-2. **Install the add-on** from the add-on store
+2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
 
-3. **Navigate to the add-on** and follow the [configuration instructions in the add-on documentation](homeassistant-addon/DOCS.md)
+3. **Click Install and Start**
+
+4. Follow the [configuration instructions for clients in the add-on documentation](homeassistant-addon/DOCS.md)
 
 ---
 
-### Method 2: Container (when Docker is available)
+### Method 2: Container
 
-**Best for:** Recommended for Home Assistant Container
+**Best for:** Recommended for Home Assistant Container or when Docker is available
 
 **Advantages:**
+- ✅ No installation
 - ✅ Isolated environment
+- ✅ Automatic updates
 
-**Get a long-lived token:** Home Assistant → Profile → Security → Long-Lived Access Tokens
-
-**Run the container:**
-
-```bash
-docker run --rm \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_long_lived_token \
-  ghcr.io/homeassistant-ai/ha-mcp:latest
-```
+**Get a long-lived token:** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
 
 **Client Configuration:**
 
@@ -121,27 +118,7 @@ Add to your `mcp.json`:
 </details>
 
 <details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add-json home-assistant '{
-  "command": "docker",
-  "args": [
-    "run",
-    "--rm",
-    "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
-    "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
-    "ghcr.io/homeassistant-ai/ha-mcp:latest"
-  ]
-}'
-```
-
-</details>
-
-<details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
-
-**⚠️ Security Warning:** Remote access exposes your setup to the internet. Always use a secret path.
 
 1. **Create a docker-compose.yml:**
    ```yaml
@@ -155,7 +132,8 @@ claude mcp add-json home-assistant '{
        environment:
          HOMEASSISTANT_URL: http://homeassistant.local:8123
          HOMEASSISTANT_TOKEN: your_long_lived_token
-       command: python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086, path='/__my_secret__')"
+         MCP_SECRET: __your_secret_string__ #this was added, but not implemented
+       command: python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086, path='/__your_secret_string__')" #this has to change to something better like ["fastmcp", "run", "fastmcp.with-cloudflared.json"]
        restart: unless-stopped
 
      cloudflared:
@@ -175,17 +153,38 @@ claude mcp add-json home-assistant '{
    docker compose logs cloudflared
    ```
 
-4. **Use:** `https://abc-def.trycloudflare.com/__my_secret__`
+4. **Use:** `https://abc-def.trycloudflare.com/__your_secret_string__`
+
+</details>
+
+<details>
+<summary><b>💻 Claude Code</b></summary>
+
+```bash
+claude mcp add-json home-assistant '{
+  "command": "docker",
+  "args": [
+    "run",
+    "--rm",
+    "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
+    "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
+    "ghcr.io/homeassistant-ai/ha-mcp:latest"
+  ]
+}'
+```
 
 </details>
 
 ---
 
-### Method 3: Python+UV (When Docker is not available)
+### Method 3: Python+UV
+
+**Best for:** When Docker is not available
 
 **Prerequisites:**
-- Python 3.11+
+- [Git](ttps://git-scm.com/downloads)
 - [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+- A long-lived token: ** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
 
 **Installation Steps:**
 
@@ -195,15 +194,9 @@ claude mcp add-json home-assistant '{
    cd ha-mcp
    ```
 
-2. **Install dependencies:**
+2. **(optional) Install dependencies and make sure uv is working:**
    ```bash
    uv sync
-   ```
-
-3. **Configure environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your Home Assistant URL and token
    ```
 
 **Client Configuration:**
@@ -212,20 +205,39 @@ claude mcp add-json home-assistant '{
 <summary><b>📱 Claude Desktop</b></summary>
 
 Add to your `mcp.json`:
+
+Linux/WSL/macOS:
 ```json
 {
   "mcpServers": {
-    "home-assistant": {
-      "command": "uv",
-      "args": [
-        "--directory", "/path/to/ha-mcp",
-        "run", "ha-mcp"
-      ],
+
+    "Home Assistant": {
+      "command": "path/to/ha-mcp/run_mcp_server.sh",
+      "args": [],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_token"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
       }
     }
+
+  }
+}
+```
+
+Windows:
+```json
+{
+  "mcpServers": {
+
+    "Home Assistant": {
+      "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
+      "args": [],
+      "env": {
+        "HOMEASSISTANT_URL": "http://localhost:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
+      }
+    }
+
   }
 }
 ```
@@ -237,14 +249,11 @@ Add to your `mcp.json`:
 
 ```bash
 claude mcp add-json home-assistant '{
-  "command": "uv",
-  "args": [
-    "--directory", "/path/to/ha-mcp",
-    "run", "ha-mcp"
-  ],
+  "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
+  "args": [],
   "env": {
     "HOMEASSISTANT_URL": "http://localhost:8123",
-    "HOMEASSISTANT_TOKEN": "your_token"
+    "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
   }
 }'
 ```
@@ -254,14 +263,12 @@ claude mcp add-json home-assistant '{
 <details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-**⚠️ Security Warning:** Remote access exposes your setup to the internet. Always use a secret path.
-
 1. **Download cloudflared binary:**
    - Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
 
 2. **Start the MCP server with secret path:**
    ```bash
-   uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086, path='/__my_secret__')"
+   uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086, path='/__my_secret__')" #this has to change, use fastmcp run ..json instead
    ```
 
 3. **In another terminal, start Cloudflare Tunnel:**
@@ -269,7 +276,7 @@ claude mcp add-json home-assistant '{
    cloudflared tunnel --url http://localhost:8086
    ```
 
-4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
+4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__` #this too
 
 </details>
 
