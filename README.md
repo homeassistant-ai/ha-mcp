@@ -133,7 +133,7 @@ Add to your `mcp.json`:
          HOMEASSISTANT_URL: http://homeassistant.local:8123
          HOMEASSISTANT_TOKEN: your_long_lived_token
          MCP_SECRET_PATH: /__your_secret_string__
-       command: ["fastmcp", "run", "fastmcp-cloudflared.json"]
+       command: ["fastmcp", "run", "fastmcp-webclient.json"]
        restart: unless-stopped
 
      cloudflared:
@@ -271,7 +271,7 @@ claude mcp add-json home-assistant '{
    export HOMEASSISTANT_URL=http://localhost:8123
    export HOMEASSISTANT_TOKEN=your_long_lived_token
    export MCP_SECRET_PATH=/__my_secret__
-   uv run fastmcp run fastmcp-cloudflared.json
+   uv run fastmcp run fastmcp-webclient.json
    ```
 
 3. **In another terminal, start Cloudflare Tunnel:**
