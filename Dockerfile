@@ -22,7 +22,7 @@ COPY src/ ./src/
 RUN uv pip install --system --no-cache .
 
 # Create non-root user for security
-RUN groupadd -r mcpuser && useradd -r -g mcpuser mcpuser && \
+RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser && \
     chown -R mcpuser:mcpuser /app
 USER mcpuser
 
@@ -33,6 +33,6 @@ ENV HOMEASSISTANT_URL="" \
 
 # Default: Run in stdio mode (for MCP clients like Claude Desktop)
 # Override CMD to run in streamable-http mode (for remote/web clients)
-# Example: docker run -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... ha-mcp fastmcp run --transport streamable-http --port 8086
-ENTRYPOINT ["uv", "run"]
+# Example: docker run ... ha-mcp python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086)"
+ENTRYPOINT ["uv", "run", "--no-project"]
 CMD ["ha-mcp"]
