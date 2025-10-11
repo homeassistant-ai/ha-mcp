@@ -1,0 +1,17 @@
+{
+  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+  "source": {
+    "path": "src/ha_mcp/__main__.py",
+    "entrypoint": "mcp"
+  },
+  "deployment": {
+    "transport": "streamable-http",
+    "host": "0.0.0.0",
+    "port": 8086,
+    "path": "${MCP_SECRET_PATH:-/mcp}",
+    "env": {
+      "HOMEASSISTANT_URL": "${HOMEASSISTANT_URL}",
+      "HOMEASSISTANT_TOKEN": "${HOMEASSISTANT_TOKEN}"
+    }
+  }
+}

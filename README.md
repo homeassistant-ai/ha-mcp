@@ -132,8 +132,8 @@ Add to your `mcp.json`:
        environment:
          HOMEASSISTANT_URL: http://homeassistant.local:8123
          HOMEASSISTANT_TOKEN: your_long_lived_token
-         MCP_SECRET: __your_secret_string__ #this was added, but not implemented
-       command: python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', host='0.0.0.0', port=8086, path='/__your_secret_string__')" #this has to change to something better like ["fastmcp", "run", "fastmcp.with-cloudflared.json"]
+         MCP_SECRET_PATH: /__your_secret_string__
+       command: ["fastmcp", "run", "fastmcp-cloudflared.json"]
        restart: unless-stopped
 
      cloudflared:
@@ -268,7 +268,10 @@ claude mcp add-json home-assistant '{
 
 2. **Start the MCP server with secret path:**
    ```bash
-   uv run python -c "from ha_mcp.__main__ import mcp; mcp.run(transport='streamable-http', port=8086, path='/__my_secret__')" #this has to change, use fastmcp run ..json instead
+   export HOMEASSISTANT_URL=http://localhost:8123
+   export HOMEASSISTANT_TOKEN=your_long_lived_token
+   export MCP_SECRET_PATH=/__my_secret__
+   uv run fastmcp run fastmcp-cloudflared.json
    ```
 
 3. **In another terminal, start Cloudflare Tunnel:**
@@ -276,7 +279,7 @@ claude mcp add-json home-assistant '{
    cloudflared tunnel --url http://localhost:8086
    ```
 
-4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__` #this too
+4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
 
 </details>
 
