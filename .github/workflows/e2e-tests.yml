@@ -13,6 +13,10 @@ on:
       - '.github/workflows/e2e-tests.yml'
   workflow_dispatch:
 
+# Limit GITHUB_TOKEN permissions to minimum required
+permissions:
+  contents: read
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
