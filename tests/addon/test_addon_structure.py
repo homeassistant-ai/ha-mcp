@@ -54,19 +54,18 @@ class TestAddonStructure:
         assert config["image"] == "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}", \
             "image field must use per-architecture naming with {arch} placeholder"
 
-        # Verify port configuration
+        # Verify port configuration (fixed internal port)
         assert "ports" in config, "ports section required for HTTP transport"
         assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
-        assert config["options"]["port"] == 9583, "default port should be 9583"
 
-        # Verify path configuration
-        assert config["options"]["path"] == "/mcp", "default path should be /mcp"
-        assert "path" in config["schema"], "schema must include path field"
+        # Verify secret_path configuration (advanced option for custom overrides)
+        assert "secret_path" in config["options"], "options must include secret_path field"
+        assert config["options"]["secret_path"] == "", "default secret_path should be empty (auto-generate)"
+        assert "secret_path" in config["schema"], "schema must include secret_path field"
 
-        # Verify authentication configuration
-        assert "require_auth" in config["options"], "options must include require_auth field"
-        assert config["options"]["require_auth"] is False, "default require_auth should be false"
-        assert "require_auth" in config["schema"], "schema must include require_auth field"
+        # Verify backup_hint configuration
+        assert "backup_hint" in config["options"], "options must include backup_hint field"
+        assert config["options"]["backup_hint"] == "normal", "default backup_hint should be normal"
 
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
