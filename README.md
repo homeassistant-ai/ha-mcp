@@ -12,8 +12,8 @@
   </p>
 
   <p align="center">
-    <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python 3.11+"></a>
-    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/github/v/release/jlowin/fastmcp?label=FastMCP&color=orange" alt="FastMCP"></a>
+    <img src="https://img.shields.io/pypi/pyversions/ha-mcp" alt="Python Version">
+    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/Built%20with-FastMCP-purple" alt="Built with FastMCP"></a>
   </p>
 
   <p align="center">
