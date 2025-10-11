@@ -81,9 +81,9 @@ Choose the installation method that best fits your setup:
 4. **Check the logs** for your unique MCP server URL:
 
    ```
-   🔐 MCP Server URL: http://192.168.1.100:9583/a1b2c3d4e5f6...
+   🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
 
-      Secret Path: /a1b2c3d4e5f6g7h8...
+      Secret Path: /private_zctpwlX7ZkIAr7oqdfLPxw
 
       ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
    ```
@@ -96,7 +96,7 @@ Choose the installation method that best fits your setup:
 {
   "mcpServers": {
     "home-assistant": {
-      "url": "http://192.168.1.100:9583/a1b2c3d4e5f6g7h8...",
+      "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
       "transport": "http"
     }
   }
@@ -106,7 +106,7 @@ Choose the installation method that best fits your setup:
 Replace the URL with the one from your add-on logs.
 
 **Security:**
-- Addon generates a unique 512-bit random path on first start
+- Addon generates a unique 128-bit random path on first start
 - The secret path is persisted and reused across restarts
 - No manual configuration needed - secure by default!
 

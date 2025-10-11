@@ -35,7 +35,7 @@ Default: `normal`
 
 Override the auto-generated secret path with a custom value. Leave empty for automatic generation (recommended).
 
-- **Empty (default)**: Generates a secure 512-bit random path on first start
+- **Empty (default)**: Generates a secure 128-bit random path on first start
 - **Custom value**: Use your own path for migration or specific requirements
 - **Persistence**: The path is saved to `/data/secret_path.txt` and reused on restarts
 
@@ -54,9 +54,9 @@ Once started, the add-on runs an MCP server accessible via HTTP with an auto-gen
 Check the add-on logs after startup to find your unique MCP server URL:
 
 ```
-🔐 MCP Server URL: http://192.168.1.100:9583/a1b2c3d4...
+🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
 
-   Secret Path: /a1b2c3d4e5f6g7h8...
+   Secret Path: /private_zctpwlX7ZkIAr7oqdfLPxw
 
    ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
 ```
@@ -67,7 +67,7 @@ Check the add-on logs after startup to find your unique MCP server URL:
 {
   "mcpServers": {
     "home-assistant": {
-      "url": "http://192.168.1.100:9583/a1b2c3d4e5f6g7h8...",
+      "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
       "transport": "http"
     }
   }
@@ -81,9 +81,9 @@ https://github.com/homeassistant-ai/ha-mcp#client-configuration
 
 ### Auto-Generated Secret Paths
 
-The add-on generates a unique 512-bit random path for each installation:
+The add-on generates a unique 128-bit random path for each installation:
 
-- **High Entropy**: 128 hexadecimal characters = 512 bits of entropy
+- **High Entropy**: 128 bits of cryptographic randomness using URL-safe encoding
 - **Persistent**: Saved to `/data/secret_path.txt` and reused on restarts
 - **Defense in Depth**: Prevents unauthorized access even on local networks
 - **No Configuration**: Works out of the box with maximum security
