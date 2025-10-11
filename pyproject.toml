@@ -181,6 +181,7 @@ dev = [
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
     "build>=1.2.2",
+    "pillow>=11.3.0",
 ]
 
 # Semantic versioning configuration
