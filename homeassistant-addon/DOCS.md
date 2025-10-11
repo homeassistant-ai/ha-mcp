@@ -4,64 +4,42 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## Capabilities
 
-With this add-on, your AI assistant can:
+Control devices, manage automations/scripts/helpers, search entities with fuzzy matching, create backups, and query system states.
 
-- **Control devices**: Lights, thermostats, media players, and more
-- **Manage automations and scripts**: Create, modify, enable/disable, trigger
-- **Manage helpers**: input_boolean, input_number, input_select, input_text, input_datetime, input_button
-- **Search entities**: Fuzzy search handles typos
-- **Create backups**: Fast local backups before destructive operations
-- **Query system**: Entity states, weather, energy data, logbook history
-
-For complete features and tool reference, see:
-https://github.com/homeassistant-ai/ha-mcp
+Full features: https://github.com/homeassistant-ai/ha-mcp
 
 ## Configuration
 
-### backup_hint
+Both options are **Advanced** (hidden by default - enable "Advanced" mode in configuration UI).
 
-Controls when the MCP server suggests creating backups before operations:
+### backup_hint (Advanced)
 
-- **strong**: Suggests backup before the FIRST modification of day/session (very cautious)
-- **normal**: Suggests backup only before operations that CANNOT be undone (default, recommended)
-- **weak**: Rarely suggests backups (only when explicitly required)
-- **auto**: Future intelligent detection based on operation type
-
-Default: `normal`
+When to suggest backups:
+- `normal` (default): Before irreversible operations
+- `strong`: Before first modification of session
+- `weak`: Rarely
+- `auto`: Intelligent detection (future)
 
 ### secret_path (Advanced)
 
-**Hidden option** - requires enabling "Advanced" mode in the configuration UI.
+Custom secret path override. Leave empty for auto-generation (recommended).
 
-Override the auto-generated secret path with a custom value. Leave empty for automatic generation (recommended).
-
-- **Empty (default)**: Generates a secure 128-bit random path on first start
-- **Custom value**: Use your own path for migration or specific requirements
-- **Persistence**: The path is saved to `/data/secret_path.txt` and reused on restarts
+- **Empty (default)**: Auto-generates 128-bit secure random path on first start
+- Persisted to `/data/secret_path.txt` and reused on restarts
 
 ## Usage
 
-Once started, the add-on runs an MCP server accessible via HTTP with an auto-generated secret path.
+**Auto-configuration** - The add-on automatically discovers your Home Assistant URL, authenticates, and generates a secure random endpoint path.
 
-**Zero configuration required** - the add-on automatically:
-- Discovers your Home Assistant URL
-- Authenticates using Supervisor token
-- Generates a secure random endpoint path
-- Configures secure communication
-
-**Finding your connection URL:**
-
-Check the add-on logs after startup to find your unique MCP server URL:
+**Get your connection URL** from the add-on logs after startup:
 
 ```
 🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
-
-   Secret Path: /private_zctpwlX7ZkIAr7oqdfLPxw
-
-   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
 ```
 
-**Client Configuration Example (Claude Desktop):**
+Copy this complete URL to configure your AI client.
+
+**Example (Claude Desktop):**
 
 ```json
 {
@@ -74,65 +52,41 @@ Check the add-on logs after startup to find your unique MCP server URL:
 }
 ```
 
-For more AI assistant setup examples, see:
-https://github.com/homeassistant-ai/ha-mcp#client-configuration
+## Remote Access with Cloudflared Addon
 
-## Security
+For secure remote access (Claude.ai, ChatGPT.com, etc.) without port forwarding, install the **Cloudflared addon**:
 
-### Auto-Generated Secret Paths
+[![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
 
-The add-on generates a unique 128-bit random path for each installation:
+**Configure Cloudflared addon** to expose HA MCP:
 
-- **High Entropy**: 128 bits of cryptographic randomness using URL-safe encoding
-- **Persistent**: Saved to `/data/secret_path.txt` and reused on restarts
-- **Defense in Depth**: Prevents unauthorized access even on local networks
-- **No Configuration**: Works out of the box with maximum security
+```yaml
+additional_hosts:
+  - hostname: ha-mcp.yourdomain.com  # Or use quick tunnel (see Cloudflared docs)
+    service: http://localhost:9583
+```
 
-### Network Security
+Your MCP URL becomes: `https://ha-mcp.yourdomain.com/private_zctpwlX7ZkIAr7oqdfLPxw`
 
-- The addon listens on port 9583 (internal container port)
-- Port mapping exposes it to your local Home Assistant network only
-- Not accessible from the internet unless you explicitly configure port forwarding
-- Secret path acts as authentication - only those with the URL can access
+**Cloudflared addon benefits:**
+- No port forwarding
+- Automatic DNS (if you have a domain) or quick tunnels (temporary URLs)
+- Optional Cloudflare Zero Trust authentication
+- Centrally managed with other Home Assistant services
 
-### Custom Secret Paths
-
-If you need to set a custom path (for migration or specific requirements):
-
-1. Enable "Advanced" mode in the add-on configuration UI
-2. Set the `secret_path` option to your desired path
-3. Restart the add-on
+See: [Cloudflared addon documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md)
 
 ## Troubleshooting
 
-### Add-on won't start
+**Add-on won't start:** Check logs for errors (invalid configuration, dependency failures)
 
-Check the add-on logs for errors. Common issues:
-- Invalid configuration in config.yaml
-- Python dependency installation failures
+**Can't connect:** Verify add-on is running, you copied the complete URL with secret path from logs, and your MCP client is configured correctly
 
-### AI assistant can't connect
+**Lost the secret URL:** Check add-on logs or restart the add-on. Path is also stored in `/data/secret_path.txt`
 
-Verify:
-1. Add-on is running (check status in Add-ons page)
-2. You copied the **complete URL** including the secret path from the logs
-3. Your MCP client is configured correctly
-4. Check add-on logs for connection attempts
-
-### Lost the secret URL
-
-The secret path is stored in `/data/secret_path.txt`. You can:
-
-1. Check the add-on logs (scroll to startup messages)
-2. Access the add-on's file system and read `/data/secret_path.txt`
-3. Or restart the add-on to see the URL logged again
-
-### Operations failing
-
-Check add-on logs for detailed error messages. The add-on sanitizes errors to prevent token leakage while maintaining usefulness.
+**Operations failing:** Check add-on logs for error details
 
 ## Support
 
-- **Issues**: https://github.com/homeassistant-ai/ha-mcp/issues
-- **Documentation**: https://github.com/homeassistant-ai/ha-mcp
-- **Wiki**: https://github.com/homeassistant-ai/ha-mcp/wiki
+- Issues: https://github.com/homeassistant-ai/ha-mcp/issues
+- Documentation: https://github.com/homeassistant-ai/ha-mcp

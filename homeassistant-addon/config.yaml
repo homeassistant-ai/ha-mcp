@@ -25,7 +25,16 @@ options:
   backup_hint: "normal"
   secret_path: ""
 schema:
-  backup_hint: list(strong|normal|weak|auto)
+  backup_hint:
+    required: false
+    advanced: true
+    default: "normal"
+    description: "Controls when backups are suggested before operations."
+    options:
+      - "strong"
+      - "normal"
+      - "weak"
+      - "auto"
   secret_path:
     required: false
     advanced: true

@@ -6,7 +6,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 - **20+ MCP Tools** for device control, automation management, and system queries
 - **Zero Configuration** - Automatically discovers Home Assistant connection
-- **Secure by Default** - Auto-generated secret paths with 512-bit entropy
+- **Secure by Default** - Auto-generated secret paths with 128-bit entropy
 - **Fuzzy Search** - Find entities even with typos
 - **Backup & Restore** - Safe configuration management
 - **Real-time Monitoring** - WebSocket-based state verification
@@ -40,7 +40,7 @@ Controls when backups are suggested before operations:
 
 Custom secret path to override the auto-generated one. Leave empty (default) for automatic generation.
 
-- When empty, the addon generates a secure 512-bit random path on first start
+- When empty, the addon generates a secure 128-bit random path on first start
 - The path is persisted to `/data/secret_path.txt` and reused on restarts
 - Custom paths are useful for migration or specific security requirements
 
@@ -64,14 +64,6 @@ http://<home-assistant-ip>:9583/private_<random-token>
 Replace `<home-assistant-ip>` with your Home Assistant's IP address or hostname.
 
 **Example URL**: `http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw`
-
-## Security
-
-- **Auto-Generated Secrets**: Each installation gets a unique 128-bit random path (cryptographically secure)
-- **Human-Readable Prefix**: `private_` prefix makes it clear the URL should be kept secret
-- **Persistent**: The secret is saved and reused across restarts
-- **No Network Exposure**: The port is only accessible on your local network
-- **Defense in Depth**: Secret path prevents unauthorized access even on local networks
 
 ## Support
 
