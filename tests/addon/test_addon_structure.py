@@ -4,7 +4,11 @@ import os
 import stat
 import yaml
 import pytest
-import toml
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # Fallback for older Python
 
 
 ADDON_DIR = "homeassistant-addon"
@@ -36,8 +40,8 @@ class TestAddonStructure:
             assert field in config, f"Missing required field: {field}"
 
         # Verify add-on version matches package version (synced by semantic-release)
-        with open("pyproject.toml") as f:
-            pyproject = toml.load(f)
+        with open("pyproject.toml", "rb") as f:
+            pyproject = tomllib.load(f)
         expected_version = pyproject["project"]["version"]
         assert config["version"] == expected_version, \
             f"Add-on version {config['version']} should match package version {expected_version}"
