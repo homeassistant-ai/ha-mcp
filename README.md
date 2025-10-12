@@ -75,7 +75,7 @@ Choose the installation method that best fits your setup:
 
 2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
 
-3. **Click Install and Start**
+3. **Click Install, Wait and then Start**
 
 4. Follow the [configuration instructions for clients in the add-on documentation](homeassistant-addon/DOCS.md)
 
@@ -95,7 +95,11 @@ Choose the installation method that best fits your setup:
 **Client Configuration:**
 
 <details>
-<summary><b>📱 Claude Desktop</b></summary>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+
+**Location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 Add to your `mcp.json`:
 ```json
@@ -202,7 +206,11 @@ claude mcp add-json home-assistant '{
 **Client Configuration:**
 
 <details>
-<summary><b>📱 Claude Desktop</b></summary>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+
+**Location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 Add to your `mcp.json`:
 
