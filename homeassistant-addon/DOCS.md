@@ -11,7 +11,6 @@ This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home A
 - **Secure by Default** - Auto-generated secret paths with 128-bit entropy
 - **Fuzzy Search** - Find entities even with typos
 - **Backup & Restore** - Safe configuration management
-- **Real-time Monitoring** - WebSocket-based state verification
 
 Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
@@ -19,7 +18,8 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Installation
 
-1. **Add the repository** to your Home Assistant instance:
+
+1. **Click the button to add the repository** to your Home Assistant instance:
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
@@ -28,18 +28,15 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
    https://github.com/homeassistant-ai/ha-mcp
    ```
 
-2. **Install the add-on** from the add-on store
+2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
 
-3. **Start the add-on** and wait for it to initialize
+3. **Click Install, Wait and then Start**
 
 4. **Check the add-on logs** for your unique MCP server URL:
 
    ```
    🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
 
-      Secret Path: /private_zctpwlX7ZkIAr7oqdfLPxw
-
-      ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!
    ```
 
 5. **Configure your AI client** using one of the options below
@@ -48,7 +45,7 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Client Configuration
 
-### <details><summary><b>📱 Claude Desktop</b></summary>
+### <details><summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
 
 Add to your Claude Desktop `mcp.json` configuration file:
 
@@ -56,6 +53,7 @@ Add to your Claude Desktop `mcp.json` configuration file:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
+#won't work. no http support in claude. let's think about it.
 **Configuration:**
 ```json
 {
