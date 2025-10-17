@@ -32,6 +32,7 @@
 
 ### 🔍 Discover, Search and Query
 - **Fuzzy Entity Search**: Comprehensive search with similar words tolerance
+- **Deep Configuration Search**: Search within automation triggers, script sequences, and helper configurations
 - **AI-Optimized System Overview**: Complete system analysis showing entity counts, areas, and device status
 - **Intelligent Entity Matching**: Advanced search across all Home Assistant entities with partial name matching
 - **Template Evaluation**: Evaluate Home Assistant templates for dynamic data processing and calculations
@@ -301,6 +302,7 @@ claude mcp add-json home-assistant '{
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_search_entities` | Comprehensive entity search with fuzzy matching | `ha_search_entities("lumiere salon")` |
+| `ha_deep_search` | Search within automation/script/helper configurations | `ha_deep_search("light.turn_on")` |
 | `ha_get_overview` | AI-optimized system overview with entity counts | `ha_get_overview()` |
 
 ### Core Home Assistant API Tools
