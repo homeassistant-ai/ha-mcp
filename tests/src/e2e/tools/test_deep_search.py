@@ -36,11 +36,7 @@ async def test_deep_search_automation(mcp_client):
     # Create the automation
     create_result = await mcp_client.call_tool(
         "ha_config_set_automation",
-        {
-            "alias": automation_config["alias"],
-            "trigger": automation_config["trigger"],
-            "action": automation_config["action"],
-        },
+        {"config": automation_config},
     )
     create_data = assert_mcp_success(create_result, "Create test automation")
     logger.info(f"✅ Created automation: {create_data}")
@@ -118,8 +114,8 @@ async def test_deep_search_script(mcp_client):
     create_result = await mcp_client.call_tool(
         "ha_config_set_script",
         {
-            "alias": script_config["alias"],
-            "sequence": script_config["sequence"],
+            "script_id": "deep_search_test_script",
+            "config": script_config,
         },
     )
     create_data = assert_mcp_success(create_result, "Create test script")
@@ -218,7 +214,8 @@ async def test_deep_search_helper(mcp_client):
         # Find our specific helper
         found = False
         for helper in helpers:
-            if "Deep Search Test" in helper.get("friendly_name", ""):
+            helper_name = helper.get("name", helper.get("friendly_name", ""))
+            if "Deep Search Test" in helper_name:
                 found = True
                 assert helper.get("match_in_config", False), (
                     "Should match in config, not just name"
@@ -234,10 +231,10 @@ async def test_deep_search_helper(mcp_client):
     finally:
         # Cleanup: Delete the test helper
         await mcp_client.call_tool(
-            "ha_config_delete_helper",
+            "ha_config_remove_helper",
             {
                 "helper_type": "input_select",
-                "helper_id": "input_select.deep_search_test_select",
+                "helper_id": "deep_search_test_select",
             },
         )
         logger.info("🧹 Cleaned up test helper")
