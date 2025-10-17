@@ -259,6 +259,18 @@ def show_menu() -> str:
 
 def main():
     """Main entry point for the test environment manager."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Home Assistant MCP Test Environment Manager"
+    )
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Run in non-interactive mode (wait for SIGINT instead of showing menu)",
+    )
+    args = parser.parse_args()
+
     print("🚀 Home Assistant MCP Test Environment Manager")
     print("=" * 50)
 
@@ -269,18 +281,27 @@ def main():
         env.start_container()
         env.print_status()
 
-        # Interactive menu loop
-        while True:
-            choice = show_menu()
+        if args.no_interactive:
+            # Non-interactive mode: just wait for interrupt
+            logger.info("🔄 Running in non-interactive mode. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("\n🛑 Received interrupt signal")
+        else:
+            # Interactive menu loop
+            while True:
+                choice = show_menu()
 
-            if choice == "1":
-                env.run_tests()
-            elif choice == "2":
-                env.stop_container()
-                print("👋 Goodbye!")
-                break
-            elif choice == "3":
-                env.print_status()
+                if choice == "1":
+                    env.run_tests()
+                elif choice == "2":
+                    env.stop_container()
+                    print("👋 Goodbye!")
+                    break
+                elif choice == "3":
+                    env.print_status()
 
     except KeyboardInterrupt:
         print("\n🛑 Interrupted by user")

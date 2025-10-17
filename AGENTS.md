@@ -145,7 +145,7 @@ HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/error_handling/ -v
 
 **Features:**
 - 🐳 Auto-managed Docker container with testcontainers
-- 🚀 Ready in ~25 seconds
+- 🚀 Ready in ~30 seconds
 - 🔑 Pre-configured auth token for immediate API access
 - 📋 Copy-paste environment variables for testing
 - 🌐 Web UI access for manual inspection
@@ -155,12 +155,17 @@ HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/error_handling/ -v
 **Usage Patterns:**
 
 ```bash
-# Pattern 1: Background mode for API testing
-uv run hamcp-test-env &
-sleep 25  # Wait for startup
-# ... do testing with curl/scripts ...
-fg  # Bring to foreground
-# Choose option 2 to stop gracefully
+# Pattern 1: Non-interactive mode for API testing (recommended for automation)
+# The Bash tool automatically backgrounds commands that exceed timeout
+uv run hamcp-test-env --no-interactive 2>&1
+# Command will auto-background after 30s, wait for it to be ready
+sleep 30
+# Container is now running, copy-paste the export lines from output
+export HOMEASSISTANT_URL=http://localhost:PORT
+export HOMEASSISTANT_TOKEN=eyJhbG...
+# Do your testing
+curl -H "Authorization: Bearer $HOMEASSISTANT_TOKEN" $HOMEASSISTANT_URL/api/config | jq
+# Stop by killing the background shell when done
 
 # Pattern 2: Interactive mode for running E2E tests
 uv run hamcp-test-env
@@ -169,14 +174,11 @@ uv run hamcp-test-env
 # Choose option 3 to show status again
 # Choose option 2 to stop and exit
 
-# Pattern 3: Quick API validation with one-liners
-uv run hamcp-test-env &
-sleep 25
-# Copy-paste the export lines from startup banner
-export HOMEASSISTANT_URL=http://localhost:PORT
-export HOMEASSISTANT_TOKEN=eyJhbG...
-curl -H "Authorization: Bearer $HOMEASSISTANT_TOKEN" $HOMEASSISTANT_URL/api/config | jq
-fg  # Stop when done
+# Pattern 3: Quick one-liner API validation
+# Start environment, wait, test, and you're done
+uv run hamcp-test-env --no-interactive 2>&1  # Will auto-background
+sleep 30
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." http://localhost:PORT/api/
 ```
 
 **Startup Banner provides:**
@@ -195,9 +197,10 @@ fg  # Stop when done
 **Important:**
 - Docker daemon must be running
 - Port is randomly assigned (shown in startup banner)
-- Container auto-cleans up on graceful exit (option 2)
-- For background mode, always bring to foreground and stop gracefully (option 2)
-- Avoid Ctrl+C as it may leave containers running
+- Container auto-cleans up on exit (Ctrl+C or option 2)
+- Use `--no-interactive` for non-interactive/automated usage
+- Interactive mode requires stdin for menu navigation
+- **Test token is centralized in `tests/test_constants.py`** - all test code imports from this single location to avoid duplication and typos
 
 ### Code Quality Commands
 ```bash
