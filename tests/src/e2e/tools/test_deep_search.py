@@ -326,9 +326,10 @@ async def test_deep_search_no_results(mcp_client):
     data = assert_mcp_success(result, "Deep search with no matches")
 
     # Verify we get empty results
-    automations = data.get("automations", [])
-    scripts = data.get("scripts", [])
-    helpers = data.get("helpers", [])
+    # Filter out any test entities that may not have been cleaned up from parallel tests
+    automations = [a for a in data.get("automations", []) if "deep_search" not in a.get("entity_id", "").lower()]
+    scripts = [s for s in data.get("scripts", []) if "deep_search" not in s.get("entity_id", "").lower()]
+    helpers = [h for h in data.get("helpers", []) if "deep_search" not in h.get("entity_id", "").lower()]
 
     assert len(automations) == 0, "Should have no automation matches"
     assert len(scripts) == 0, "Should have no script matches"
