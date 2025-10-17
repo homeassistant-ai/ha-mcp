@@ -45,30 +45,40 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Client Configuration
 
-### <details><summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Add to your Claude Desktop `mcp.json` configuration file:
+Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-proxy** first:
+
+```bash
+# Install mcp-proxy
+uv tool install mcp-proxy
+# or
+pipx install mcp-proxy
+```
+
+Then add to your Claude Desktop configuration file:
 
 **Location:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-#won't work. no http support in claude. let's think about it.
 **Configuration:**
 ```json
 {
   "mcpServers": {
     "home-assistant": {
-      "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
-      "transport": "http"
+      "command": "mcp-proxy",
+      "args": ["http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
 ```
 
-Replace the URL with the one from your add-on logs.
+Replace the URL in `args` with the one from your add-on logs.
 
 **Restart Claude Desktop** after saving the configuration.
+
+**How it works:** mcp-proxy converts the HTTP/SSE endpoint to stdio that Claude Desktop can use.
 
 </details>
 
