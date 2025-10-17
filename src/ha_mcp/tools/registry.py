@@ -361,6 +361,47 @@ class ToolsRegistry:
 
         @self.mcp.tool
         @log_tool_usage
+        async def ha_deep_search(
+            query: str,
+            search_types: Annotated[
+                list[str] | None,
+                Field(
+                    default=None,
+                    description="Types to search in: 'automation', 'script', 'helper'. Default: all types",
+                ),
+            ] = None,
+            limit: int = 20,
+        ) -> dict[str, Any]:
+            """Deep search across automation, script, and helper definitions.
+
+            Searches not only entity names but also within configuration definitions including
+            triggers, actions, sequences, and other config fields. Perfect for finding automations
+            that use specific services, helpers referenced in scripts, or tracking down where
+            particular entities are being used.
+
+            Args:
+                query: Search query (can be partial, with typos)
+                search_types: Types to search (default: ["automation", "script", "helper"])
+                limit: Maximum total results to return (default: 20)
+
+            Examples:
+                - Find automations using a service: ha_deep_search("light.turn_on")
+                - Find scripts with delays: ha_deep_search("delay")
+                - Find helpers with specific options: ha_deep_search("option_a")
+                - Search all types for an entity: ha_deep_search("sensor.temperature")
+                - Search only automations: ha_deep_search("motion", search_types=["automation"])
+
+            Returns detailed matches with:
+                - match_in_name: True if query matched the entity name
+                - match_in_config: True if query matched within the configuration
+                - config: Full configuration for matched items
+                - score: Match quality score (higher is better)
+            """
+            result = await self.smart_tools.deep_search(query, search_types, limit)
+            return cast(dict[str, Any], result)
+
+        @self.mcp.tool
+        @log_tool_usage
         async def ha_get_state(entity_id: str) -> dict[str, Any]:
             """Get detailed state information for a Home Assistant entity with timezone metadata."""
             try:
