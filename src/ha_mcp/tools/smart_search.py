@@ -369,13 +369,13 @@ class SmartSearchTools:
                     "total_areas": len(area_stats),
                 },
                 "domain_stats": formatted_domain_stats,
+                "area_analysis": area_stats,  # Now included in all detail levels
                 "ai_insights": ai_insights,
             }
 
             # Add level-specific fields
             if detail_level == "full":
-                # Full: Add area analysis, device types, and service catalog
-                base_response["area_analysis"] = area_stats
+                # Full: Add device types and service catalog
                 base_response["device_types"] = device_types
                 base_response["service_availability"] = service_stats
 

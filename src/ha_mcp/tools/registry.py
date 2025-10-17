@@ -139,7 +139,20 @@ class ToolsRegistry:
             limit: int = 10,
             group_by_domain: bool = False,
         ) -> dict[str, Any]:
-            """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping."""
+            """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
+
+            BEST PRACTICE: Before performing searches or starting any task, call ha_get_overview() first to understand:
+            - Smart home size and scale (total entities, domains, areas)
+            - Language used in entity naming (French/English/mixed)
+            - Available areas/rooms and their entity distribution
+            - System capabilities (controllable devices, sensors, automations)
+
+            Choose overview detail level based on task:
+            - 'minimal': Quick orientation (10 entities per domain sample)
+            - 'standard': Complete picture (all entities, friendly names only) - RECOMMENDED for most tasks
+            - 'full': Maximum detail (includes states, device types, services) - for comprehensive analysis
+
+            This context helps tailor search strategies, understand naming conventions, and make informed decisions."""
             try:
                 # If area_filter is provided, use area-based search
                 if area_filter:
