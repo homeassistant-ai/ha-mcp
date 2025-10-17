@@ -126,18 +126,37 @@ class HomeAssistantTestEnvironment:
         while time.time() - start_time < timeout:
             attempts += 1
             try:
-                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                # Check frontend (no auth required) to see if HA is up
+                response = requests.get(f"{self.ha_url}/", timeout=5)
+                logger.debug(f"Attempt {attempts}: HTTP {response.status_code}")
                 if response.status_code == 200:
-                    config = response.json()
-                    logger.info(
-                        f"✅ Home Assistant ready! Version: {config.get('version', 'unknown')}"
-                    )
-                    logger.info(
-                        f"🏠 Components loaded: {len(config.get('components', []))}"
-                    )
+                    logger.info("✅ Home Assistant frontend is ready!")
+                    # Now verify API with token
+                    try:
+                        headers = {"Authorization": f"Bearer {self.ha_token}"}
+                        api_response = requests.get(
+                            f"{self.ha_url}/api/config", headers=headers, timeout=5
+                        )
+                        if api_response.status_code == 200:
+                            config = api_response.json()
+                            logger.info(
+                                f"✅ API authenticated! Version: {config.get('version', 'unknown')}"
+                            )
+                            logger.info(
+                                f"🏠 Components loaded: {len(config.get('components', []))}"
+                            )
+                        else:
+                            logger.warning(
+                                f"⚠️ API token may be invalid (HTTP {api_response.status_code}). "
+                                "Tests may fail. See tests/README.md for token update instructions."
+                            )
+                    except requests.RequestException as e:
+                        logger.warning(f"⚠️ Could not verify API token: {e}")
                     return
-            except requests.RequestException:
-                pass
+                else:
+                    logger.debug(f"Non-200 response: {response.status_code}")
+            except requests.RequestException as e:
+                logger.debug(f"Request failed: {type(e).__name__}: {e}")
 
             if attempts % 6 == 0:  # Every 30 seconds
                 logger.info(f"⏳ Still waiting... ({attempts * 5}s elapsed)")
@@ -200,7 +219,10 @@ class HomeAssistantTestEnvironment:
             print("📊 API Health: ", end="")
 
             try:
-                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                headers = {"Authorization": f"Bearer {self.ha_token}"}
+                response = requests.get(
+                    f"{self.ha_url}/api/config", headers=headers, timeout=5
+                )
                 if response.status_code == 200:
                     print("✅ Ready")
                 else:
