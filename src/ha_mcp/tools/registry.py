@@ -148,9 +148,9 @@ class ToolsRegistry:
             - System capabilities (controllable devices, sensors, automations)
 
             Choose overview detail level based on task:
-            - 'minimal': Quick orientation (10 entities per domain sample)
-            - 'standard': Complete picture (all entities, friendly names only) - RECOMMENDED for most tasks
-            - 'full': Maximum detail (includes states, device types, services) - for comprehensive analysis
+            - 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches
+            - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
+            - 'full': Maximum detail (includes states, device types, services) - for deep analysis
 
             This context helps tailor search strategies, understand naming conventions, and make informed decisions."""
             try:
