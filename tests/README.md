@@ -5,13 +5,17 @@
 ### Interactive Test Environment (Recommended)
 
 ```bash
-# Start test environment with menu
+# Start test environment with interactive menu
 uv run hamcp-test-env
+
+# Or start in non-interactive mode (for automation/background usage)
+uv run hamcp-test-env --no-interactive
 ```
 
 **Features:**
 - 🐳 Auto-managed Home Assistant container
 - 📋 Interactive menu (run tests, view status, shutdown)
+- 🤖 Non-interactive mode for automation (use `--no-interactive`)
 - 🌐 Web UI access: `mcp` / `mcp`
 - 🔄 Multiple test runs without restart
 
@@ -67,4 +71,4 @@ To update the baseline Home Assistant configuration:
    - Generate Personal Access Token
 4. **Shutdown**: Choose option 2 in menu
 5. **Save state**: Copy files from displayed temp directory to `tests/initial_test_state/`
-6. **Update token**: Replace token in `tests/test_env_manager.py` `ha_token` variable
+6. **Update token**: Replace `TEST_TOKEN` in `tests/test_constants.py` (centralized location for all test code)
