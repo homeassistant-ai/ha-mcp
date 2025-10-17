@@ -593,11 +593,14 @@ class SmartSearchTools:
 
             total_matches = len(limited_results)
 
+            # Return automations/scripts/helpers at top level for easy access
             return {
                 "success": True,
                 "query": query,
                 "total_matches": total_matches,
-                "results": final_results,
+                "automations": final_results["automations"],
+                "scripts": final_results["scripts"],
+                "helpers": final_results["helpers"],
                 "search_types": search_types,
                 "search_metadata": {
                     "fuzzy_threshold": self.settings.fuzzy_threshold,
@@ -618,7 +621,9 @@ class SmartSearchTools:
                 "success": False,
                 "query": query,
                 "error": str(e),
-                "results": {"automations": [], "scripts": [], "helpers": []},
+                "automations": [],
+                "scripts": [],
+                "helpers": [],
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify automation/script/helper entities exist",
