@@ -273,23 +273,28 @@ class HomeAssistantClient:
 
         Args:
             entity_id: Optional entity ID to filter
-            start_time: Optional start time (ISO format)
-            end_time: Optional end time (ISO format)
+            start_time: Optional start time (ISO format) - used as URL path component
+            end_time: Optional end time (ISO format) - used as query parameter
 
         Returns:
             Logbook entries
         """
-        logger.debug(f"Fetching logbook entries for entity: {entity_id}")
+        logger.debug(f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}")
 
+        # Build endpoint - start_time goes in URL path if provided
+        if start_time:
+            endpoint = f"/logbook/{start_time}"
+        else:
+            endpoint = "/logbook"
+
+        # Build query parameters
         params = {}
         if entity_id:
             params["entity"] = entity_id
-        if start_time:
-            params["start_time"] = start_time
         if end_time:
             params["end_time"] = end_time
 
-        result = await self._request("GET", "/logbook", params=params)
+        result = await self._request("GET", endpoint, params=params)
         if isinstance(result, list):
             return result
         else:
