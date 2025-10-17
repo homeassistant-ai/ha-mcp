@@ -369,13 +369,13 @@ class SmartSearchTools:
                     "total_areas": len(area_stats),
                 },
                 "domain_stats": formatted_domain_stats,
+                "area_analysis": area_stats,  # Now included in all detail levels
                 "ai_insights": ai_insights,
             }
 
             # Add level-specific fields
             if detail_level == "full":
-                # Full: Add area analysis, device types, and service catalog
-                base_response["area_analysis"] = area_stats
+                # Full: Add device types and service catalog
                 base_response["device_types"] = device_types
                 base_response["service_availability"] = service_stats
 
@@ -395,6 +395,276 @@ class SmartSearchTools:
                     "Try test_connection first",
                 ],
             }
+
+    async def deep_search(
+        self,
+        query: str,
+        search_types: list[str] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """
+        Deep search across automation, script, and helper definitions.
+
+        Searches not just entity names but also within configuration definitions
+        including triggers, actions, sequences, and other config fields.
+
+        Args:
+            query: Search query (can be partial, with typos)
+            search_types: Types to search (default: ["automation", "script", "helper"])
+            limit: Maximum total results to return
+
+        Returns:
+            Dictionary with search results grouped by type
+        """
+        if search_types is None:
+            search_types = ["automation", "script", "helper"]
+
+        try:
+            results: dict[str, list[dict[str, Any]]] = {
+                "automations": [],
+                "scripts": [],
+                "helpers": [],
+            }
+
+            query_lower = query.lower().strip()
+
+            # Search automations
+            if "automation" in search_types:
+                entities = await self.client.get_states()
+                automation_entities = [
+                    e for e in entities if e.get("entity_id", "").startswith("automation.")
+                ]
+
+                for entity in automation_entities:
+                    entity_id = entity.get("entity_id", "")
+                    friendly_name = entity.get("attributes", {}).get("friendly_name", entity_id)
+
+                    # Check if query matches in name first
+                    name_match_score = self.fuzzy_searcher._calculate_entity_score(
+                        entity_id, friendly_name, "automation", query_lower
+                    )
+
+                    # Get automation config and search in definition
+                    try:
+                        config_response = await self.client.get_automation_config(entity_id)
+                        config_match_score = self._search_in_dict(config_response, query_lower)
+
+                        # Combined score
+                        total_score = max(name_match_score, config_match_score)
+
+                        if total_score >= self.settings.fuzzy_threshold:
+                            results["automations"].append({
+                                "entity_id": entity_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
+                                "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
+                                "config": config_response,
+                            })
+                    except Exception as e:
+                        logger.debug(f"Could not get config for {entity_id}: {e}")
+                        # Still include if name matches
+                        if name_match_score >= self.settings.fuzzy_threshold:
+                            results["automations"].append({
+                                "entity_id": entity_id,
+                                "friendly_name": friendly_name,
+                                "score": name_match_score,
+                                "match_in_name": True,
+                                "match_in_config": False,
+                            })
+
+            # Search scripts
+            if "script" in search_types:
+                entities = await self.client.get_states()
+                script_entities = [
+                    e for e in entities if e.get("entity_id", "").startswith("script.")
+                ]
+
+                for entity in script_entities:
+                    entity_id = entity.get("entity_id", "")
+                    friendly_name = entity.get("attributes", {}).get("friendly_name", entity_id)
+                    script_id = entity_id.replace("script.", "")
+
+                    # Check if query matches in name
+                    name_match_score = self.fuzzy_searcher._calculate_entity_score(
+                        entity_id, friendly_name, "script", query_lower
+                    )
+
+                    # Get script config and search in definition
+                    try:
+                        config_response = await self.client.get_script_config(script_id)
+                        script_config = config_response.get("config", {})
+                        config_match_score = self._search_in_dict(script_config, query_lower)
+
+                        # Combined score
+                        total_score = max(name_match_score, config_match_score)
+
+                        if total_score >= self.settings.fuzzy_threshold:
+                            results["scripts"].append({
+                                "entity_id": entity_id,
+                                "script_id": script_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
+                                "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
+                                "config": script_config,
+                            })
+                    except Exception as e:
+                        logger.debug(f"Could not get config for {script_id}: {e}")
+                        # Still include if name matches
+                        if name_match_score >= self.settings.fuzzy_threshold:
+                            results["scripts"].append({
+                                "entity_id": entity_id,
+                                "script_id": script_id,
+                                "friendly_name": friendly_name,
+                                "score": name_match_score,
+                                "match_in_name": True,
+                                "match_in_config": False,
+                            })
+
+            # Search helpers
+            if "helper" in search_types:
+                helper_types = [
+                    "input_boolean",
+                    "input_number",
+                    "input_select",
+                    "input_text",
+                    "input_datetime",
+                    "input_button",
+                ]
+
+                for helper_type in helper_types:
+                    try:
+                        # Use WebSocket to list helpers
+                        message = {"type": f"{helper_type}/list"}
+                        helper_list_response = await self.client.send_websocket_message(message)
+
+                        if not helper_list_response.get("success"):
+                            continue
+
+                        helpers = helper_list_response.get("result", [])
+
+                        for helper in helpers:
+                            helper_id = helper.get("id", "")
+                            entity_id = f"{helper_type}.{helper_id}"
+                            name = helper.get("name", helper_id)
+
+                            # Check if query matches in name or config
+                            name_match_score = self.fuzzy_searcher._calculate_entity_score(
+                                entity_id, name, helper_type, query_lower
+                            )
+                            config_match_score = self._search_in_dict(helper, query_lower)
+
+                            # Combined score
+                            total_score = max(name_match_score, config_match_score)
+
+                            if total_score >= self.settings.fuzzy_threshold:
+                                results["helpers"].append({
+                                    "entity_id": entity_id,
+                                    "helper_type": helper_type,
+                                    "name": name,
+                                    "score": total_score,
+                                    "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
+                                    "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
+                                    "config": helper,
+                                })
+                    except Exception as e:
+                        logger.debug(f"Could not list {helper_type}: {e}")
+
+            # Sort all results by score and apply limit
+            all_results = []
+            for result_type, items in results.items():
+                for item in items:
+                    item["result_type"] = result_type.rstrip("s")  # singular form
+                    all_results.append(item)
+
+            all_results.sort(key=lambda x: x["score"], reverse=True)
+            limited_results = all_results[:limit]
+
+            # Re-group by type
+            final_results: dict[str, list[dict[str, Any]]] = {
+                "automations": [],
+                "scripts": [],
+                "helpers": [],
+            }
+            for item in limited_results:
+                result_type = item.pop("result_type")
+                final_results[f"{result_type}s"].append(item)
+
+            total_matches = len(limited_results)
+
+            # Return automations/scripts/helpers at top level for easy access
+            return {
+                "success": True,
+                "query": query,
+                "total_matches": total_matches,
+                "automations": final_results["automations"],
+                "scripts": final_results["scripts"],
+                "helpers": final_results["helpers"],
+                "search_types": search_types,
+                "search_metadata": {
+                    "fuzzy_threshold": self.settings.fuzzy_threshold,
+                    "best_match_score": limited_results[0]["score"] if limited_results else 0,
+                    "truncated": len(all_results) > limit,
+                },
+                "usage_tips": [
+                    "Deep search finds matches in automation triggers, actions, and conditions",
+                    "Script sequences and service calls are also searched",
+                    "Helper configurations including options and constraints are included",
+                    "Use match_in_name and match_in_config to understand where the match occurred",
+                ],
+            }
+
+        except Exception as e:
+            logger.error(f"Error in deep_search: {e}")
+            return {
+                "success": False,
+                "query": query,
+                "error": str(e),
+                "automations": [],
+                "scripts": [],
+                "helpers": [],
+                "suggestions": [
+                    "Check Home Assistant connection",
+                    "Verify automation/script/helper entities exist",
+                    "Try simpler search terms",
+                ],
+            }
+
+    def _search_in_dict(self, data: dict[str, Any] | list[Any] | Any, query: str) -> int:
+        """
+        Recursively search for query string in nested dictionary/list structures.
+
+        Returns a fuzzy match score based on how well the query matches values in the data.
+        """
+        from fuzzywuzzy import fuzz
+
+        max_score = 0
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                # Score the key itself
+                key_score = fuzz.partial_ratio(query, str(key).lower())
+                max_score = max(max_score, key_score)
+
+                # Recursively score the value
+                value_score = self._search_in_dict(value, query)
+                max_score = max(max_score, value_score)
+
+        elif isinstance(data, list):
+            for item in data:
+                item_score = self._search_in_dict(item, query)
+                max_score = max(max_score, item_score)
+
+        elif isinstance(data, str):
+            # Direct fuzzy match on string values
+            max_score = max(max_score, fuzz.partial_ratio(query, data.lower()))
+
+        elif data is not None:
+            # Convert to string and match
+            max_score = max(max_score, fuzz.partial_ratio(query, str(data).lower()))
+
+        return max_score
 
 
 def create_smart_search_tools(
