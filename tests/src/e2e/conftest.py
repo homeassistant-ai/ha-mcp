@@ -30,12 +30,13 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
 
+# Import test constants
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from test_constants import TEST_TOKEN
+
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Constants for test configuration
-TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
 
 
 def _setup_config_permissions(config_path: Path) -> None:

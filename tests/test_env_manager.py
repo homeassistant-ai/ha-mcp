@@ -16,6 +16,10 @@ from pathlib import Path
 import requests
 from testcontainers.core.container import DockerContainer
 
+# Add tests directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+from test_constants import TEST_PASSWORD, TEST_TOKEN, TEST_USER
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -31,9 +35,9 @@ class HomeAssistantTestEnvironment:
     def __init__(self):
         self.container: DockerContainer | None = None
         self.ha_url: str | None = None
-        self.ha_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6iTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
-        self.test_user = "mcp"
-        self.test_password = "mcp"
+        self.ha_token = TEST_TOKEN
+        self.test_user = TEST_USER
+        self.test_password = TEST_PASSWORD
 
     def _setup_config_directory(self) -> Path:
         """Set up Home Assistant configuration directory."""
