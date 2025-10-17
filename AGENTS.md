@@ -139,6 +139,69 @@ HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/scripts/ -v
 HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/error_handling/ -v
 ```
 
+#### Interactive Test Environment (hamcp-test-env)
+
+**Quick, isolated Home Assistant environment for development, testing, and API exploration.**
+
+**Features:**
+- 🐳 Auto-managed Docker container with testcontainers
+- 🚀 Ready in ~30 seconds
+- 🔑 Pre-configured auth token for immediate API access
+- 📋 Copy-paste environment variables for testing
+- 🌐 Web UI access for manual inspection
+- 🔄 Can run tests multiple times without restart
+- 🧹 Automatic cleanup on exit
+
+**Usage Patterns:**
+
+```bash
+# Pattern 1: Non-interactive mode for API testing (recommended for automation)
+# The Bash tool automatically backgrounds commands that exceed timeout
+uv run hamcp-test-env --no-interactive 2>&1
+# Command will auto-background after 30s, wait for it to be ready
+sleep 30
+# Container is now running, copy-paste the export lines from output
+export HOMEASSISTANT_URL=http://localhost:PORT
+export HOMEASSISTANT_TOKEN=eyJhbG...
+# Do your testing
+curl -H "Authorization: Bearer $HOMEASSISTANT_TOKEN" $HOMEASSISTANT_URL/api/config | jq
+# Stop by killing the background shell when done
+
+# Pattern 2: Interactive mode for running E2E tests
+uv run hamcp-test-env
+# Wait for status banner showing URL and token
+# Choose option 1 to run tests
+# Choose option 3 to show status again
+# Choose option 2 to stop and exit
+
+# Pattern 3: Quick one-liner API validation
+# Start environment, wait, test, and you're done
+uv run hamcp-test-env --no-interactive 2>&1  # Will auto-background
+sleep 30
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." http://localhost:PORT/api/
+```
+
+**Startup Banner provides:**
+- Web UI URL with username/password (mcp/mcp)
+- Copy-pasteable environment variable exports
+- Full API token for curl/scripts
+- API health status
+
+**Use Cases:**
+- Test API endpoints manually before writing tests
+- Validate tool implementations against real HA instance
+- Debug WebSocket connections
+- Explore Home Assistant API behavior
+- Quick smoke tests during development
+
+**Important:**
+- Docker daemon must be running
+- Port is randomly assigned (shown in startup banner)
+- Container auto-cleans up on exit (Ctrl+C or option 2)
+- Use `--no-interactive` for non-interactive/automated usage
+- Interactive mode requires stdin for menu navigation
+- **Test token is centralized in `tests/test_constants.py`** - all test code imports from this single location to avoid duplication and typos
+
 ### Code Quality Commands
 ```bash
 # Format code

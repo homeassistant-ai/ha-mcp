@@ -74,7 +74,7 @@ jobs:
       run: uv run pytest tests/addon/test_addon_structure.py -v
 
     - name: Validate docker-compose configuration
-      run: uv run pytest tests/docker/test_docker_compose.py -v
+      run: uv run pytest tests/test_docker/test_docker_compose.py -v
 
     - name: Build and test standalone Docker image
-      run: uv run pytest tests/docker/test_docker_build.py -v
+      run: uv run pytest tests/test_docker/test_docker_build.py -v

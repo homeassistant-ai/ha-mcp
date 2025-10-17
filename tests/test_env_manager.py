@@ -16,6 +16,10 @@ from pathlib import Path
 import requests
 from testcontainers.core.container import DockerContainer
 
+# Add tests directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+from test_constants import TEST_PASSWORD, TEST_TOKEN, TEST_USER
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -31,9 +35,9 @@ class HomeAssistantTestEnvironment:
     def __init__(self):
         self.container: DockerContainer | None = None
         self.ha_url: str | None = None
-        self.ha_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6iTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
-        self.test_user = "mcp"
-        self.test_password = "mcp"
+        self.ha_token = TEST_TOKEN
+        self.test_user = TEST_USER
+        self.test_password = TEST_PASSWORD
 
     def _setup_config_directory(self) -> Path:
         """Set up Home Assistant configuration directory."""
@@ -126,18 +130,37 @@ class HomeAssistantTestEnvironment:
         while time.time() - start_time < timeout:
             attempts += 1
             try:
-                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                # Check frontend (no auth required) to see if HA is up
+                response = requests.get(f"{self.ha_url}/", timeout=5)
+                logger.debug(f"Attempt {attempts}: HTTP {response.status_code}")
                 if response.status_code == 200:
-                    config = response.json()
-                    logger.info(
-                        f"✅ Home Assistant ready! Version: {config.get('version', 'unknown')}"
-                    )
-                    logger.info(
-                        f"🏠 Components loaded: {len(config.get('components', []))}"
-                    )
+                    logger.info("✅ Home Assistant frontend is ready!")
+                    # Now verify API with token
+                    try:
+                        headers = {"Authorization": f"Bearer {self.ha_token}"}
+                        api_response = requests.get(
+                            f"{self.ha_url}/api/config", headers=headers, timeout=5
+                        )
+                        if api_response.status_code == 200:
+                            config = api_response.json()
+                            logger.info(
+                                f"✅ API authenticated! Version: {config.get('version', 'unknown')}"
+                            )
+                            logger.info(
+                                f"🏠 Components loaded: {len(config.get('components', []))}"
+                            )
+                        else:
+                            logger.warning(
+                                f"⚠️ API token may be invalid (HTTP {api_response.status_code}). "
+                                "Tests may fail. See tests/README.md for token update instructions."
+                            )
+                    except requests.RequestException as e:
+                        logger.warning(f"⚠️ Could not verify API token: {e}")
                     return
-            except requests.RequestException:
-                pass
+                else:
+                    logger.debug(f"Non-200 response: {response.status_code}")
+            except requests.RequestException as e:
+                logger.debug(f"Request failed: {type(e).__name__}: {e}")
 
             if attempts % 6 == 0:  # Every 30 seconds
                 logger.info(f"⏳ Still waiting... ({attempts * 5}s elapsed)")
@@ -187,20 +210,27 @@ class HomeAssistantTestEnvironment:
 
     def print_status(self) -> None:
         """Print current environment status."""
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         print("🏠 HOME ASSISTANT MCP TEST ENVIRONMENT")
-        print("=" * 70)
+        print("=" * 80)
 
         if self.container and self.ha_url:
-            print(f"🌐 Home Assistant URL: {self.ha_url}")
-            print(f"👤 Test User: {self.test_user}")
-            print(f"🔐 Test Password: {self.test_password}")
-            print(f"🔑 API Token: {self.ha_token[:20]}...")
-            print("🐳 Container Status: Running")
+            print(f"\n🌐 Web UI: {self.ha_url}")
+            print(f"   Username: {self.test_user}")
+            print(f"   Password: {self.test_password}")
+            print(f"\n📋 Copy-paste for testing:")
+            print(f"   export HOMEASSISTANT_URL={self.ha_url}")
+            print(f"   export HOMEASSISTANT_TOKEN={self.ha_token}")
+            print(f"\n🔑 Full API Token:")
+            print(f"   {self.ha_token}")
+            print(f"\n🐳 Container Status: Running")
             print("📊 API Health: ", end="")
 
             try:
-                response = requests.get(f"{self.ha_url}/api/config", timeout=5)
+                headers = {"Authorization": f"Bearer {self.ha_token}"}
+                response = requests.get(
+                    f"{self.ha_url}/api/config", headers=headers, timeout=5
+                )
                 if response.status_code == 200:
                     print("✅ Ready")
                 else:
@@ -229,6 +259,18 @@ def show_menu() -> str:
 
 def main():
     """Main entry point for the test environment manager."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Home Assistant MCP Test Environment Manager"
+    )
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Run in non-interactive mode (wait for SIGINT instead of showing menu)",
+    )
+    args = parser.parse_args()
+
     print("🚀 Home Assistant MCP Test Environment Manager")
     print("=" * 50)
 
@@ -239,18 +281,27 @@ def main():
         env.start_container()
         env.print_status()
 
-        # Interactive menu loop
-        while True:
-            choice = show_menu()
+        if args.no_interactive:
+            # Non-interactive mode: just wait for interrupt
+            logger.info("🔄 Running in non-interactive mode. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("\n🛑 Received interrupt signal")
+        else:
+            # Interactive menu loop
+            while True:
+                choice = show_menu()
 
-            if choice == "1":
-                env.run_tests()
-            elif choice == "2":
-                env.stop_container()
-                print("👋 Goodbye!")
-                break
-            elif choice == "3":
-                env.print_status()
+                if choice == "1":
+                    env.run_tests()
+                elif choice == "2":
+                    env.stop_container()
+                    print("👋 Goodbye!")
+                    break
+                elif choice == "3":
+                    env.print_status()
 
     except KeyboardInterrupt:
         print("\n🛑 Interrupted by user")
