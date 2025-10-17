@@ -210,16 +210,20 @@ class HomeAssistantTestEnvironment:
 
     def print_status(self) -> None:
         """Print current environment status."""
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         print("🏠 HOME ASSISTANT MCP TEST ENVIRONMENT")
-        print("=" * 70)
+        print("=" * 80)
 
         if self.container and self.ha_url:
-            print(f"🌐 Home Assistant URL: {self.ha_url}")
-            print(f"👤 Test User: {self.test_user}")
-            print(f"🔐 Test Password: {self.test_password}")
-            print(f"🔑 API Token: {self.ha_token[:20]}...")
-            print("🐳 Container Status: Running")
+            print(f"\n🌐 Web UI: {self.ha_url}")
+            print(f"   Username: {self.test_user}")
+            print(f"   Password: {self.test_password}")
+            print(f"\n📋 Copy-paste for testing:")
+            print(f"   export HOMEASSISTANT_URL={self.ha_url}")
+            print(f"   export HOMEASSISTANT_TOKEN={self.ha_token}")
+            print(f"\n🔑 Full API Token:")
+            print(f"   {self.ha_token}")
+            print(f"\n🐳 Container Status: Running")
             print("📊 API Health: ", end="")
 
             try:
