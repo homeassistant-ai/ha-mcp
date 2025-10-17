@@ -2,6 +2,7 @@
 Tests for ha_deep_search tool - searches within automation/script/helper configs.
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -40,6 +41,9 @@ async def test_deep_search_automation(mcp_client):
     )
     create_data = assert_mcp_success(create_result, "Create test automation")
     logger.info(f"✅ Created automation: {create_data}")
+
+    # Wait for entity to register in HA before searching
+    await asyncio.sleep(5)
 
     try:
         # Test: Search for the sensor entity mentioned in the trigger
@@ -87,8 +91,8 @@ async def test_deep_search_automation(mcp_client):
     finally:
         # Cleanup: Delete the test automation
         await mcp_client.call_tool(
-            "ha_config_delete_automation",
-            {"automation_id": "automation.deep_search_test_automation"},
+            "ha_config_remove_automation",
+            {"identifier": "automation.deep_search_test_automation"},
         )
         logger.info("🧹 Cleaned up test automation")
 
@@ -120,6 +124,9 @@ async def test_deep_search_script(mcp_client):
     )
     create_data = assert_mcp_success(create_result, "Create test script")
     logger.info(f"✅ Created script: {create_data}")
+
+    # Wait for entity to register in HA before searching
+    await asyncio.sleep(5)
 
     try:
         # Test: Search for the unique message in the script
@@ -166,7 +173,7 @@ async def test_deep_search_script(mcp_client):
     finally:
         # Cleanup: Delete the test script
         await mcp_client.call_tool(
-            "ha_config_delete_script",
+            "ha_config_remove_script",
             {"script_id": "script.deep_search_test_script"},
         )
         logger.info("🧹 Cleaned up test script")
@@ -194,6 +201,9 @@ async def test_deep_search_helper(mcp_client):
     )
     create_data = assert_mcp_success(create_result, "Create test helper")
     logger.info(f"✅ Created helper: {create_data}")
+
+    # Wait for entity to register in HA before searching
+    await asyncio.sleep(5)
 
     try:
         # Test: Search for the unique option in the helper
