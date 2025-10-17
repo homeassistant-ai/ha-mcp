@@ -60,8 +60,12 @@ dev = [
 ha-mcp = "ha_mcp.__main__:main"
 hamcp-test-env = "tests.test_env_manager:main"
 
-[tool.setuptools.packages.find]
-where = ["src", "tests"]
+[tool.setuptools]
+packages = ["ha_mcp", "tests"]
+
+[tool.setuptools.package-dir]
+ha_mcp = "src/ha_mcp"
+tests = "tests"
 
 [tool.setuptools.package-data]
 ha_mcp = ["py.typed"]
