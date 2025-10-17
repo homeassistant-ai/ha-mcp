@@ -18,9 +18,7 @@ class TestAddonStartup:
         """Create a test add-on configuration file."""
         config = {
             "backup_hint": "normal",
-            "port": 9583,
-            "path": "/mcp",
-            "require_auth": False,
+            "secret_path": "",  # Auto-generate
         }
         config_file = tmp_path / "options.json"
         with open(config_file, "w") as f:
@@ -74,16 +72,11 @@ class TestAddonStartup:
             # Verify expected log messages
             assert "[INFO] Starting Home Assistant MCP Server..." in logs
             assert "[INFO] Backup hint mode: normal" in logs
-            assert "[INFO] HTTP port: 9583" in logs
-            assert "[INFO] MCP path: /mcp" in logs
-            assert "[INFO] Require authentication: False" in logs
+            assert "[INFO] Generated new secret path with 128-bit entropy" in logs
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
-            assert (
-                "[INFO] MCP Authentication: DISABLED (use secret path for security)"
-                in logs
-            )
-            assert "[INFO] Launching ha-mcp in HTTP mode on 0.0.0.0:9583/mcp" in logs
-            assert "MCP Server URL: http://<home-assistant-ip>:9583/mcp" in logs
+            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
+            assert "Secret Path: /private_" in logs
+            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -99,14 +92,12 @@ class TestAddonStartup:
         finally:
             container.stop()
 
-    def test_addon_startup_with_auth(self, tmp_path):
-        """Test that add-on logs authentication enabled when configured."""
-        # Create config with auth enabled
+    def test_addon_startup_custom_secret_path(self, tmp_path):
+        """Test that add-on uses custom secret path when configured."""
+        # Create config with custom secret path
         config = {
-            "backup_hint": "normal",
-            "port": 9583,
-            "path": "/mcp",
-            "require_auth": True,
+            "backup_hint": "strong",
+            "secret_path": "/my_custom_secret",
         }
         config_file = tmp_path / "options.json"
         with open(config_file, "w") as f:
@@ -121,65 +112,7 @@ class TestAddonStartup:
             .with_bind_ports(9583, 9583)
             .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
-            .with_volume_mapping(str(config_file.parent), "/data", mode="ro")
-        )
-
-        # Build if not already built
-        try:
-            container.get_docker_client().client.images.get("ha-mcp-addon-test")
-        except Exception:
-            container.get_docker_client().client.images.build(
-                path=str(context_path),
-                dockerfile=str(dockerfile_path),
-                tag="ha-mcp-addon-test",
-                rm=True,
-                buildargs={
-                    "BUILD_VERSION": "1.0.0-test",
-                    "BUILD_ARCH": "amd64",
-                },
-            )
-
-        # Configure wait strategy
-        container.waiting_for(
-            LogMessageWaitStrategy("MCP Server URL:").with_startup_timeout(30)
-        )
-
-        container.start()
-
-        try:
-            # Get logs
-            logs = container.get_logs()[0].decode("utf-8")
-
-            # Verify auth is enabled
-            assert "[INFO] Require authentication: True" in logs
-            assert "[INFO] MCP Authentication: ENABLED (HA token validation)" in logs
-
-        finally:
-            container.stop()
-
-    def test_addon_startup_custom_port_and_path(self, tmp_path):
-        """Test that add-on uses custom port and path from config."""
-        # Create config with custom values
-        config = {
-            "backup_hint": "strong",
-            "port": 8080,
-            "path": "/custom-path",
-            "require_auth": False,
-        }
-        config_file = tmp_path / "options.json"
-        with open(config_file, "w") as f:
-            json.dump(config, f)
-
-        # Build and start container
-        dockerfile_path = Path("homeassistant-addon/Dockerfile")
-        context_path = Path(".")
-
-        container = (
-            DockerContainer(image="ha-mcp-addon-test")
-            .with_bind_ports(8080, 8080)
-            .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
-            .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
-            .with_volume_mapping(str(config_file.parent), "/data", mode="ro")
+            .with_volume_mapping(str(config_file.parent), "/data", mode="rw")
         )
 
         # Build if not already built
@@ -210,13 +143,9 @@ class TestAddonStartup:
 
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
-            assert "[INFO] HTTP port: 8080" in logs
-            assert "[INFO] MCP path: /custom-path" in logs
-            assert (
-                "[INFO] Launching ha-mcp in HTTP mode on 0.0.0.0:8080/custom-path"
-                in logs
-            )
-            assert "MCP Server URL: http://<home-assistant-ip>:8080/custom-path" in logs
+            assert "[INFO] Using custom secret path from configuration" in logs
+            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
+            assert "Secret Path: /my_custom_secret" in logs
 
         finally:
             container.stop()

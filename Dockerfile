@@ -15,6 +15,7 @@ WORKDIR /app
 # Copy project files
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY fastmcp.json fastmcp-http.json ./
 
 # Install dependencies and project with uv
 # --no-cache: Don't cache downloaded packages
@@ -22,7 +23,7 @@ COPY src/ ./src/
 RUN uv pip install --system --no-cache .
 
 # Create non-root user for security
-RUN groupadd -r mcpuser && useradd -r -g mcpuser mcpuser && \
+RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser && \
     chown -R mcpuser:mcpuser /app
 USER mcpuser
 
@@ -31,5 +32,7 @@ ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
     BACKUP_HINT="normal"
 
-# Run the MCP server
-CMD ["ha-mcp"]
+# Default: Run in stdio mode using fastmcp.json
+# For HTTP mode, override with: docker run ... ha-mcp fastmcp run fastmcp-http.json
+ENTRYPOINT ["uv", "run", "--no-project"]
+CMD ["fastmcp", "run", "fastmcp.json"]

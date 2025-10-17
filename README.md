@@ -4,10 +4,14 @@
   # The Unofficial and Awesome Home Assistant MCP Server
 
   <p align="center">
-    <a href="tests/"><img src="https://img.shields.io/badge/Tests-E2E%20%2B%20Integration-brightgreen" alt="Test Suite"></a>
-    <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-1.12.0-blue" alt="MCP Version"></a>
-    <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python"></a>
-    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/FastMCP-2.10.5-orange" alt="FastMCP"></a>
+    <a href="https://github.com/homeassistant-ai/ha-mcp"><img src="https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant" alt="Home Assistant Add-on"></a>
+    <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
+    <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
+    <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
+    <br>
+    <a href="https://github.com/homeassistant-ai/ha-mcp/commits/master"><img src="https://img.shields.io/github/commit-activity/m/homeassistant-ai/ha-mcp.svg" alt="Activity"></a>
+    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/Built%20with-FastMCP-purple" alt="Built with FastMCP"></a>
+    <img src="https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fhomeassistant-ai%2Fha-mcp%2Fmaster%2Fpyproject.toml" alt="Python Version">
   </p>
 
   <p align="center">
@@ -27,7 +31,7 @@
 ## ✨ Features
 
 ### 🔍 Discover, Search and Query
-- **Fuzzy Entity Search**: Comprehensive search with typo tolerance
+- **Fuzzy Entity Search**: Comprehensive search with similar words tolerance
 - **AI-Optimized System Overview**: Complete system analysis showing entity counts, areas, and device status
 - **Intelligent Entity Matching**: Advanced search across all Home Assistant entities with partial name matching
 - **Template Evaluation**: Evaluate Home Assistant templates for dynamic data processing and calculations
@@ -40,30 +44,175 @@
 ### 🔧 Manage
 - **Automation and Scripts**: Create, modify, delete, enable/disable, and trigger Home Assistant automations
 - **Helper Entity Management**: Create, modify, and delete input_boolean, input_number, input_select, input_text, input_datetime, and input_button entities
-- **Backup and Restore**: Create fast local backups (excludes database) and restore with safety mechanisms ([configurable](#optional-configuration))
+- **Backup and Restore**: Create fast local backups (excludes database) and restore with safety mechanisms
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## 🚀 Installation
 
-- **Long-lived access token** from Home Assistant user profile - Security tab
+Choose the installation method that best fits your setup:
 
-### Installation
+### Method 1: Home Assistant Add-on (Recommended)
 
-1. **Install uv**
+**Best for:** Users running Home Assistant OS
 
-   uv is a Python package manager (Python installation not required).
-   Follow instructions at https://docs.astral.sh/uv/getting-started/installation/
+**Advantages:**
+- ✅ 5 clicks installation
+- ✅ Isolated environment
+- ✅ Automatic updates
+- ✅ Part of your Home Assistant Setup
 
-2. **Clone the repository**
+**Installation Steps:**
+
+1. **Click the button to add the repository** to your Home Assistant instance:
+
+   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
+
+   Or manually add this repository URL in Supervisor → Add-on Store:
+   ```
+   https://github.com/homeassistant-ai/ha-mcp
+   ```
+
+2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
+
+3. **Click Install, Wait and then Start**
+
+4. Follow the [configuration instructions for clients in the add-on documentation](homeassistant-addon/DOCS.md)
+
+---
+
+### Method 2: Container
+
+**Best for:** Recommended for Home Assistant Container or when Docker is available
+
+**Advantages:**
+- ✅ No installation
+- ✅ Isolated environment
+- ✅ Automatic updates
+
+**Get a long-lived token:** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
+
+**Client Configuration:**
+
+<details>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+
+**Location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add to your `mcp.json`:
+```json
+{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
+
+1. **Create a docker-compose.yml:**
+   ```yaml
+   version: '3.8'
+   services:
+     ha-mcp:
+       image: ghcr.io/homeassistant-ai/ha-mcp:latest
+       container_name: ha-mcp
+       ports:
+         - "8086:8086"
+       environment:
+         HOMEASSISTANT_URL: http://homeassistant.local:8123
+         HOMEASSISTANT_TOKEN: your_long_lived_token
+         MCP_SECRET_PATH: /__your_secret_string__
+       command: ["fastmcp", "run", "fastmcp-webclient.json"]
+       restart: unless-stopped
+
+     cloudflared:
+       image: cloudflare/cloudflared:latest
+       command: tunnel --url http://ha-mcp:8086
+       depends_on:
+         - ha-mcp
+   ```
+
+2. **Start the services:**
+   ```bash
+   docker compose up -d
+   ```
+
+3. **Check cloudflared logs for your URL:**
+   ```bash
+   docker compose logs cloudflared
+   ```
+
+4. **Use:** `https://abc-def.trycloudflare.com/__your_secret_string__`
+
+</details>
+
+<details>
+<summary><b>💻 Claude Code</b></summary>
+
+```bash
+claude mcp add-json home-assistant '{
+  "command": "docker",
+  "args": [
+    "run",
+    "--rm",
+    "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
+    "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
+    "ghcr.io/homeassistant-ai/ha-mcp:latest"
+  ]
+}'
+```
+
+</details>
+
+---
+
+### Method 3: Python+UV
+
+**Best for:** When Docker is not available
+
+**Prerequisites:**
+- [Git](ttps://git-scm.com/downloads)
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+- A long-lived token: ** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
+
+**Installation Steps:**
+
+1. **Clone the repository:**
    ```bash
    git clone https://github.com/homeassistant-ai/ha-mcp
    cd ha-mcp
    ```
 
-## Client Configuration
+2. **(optional) Install dependencies and make sure uv is working:**
+   ```bash
+   uv sync
+   ```
 
-### mcp.json format (Claude Desktop, VSCode, etc.)
+**Client Configuration:**
+
+<details>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+
+**Location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add to your `mcp.json`:
 
 Linux/WSL/macOS:
 ```json
@@ -101,80 +250,50 @@ Windows:
 }
 ```
 
-### Optional Configuration
+</details>
 
-**`BACKUP_HINT`** - Controls backup tool recommendation behavior:
-- `strong`: Suggests backup before the FIRST modification of day/session (for very cautious users)
-- `normal`: Suggests backup only before operations that CANNOT be undone (default, recommended)
-- `weak`: Rarely suggests backups (only if explicitly requested)
-- `auto`: Currently same as `normal`, will auto-detect in future
-
-Add to `env` section: `"BACKUP_HINT": "normal"`
-
-### Claude Code
+<details>
+<summary><b>💻 Claude Code</b></summary>
 
 ```bash
-cd ha-mcp
-uv sync
-claude mcp add ha-mcp -- uv --directory /path/to/ha-mcp --env HOMEASSISTANT_URL=http://localhost:8123 --env HOMEASSISTANT_TOKEN=your_token run fastmcp run
-claude mcp add-json ha-mcp '{"type":"stdio","command":"uv","args":["--directory","/path/to/ha-mcp","run","fastmcp","run"],"env":{"HOMEASSISTANT_URL":"http://localhost:8123","HOMEASSISTANT_TOKEN":"your_token"}}'
+claude mcp add-json home-assistant '{
+  "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
+  "args": [],
+  "env": {
+    "HOMEASSISTANT_URL": "http://localhost:8123",
+    "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
+  }
+}'
 ```
 
-### Remote mode (for compatibility with remote mcp)
+</details>
 
-1. **Configure environment**
+<details>
+<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
+
+1. **Download cloudflared binary:**
+   - Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+2. **Start the MCP server with secret path:**
    ```bash
-   cp .env.example .env
-   # Edit .env with your Home Assistant details:
-   HOMEASSISTANT_URL=http://localhost:8123
-   HOMEASSISTANT_TOKEN=your_token
+   export HOMEASSISTANT_URL=http://localhost:8123
+   export HOMEASSISTANT_TOKEN=your_long_lived_token
+   export MCP_SECRET_PATH=/__my_secret__
+   uv run fastmcp run fastmcp-webclient.json
    ```
 
-2. **Start the server**
-```bash
-uv run fastmcp run --transport streamable-http --port 8086
-```
-
-Server will be available at http://127.0.0.1:8086/mcp
-
-## Online clients (Claude.ai, ChatGPT.com, ...)
-
-> **WARNING!** This is not the most secure way of connecting those providers. Use this setup at your own risk. Anybody figuring out how to do it properly is welcome to contribute to this project. Check out https://gofastmcp.com/servers/auth/authentication for more information. 
-
-This setup consists of an HTTPS tunnel with cloudflared tunnel.
-
-1. **Install cloudflared** See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-
-2. **Configure environment**
+3. **In another terminal, start Cloudflare Tunnel:**
    ```bash
-   cp .env.example .env
-   # Edit .env with your Home Assistant details:
-   HOMEASSISTANT_URL=http://localhost:8123
-   HOMEASSISTANT_TOKEN=your_token
+   cloudflared tunnel --url http://localhost:8086
    ```
 
-3. **Run the MCP server**
+4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
 
-```bash
-uv run fastmcp run --transport streamable-http --port 8086 --path __my_secret_key_that_should_not_be_shared_with_anyone__
-```
+</details>
 
-> Replace the path parameter with a secret value!
+**Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
 
-4. **Start the tunnel**
-
-```bash
-cloudflared tunnel --url http://localhost:8086
-```
-
-You will find the base url in your output. It will look like this: https://abc-def-ghi.trycloudflare.com
-
-Append your secret path and use the url in the online provider (Claude.ai and such)
-
-The url should look like: https://abc-def-ghi.trycloudflare.com/__my_secret_key_that_should_not_be_shared_with_anyone__
-
-For Claude.AI: https://support.anthropic.com/en/articles/11176164-pre-built-web-connectors-using-remote-mcp
-For ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chatgpt (untested)
+---
 
 ## 🛠️ Available Tools
 
@@ -197,45 +316,65 @@ For ChatGPT.com: https://help.openai.com/en/articles/11487775-connectors-in-chat
 | `ha_get_operation_status` | Check status of device operations | `ha_get_operation_status("operation_id")` |
 | `ha_get_bulk_status` | Check status of multiple operations | `ha_get_bulk_status(["op1", "op2"])` |
 
+### Configuration Management Tools
+| Tool | Description | Example |
+|------|-------------|---------|
+| `ha_config_set_helper` | Create/update helper entities | `ha_config_set_helper("input_boolean", "test")` |
+| `ha_config_remove_helper` | Delete helper entities | `ha_config_remove_helper("input_boolean", "test")` |
+| `ha_config_set_script` | Create/update scripts | `ha_config_set_script("script_id", config)` |
+| `ha_config_get_script` | Get script configuration | `ha_config_get_script("script_id")` |
+| `ha_config_remove_script` | Delete scripts | `ha_config_remove_script("script_id")` |
+| `ha_config_set_automation` | Create/update automations | `ha_config_set_automation(config)` |
+| `ha_config_get_automation` | Get automation configuration | `ha_config_get_automation("automation.id")` |
+| `ha_config_remove_automation` | Delete automations | `ha_config_remove_automation("automation.id")` |
+
 ### Convenience Tools
 | Tool | Description | Example |
 |------|-------------|---------|
 | `ha_activate_scene` | Activate a Home Assistant scene | `ha_activate_scene("scene.movie_time")` |
 | `ha_get_weather` | Get current weather information | `ha_get_weather()` |
 | `ha_get_energy` | Get energy usage information | `ha_get_energy()` |
+| `ha_get_logbook` | Access historical logbook entries | `ha_get_logbook(hours_back=24)` |
 
-### Helper Entity Management Tools
+### Backup & Restore Tools
 | Tool | Description | Example |
 |------|-------------|---------|
-| `ha_manage_helper` | Create/modify/delete 6 types of helpers | `ha_manage_helper("create", "input_boolean", {"name": "test"})` |
+| `ha_backup_create` | Create fast local backup | `ha_backup_create("backup_name")` |
+| `ha_backup_restore` | Restore from backup | `ha_backup_restore("backup_id")` |
 
-### Script Management Tools
+### Template & Documentation Tools
 | Tool | Description | Example |
 |------|-------------|---------|
-| `ha_manage_script` | Full script lifecycle management | `ha_manage_script("create", "test_script", {"sequence": []})` |
-
-### Automation Management Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_manage_automation` | Complete automation lifecycle | `ha_manage_automation("create", "test_auto", {"trigger": []})` |
-
-### Template & Data Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_eval_template` | Evaluate Jinja2 templates | `ha_eval_template("{{ states('sensor.temperature') }}")` |
-| `ha_get_logbook` | Access historical logbook entries | `ha_get_logbook("2024-01-01", "light.living_room")` |
-
-### Documentation Tools
-| Tool | Description | Example |
-|------|-------------|---------|
+| `ha_eval_template` | Evaluate Jinja2 templates | `ha_eval_template("{{ states('sensor.temp') }}")` |
 | `ha_get_domain_docs` | Get Home Assistant domain documentation | `ha_get_domain_docs("light")` |
 
+---
+
+## ⚙️ Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `HOMEASSISTANT_URL` | Home Assistant URL | - | Yes |
+| `HOMEASSISTANT_TOKEN` | Long-lived access token | - | Yes |
+| `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+
+**Backup Hint Modes:**
+- `strong`: Suggests backup before first modification each day/session
+- `normal`: Suggests backup only before irreversible operations (recommended)
+- `weak`: Rarely suggests backups
+- `auto`: Same as normal (future: auto-detection)
+
+---
 
 ## 🤝 Contributing
 
 For development setup, testing instructions, and contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 For comprehensive testing documentation, see **[tests/README.md](tests/README.md)**.
+
+---
 
 ## 🛣️ Development Roadmap
 
@@ -247,12 +386,18 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [x] WebSocket async device control
 - [x] Convenience tools for scenes and automations
 - [x] Comprehensive test suite
+- [x] Home Assistant Add-on support
+- [x] Docker images with multi-mode support
 
 For future enhancements and planned features, see the [Development Roadmap](https://github.com/homeassistant-ai/ha-mcp/wiki) in our wiki.
+
+---
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
 
 ## 🙏 Acknowledgments
 
@@ -260,3 +405,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
+
