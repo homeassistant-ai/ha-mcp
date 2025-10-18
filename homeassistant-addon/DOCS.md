@@ -10,6 +10,7 @@ This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home A
 - **Zero Configuration** - Automatically discovers Home Assistant connection
 - **Secure by Default** - Auto-generated secret paths with 128-bit entropy
 - **Fuzzy Search** - Find entities even with typos
+- **Deep Search** - Search within automation triggers, script sequences, and helper configs
 - **Backup & Restore** - Safe configuration management
 
 Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
@@ -265,6 +266,7 @@ The add-on provides 20+ MCP tools for controlling Home Assistant:
 
 ### Core Tools
 - `ha_search_entities` - Fuzzy entity search
+- `ha_deep_search` - Search within automation/script/helper configurations
 - `ha_get_overview` - System overview
 - `ha_get_state` - Entity state with details
 - `ha_call_service` - Universal service control
