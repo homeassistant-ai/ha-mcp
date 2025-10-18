@@ -599,7 +599,7 @@ class HomeAssistantClient:
         import json
 
         # Generate our own message ID to track the response
-        message_id = ws_client._get_next_id()
+        message_id = ws_client.get_next_message_id()
 
         # Construct the full message with proper ID
         full_message = {
@@ -611,30 +611,16 @@ class HomeAssistantClient:
         }
 
         # Create futures for both result and event responses
-        result_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        event_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+        result_future = ws_client.register_pending_response(message_id)
+        event_future = ws_client.register_render_template_event(message_id)
 
-        # Store the result future in pending_requests (normal flow)
-        ws_client.pending_requests[message_id] = result_future
-
-        # For render_template, we also need to track the follow-up event
-        # We'll use a special tracker for this
-        if not hasattr(ws_client, "_render_template_events"):
-            ws_client._render_template_events = {}
-        ws_client._render_template_events[message_id] = event_future
-
-        # Ensure WebSocket client lock is in correct event loop
-        ws_client._ensure_lock()
-
-        # Use WebSocket client's lock to send message
-        async with ws_client._send_lock:
-            try:
-                logger.debug(f"WebSocket sending render_template: {full_message}")
-                await ws_client.websocket.send(json.dumps(full_message))
-            except Exception as e:
-                ws_client.pending_requests.pop(message_id, None)
-                ws_client._render_template_events.pop(message_id, None)
-                raise e
+        # Use WebSocket client's send helper to transmit the message
+        try:
+            await ws_client.send_json_message(full_message)
+        except Exception as e:
+            ws_client.cancel_pending_response(message_id)
+            ws_client.cancel_render_template_event(message_id)
+            raise e
 
         try:
             # Wait for the initial result response (should be success with null result)
@@ -644,7 +630,7 @@ class HomeAssistantClient:
             logger.debug(f"WebSocket render_template result: {result_response}")
 
             if not result_response.get("success"):
-                ws_client._render_template_events.pop(message_id, None)
+                ws_client.cancel_render_template_event(message_id)
                 error = result_response.get("error", "Unknown error")
                 return {
                     "success": False,
@@ -677,25 +663,25 @@ class HomeAssistantClient:
                         "template": message.get("template"),
                     }
 
-            except TimeoutError:
-                ws_client._render_template_events.pop(message_id, None)
+            except asyncio.TimeoutError:
+                ws_client.cancel_render_template_event(message_id)
                 return {
                     "success": False,
                     "error": "Event timeout - template result not received",
                     "template": message.get("template"),
                 }
 
-        except TimeoutError:
-            ws_client.pending_requests.pop(message_id, None)
-            ws_client._render_template_events.pop(message_id, None)
+        except asyncio.TimeoutError:
+            ws_client.cancel_pending_response(message_id)
+            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
                 "error": "Command timeout",
                 "template": message.get("template"),
             }
         except Exception as e:
-            ws_client.pending_requests.pop(message_id, None)
-            ws_client._render_template_events.pop(message_id, None)
+            ws_client.cancel_pending_response(message_id)
+            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
                 "error": str(e),
