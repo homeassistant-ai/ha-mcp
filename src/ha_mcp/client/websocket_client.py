@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -20,6 +21,136 @@ import websockets
 from ..config import get_global_settings
 
 logger = logging.getLogger(__name__)
+
+
+class WebSocketConnectionState:
+    """Encapsulates mutable state used by the WebSocket client."""
+
+    def __init__(self) -> None:
+        self.connected = False
+        self.authenticated = False
+        self._message_id = 0
+        self._pending_requests: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._auth_messages: dict[str, dict[str, Any]] = {}
+        self._render_template_events: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._event_handlers: dict[
+            str, set[Callable[[dict[str, Any]], Awaitable[None]]]
+        ] = defaultdict(set)
+
+    def next_message_id(self) -> int:
+        """Reserve the next available WebSocket message identifier."""
+        self._message_id += 1
+        return self._message_id
+
+    def register_pending_request(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]]:
+        """Create and register a future for a pending command response."""
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending_requests[message_id] = future
+        return future
+    def resolve_pending_request(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]] | None:
+        """Resolve and remove a pending request future."""
+        return self._pending_requests.pop(message_id, None)
+
+    def cancel_pending_request(self, message_id: int) -> None:
+        """Cancel a pending request future if it exists."""
+        future = self._pending_requests.pop(message_id, None)
+        if future and not future.done():
+            future.cancel()
+
+    def register_render_template_event(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]]:
+        """Create and register a future for a render_template follow-up event."""
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._render_template_events[message_id] = future
+        return future
+
+    def resolve_render_template_event(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]] | None:
+        """Resolve a stored render_template event future."""
+        return self._render_template_events.pop(message_id, None)
+
+    def cancel_render_template_event(self, message_id: int) -> None:
+        """Cancel a stored render_template event future."""
+        future = self._render_template_events.pop(message_id, None)
+        if future and not future.done():
+            future.cancel()
+
+    def store_auth_message(self, message_type: str, data: dict[str, Any]) -> None:
+        """Store an authentication handshake message."""
+        self._auth_messages[message_type] = data
+
+    def consume_auth_message(self, message_type: str) -> dict[str, Any] | None:
+        """Retrieve and remove an authentication message if present."""
+        return self._auth_messages.pop(message_type, None)
+
+    def reset_connection(self) -> None:
+        """Reset connection-specific state while preserving handlers."""
+        self.connected = False
+        self.authenticated = False
+        self._message_id = 0
+
+        for future in self._pending_requests.values():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
+
+        for future in self._render_template_events.values():
+            if not future.done():
+                future.cancel()
+        self._render_template_events.clear()
+
+        self._auth_messages.clear()
+
+    def mark_connected(self) -> None:
+        """Mark the socket as connected but not yet authenticated."""
+        self.connected = True
+        self.authenticated = False
+
+    def mark_authenticated(self) -> None:
+        """Mark the socket as authenticated and ready for commands."""
+        self.authenticated = True
+
+    def mark_disconnected(self) -> None:
+        """Reset connection state when the socket is closed."""
+        self.reset_connection()
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether the connection is active and authenticated."""
+        return self.connected and self.authenticated
+
+    def add_event_handler(
+        self, event_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]
+    ) -> None:
+        """Register an async handler for a Home Assistant event type."""
+        self._event_handlers[event_type].add(handler)
+
+    def remove_event_handler(
+        self, event_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]
+    ) -> None:
+        """Remove an event handler and prune empty handler sets."""
+        if event_type in self._event_handlers:
+            self._event_handlers[event_type].discard(handler)
+            if not self._event_handlers[event_type]:
+                self._event_handlers.pop(event_type, None)
+
+    def get_event_handlers(
+        self, event_type: str
+    ) -> tuple[Callable[[dict[str, Any]], Awaitable[None]], ...]:
+        """Return registered handlers for a given event type."""
+        if event_type not in self._event_handlers:
+            return ()
+        return tuple(self._event_handlers[event_type])
 
 
 class HomeAssistantWebSocketClient:
@@ -35,15 +166,10 @@ class HomeAssistantWebSocketClient:
         self.base_url = url.rstrip("/")
         self.token = token
         self.websocket: websockets.ClientConnection | None = None
-        self.connected = False
-        self.authenticated = False
-        self.message_id = 0
-        self.pending_requests: dict[int, asyncio.Future] = {}
-        self.event_handlers: dict[str, set[Callable[[dict[str, Any]], Awaitable[None]]]] = {}
         self.background_task: asyncio.Task | None = None
-        self._send_lock = asyncio.Lock()  # Prevent concurrent WebSocket operations
-        self._auth_messages: dict[str, dict[str, Any]] = {}  # Store auth messages
-        self._lock_loop: asyncio.AbstractEventLoop | None = None  # Track which event loop created the lock
+        self._send_lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
+        self._state = WebSocketConnectionState()
 
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
@@ -58,12 +184,13 @@ class HomeAssistantWebSocketClient:
         """
         try:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
+            self._state.reset_connection()
 
             # Connect to WebSocket
             self.websocket = await websockets.connect(
                 self.ws_url, ping_interval=30, ping_timeout=10
             )
-            self.connected = True
+            self._state.mark_connected()
 
             # Start message handling task
             self.background_task = asyncio.create_task(self._message_handler())
@@ -90,7 +217,7 @@ class HomeAssistantWebSocketClient:
                     raise Exception("Authentication failed: Invalid token")
                 raise Exception("Authentication timeout")
 
-            self.authenticated = True
+            self._state.mark_authenticated()
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
@@ -107,14 +234,14 @@ class HomeAssistantWebSocketClient:
                 await self.background_task
             except asyncio.CancelledError:
                 pass
+            finally:
+                self.background_task = None
 
         if self.websocket:
             await self.websocket.close()
+            self.websocket = None
 
-        self.connected = False
-        self.authenticated = False
-        self.websocket = None
-        self._auth_messages.clear()
+        self._state.mark_disconnected()
         logger.info("WebSocket disconnected")
 
     async def _send_auth(self) -> None:
@@ -131,8 +258,9 @@ class HomeAssistantWebSocketClient:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            if message_type in self._auth_messages:
-                return self._auth_messages.pop(message_type)
+            message = self._state.consume_auth_message(message_type)
+            if message:
+                return message
             await asyncio.sleep(0.01)  # Small delay to prevent busy waiting
 
         return None
@@ -156,8 +284,7 @@ class HomeAssistantWebSocketClient:
         except Exception as e:
             logger.error(f"WebSocket message handler error: {e}")
         finally:
-            self.connected = False
-            self.authenticated = False
+            self._state.mark_disconnected()
 
     async def _process_message(self, data: dict[str, Any]) -> None:
         """Process incoming WebSocket message."""
@@ -166,42 +293,88 @@ class HomeAssistantWebSocketClient:
 
         # Handle authentication messages (store for auth sequence)
         if message_type in ["auth_required", "auth_ok", "auth_invalid"]:
-            self._auth_messages[message_type] = data
+            self._state.store_auth_message(message_type, data)
             return
 
         # Handle command responses
-        if message_id and message_id in self.pending_requests:
-            future = self.pending_requests.pop(message_id)
-            if not future.cancelled():
-                future.set_result(data)
-            return
-
-        # Handle events
-        if message_type == "event":
-            # Check if this is a render_template event we're waiting for
-            if (
-                message_id
-                and hasattr(self, "_render_template_events")
-                and message_id in self._render_template_events
-            ):
-                future = self._render_template_events.pop(message_id)
+        if message_id is not None:
+            future = self._state.resolve_pending_request(message_id)
+            if future:
                 if not future.cancelled():
                     future.set_result(data)
                 return
 
-            # Handle other events with registered handlers
+        # Handle events
+        if message_type == "event":
+            if message_id is not None:
+                render_future = self._state.resolve_render_template_event(message_id)
+                if render_future:
+                    if not render_future.cancelled():
+                        render_future.set_result(data)
+                    return
+
             event_type = data.get("event", {}).get("event_type")
-            if event_type and event_type in self.event_handlers:
-                for handler in self.event_handlers[event_type]:
+            if event_type:
+                for handler in self._state.get_event_handlers(event_type):
                     try:
                         await handler(data["event"])
                     except Exception as e:
                         logger.error(f"Error in event handler: {e}")
 
-    def _get_next_id(self) -> int:
-        """Get next message ID."""
-        self.message_id += 1
-        return self.message_id
+    def _ensure_send_lock(self) -> None:
+        """Ensure the send lock belongs to the current event loop."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if (
+            self._send_lock is not None
+            and self._lock_loop is not None
+            and self._lock_loop != current_loop
+        ):
+            logger.debug("Event loop changed, resetting WebSocket send lock")
+            self._send_lock = None
+
+        if self._send_lock is None:
+            self._send_lock = asyncio.Lock()
+            self._lock_loop = current_loop
+
+    async def send_json_message(self, message: dict[str, Any]) -> None:
+        """Send a raw JSON message over the WebSocket connection."""
+        self._ensure_send_lock()
+        if not self._send_lock:
+            raise Exception("Send lock not initialized")
+
+        async with self._send_lock:
+            if not self.websocket:
+                raise Exception("WebSocket not connected")
+            logger.debug(f"WebSocket sending: {message}")
+            await self.websocket.send(json.dumps(message))
+
+    def get_next_message_id(self) -> int:
+        """Expose the next WebSocket message ID for external callers."""
+        return self._state.next_message_id()
+
+    def register_pending_response(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]]:
+        """Register a future that will resolve when the response arrives."""
+        return self._state.register_pending_request(message_id)
+
+    def cancel_pending_response(self, message_id: int) -> None:
+        """Cancel and drop a pending response future."""
+        self._state.cancel_pending_request(message_id)
+
+    def register_render_template_event(
+        self, message_id: int
+    ) -> asyncio.Future[dict[str, Any]]:
+        """Register a future for a render_template follow-up event."""
+        return self._state.register_render_template_event(message_id)
+
+    def cancel_render_template_event(self, message_id: int) -> None:
+        """Cancel and drop a stored render_template event future."""
+        self._state.cancel_render_template_event(message_id)
 
     async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
         """Send command and wait for response.
@@ -213,28 +386,20 @@ class HomeAssistantWebSocketClient:
         Returns:
             Response from Home Assistant
         """
-        if not self.authenticated:
+        if not self._state.is_ready:
             raise Exception("WebSocket not authenticated")
 
-        message_id = self._get_next_id()
+        message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
 
         # Create future for response
-        future: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        self.pending_requests[message_id] = future
+        future = self.register_pending_response(message_id)
 
-        # Use lock to prevent concurrent WebSocket access
-        async with self._send_lock:
-            try:
-                # Send message
-                if not self.websocket:
-                    raise Exception("WebSocket not connected")
-                logger.debug(f"WebSocket sending: {message}")
-                await self.websocket.send(json.dumps(message))
-
-            except Exception as e:
-                self.pending_requests.pop(message_id, None)
-                raise e
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self.cancel_pending_response(message_id)
+            raise
 
         # Wait for response outside the lock (30 second timeout)
         try:
@@ -267,12 +432,12 @@ class HomeAssistantWebSocketClient:
                 )
                 return {"success": True, **response}
 
-        except TimeoutError:
-            self.pending_requests.pop(message_id, None)
+        except asyncio.TimeoutError:
+            self.cancel_pending_response(message_id)
             raise Exception("Command timeout")
-        except Exception as e:
-            self.pending_requests.pop(message_id, None)
-            raise e
+        except Exception:
+            self.cancel_pending_response(message_id)
+            raise
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
@@ -288,26 +453,34 @@ class HomeAssistantWebSocketClient:
             kwargs["event_type"] = event_type
 
         response = await self.send_command("subscribe_events", **kwargs)
-        subscription_id = response.get("id")
-        if not isinstance(subscription_id, int):
-            raise Exception("Failed to get subscription ID")
-        return subscription_id
+        result = response.get("result")
+        if isinstance(result, dict):
+            subscription_id = result.get("subscription")
+            if isinstance(subscription_id, int):
+                return subscription_id
 
-    def add_event_handler(self, event_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+        raise Exception("Failed to get subscription ID")
+
+    def add_event_handler(
+        self,
+        event_type: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
         """Add event handler for specific event type.
 
         Args:
             event_type: Event type to handle (e.g., 'state_changed')
             handler: Async function to handle events
         """
-        if event_type not in self.event_handlers:
-            self.event_handlers[event_type] = set()
-        self.event_handlers[event_type].add(handler)
+        self._state.add_event_handler(event_type, handler)
 
-    def remove_event_handler(self, event_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+    def remove_event_handler(
+        self,
+        event_type: str,
+        handler: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
         """Remove event handler."""
-        if event_type in self.event_handlers:
-            self.event_handlers[event_type].discard(handler)
+        self._state.remove_event_handler(event_type, handler)
 
     async def get_states(self) -> dict[str, Any]:
         """Get all entity states via WebSocket."""
@@ -359,31 +532,7 @@ class HomeAssistantWebSocketClient:
     @property
     def is_connected(self) -> bool:
         """Check if WebSocket is connected and authenticated."""
-        return self.connected and self.authenticated
-
-    def _ensure_lock(self) -> None:
-        """Ensure lock is created in the current event loop."""
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        # If we have a lock from a different loop, reset it
-        if (
-            self._send_lock is not None
-            and self._lock_loop is not None
-            and self._lock_loop != current_loop
-        ):
-            logger.debug("Event loop changed, resetting WebSocket client lock")
-            self._send_lock = asyncio.Lock()
-
-        # Set the current loop reference
-        self._lock_loop = current_loop
-
-        # Create lock if it doesn't exist
-        if self._send_lock is None:
-            self._send_lock = asyncio.Lock()
-            self._lock_loop = current_loop
+        return self._state.is_ready
 
 
 class WebSocketManager:
@@ -394,13 +543,24 @@ class WebSocketManager:
     _current_loop: asyncio.AbstractEventLoop | None = None
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
+    _client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None
 
     def __new__(cls) -> "WebSocketManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._lock = None  # Don't create lock here - create in event loop
+            cls._instance._lock = None
             cls._instance._lock_loop = None
+            cls._instance._client_factory = HomeAssistantWebSocketClient
         return cls._instance
+
+    def configure(
+        self,
+        *,
+        client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None,
+    ) -> None:
+        """Configure the manager with injectable dependencies."""
+        if client_factory is not None:
+            self._client_factory = client_factory
 
     def _ensure_lock(self) -> None:
         """Ensure lock is created in the current event loop."""
@@ -409,7 +569,6 @@ class WebSocketManager:
         except RuntimeError:
             current_loop = None
 
-        # If we have a lock from a different loop, reset it
         if (
             self._lock is not None
             and self._lock_loop is not None
@@ -418,7 +577,6 @@ class WebSocketManager:
             logger.debug("Event loop changed, resetting WebSocketManager lock")
             self._lock = None
 
-        # Create lock if needed
         if self._lock is None:
             self._lock = asyncio.Lock()
             self._lock_loop = current_loop
@@ -426,24 +584,19 @@ class WebSocketManager:
 
     async def get_client(self) -> HomeAssistantWebSocketClient:
         """Get WebSocket client, creating connection if needed."""
-        import asyncio
-
         current_loop = asyncio.get_event_loop()
 
-        # Ensure lock is created in current event loop
         self._ensure_lock()
 
-        # Use async lock to prevent race conditions during concurrent access
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            # If event loop changed, disconnect old client
             if self._current_loop is not None and self._current_loop != current_loop:
                 if self._client:
                     try:
                         await self._client.disconnect()
-                    except:
-                        pass  # Ignore errors during cleanup
+                    except Exception:
+                        pass
                     self._client = None
 
             self._current_loop = current_loop
@@ -451,13 +604,12 @@ class WebSocketManager:
             if self._client and self._client.is_connected:
                 return self._client
 
-            # Create new client
             settings = get_global_settings()
-            self._client = HomeAssistantWebSocketClient(
+            factory = self._client_factory or HomeAssistantWebSocketClient
+            self._client = factory(
                 settings.homeassistant_url, settings.homeassistant_token
             )
 
-            # Connect
             connected = await self._client.connect()
             if not connected:
                 raise Exception("Failed to connect to Home Assistant WebSocket")
@@ -466,7 +618,6 @@ class WebSocketManager:
 
     async def disconnect(self) -> None:
         """Disconnect WebSocket client."""
-        # Ensure lock is created in current event loop
         self._ensure_lock()
 
         if not self._lock:
@@ -475,6 +626,7 @@ class WebSocketManager:
             if self._client:
                 await self._client.disconnect()
                 self._client = None
+                self._current_loop = None
 
 
 # Global WebSocket manager instance
