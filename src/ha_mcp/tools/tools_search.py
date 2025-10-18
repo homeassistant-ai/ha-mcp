@@ -259,7 +259,10 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
             list[str] | None,
             Field(
                 default=None,
-                description="Types to search in: 'automation', 'script', 'helper'. Default: all types",
+                description=(
+                    "Types to search in: 'automation', 'script', 'helper'. Pass as a list of strings, "
+                    "e.g. ['automation']. Default: all types"
+                ),
             ),
         ] = None,
         limit: int = 20,
@@ -273,7 +276,7 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
 
         Args:
             query: Search query (can be partial, with typos)
-            search_types: Types to search (default: ["automation", "script", "helper"])
+            search_types: Types to search (list of strings, default: ["automation", "script", "helper"])
             limit: Maximum total results to return (default: 20)
 
         Examples:
