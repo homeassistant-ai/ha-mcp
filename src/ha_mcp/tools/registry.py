@@ -5,7 +5,7 @@ This module acts as an orchestrator, importing and coordinating tool registratio
 from specialized modules.
 """
 
-from typing import Any, cast
+from typing import Any
 
 from .backup import register_backup_tools
 from .tools_config_automations import register_config_automation_tools
@@ -25,7 +25,6 @@ class ToolsRegistry:
         self.mcp = server.mcp
         self.smart_tools = server.smart_tools
         self.device_tools = server.device_tools
-        self.convenience_tools = server.convenience_tools
 
     def register_all_tools(self) -> None:
         """Register all tools with the MCP server."""
@@ -49,27 +48,3 @@ class ToolsRegistry:
 
         # Register backup tools
         register_backup_tools(self.mcp, self.client)
-
-        # Register convenience delegator tools
-        self._register_convenience_delegators()
-
-    def _register_convenience_delegators(self) -> None:
-        """Register simple convenience delegator tools for scenes, weather, and energy."""
-
-        @self.mcp.tool
-        async def ha_activate_scene(scene_name: str) -> dict[str, Any]:
-            """Activate a Home Assistant scene by name or entity ID."""
-            result = await self.convenience_tools.activate_scene(scene_name=scene_name)
-            return cast(dict[str, Any], result)
-
-        @self.mcp.tool
-        async def ha_get_weather(location: str | None = None) -> dict[str, Any]:
-            """Get current weather information from Home Assistant weather entities."""
-            result = await self.convenience_tools.get_weather_info(location=location)
-            return cast(dict[str, Any], result)
-
-        @self.mcp.tool
-        async def ha_get_energy(period: str = "today") -> dict[str, Any]:
-            """Get energy usage information from Home Assistant energy monitoring."""
-            result = await self.convenience_tools.get_energy_usage(period=period)
-            return cast(dict[str, Any], result)
