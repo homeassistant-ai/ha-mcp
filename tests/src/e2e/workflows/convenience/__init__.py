@@ -1,1 +1,1 @@
-"""Convenience tool tests for scenes, weather, energy, and documentation."""
+"""Convenience workflow tests for backup and logbook-focused tools."""

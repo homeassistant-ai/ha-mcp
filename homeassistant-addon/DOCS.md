@@ -286,10 +286,7 @@ The add-on provides 20+ MCP tools for controlling Home Assistant:
 - `ha_get_operation_status` - Check operation status
 - `ha_get_bulk_status` - Check multiple operations
 
-### Convenience
-- `ha_activate_scene` - Activate scenes
-- `ha_get_weather` - Weather information
-- `ha_get_energy` - Energy usage data
+### History & Insights
 - `ha_get_logbook` - Historical events
 
 ### Backup & Restore

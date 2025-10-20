@@ -11,7 +11,6 @@ from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
 from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
-from .tools.convenience import create_convenience_tools
 from .tools.device_control import create_device_control_tools
 from .tools.smart_search import create_smart_search_tools
 from .prompts.manager import register_mcp_prompts
@@ -37,7 +36,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Initialize smart tools
         self.smart_tools = create_smart_search_tools(self.client)
         self.device_tools = create_device_control_tools(self.client)
-        self.convenience_tools = create_convenience_tools(self.client)
 
         # Initialize tools registry
         self.tools_registry = ToolsRegistry(self)
@@ -111,7 +109,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
             logger.error(f"❌ Error testing connection: {e}")
 
         # Log available tools count
-        logger.info("🔧 Smart server with 20+ enhanced tools loaded")
+        logger.info("🔧 Smart server with enhanced tools loaded")
 
         # Run the MCP server with async compatibility
         await self.mcp.run_async()

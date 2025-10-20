@@ -330,12 +330,9 @@ claude mcp add-json home-assistant '{
 | `ha_config_get_automation` | Get automation configuration | `ha_config_get_automation("automation.id")` |
 | `ha_config_remove_automation` | Delete automations | `ha_config_remove_automation("automation.id")` |
 
-### Convenience Tools
+### History & Insights Tools
 | Tool | Description | Example |
 |------|-------------|---------|
-| `ha_activate_scene` | Activate a Home Assistant scene | `ha_activate_scene("scene.movie_time")` |
-| `ha_get_weather` | Get current weather information | `ha_get_weather()` |
-| `ha_get_energy` | Get energy usage information | `ha_get_energy()` |
 | `ha_get_logbook` | Access historical logbook entries | `ha_get_logbook(hours_back=24)` |
 
 ### Backup & Restore Tools
@@ -386,7 +383,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [x] Smart search tools with fuzzy matching
 - [x] Optimized tool documentation to reduce tool call errors
 - [x] WebSocket async device control
-- [x] Convenience tools for scenes and automations
+- [x] Logbook history and operational insights
 - [x] Comprehensive test suite
 - [x] Home Assistant Add-on support
 - [x] Docker images with multi-mode support
