@@ -14,8 +14,6 @@ from .tools.enhanced import EnhancedToolsMixin
 from .tools.convenience import create_convenience_tools
 from .tools.device_control import create_device_control_tools
 from .tools.smart_search import create_smart_search_tools
-from .prompts.manager import register_mcp_prompts
-from .resources.manager import register_mcp_resources
 from .tools.registry import ToolsRegistry
 
 logger = logging.getLogger(__name__)
@@ -42,7 +40,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Initialize tools registry
         self.tools_registry = ToolsRegistry(self)
 
-        # Register all tools, resources, and prompts
+        # Register all tools and expert prompts
         self._initialize_server()
 
     def _initialize_server(self) -> None:
@@ -53,10 +51,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Register enhanced tools and prompts for first/second interaction success
         self.register_enhanced_tools()
         self.register_enhanced_prompts()
-
-        # Register MCP resources and prompts
-        register_mcp_resources(self.mcp)
-        register_mcp_prompts(self.mcp)
 
     # Helper methods required by EnhancedToolsMixin
 
