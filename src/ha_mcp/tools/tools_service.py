@@ -18,6 +18,52 @@ from .util_helpers import parse_json_param
 
 _QUICK_ACTION_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 _QUICK_ACTION_CACHE_LIMIT = 32
+_DEFAULT_MIN_CONFIDENCE_PERCENT = 85.0
+
+
+def _normalize_quick_action_confidence(
+    raw_value: Any,
+) -> tuple[float, float]:
+    """Normalize min_confidence inputs into ratio and percentage values."""
+
+    value_to_report = raw_value
+
+    if raw_value is None:
+        numeric_value = _DEFAULT_MIN_CONFIDENCE_PERCENT
+    elif isinstance(raw_value, bool):
+        numeric_value = float(raw_value)
+    elif isinstance(raw_value, (int, float)):
+        numeric_value = float(raw_value)
+    elif isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        try:
+            numeric_value = float(stripped)
+        except ValueError as exc:  # noqa: TRY003 - we want consistent error messaging
+            raise ValueError(
+                "min_confidence must be integer [0-100] or float [0-1]; "
+                f"got {value_to_report!r}"
+            ) from exc
+    else:
+        raise ValueError(
+            "min_confidence must be integer [0-100] or float [0-1]; "
+            f"got {value_to_report!r}"
+        )
+
+    if numeric_value < 0 or numeric_value > 100:
+        raise ValueError(
+            "min_confidence must be integer [0-100] or float [0-1]; "
+            f"got {value_to_report!r}"
+        )
+
+    if numeric_value <= 1:
+        ratio_value = numeric_value
+    else:
+        ratio_value = numeric_value / 100.0
+
+    ratio_value = max(0.0, min(1.0, ratio_value))
+    percent_value = ratio_value * 100.0
+
+    return ratio_value, percent_value
 
 
 def _normalize_quick_action_terms(raw_terms: Any) -> list[dict[str, Any]]:
@@ -438,12 +484,13 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
         ],
         data: str | dict[str, Any] | None = None,
         min_confidence: Annotated[
-            int,
+            float,
             Field(
                 default=85,
-                ge=0,
-                le=100,
-                description="Minimum confidence required to auto-execute the service",
+                description=(
+                    "Minimum confidence required to auto-execute the service. "
+                    "Accepts 0-100 for percentages or 0-1 for ratios."
+                ),
             ),
         ] = 85,
         limit: Annotated[
@@ -516,6 +563,20 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
                 "error": str(exc),
                 "search_terms": search_terms,
             }
+
+        try:
+            min_confidence_ratio, min_confidence_percent = _normalize_quick_action_confidence(
+                min_confidence
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "min_confidence": min_confidence,
+            }
+
+        confidence_percent_display = round(min_confidence_percent, 2)
+        confidence_ratio_display = round(min_confidence_ratio, 4)
 
         applied_terms = [
             {
@@ -591,6 +652,8 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
                     "limit": limit,
                     "matches_considered": matches or [],
                 },
+                "confidence_threshold_percent": confidence_percent_display,
+                "confidence_threshold_ratio": confidence_ratio_display,
                 "message": (
                     f"Successfully executed {domain}.{service}"
                     if target_entity_id
@@ -735,7 +798,7 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
 
         best_match = top_matches[0]
 
-        if best_match["score"] >= min_confidence:
+        if best_match["score"] >= min_confidence_percent:
             return await _perform_service(
                 best_match["entity_id"],
                 best_match,
@@ -758,7 +821,7 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
                 "search_terms": applied_terms,
                 "top_matches": top_matches,
                 "best_score": best_match["score"],
-                "min_confidence": min_confidence,
+                "min_confidence": confidence_percent_display,
                 "retry_count": retry_count,
                 "max_retries": max_retries,
                 "suggestions": suggestions,
@@ -780,7 +843,7 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
             "reason": "low_confidence",
             "search_terms": applied_terms,
             "top_matches": top_matches,
-            "min_confidence": min_confidence,
+            "min_confidence": confidence_percent_display,
             "best_score": best_match["score"],
             "retry_count": retry_count,
             "max_retries": max_retries,
@@ -789,7 +852,7 @@ def register_service_tools(mcp, client, device_tools, **kwargs):
                 "type": "confirm_entity",
                 "message": (
                     "Confirm the correct entity or provide additional search terms. "
-                    f"Best match scored {best_match['score']:.1f}% (threshold {min_confidence}%)."
+                    f"Best match scored {best_match['score']:.1f}% (threshold {confidence_percent_display}%)."
                 ),
                 "options": options,
                 "instructions": "Call this tool again with selected_entity_id set to the correct entity and confirm=true, or provide refined search terms.",

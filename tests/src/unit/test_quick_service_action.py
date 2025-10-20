@@ -7,6 +7,7 @@ import pytest
 from ha_mcp.tools import tools_service
 from ha_mcp.tools.tools_service import (
     _QUICK_ACTION_CACHE,
+    _normalize_quick_action_confidence,
     _normalize_quick_action_terms,
     register_service_tools,
 )
@@ -103,6 +104,21 @@ def test_normalize_quick_action_terms_weighted_inputs():
         _normalize_quick_action_terms("")
 
 
+def test_normalize_quick_action_confidence_accepts_ratio_and_percent():
+    ratio, percent = _normalize_quick_action_confidence(0.6)
+
+    assert ratio == pytest.approx(0.6)
+    assert percent == pytest.approx(60.0)
+
+    ratio, percent = _normalize_quick_action_confidence(60)
+
+    assert ratio == pytest.approx(0.6)
+    assert percent == pytest.approx(60.0)
+
+    with pytest.raises(ValueError):
+        _normalize_quick_action_confidence(150)
+
+
 @pytest.mark.asyncio
 async def test_quick_service_action_auto_executes_high_confidence(monkeypatch: pytest.MonkeyPatch):
     states = [
@@ -140,6 +156,37 @@ async def test_quick_service_action_auto_executes_high_confidence(monkeypatch: p
     assert result["entity_id"] == "light.kitchen"
     assert result["search_context"]["source"] == "auto"
     assert result["search_context"]["matches_considered"]
+    assert client.call_service_calls == [
+        ("light", "turn_off", {"entity_id": "light.kitchen"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_quick_service_action_accepts_ratio_min_confidence(monkeypatch: pytest.MonkeyPatch):
+    states = [
+        {
+            "entity_id": "light.kitchen",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen Ceiling Light"},
+        }
+    ]
+
+    searcher = DummySearcher(scores={("light.kitchen", "kitchen lights"): 72})
+    client = DummyClient(states)
+    tool = _setup_tool(monkeypatch, client, searcher)
+
+    result = await tool(
+        domain="light",
+        service="turn_off",
+        search_terms="Kitchen Lights",
+        min_confidence=0.6,
+        entity_domain=None,
+        cache_key=None,
+    )
+
+    assert result["success"] is True
+    assert result["confidence_threshold_percent"] == pytest.approx(60.0)
+    assert result["confidence_threshold_ratio"] == pytest.approx(0.6, abs=1e-4)
     assert client.call_service_calls == [
         ("light", "turn_off", {"entity_id": "light.kitchen"})
     ]
@@ -202,4 +249,33 @@ async def test_quick_service_action_respects_user_decline(monkeypatch: pytest.Mo
     assert result["success"] is False
     assert result.get("cancelled") is True
     assert "Selection cancelled" in result["message"]
+    assert client.call_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_quick_service_action_rejects_invalid_min_confidence(monkeypatch: pytest.MonkeyPatch):
+    states = [
+        {
+            "entity_id": "light.kitchen",
+            "state": "on",
+            "attributes": {"friendly_name": "Kitchen Ceiling Light"},
+        }
+    ]
+
+    searcher = DummySearcher(scores={("light.kitchen", "kitchen"): 90})
+    client = DummyClient(states)
+    tool = _setup_tool(monkeypatch, client, searcher)
+
+    result = await tool(
+        domain="light",
+        service="turn_off",
+        search_terms="Kitchen",
+        min_confidence=150,
+        entity_domain=None,
+        cache_key=None,
+    )
+
+    assert result["success"] is False
+    assert "min_confidence must be integer" in result["error"]
+    assert result["min_confidence"] == 150
     assert client.call_service_calls == []
