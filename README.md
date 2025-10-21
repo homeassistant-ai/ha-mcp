@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
@@ -22,7 +22,7 @@
 
 ---
 
-![Home Assistant MCP Demo](img/demo.webp)
+![Home Assistant MCP Demo](docs/img/demo.webp)
 
 **[YouTube version →](https://youtu.be/eCO93KfSvIM)**
 
@@ -184,7 +184,9 @@ claude mcp add-json home-assistant '{
 
 ### Method 3: Python+UV
 
-**Best for:** When Docker is not available
+**Best for:** When Docker is not available.
+
+> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
 
 **Prerequisites:**
 - [Git](ttps://git-scm.com/downloads)
@@ -405,3 +407,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
 
+## 👥 Contributors
+
+- **julienld** — Project maintainer & core contributor.
+- **kingbear2** — Windows UV setup guide.

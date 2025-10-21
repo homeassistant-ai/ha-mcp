@@ -7,7 +7,7 @@ name = "ha-mcp"
 version = "3.1.6"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [
     {name = "Julien", email = "github@qc-h.net"}
