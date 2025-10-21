@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Development/Debug configuration
     debug: bool = Field(False, alias="DEBUG")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    log_all_tools: bool = Field(False, alias="HOMEASSISTANT_LOG_ALL")
 
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
