@@ -52,13 +52,13 @@ script falls back to character counts.
 
 ## Continuous Integration Validation
 
-The `E2E Tests` GitHub workflow automatically enables
-`HOMEASSISTANT_LOG_ALL=true` and stores the combined pytest output in
-`artifacts/tool_calls.log`. Whether triggered by pushes or pull requests, a
-follow-up `tool_logging` test suite consumes the artifact and runs the helpers
-above to ensure at least one successful tool call was captured. Workflow
-failures flag regressions in verbose logging or the analysis pipeline long
-before optimization work begins.
+The `E2E Tests` GitHub workflow (pushes) and the `PR Validation Pipeline`
+workflow (pull requests) automatically enable `HOMEASSISTANT_LOG_ALL=true` and
+store the combined pytest output in `artifacts/tool_calls.log`. Each run invokes
+the follow-up `tool_logging` test suite, which consumes the artifact and runs
+the helpers above to ensure at least one successful tool call was captured.
+Workflow failures flag regressions in verbose logging or the analysis pipeline
+long before optimization work begins.
 
 ## Storage and Retention Tips
 
