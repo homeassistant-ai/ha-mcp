@@ -36,9 +36,9 @@ the server logs. This is useful when diagnosing overly verbose tools or
 preparing optimization work. Detailed usage instructions, including the
 analysis helper script, live in
 [`docs/tool-usage-logging.md`](docs/tool-usage-logging.md). The E2E GitHub
-workflow also enforces this by writing the combined pytest output to
-`artifacts/tool_calls.log` and running `tests/src/tool_logging/` to ensure the
-analysis helpers keep working.
+workflow enforces this on pushes and pull requests by writing the combined
+pytest output to `artifacts/tool_calls.log` and running
+`tests/src/tool_logging/` to ensure the analysis helpers keep working.
 
 ## 📋 Guidelines
 

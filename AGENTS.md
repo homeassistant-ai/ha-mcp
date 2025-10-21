@@ -85,8 +85,8 @@ A production-ready Model Context Protocol (MCP) server that enables AI assistant
   [`docs/tool-usage-logging.md`](docs/tool-usage-logging.md) for parsing
   scripts and optimization workflow tips.
 - The CI E2E workflow stores log output in `artifacts/tool_calls.log` and runs
-  `tests/src/tool_logging/` afterwards to ensure verbose logging and analysis
-  helpers continue to function.
+  `tests/src/tool_logging/` afterwards on pushes and pull requests to ensure
+  verbose logging and analysis helpers continue to function.
 
 ### Environment Setup
 ```bash
