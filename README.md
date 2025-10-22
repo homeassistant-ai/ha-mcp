@@ -384,5 +384,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👥 Contributors
 
-- **julienld** — Project maintainer & core contributor.
-- **kingbear2** — Windows UV setup guide.
+- **[@julienld](https://github.com/julienld)** — Project maintainer & core contributor.
+- **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
