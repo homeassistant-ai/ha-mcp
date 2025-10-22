@@ -59,6 +59,7 @@ dev = [
 [project.scripts]
 ha-mcp = "ha_mcp.__main__:main"
 hamcp-test-env = "tests.test_env_manager:main"
+ha-mcp-web = "ha_mcp.__main__:main_web"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
