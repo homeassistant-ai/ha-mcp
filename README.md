@@ -189,10 +189,8 @@ claude mcp add-json home-assistant '{
 > **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
 
 **Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-- [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
-- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
-- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) (provides the `uvx` runner)
+- Home Assistant URL and long-lived access token (Profile → Security → Long-Lived Access Tokens)
 
 **Client Configuration:**
 
@@ -206,7 +204,6 @@ claude mcp add-json home-assistant '{
 ```json
 {
   "mcpServers": {
-
     "Home Assistant": {
       "command": "uvx",
       "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
@@ -215,7 +212,6 @@ claude mcp add-json home-assistant '{
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"
       }
     }
-
   }
 }
 ```
@@ -228,9 +224,9 @@ Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 
 ```bash
 claude mcp add --transport stdio home-assistant \
---env HOMEASSISTANT_URL=http://localhost:8123 \
---env HOMEASSISTANT_TOKEN=your_long_lived_token \
--- uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
+  --env HOMEASSISTANT_URL=http://localhost:8123 \
+  --env HOMEASSISTANT_TOKEN=your_long_lived_token \
+  -- uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
 ```
 
 </details>
@@ -248,13 +244,13 @@ export MCP_SECRET_PATH=/__my_secret__
 uvx ha-mcp-web
 ```
 
-Then point your client at:
+Then point your web-based MCP client at:
 
 ```bash
 claude mcp add home-assistant --url http://localhost:8086/__my_secret__ --transport http
 ```
 
-For remote access, put an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and use the tunneled URL with the same secret path.
+For remote access, place an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and reuse the same secret path.
 
 **Optional – Cloudflared quick tunnel:**
 
@@ -263,27 +259,6 @@ cloudflared tunnel --url http://localhost:${MCP_PORT:-8086}
 ```
 
 Use the printed `https://…trycloudflare.com/__my_secret__` URL in your web-based MCP client.
-
-**Optional – docker-compose example:**
-
-```yaml
-services:
-  ha-mcp:
-    image: ghcr.io/homeassistant-ai/ha-mcp:latest
-    environment:
-      HOMEASSISTANT_URL: http://homeassistant.local:8123
-      HOMEASSISTANT_TOKEN: your_long_lived_token
-      MCP_SECRET_PATH: /__your_secret__
-      MCP_PORT: 8086
-    command: ["ha-mcp-web"]
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --url http://ha-mcp:8086
-    depends_on:
-      - ha-mcp
-```
-
 </details>
 
 **Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
