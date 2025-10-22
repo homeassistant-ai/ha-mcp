@@ -9,7 +9,7 @@ This guide walks through running the ha-mcp server locally on Windows with Claud
 Open **PowerShell** or **cmd** and run:
 
 ```powershell
-winget install astral-sh.uv Git.Git
+winget install astral-sh.uv Git.Git -e
 ```
 
 ## 2. Configure Claude Desktop
@@ -22,7 +22,7 @@ winget install astral-sh.uv Git.Git
       "mcpServers": {
         "Home Assistant": {
           "command": "uvx",
-          "args": ["--from", "git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
+          "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
           "env": {
             "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
             "HOMEASSISTANT_TOKEN": "your_long_lived_token"
