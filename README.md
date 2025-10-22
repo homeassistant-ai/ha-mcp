@@ -189,66 +189,37 @@ claude mcp add-json home-assistant '{
 > **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
 
 **Prerequisites:**
-- [Git](ttps://git-scm.com/downloads)
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-- A long-lived token: ** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) (provides the `uvx` runner)
+- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens)
 
-**Installation Steps:**
+**Run manually (any platform):**
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/homeassistant-ai/ha-mcp
-   cd ha-mcp
-   ```
+```bash
+uvx --from git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
+```
 
-2. **(optional) Install dependencies and make sure uv is working:**
-   ```bash
-   uv sync
-   ```
+Make sure `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are set in your environment before launching.
 
 **Client Configuration:**
 
 <details>
-<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+<summary><b>📱 Claude Desktop</b></summary>
 
-**Location:**
+**Config file:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add to your `mcp.json`:
-
-Linux/WSL/macOS:
 ```json
 {
   "mcpServers": {
-
     "Home Assistant": {
-      "command": "path/to/ha-mcp/run_mcp_server.sh",
-      "args": [],
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
       }
     }
-
-  }
-}
-```
-
-Windows:
-```json
-{
-  "mcpServers": {
-
-    "Home Assistant": {
-      "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
-      "args": [],
-      "env": {
-        "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
-      }
-    }
-
   }
 }
 ```
@@ -259,14 +230,11 @@ Windows:
 <summary><b>💻 Claude Code</b></summary>
 
 ```bash
-claude mcp add-json home-assistant '{
-  "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
-  "args": [],
-  "env": {
-    "HOMEASSISTANT_URL": "http://localhost:8123",
-    "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
-  }
-}'
+claude mcp add home-assistant \
+  --command uvx \
+  --args "--from=git+https://github.com/homeassistant-ai/ha-mcp" "ha-mcp" \
+  --env HOMEASSISTANT_URL=http://localhost:8123 \
+  --env HOMEASSISTANT_TOKEN=your_long_lived_token
 ```
 
 </details>
