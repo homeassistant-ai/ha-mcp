@@ -256,6 +256,34 @@ claude mcp add home-assistant --url http://localhost:8086/__my_secret__ --transp
 
 For remote access, put an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and use the tunneled URL with the same secret path.
 
+**Optional – Cloudflared quick tunnel:**
+
+```bash
+cloudflared tunnel --url http://localhost:${MCP_PORT:-8086}
+```
+
+Use the printed `https://…trycloudflare.com/__my_secret__` URL in your web-based MCP client.
+
+**Optional – docker-compose example:**
+
+```yaml
+services:
+  ha-mcp:
+    image: ghcr.io/homeassistant-ai/ha-mcp:latest
+    environment:
+      HOMEASSISTANT_URL: http://homeassistant.local:8123
+      HOMEASSISTANT_TOKEN: your_long_lived_token
+      MCP_SECRET_PATH: /__your_secret__
+      MCP_PORT: 8086
+    command: ["ha-mcp-web"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --url http://ha-mcp:8086
+    depends_on:
+      - ha-mcp
+```
+
 </details>
 
 **Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
