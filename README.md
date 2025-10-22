@@ -184,18 +184,20 @@ claude mcp add-json home-assistant '{
 
 ### Method 3: Running Python with UV
 
-**Best for:** When Docker is not available.
+**Best for:** When Docker is not available
 
 > **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
 
 **Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) (provides the `uvx` runner)
-- Home Assistant URL and long-lived access token (Profile → Security → Long-Lived Access Tokens)
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+- [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
+- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
 
 **Client Configuration:**
 
 <details>
-<summary><b>📱 Claude Desktop</b></summary>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
 
 **Config file:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -234,27 +236,34 @@ claude mcp add --transport stdio home-assistant \
 <details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-Run the MCP server over HTTP/SSE with uvx (no cloning required):
+Run the MCP server with uvx (replace the values of the environement variables):
 
+Windows:
+```bash
+set HOMEASSISTANT_URL=http://localhost:8123
+set HOMEASSISTANT_TOKEN=your_long_lived_token
+set MCP_PORT=8086
+set MCP_SECRET_PATH=/__my_secret__
+uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
+```
+Others:
 ```bash
 export HOMEASSISTANT_URL=http://localhost:8123
 export HOMEASSISTANT_TOKEN=your_long_lived_token
 export MCP_PORT=8086
 export MCP_SECRET_PATH=/__my_secret__
-uvx ha-mcp-web
+uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
 ```
 
-Then configure your web-based MCP client to use `http://localhost:8086/__my_secret__` with the HTTP transport.
+Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
 
-For remote access, place an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and reuse the same secret path.
-
-**Optional – Cloudflared quick tunnel:**
+**In another terminal, start Cloudflare Tunnel:**
 
 ```bash
-cloudflared tunnel --url http://localhost:${MCP_PORT:-8086}
+cloudflared tunnel --url http://localhost:8086
 ```
 
-Use the printed `https://…trycloudflare.com/__my_secret__` URL in your web-based MCP client.
+Use the url provided and add your secret path `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration.
 </details>
 
 **Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
