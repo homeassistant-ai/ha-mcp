@@ -16,7 +16,7 @@ def main() -> None:
     mcp.run()
 
 
-# HTTP entry point for web/SSE clients (no clone required)
+# HTTP entry point for web clients
 def main_web() -> None:
     """Run server over HTTP for web-capable MCP clients.
 
