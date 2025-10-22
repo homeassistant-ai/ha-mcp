@@ -244,11 +244,7 @@ export MCP_SECRET_PATH=/__my_secret__
 uvx ha-mcp-web
 ```
 
-Then point your web-based MCP client at:
-
-```bash
-claude mcp add home-assistant --url http://localhost:8086/__my_secret__ --transport http
-```
+Then configure your web-based MCP client to use `http://localhost:8086/__my_secret__` with the HTTP transport.
 
 For remote access, place an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and reuse the same secret path.
 
