@@ -186,11 +186,12 @@ claude mcp add-json home-assistant '{
 
 **Best for:** When Docker is not available
 
-> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
+> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
 
 **Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-- [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) and [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+  - Windows: winget install astral-sh.uv Git.Git -e
+  - MacOS: brew install git uv
 - Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
 - A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
 
