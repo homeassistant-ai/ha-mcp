@@ -238,25 +238,23 @@ claude mcp add --transport stdio home-assistant \
 <details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-1. **Download cloudflared binary:**
-   - Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+Run the MCP server over HTTP/SSE with uvx (no cloning required):
 
-2. **Start the MCP server with secret path:**
-   ```bash
-   git clone https://github.com/homeassistant-ai/ha-mcp
-   cd ha-mcp
-   export HOMEASSISTANT_URL=http://localhost:8123
-   export HOMEASSISTANT_TOKEN=your_long_lived_token
-   export MCP_SECRET_PATH=/__my_secret__
-   uv run fastmcp run fastmcp-webclient.json
-   ```
+```bash
+export HOMEASSISTANT_URL=http://localhost:8123
+export HOMEASSISTANT_TOKEN=your_long_lived_token
+export MCP_PORT=8086
+export MCP_SECRET_PATH=/__my_secret__
+uvx ha-mcp-web
+```
 
-3. **In another terminal, start Cloudflare Tunnel:**
-   ```bash
-   cloudflared tunnel --url http://localhost:8086
-   ```
+Then point your client at:
 
-4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
+```bash
+claude mcp add home-assistant --url http://localhost:8086/__my_secret__ --transport http
+```
+
+For remote access, put an HTTPS tunnel (e.g., Cloudflared) in front of `http://localhost:8086` and use the tunneled URL with the same secret path.
 
 </details>
 
