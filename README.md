@@ -257,13 +257,15 @@ uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
 
 Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
 
+Easiest option is to download [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release)
+
 **In another terminal, start Cloudflare Tunnel:**
 
 ```bash
 cloudflared tunnel --url http://localhost:8086
 ```
 
-Use the url provided and add your secret path `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration.
+Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
 </details>
 
 **Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
