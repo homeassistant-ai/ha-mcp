@@ -182,23 +182,17 @@ claude mcp add-json home-assistant '{
 
 ---
 
-### Method 3: Python+UV
+### Method 3: Running Python with UV
 
 **Best for:** When Docker is not available.
 
 > **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md) (steps shared by @kingbear2).
 
 **Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) (provides the `uvx` runner)
-- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens)
-
-**Run manually (any platform):**
-
-```bash
-uvx --from git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
-```
-
-Make sure `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are set in your environment before launching.
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+- [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
+- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
 
 **Client Configuration:**
 
@@ -212,17 +206,20 @@ Make sure `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are set in your environm
 ```json
 {
   "mcpServers": {
+
     "Home Assistant": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
+      "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"
       }
     }
+
   }
 }
 ```
+Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 
 </details>
 
@@ -230,11 +227,10 @@ Make sure `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are set in your environm
 <summary><b>💻 Claude Code</b></summary>
 
 ```bash
-claude mcp add home-assistant \
-  --command uvx \
-  --args "--from=git+https://github.com/homeassistant-ai/ha-mcp" "ha-mcp" \
-  --env HOMEASSISTANT_URL=http://localhost:8123 \
-  --env HOMEASSISTANT_TOKEN=your_long_lived_token
+claude mcp add --transport stdio home-assistant \
+--env HOMEASSISTANT_URL=http://localhost:8123 \
+--env HOMEASSISTANT_TOKEN=your_long_lived_token \
+-- uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
 ```
 
 </details>
@@ -247,6 +243,8 @@ claude mcp add home-assistant \
 
 2. **Start the MCP server with secret path:**
    ```bash
+   git clone https://github.com/homeassistant-ai/ha-mcp
+   cd ha-mcp
    export HOMEASSISTANT_URL=http://localhost:8123
    export HOMEASSISTANT_TOKEN=your_long_lived_token
    export MCP_SECRET_PATH=/__my_secret__
