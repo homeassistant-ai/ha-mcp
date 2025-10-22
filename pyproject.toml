@@ -7,7 +7,7 @@ name = "ha-mcp"
 version = "3.1.6"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [
     {name = "Julien", email = "github@qc-h.net"}
@@ -59,6 +59,7 @@ dev = [
 [project.scripts]
 ha-mcp = "ha_mcp.__main__:main"
 hamcp-test-env = "tests.test_env_manager:main"
+ha-mcp-web = "ha_mcp.__main__:main_web"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
