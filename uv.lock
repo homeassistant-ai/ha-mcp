@@ -434,7 +434,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "textdistance", extra = ["extras"] },
+    { name = "textdistance" },
     { name = "websockets" },
 ]
 
@@ -485,7 +485,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.25.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.13.0" },
-    { name = "textdistance", extras = ["extras"], specifier = ">=4.6.0" },
+    { name = "textdistance", specifier = ">=4.6.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 provides-extras = ["dev"]
