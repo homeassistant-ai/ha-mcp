@@ -23,12 +23,8 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-        ssh-key: ${{ secrets.FORCE_PUSH }}   # Deploy key
-        persist-credentials: false           # IMPORTANT: prevents checkout from configuring GITHUB_TOKEN
-    
-    - name: Ensure origin is SSH
-      run: git remote set-url origin git@github.com:homeassistant-ai/ha-mcp.git
-  
+        token: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Python Semantic Release
       id: semantic
       uses: python-semantic-release/python-semantic-release@v10.4.1
