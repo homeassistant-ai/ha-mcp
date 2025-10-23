@@ -23,7 +23,7 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+        ssh-key: ${{ secrets.FORCE_PUSH }}
 
     - name: Python Semantic Release
       id: semantic
