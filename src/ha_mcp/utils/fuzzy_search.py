@@ -3,9 +3,12 @@ Fuzzy entity search utilities for Home Assistant MCP server.
 """
 
 import logging
-from typing import Any
+from typing import Any, Iterable
 
-from fuzzywuzzy import fuzz, process
+import textdistance
+
+
+_LEVENSHTEIN = textdistance.Levenshtein()
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +92,17 @@ class FuzzyEntitySearcher:
             score += 80
 
         # Fuzzy matching scores
-        entity_id_ratio = fuzz.ratio(query, entity_id.lower())
-        friendly_ratio = fuzz.ratio(query, friendly_name.lower())
-        domain_ratio = fuzz.ratio(query, domain.lower())
+        entity_id_ratio = calculate_ratio(query, entity_id.lower())
+        friendly_ratio = calculate_ratio(query, friendly_name.lower())
+        domain_ratio = calculate_ratio(query, domain.lower())
 
         # Partial ratio for substring matching
-        entity_partial = fuzz.partial_ratio(query, entity_id.lower())
-        friendly_partial = fuzz.partial_ratio(query, friendly_name.lower())
+        entity_partial = calculate_partial_ratio(query, entity_id.lower())
+        friendly_partial = calculate_partial_ratio(query, friendly_name.lower())
 
         # Token sort ratio for word order independence
-        entity_token = fuzz.token_sort_ratio(query, entity_id.lower())
-        friendly_token = fuzz.token_sort_ratio(query, friendly_name.lower())
+        entity_token = calculate_token_sort_ratio(query, entity_id.lower())
+        friendly_token = calculate_token_sort_ratio(query, friendly_name.lower())
 
         # Weight the scores
         score += max(entity_id_ratio, entity_partial, entity_token) * 0.7
@@ -185,7 +188,7 @@ class FuzzyEntitySearcher:
                     continue
 
             # Fuzzy match on friendly name for room inference
-            area_score = fuzz.partial_ratio(area_lower, friendly_name.lower())
+            area_score = calculate_partial_ratio(area_lower, friendly_name.lower())
             if area_score >= self.threshold:
                 inferred_area = self._infer_area_from_name(friendly_name)
                 if inferred_area not in area_matches:
@@ -260,12 +263,12 @@ class FuzzyEntitySearcher:
                 areas.add(inferred_area)
 
         # Fuzzy match against domains
-        domain_matches = process.extract(query, domains, limit=3, scorer=fuzz.ratio)
-        suggestions.extend([match[0] for match in domain_matches if match[1] >= 60])
+        domain_matches = extract_best_matches(query, domains, limit=3)
+        suggestions.extend([match for match, score in domain_matches if score >= 60])
 
         # Fuzzy match against areas
-        area_matches = process.extract(query, areas, limit=3, scorer=fuzz.ratio)
-        suggestions.extend([match[0] for match in area_matches if match[1] >= 60])
+        area_matches = extract_best_matches(query, areas, limit=3)
+        suggestions.extend([match for match, score in area_matches if score >= 60])
 
         # Add common search patterns
         if not suggestions:
@@ -290,3 +293,55 @@ class FuzzyEntitySearcher:
 def create_fuzzy_searcher(threshold: int = 60) -> FuzzyEntitySearcher:
     """Create a new fuzzy entity searcher instance."""
     return FuzzyEntitySearcher(threshold)
+
+
+def calculate_ratio(query: str, value: str) -> int:
+    """Return the normalized Levenshtein similarity ratio (0-100)."""
+    if not query and not value:
+        return 100
+
+    max_len = max(len(query), len(value))
+    if max_len == 0:
+        return 0
+
+    distance = _LEVENSHTEIN.distance(query, value)
+    similarity = 1 - (distance / max_len)
+    return int(max(similarity, 0) * 100)
+
+
+def calculate_partial_ratio(query: str, value: str) -> int:
+    """Return the best similarity score for any substring match."""
+    if not query or not value:
+        return 0
+
+    shorter, longer = (query, value) if len(query) <= len(value) else (value, query)
+    window = len(shorter)
+    if window == 0:
+        return 0
+
+    best_score = 0
+    for start in range(len(longer) - window + 1):
+        substring = longer[start : start + window]
+        best_score = max(best_score, calculate_ratio(shorter, substring))
+        if best_score == 100:
+            break
+
+    return best_score
+
+
+def calculate_token_sort_ratio(query: str, value: str) -> int:
+    """Return similarity ratio after token sorting."""
+    query_sorted = " ".join(sorted(query.split()))
+    value_sorted = " ".join(sorted(value.split()))
+    return calculate_ratio(query_sorted, value_sorted)
+
+
+def extract_best_matches(
+    query: str, choices: Iterable[str], limit: int = 3
+) -> list[tuple[str, int]]:
+    """Return the highest scoring matches for a query among choices."""
+    scored_choices = [
+        (choice, calculate_ratio(query, choice)) for choice in choices if choice
+    ]
+    scored_choices.sort(key=lambda item: item[1], reverse=True)
+    return scored_choices[:limit]
