@@ -7,7 +7,7 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
-from ..utils.fuzzy_search import create_fuzzy_searcher
+from ..utils.fuzzy_search import calculate_partial_ratio, create_fuzzy_searcher
 
 logger = logging.getLogger(__name__)
 
@@ -637,14 +637,12 @@ class SmartSearchTools:
 
         Returns a fuzzy match score based on how well the query matches values in the data.
         """
-        from fuzzywuzzy import fuzz
-
         max_score = 0
 
         if isinstance(data, dict):
             for key, value in data.items():
                 # Score the key itself
-                key_score = fuzz.partial_ratio(query, str(key).lower())
+                key_score = calculate_partial_ratio(query, str(key).lower())
                 max_score = max(max_score, key_score)
 
                 # Recursively score the value
@@ -658,11 +656,14 @@ class SmartSearchTools:
 
         elif isinstance(data, str):
             # Direct fuzzy match on string values
-            max_score = max(max_score, fuzz.partial_ratio(query, data.lower()))
+            max_score = max(max_score, calculate_partial_ratio(query, data.lower()))
 
         elif data is not None:
             # Convert to string and match
-            max_score = max(max_score, fuzz.partial_ratio(query, str(data).lower()))
+            max_score = max(
+                max_score,
+                calculate_partial_ratio(query, str(data).lower()),
+            )
 
         return max_score
 
