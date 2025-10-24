@@ -1,0 +1,188 @@
+name: Codex Auto-Fix on Failure
+
+on:
+  workflow_run:
+    workflows: ["PR Validation Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-fix:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: "3.13"
+      FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+      FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Checkout Failing Ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.FAILED_HEAD_SHA }}
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Prepare Codex authentication
+        env:
+          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          auth_path="$HOME/.codex/auth.json"
+          mkdir -p "$(dirname "$auth_path")"
+          printf '%s' "$CODEX_AUTH" > "$auth_path"
+          chmod 600 "$auth_path"
+          cp "$auth_path" "$RUNNER_TEMP/codex-auth-original.json"
+          echo "ORIGINAL_CODEX_AUTH=$RUNNER_TEMP/codex-auth-original.json" >> "$GITHUB_ENV"
+          echo "Wrote Codex auth to $auth_path"
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Generate Codex output schema
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          cat <<'JSON' > "$RUNNER_TEMP/codex-output-schema.json"
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "testing": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["summary", "testing"],
+  "additionalProperties": false
+}
+JSON
+
+      - name: Run Codex
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          OUTPUT_FILE="$RUNNER_TEMP/codex-output.json"
+          codex exec \
+            --full-auto \
+            --sandbox workspace-write \
+            --output-schema "$RUNNER_TEMP/codex-output-schema.json" \
+            -o "$OUTPUT_FILE" \
+            "You are working in the ha-mcp repository for a Home Assistant MCP server. Investigate the failing 'PR Validation Pipeline' run and implement the minimal code changes required to fix the regression. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or docker validation suites; they will execute after the pull request is opened."
+          echo "CODEX_OUTPUT=$OUTPUT_FILE" >> "$GITHUB_ENV"
+
+      - name: Parse Codex summary
+        id: codex_summary
+        env:
+          CODEX_OUTPUT: ${{ env.CODEX_OUTPUT }}
+        run: |
+          python - <<'PY'
+import json
+import os
+
+output_path = os.environ.get("CODEX_OUTPUT")
+if not output_path or not os.path.exists(output_path):
+    raise SystemExit("Codex output file missing")
+
+with open(output_path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+summary_items = data.get("summary", [])
+testing_items = data.get("testing", [])
+
+summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
+testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
+
+with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+    fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
+    fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
+PY
+
+      - name: Create pull request with fixes
+        if: success()
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "fix(ci): auto-fix failing tests via Codex"
+          branch: codex/auto-fix-${{ github.event.workflow_run.run_id }}
+          base: ${{ env.FAILED_HEAD_BRANCH }}
+          title: "Auto-fix failing CI via Codex"
+          body: |
+            Codex automatically generated this PR in response to a CI failure on workflow `${{ env.FAILED_WORKFLOW_NAME }}`.
+            Failed run: `${{ env.FAILED_RUN_URL }}`
+            Head branch: `${{ env.FAILED_HEAD_BRANCH }}`
+            
+            ## Summary
+            ${{ steps.codex_summary.outputs.summary_markdown }}
+            
+            ## Testing
+            ${{ steps.codex_summary.outputs.testing_markdown }}
+
+      - name: Update CODEX auth secret if refreshed
+        if: always()
+        env:
+          ORIGINAL_CODEX_AUTH: ${{ env.ORIGINAL_CODEX_AUTH }}
+          GH_TOKEN: ${{ secrets.CODEX_AUTH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          auth_path="$HOME/.codex/auth.json"
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "No PAT provided; skipping secret refresh."
+            exit 0
+          fi
+          if [ ! -f "$auth_path" ]; then
+            echo "Codex auth file missing; skipping secret refresh."
+            exit 0
+          fi
+          if [ -z "${ORIGINAL_CODEX_AUTH:-}" ] || [ ! -f "$ORIGINAL_CODEX_AUTH" ]; then
+            echo "Original auth snapshot missing; skipping secret refresh."
+            exit 0
+          fi
+          if cmp -s "$ORIGINAL_CODEX_AUTH" "$auth_path"; then
+            echo "Codex auth unchanged; no secret update needed."
+            exit 0
+          fi
+
+          echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
+          python -m pip install --quiet pynacl
+          IFS=$'\t' read -r key_id public_key <<EOF
+$(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
+EOF
+          encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$auth_path" python - <<'PY'
+import base64
+import os
+from pathlib import Path
+from nacl import public
+
+key = base64.b64decode(os.environ["PUBLIC_KEY"])
+auth = Path(os.environ["AUTH_PATH"]).read_bytes()
+sealed = public.SealedBox(public.PublicKey(key))
+print(base64.b64encode(sealed.encrypt(auth)).decode())
+PY
+          )
+          gh api --method PUT \
+            repos/${GITHUB_REPOSITORY}/actions/secrets/CODEX_AUTH \
+            -H "Accept: application/vnd.github+json" \
+            -f encrypted_value="$encrypted_value" \
+            -f key_id="$key_id"
+          echo "Updated CODEX_AUTH secret via REST API."
