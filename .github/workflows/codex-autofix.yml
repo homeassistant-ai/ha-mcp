@@ -98,27 +98,27 @@ jobs:
         env:
           CODEX_OUTPUT: ${{ env.CODEX_OUTPUT }}
         run: |
-          python - <<-'PY'
-	import json
-	import os
+          python - <<'PY'
+          import json
+          import os
 
-	output_path = os.environ.get("CODEX_OUTPUT")
-	if not output_path or not os.path.exists(output_path):
-	    raise SystemExit("Codex output file missing")
+          output_path = os.environ.get("CODEX_OUTPUT")
+          if not output_path or not os.path.exists(output_path):
+              raise SystemExit("Codex output file missing")
 
-	with open(output_path, "r", encoding="utf-8") as fh:
-	    data = json.load(fh)
+          with open(output_path, "r", encoding="utf-8") as fh:
+              data = json.load(fh)
 
-	summary_items = data.get("summary", [])
-	testing_items = data.get("testing", [])
+          summary_items = data.get("summary", [])
+          testing_items = data.get("testing", [])
 
-	summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
-	testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
+          summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
+          testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
 
-	with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-	    fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
-	    fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
-PY
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
+              fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
+          PY
 
       - name: Create pull request with fixes
         if: success()
@@ -167,20 +167,20 @@ PY
 
           echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
           python -m pip install --quiet pynacl
-          IFS=$'\t' read -r key_id public_key <<-EOF
-	$(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
-EOF
-          encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$auth_path" python - <<-'PY'
-	import base64
-	import os
-	from pathlib import Path
-	from nacl import public
+          IFS=$'\t' read -r key_id public_key <<'EOF'
+          $(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
+          EOF
+          encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$auth_path" python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          from nacl import public
 
-	key = base64.b64decode(os.environ["PUBLIC_KEY"])
-	auth = Path(os.environ["AUTH_PATH"]).read_bytes()
-	sealed = public.SealedBox(public.PublicKey(key))
-	print(base64.b64encode(sealed.encrypt(auth)).decode())
-PY
+          key = base64.b64decode(os.environ["PUBLIC_KEY"])
+          auth = Path(os.environ["AUTH_PATH"]).read_bytes()
+          sealed = public.SealedBox(public.PublicKey(key))
+          print(base64.b64encode(sealed.encrypt(auth)).decode())
+          PY
           )
           gh api --method PUT \
             repos/${GITHUB_REPOSITORY}/actions/secrets/CODEX_AUTH \
