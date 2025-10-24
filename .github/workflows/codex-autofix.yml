@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   auto-fix:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.id == github.repository_id && secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.id == github.repository_id }}
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: "3.13"
@@ -23,24 +23,43 @@ jobs:
       FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
+      - name: Ensure Codex secrets available
+        id: ensure_codex_secrets
+        env:
+          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+          CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
+        run: |
+          if [ -n "${CODEX_AUTH}" ] && [ -n "${CODEX_AUTH_PAT}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Codex secrets missing; skipping auto-fix execution."
+
       - name: Checkout Failing Ref
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
 
       - name: Install uv
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
       - name: Set up Python
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: uv sync --all-extras --dev
 
       - name: Prepare Codex authentication
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
           RUNNER_TEMP: ${{ runner.temp }}
@@ -55,9 +74,11 @@ jobs:
           echo "Wrote Codex auth to $auth_path"
 
       - name: Install Codex CLI
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: npm install -g @openai/codex
 
       - name: Generate Codex output schema
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
@@ -80,6 +101,7 @@ jobs:
           JSON
 
       - name: Run Codex
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
@@ -95,6 +117,7 @@ jobs:
 
       - name: Parse Codex summary
         id: codex_summary
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           CODEX_OUTPUT: ${{ env.CODEX_OUTPUT }}
         run: |
@@ -121,7 +144,7 @@ jobs:
           PY
 
       - name: Create pull request with fixes
-        if: success()
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' && success() }}
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "fix(ci): auto-fix failing tests via Codex"
@@ -140,7 +163,7 @@ jobs:
             ${{ steps.codex_summary.outputs.testing_markdown }}
 
       - name: Update CODEX auth secret if refreshed
-        if: always()
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' && always() }}
         env:
           ORIGINAL_CODEX_AUTH: ${{ env.ORIGINAL_CODEX_AUTH }}
           GH_TOKEN: ${{ secrets.CODEX_AUTH_PAT }}
