@@ -18,7 +18,7 @@ services:
       # Point to your Home Assistant instance
       # If HA is in same compose file, use service name: http://homeassistant:8123
       # If HA is external, use: http://your-ha-ip:8123
-      - HOMEASSISTANT_URL=http://homeassistant:8123
+      - HOME_ASSISTANT_URL=http://homeassistant:8123
       # Set your Home Assistant long-lived access token
       - HOMEASSISTANT_TOKEN=${HA_TOKEN}
       # Optional: Configure backup hint behavior
