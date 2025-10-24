@@ -2,7 +2,7 @@ name: Codex Auto-Fix on Failure
 
 on:
   workflow_run:
-    workflows: ["PR Validation Pipeline"]
+    workflows: ["pr.yml"]
     types: [completed]
 
 permissions:
@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   auto-fix:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.id == github.repository_id && secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+    # Secrets cannot be referenced in the job condition, so only gate on workflow metadata here.
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.id == github.repository_id }}
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: "3.13"
@@ -21,24 +22,43 @@ jobs:
       FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
+      - name: Ensure Codex secrets available
+        id: ensure_codex_secrets
+        env:
+          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+          CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
+        run: |
+          if [ -n "${CODEX_AUTH}" ] && [ -n "${CODEX_AUTH_PAT}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Codex secrets missing; skipping auto-fix execution."
+
       - name: Checkout Failing Ref
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
 
       - name: Install uv
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
       - name: Set up Python
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: uv sync --all-extras --dev
 
       - name: Prepare Codex authentication
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
           RUNNER_TEMP: ${{ runner.temp }}
@@ -53,31 +73,34 @@ jobs:
           echo "Wrote Codex auth to $auth_path"
 
       - name: Install Codex CLI
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: npm install -g @openai/codex
 
       - name: Generate Codex output schema
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           cat <<'JSON' > "$RUNNER_TEMP/codex-output-schema.json"
-{
-  "type": "object",
-  "properties": {
-    "summary": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "testing": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
-  },
-  "required": ["summary", "testing"],
-  "additionalProperties": false
-}
-JSON
+            {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "testing": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["summary", "testing"],
+              "additionalProperties": false
+            }
+          JSON
 
       - name: Run Codex
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
@@ -93,33 +116,34 @@ JSON
 
       - name: Parse Codex summary
         id: codex_summary
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           CODEX_OUTPUT: ${{ env.CODEX_OUTPUT }}
         run: |
           python - <<'PY'
-import json
-import os
+          import json
+          import os
 
-output_path = os.environ.get("CODEX_OUTPUT")
-if not output_path or not os.path.exists(output_path):
-    raise SystemExit("Codex output file missing")
+          output_path = os.environ.get("CODEX_OUTPUT")
+          if not output_path or not os.path.exists(output_path):
+              raise SystemExit("Codex output file missing")
 
-with open(output_path, "r", encoding="utf-8") as fh:
-    data = json.load(fh)
+          with open(output_path, "r", encoding="utf-8") as fh:
+              data = json.load(fh)
 
-summary_items = data.get("summary", [])
-testing_items = data.get("testing", [])
+          summary_items = data.get("summary", [])
+          testing_items = data.get("testing", [])
 
-summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
-testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
+          summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
+          testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
 
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-    fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
-    fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
-PY
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
+              fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
+          PY
 
       - name: Create pull request with fixes
-        if: success()
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' && success() }}
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "fix(ci): auto-fix failing tests via Codex"
@@ -138,7 +162,7 @@ PY
             ${{ steps.codex_summary.outputs.testing_markdown }}
 
       - name: Update CODEX auth secret if refreshed
-        if: always()
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' && always() }}
         env:
           ORIGINAL_CODEX_AUTH: ${{ env.ORIGINAL_CODEX_AUTH }}
           GH_TOKEN: ${{ secrets.CODEX_AUTH_PAT }}
@@ -165,20 +189,20 @@ PY
 
           echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
           python -m pip install --quiet pynacl
-          IFS=$'\t' read -r key_id public_key <<EOF
-$(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
-EOF
+          IFS=$'\t' read -r key_id public_key <<'EOF'
+          $(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
+          EOF
           encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$auth_path" python - <<'PY'
-import base64
-import os
-from pathlib import Path
-from nacl import public
+          import base64
+          import os
+          from pathlib import Path
+          from nacl import public
 
-key = base64.b64decode(os.environ["PUBLIC_KEY"])
-auth = Path(os.environ["AUTH_PATH"]).read_bytes()
-sealed = public.SealedBox(public.PublicKey(key))
-print(base64.b64encode(sealed.encrypt(auth)).decode())
-PY
+          key = base64.b64decode(os.environ["PUBLIC_KEY"])
+          auth = Path(os.environ["AUTH_PATH"]).read_bytes()
+          sealed = public.SealedBox(public.PublicKey(key))
+          print(base64.b64encode(sealed.encrypt(auth)).decode())
+          PY
           )
           gh api --method PUT \
             repos/${GITHUB_REPOSITORY}/actions/secrets/CODEX_AUTH \
