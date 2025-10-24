@@ -62,22 +62,22 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           cat <<'JSON' > "$RUNNER_TEMP/codex-output-schema.json"
-{
-  "type": "object",
-  "properties": {
-    "summary": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "testing": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
-  },
-  "required": ["summary", "testing"],
-  "additionalProperties": false
-}
-JSON
+            {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "testing": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["summary", "testing"],
+              "additionalProperties": false
+            }
+          JSON
 
       - name: Run Codex
         env:
