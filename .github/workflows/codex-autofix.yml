@@ -2,10 +2,8 @@ name: Codex Auto-Fix on Failure
 
 on:
   workflow_run:
-    workflows:
-      - "PR Validation Pipeline"
-    types:
-      - completed
+    workflows: ["PR Validation Pipeline"]
+    types: [completed]
 
 permissions:
   contents: write
