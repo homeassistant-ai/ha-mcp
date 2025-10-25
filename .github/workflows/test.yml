@@ -46,9 +46,7 @@ jobs:
       - name: Install Node and Codex CLI
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: |
-          corepack enable
           npm install -g @openai/codex@latest
-          codex version
 
       - name: Simple hello world
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
