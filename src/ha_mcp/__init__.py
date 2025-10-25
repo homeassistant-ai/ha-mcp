@@ -5,7 +5,7 @@ A Model Context Protocol server that provides complete control over Home Assista
 through REST API and WebSocket integration with 20+ enhanced tools.
 """
 
-__version__ = "3.2.2"
+__version__ = "3.2.3"
 __author__ = "Julien"
 __license__ = "MIT"
 
