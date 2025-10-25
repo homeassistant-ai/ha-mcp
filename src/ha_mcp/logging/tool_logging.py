@@ -19,6 +19,9 @@ from fastmcp.server.middleware.middleware import CallNext
 from fastmcp.tools.tool import ToolResult
 
 
+LOG_FILENAME = "tool_calls.ndjson.zst"
+
+
 class ZstdNDJSONFileHandler(Handler):
     """Logging handler that writes NDJSON entries compressed with Zstandard."""
 

@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 
 from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
-from .logging import AsyncToolLogManager, ToolCallLoggingMiddleware
+from .logging import LOG_FILENAME, AsyncToolLogManager, ToolCallLoggingMiddleware
 from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
 from .tools.device_control import create_device_control_tools
@@ -34,8 +34,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         self._tool_log_manager: AsyncToolLogManager | None = None
 
         # Install verbose tool logging when requested via environment flag
-        if self.settings.log_all_tools:
-            self._tool_log_manager = AsyncToolLogManager(Path(self.settings.tool_log_path))
+        if self.settings.tool_log_dir:
+            log_path = Path(self.settings.tool_log_dir) / LOG_FILENAME
+            self._tool_log_manager = AsyncToolLogManager(log_path)
             self.mcp.add_middleware(
                 ToolCallLoggingMiddleware(self._tool_log_manager.logger)
             )

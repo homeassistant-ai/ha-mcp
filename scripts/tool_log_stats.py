@@ -1,7 +1,7 @@
 """Utilities for analyzing Home Assistant MCP tool call logs.
 
-This script parses log lines emitted when ``HOMEASSISTANT_LOG_ALL`` is set to
-``true`` and provides basic statistics to highlight verbose tools.
+This script parses log lines emitted when ``HOMEASSISTANT_TOOL_LOG_DIR`` is set
+and provides basic statistics to highlight verbose tools.
 
 Usage examples::
 

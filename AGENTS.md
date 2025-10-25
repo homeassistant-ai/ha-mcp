@@ -81,7 +81,7 @@ A production-ready Model Context Protocol (MCP) server that enables AI assistant
 ### Tool Usage Logging
 
 - Verbose tool request/response logging is controlled via the
-  `HOMEASSISTANT_LOG_ALL` environment variable. When enabled, see
+  `HOMEASSISTANT_TOOL_LOG_DIR` environment variable. When enabled, see
   [`docs/tool-usage-logging.md`](docs/tool-usage-logging.md) for parsing
   scripts and optimization workflow tips.
 - CI pushes trigger the `E2E Tests` workflow and pull requests trigger the `PR

@@ -7,26 +7,28 @@ from pathlib import Path
 
 import pytest
 
+from ha_mcp.logging import LOG_FILENAME
 from scripts import tool_log_stats
 
 
 REQUIRE_LOG = os.getenv("TOOL_LOG_REQUIRED", "0") == "1"
-DEFAULT_LOG_PATH = Path("artifacts/tool_calls.ndjson.zst")
+LOG_DIR_ENV = "HOMEASSISTANT_TOOL_LOG_DIR"
+DEFAULT_LOG_PATH = Path("artifacts") / LOG_FILENAME
 
 
 @pytest.fixture(scope="module")
 def log_path() -> Path:
     """Resolve the tool log path and ensure it exists when required."""
 
-    env_path = os.getenv("TOOL_LOG_PATH")
-    path = Path(env_path) if env_path else DEFAULT_LOG_PATH
+    env_dir = os.getenv(LOG_DIR_ENV)
+    path = (Path(env_dir) / LOG_FILENAME) if env_dir else DEFAULT_LOG_PATH
 
     if path.exists():
         return path
 
     message = (
-        "Tool log file not found. Expected E2E pytest run with HOMEASSISTANT_LOG_ALL "
-        f"to populate '{path}'."
+        "Tool log file not found. Expected E2E pytest run with "
+        f"{LOG_DIR_ENV} set to the logging directory to populate '{path}'."
     )
 
     if REQUIRE_LOG:
@@ -50,7 +52,6 @@ def log_entries(log_path: Path) -> list[tool_log_stats.ToolLogEntry]:
     return entries
 
 
-@pytest.mark.tool_logging
 @pytest.mark.integration
 @pytest.mark.e2e
 def test_tool_log_contains_requests(
@@ -61,7 +62,6 @@ def test_tool_log_contains_requests(
     assert any(entry.request_characters > 0 for entry in log_entries)
 
 
-@pytest.mark.tool_logging
 @pytest.mark.integration
 @pytest.mark.e2e
 def test_tool_log_records_successful_tools(
@@ -72,7 +72,6 @@ def test_tool_log_records_successful_tools(
     assert any(entry.status == "success" for entry in log_entries)
 
 
-@pytest.mark.tool_logging
 @pytest.mark.integration
 @pytest.mark.e2e
 def test_tool_log_stats_summary_executes(
@@ -87,7 +86,6 @@ def test_tool_log_stats_summary_executes(
     assert "Calls" in captured
 
 
-@pytest.mark.tool_logging
 @pytest.mark.integration
 @pytest.mark.e2e
 def test_tool_log_stats_largest_executes(

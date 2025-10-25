@@ -10,7 +10,7 @@ on:
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
-  HOMEASSISTANT_LOG_ALL: "true"
+  HOMEASSISTANT_TOOL_LOG_DIR: artifacts
 
 jobs:
   # Comprehensive E2E validation for all PRs (reuses the push workflow)
