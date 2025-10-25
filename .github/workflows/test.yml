@@ -1,0 +1,99 @@
+name: Codex Hello World Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codex-hello:
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHON_VERSION: "3.13"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Ensure Codex secrets available
+        id: ensure_codex_secrets
+        env:
+          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+          CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
+        run: |
+          if [ -n "${CODEX_AUTH}" ] && [ -n "${CODEX_AUTH_PAT}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Codex secrets missing; skipping tests."
+
+      - name: Prepare Codex authentication
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        env:
+          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          auth_path="$HOME/.codex/auth.json"
+          mkdir -p "$(dirname "$auth_path")"
+          printf '%s' "$CODEX_AUTH" > "$auth_path"
+          chmod 600 "$auth_path"
+          echo "Wrote Codex auth to $auth_path"
+
+      - name: Install Node and Codex CLI
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        run: |
+          corepack enable
+          npm install -g @openai/codex@latest
+          codex version
+
+      - name: Simple hello world
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        run: |
+          echo "=== Basic text ==="
+          codex exec "Say hello world"
+
+      - name: Structured hello world
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        run: |
+          echo "=== Structured output ==="
+          cat <<'JSON' > schema.json
+          {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" }
+            },
+            "required": ["message"],
+            "additionalProperties": false
+          }
+          JSON
+          codex exec \
+            --output-schema schema.json \
+            -o output.json \
+            "Output a JSON object with key 'message' set to 'hello world'."
+          echo "=== output.json ==="
+          cat output.json
+
+      - name: Sandbox write test
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        env:
+          CODEX_QUIET_MODE: "1"
+        run: |
+          echo "=== Workspace write sandbox ==="
+          codex exec \
+            --sandbox workspace-write \
+            --quiet \
+            "Create a file hello.txt containing the text 'hello world' and confirm it exists."
+          echo "=== File contents ==="
+          cat hello.txt
+
+      - name: JSON events test
+        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+        run: |
+          echo "=== JSON events mode ==="
+          codex exec --json "Say hello world" | tee events.jsonl
+          echo "=== Tail events ==="
+          tail -n 10 events.jsonl
