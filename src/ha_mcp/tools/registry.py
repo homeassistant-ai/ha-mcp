@@ -12,6 +12,7 @@ from .tools_config_automations import register_config_automation_tools
 from .tools_config_helpers import register_config_helper_tools
 from .tools_config_scripts import register_config_script_tools
 from .tools_search import register_search_tools
+from .tools_quick_placeholder import register_quick_placeholder_script_tool
 from .tools_service import register_service_tools
 from .tools_utility import register_utility_tools
 
@@ -37,6 +38,9 @@ class ToolsRegistry:
         register_service_tools(
             self.mcp, self.client, self.device_tools
         )
+
+        # Register quick placeholder script execution tool
+        register_quick_placeholder_script_tool(self.mcp, self.client)
 
         # Register config management tools (helpers, scripts, automations)
         register_config_helper_tools(self.mcp, self.client)
