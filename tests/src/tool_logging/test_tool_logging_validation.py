@@ -11,8 +11,8 @@ from ha_mcp.logging import LOG_FILENAME
 from scripts import tool_log_stats
 
 
-REQUIRE_LOG = os.getenv("TOOL_LOG_REQUIRED", "0") == "1"
 LOG_DIR_ENV = "HOMEASSISTANT_TOOL_LOG_DIR"
+REQUIRE_LOG = bool(os.getenv(LOG_DIR_ENV))
 DEFAULT_LOG_PATH = Path("artifacts") / LOG_FILENAME
 
 

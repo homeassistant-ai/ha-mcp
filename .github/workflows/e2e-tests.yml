@@ -66,4 +66,3 @@ jobs:
         uv run pytest tests/src/tool_logging/ --tb=short -v
       env:
         HOMEASSISTANT_TOOL_LOG_DIR: artifacts
-        TOOL_LOG_REQUIRED: "1"
