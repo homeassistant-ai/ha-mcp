@@ -43,9 +43,9 @@ def log_entries(log_path: Path) -> list[tool_log_stats.ToolLogEntry]:
     if not entries:
         if REQUIRE_LOG:
             pytest.fail(
-                "Tool log file was present but no [TOOL_CALL] entries were detected."
+                "Tool log file was present but no tool_call entries were detected."
             )
-        pytest.skip("Tool log present but contained no [TOOL_CALL] entries.")
+        pytest.skip("Tool log present but contained no tool_call entries.")
 
     return entries
 
