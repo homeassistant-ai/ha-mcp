@@ -53,7 +53,7 @@ jobs:
       - name: Simple hello world
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: |
-          codex exec "test"
+          DEBUG=true codex -a auto-edit --quiet "update CHANGELOG for next release"
 
       - name: Structured hello world
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
