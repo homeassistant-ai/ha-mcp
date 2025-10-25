@@ -115,12 +115,11 @@ jobs:
           set -euo pipefail
           OUTPUT_FILE="$RUNNER_TEMP/codex-output.json"
           codex exec \
-            --ask-for-approval on-failure \
-            --sandbox workspace-write \
-            --quiet \
+            --full-auto \
+            --skip-git-repo-check \
             --output-schema "$RUNNER_TEMP/codex-output-schema.json" \
             -o "$OUTPUT_FILE" \
-            "You are working in the ha-mcp repository for a Home Assistant MCP server. Investigate the failing 'PR Validation Pipeline' run and implement the minimal code changes required to fix the regression. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or docker validation suites; they will execute after the pull request is opened."
+            "You are working in the ha-mcp repository for a Home Assistant MCP server on Github. Investigate the failing 'PR Validation Pipeline' run and implement the minimal code changes required to fix the regression. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or docker validation suites; they will execute after the pull request is opened."
           echo "CODEX_OUTPUT=$OUTPUT_FILE" >> "$GITHUB_ENV"
       - name: Parse Codex summary
         id: codex_summary
