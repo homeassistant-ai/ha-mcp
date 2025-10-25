@@ -1,9 +1,8 @@
-name: Codex Auto-Fix on Failure
+name: PR Validation Pipeline - Auto-fix
 
 on:
   workflow_run:
-    # Must exactly match the PR workflow's file name or its `name:` value.
-    workflows: ["pr.yml"]
+    workflows: ["PR Validation Pipeline"]
     types: [completed]
 
 permissions:
