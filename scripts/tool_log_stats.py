@@ -6,30 +6,31 @@ This script parses log lines emitted when ``HOMEASSISTANT_LOG_ALL`` is set to
 Usage examples::
 
     # Summaries for every tool using character counts (default)
-    python scripts/tool_log_stats.py summary path/to/server.log
+    python scripts/tool_log_stats.py summary path/to/tool_calls.ndjson.zst
 
     # Use token counts (requires ``tiktoken``) with a specific encoding
-    python scripts/tool_log_stats.py summary path/to/server.log --tokens --encoding cl100k_base
+    python scripts/tool_log_stats.py summary path/to/tool_calls.ndjson.zst --tokens --encoding cl100k_base
 
     # Largest response across all tools
-    python scripts/tool_log_stats.py largest path/to/server.log
+    python scripts/tool_log_stats.py largest path/to/tool_calls.ndjson.zst
 
     # Largest response for a single tool
-    python scripts/tool_log_stats.py largest path/to/server.log --tool ha_call_service
+    python scripts/tool_log_stats.py largest path/to/tool_calls.ndjson.zst --tool ha_call_service
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-
-LOG_MARKER = "[TOOL_CALL]"
+import zstandard
 
 
 @dataclass
@@ -56,41 +57,49 @@ class ToolLogEntry:
         return json.dumps(self.response, ensure_ascii=False, sort_keys=True)
 
 
+def _iter_lines(log_path: Path) -> Iterable[str]:
+    """Yield decoded lines from plain text or zstd-compressed NDJSON files."""
+
+    if log_path.suffix == ".zst":
+        decompressor = zstandard.ZstdDecompressor()
+        with log_path.open("rb") as raw:
+            with decompressor.stream_reader(raw) as reader:
+                text_stream = io.TextIOWrapper(reader, encoding="utf-8")
+                yield from text_stream
+        return
+
+    with log_path.open("r", encoding="utf-8") as handle:
+        yield from handle
+
+
 def load_entries(log_path: Path) -> Iterable[ToolLogEntry]:
     """Iterate over parsed tool log entries from the provided file."""
 
-    with log_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if LOG_MARKER not in line:
-                continue
-            marker_index = line.find(LOG_MARKER)
-            payload = line[marker_index + len(LOG_MARKER) :].strip()
-            if payload.startswith(":"):
-                payload = payload[1:].strip()
+    for line in _iter_lines(log_path):
+        line = line.strip()
+        if not line:
+            continue
 
-            if not payload:
-                continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
 
-            try:
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
+        if data.get("event") != "tool_call":
+            continue
 
-            if data.get("event") != "tool_call":
-                continue
-
-            yield ToolLogEntry(
-                tool=data.get("tool", "unknown"),
-                status=data.get("status", "unknown"),
-                request=data.get("request"),
-                response=data.get("response"),
-                request_characters=int(data.get("request_characters", 0)),
-                response_characters=(
-                    int(data["response_characters"])
-                    if "response_characters" in data
-                    else None
-                ),
-            )
+        yield ToolLogEntry(
+            tool=data.get("tool", "unknown"),
+            status=data.get("status", "unknown"),
+            request=data.get("request"),
+            response=data.get("response"),
+            request_characters=int(data.get("request_characters", 0)),
+            response_characters=(
+                int(data["response_characters"])
+                if "response_characters" in data
+                else None
+            ),
+        )
 
 
 def build_tokenizer(encoding_name: str | None):

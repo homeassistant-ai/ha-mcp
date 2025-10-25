@@ -85,7 +85,7 @@ A production-ready Model Context Protocol (MCP) server that enables AI assistant
   [`docs/tool-usage-logging.md`](docs/tool-usage-logging.md) for parsing
   scripts and optimization workflow tips.
 - CI pushes trigger the `E2E Tests` workflow and pull requests trigger the `PR
-  Validation Pipeline`; both store log output in `artifacts/tool_calls.log` and
+  Validation Pipeline`; both store log output in `artifacts/tool_calls.ndjson.zst` and
   run `tests/src/tool_logging/` afterwards to ensure verbose logging and
   analysis helpers continue to function. The PR workflow delegates to the
   reusable `E2E Tests` pipeline so push and PR runs share identical logging

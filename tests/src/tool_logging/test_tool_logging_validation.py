@@ -11,7 +11,7 @@ from scripts import tool_log_stats
 
 
 REQUIRE_LOG = os.getenv("TOOL_LOG_REQUIRED", "0") == "1"
-DEFAULT_LOG_PATH = Path("artifacts/tool_calls.log")
+DEFAULT_LOG_PATH = Path("artifacts/tool_calls.ndjson.zst")
 
 
 @pytest.fixture(scope="module")
@@ -25,8 +25,8 @@ def log_path() -> Path:
         return path
 
     message = (
-        "Tool log file not found. Expected E2E pytest run with --log-file to populate "
-        f"'{path}'."
+        "Tool log file not found. Expected E2E pytest run with HOMEASSISTANT_LOG_ALL "
+        f"to populate '{path}'."
     )
 
     if REQUIRE_LOG:

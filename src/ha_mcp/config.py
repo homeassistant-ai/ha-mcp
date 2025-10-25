@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     debug: bool = Field(False, alias="DEBUG")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_all_tools: bool = Field(False, alias="HOMEASSISTANT_LOG_ALL")
+    tool_log_path: str = Field(
+        "artifacts/tool_calls.ndjson.zst", alias="TOOL_LOG_PATH"
+    )
 
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")

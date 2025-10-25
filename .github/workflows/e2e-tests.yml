@@ -22,6 +22,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   HOMEASSISTANT_LOG_ALL: "true"
+  TOOL_LOG_PATH: artifacts/tool_calls.ndjson.zst
 
 jobs:
   # Comprehensive E2E validation for main branch
@@ -54,9 +55,7 @@ jobs:
         uv run pytest tests/src/e2e/ \
           -n3 \
           --tb=short \
-          -v \
-          --log-file=artifacts/tool_calls.log \
-          --log-file-level=INFO
+          -v
         echo "✅ Full E2E test suite passed"
       env:
         HOMEASSISTANT_URL: "http://localhost:8123"
@@ -67,5 +66,5 @@ jobs:
         echo "🔍 Validating tool logging artifacts"
         uv run pytest tests/src/tool_logging/ --tb=short -v
       env:
-        TOOL_LOG_PATH: artifacts/tool_calls.log
+        TOOL_LOG_PATH: artifacts/tool_calls.ndjson.zst
         TOOL_LOG_REQUIRED: "1"

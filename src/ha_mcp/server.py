@@ -1,15 +1,14 @@
 """Core Smart MCP Server implementation."""
 
-import asyncio
-import functools
-import json
 import logging
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 from fastmcp import FastMCP
 
 from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
+from .logging import AsyncToolLogManager, ToolCallLoggingMiddleware
 from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
 from .tools.device_control import create_device_control_tools
@@ -32,9 +31,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
             name=self.settings.mcp_server_name, version=self.settings.mcp_server_version
         )
 
+        self._tool_log_manager: AsyncToolLogManager | None = None
+
         # Install verbose tool logging when requested via environment flag
         if self.settings.log_all_tools:
-            self._install_tool_logging()
+            self._tool_log_manager = AsyncToolLogManager(Path(self.settings.tool_log_path))
+            self.mcp.add_middleware(
+                ToolCallLoggingMiddleware(self._tool_log_manager.logger)
+            )
 
         # Initialize smart tools
         self.smart_tools = create_smart_search_tools(self.client)
@@ -117,140 +121,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         """Close the MCP server and cleanup resources."""
         if hasattr(self.client, "close"):
             await self.client.close()
+        if self._tool_log_manager is not None:
+            self._tool_log_manager.shutdown()
         logger.info("🔧 Home Assistant Smart MCP Server closed")
-
-    # ------------------------------------------------------------------
-    # Tool logging helpers
-    # ------------------------------------------------------------------
-
-    def _install_tool_logging(self) -> None:
-        """Wrap FastMCP tool registration to log requests and responses."""
-
-        original_tool = self.mcp.tool
-
-        def logging_tool(
-            *tool_args: Any, **tool_kwargs: Any
-        ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-            decorator = original_tool(*tool_args, **tool_kwargs)
-
-            def wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
-                tool_name = tool_kwargs.get("name") or getattr(
-                    func, "__name__", "unknown"
-                )
-
-                if asyncio.iscoroutinefunction(func):
-
-                    @functools.wraps(func)
-                    async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                        return await self._execute_tool_with_logging(
-                            tool_name, func, args, kwargs
-                        )
-
-                    return decorator(async_wrapper)
-
-                @functools.wraps(func)
-                def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    return self._execute_tool_with_logging_sync(
-                        tool_name, func, args, kwargs
-                    )
-
-                return decorator(sync_wrapper)
-
-            return wrapper
-
-        self.mcp.tool = logging_tool
-
-    async def _execute_tool_with_logging(
-        self,
-        tool_name: str,
-        func: Callable[..., Any],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        """Execute async tool with logging of request and response payloads."""
-
-        log_entry = self._prepare_log_entry(tool_name, args, kwargs)
-        try:
-            result = await func(*args, **kwargs)
-        except Exception as exc:  # pragma: no cover - passthrough for logging only
-            log_entry["status"] = "error"
-            log_entry["error"] = repr(exc)
-            logger.info(
-                "[TOOL_CALL] %s",
-                json.dumps(log_entry, ensure_ascii=False, sort_keys=True),
-            )
-            raise
-
-        self._attach_response(log_entry, result)
-        logger.info(
-            "[TOOL_CALL] %s", json.dumps(log_entry, ensure_ascii=False, sort_keys=True)
-        )
-        return result
-
-    def _execute_tool_with_logging_sync(
-        self,
-        tool_name: str,
-        func: Callable[..., Any],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        """Execute sync tool with logging of request and response payloads."""
-
-        log_entry = self._prepare_log_entry(tool_name, args, kwargs)
-        try:
-            result = func(*args, **kwargs)
-        except Exception as exc:  # pragma: no cover - passthrough for logging only
-            log_entry["status"] = "error"
-            log_entry["error"] = repr(exc)
-            logger.info(
-                "[TOOL_CALL] %s",
-                json.dumps(log_entry, ensure_ascii=False, sort_keys=True),
-            )
-            raise
-
-        self._attach_response(log_entry, result)
-        logger.info(
-            "[TOOL_CALL] %s", json.dumps(log_entry, ensure_ascii=False, sort_keys=True)
-        )
-        return result
-
-    def _prepare_log_entry(
-        self, tool_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Create the base log entry with serialized request data."""
-
-        request_payload, request_characters = self._serialize_with_size(
-            {"args": list(args), "kwargs": kwargs}
-        )
-        return {
-            "event": "tool_call",
-            "tool": tool_name,
-            "status": "success",
-            "request": request_payload,
-            "request_characters": request_characters,
-        }
-
-    def _attach_response(self, log_entry: dict[str, Any], result: Any) -> None:
-        """Attach serialized response information to an existing log entry."""
-
-        response_payload, response_characters = self._serialize_with_size(result)
-        log_entry["response"] = response_payload
-        log_entry["response_characters"] = response_characters
-
-    def _serialize_with_size(self, value: Any) -> tuple[Any, int]:
-        """Serialize complex values into JSON-friendly structures and measure size."""
-
-        serialized = self._to_serializable(value)
-        serialized_text = json.dumps(serialized, ensure_ascii=False, sort_keys=True)
-        return serialized, len(serialized_text)
-
-    def _to_serializable(self, value: Any) -> Any:
-        """Best-effort conversion of values into JSON-serializable data."""
-
-        if isinstance(value, dict):
-            return {str(key): self._to_serializable(val) for key, val in value.items()}
-        if isinstance(value, (list, tuple, set)):
-            return [self._to_serializable(item) for item in value]
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        return repr(value)

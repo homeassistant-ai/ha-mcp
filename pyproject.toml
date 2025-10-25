@@ -33,6 +33,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "websockets>=12.0",
     "python-levenshtein>=0.25.0", # For faster fuzzy matching
+    "zstandard>=0.25.0",
 ]
 
 [project.optional-dependencies]
