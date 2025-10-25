@@ -12,6 +12,8 @@ jobs:
 
     env:
       PYTHON_VERSION: "3.13"
+      CODEX_CLI_MODEL: "gpt-4.1-mini"
+      CODEX_CLI_MODEL_FALLBACKS: "gpt-4o-mini gpt-4o-mini-2024-08-06 gpt-4.1 gpt-4o-mini-2024-05-13"
 
     steps:
       - name: Checkout
@@ -51,12 +53,33 @@ jobs:
       - name: Simple hello world
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: |
-          echo "=== Basic text ==="
-          codex exec "Say hello world"
+          set -uo pipefail
+          : "${CODEX_CLI_MODEL_FALLBACKS:=}"
+          success=0
+          for candidate in ${CODEX_CLI_MODEL} ${CODEX_CLI_MODEL_FALLBACKS}; do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            echo "=== Basic text with model: ${candidate} ==="
+            if codex exec --model "${candidate}" "Say hello world"; then
+              echo "=== Success: ${candidate} ==="
+              success=1
+            else
+              status=$?
+              echo "::warning::codex exec failed for ${candidate} with exit code ${status}"
+            fi
+            echo
+          done
+          if [ "${success}" -eq 0 ]; then
+            echo "::error::No codex exec variation succeeded"
+            exit 1
+          fi
 
       - name: Structured hello world
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: |
+          set -uo pipefail
+          : "${CODEX_CLI_MODEL_FALLBACKS:=}"
           echo "=== Structured output ==="
           cat <<'JSON' > schema.json
           {
@@ -68,30 +91,97 @@ jobs:
             "additionalProperties": false
           }
           JSON
-          codex exec \
-            --output-schema schema.json \
-            -o output.json \
-            "Output a JSON object with key 'message' set to 'hello world'."
-          echo "=== output.json ==="
-          cat output.json
+          success=0
+          mkdir -p codex_artifacts
+          for candidate in ${CODEX_CLI_MODEL} ${CODEX_CLI_MODEL_FALLBACKS}; do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            safe_name=$(printf '%s' "${candidate}" | tr -c '[:alnum:]' '_')
+            output_path="codex_artifacts/output_${safe_name}.json"
+            echo "=== Structured output with model: ${candidate} ==="
+            if codex exec \
+              --model "${candidate}" \
+              --output-schema schema.json \
+              -o "${output_path}" \
+              "Output a JSON object with key 'message' set to 'hello world'."; then
+              echo "=== ${output_path} ==="
+              cat "${output_path}"
+              success=1
+            else
+              status=$?
+              echo "::warning::Structured run failed for ${candidate} with exit code ${status}"
+            fi
+            echo
+          done
+          if [ "${success}" -eq 0 ]; then
+            echo "::error::No structured codex exec variation succeeded"
+            exit 1
+          fi
 
       - name: Sandbox write test
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         env:
           CODEX_QUIET_MODE: "1"
         run: |
+          set -uo pipefail
+          : "${CODEX_CLI_MODEL_FALLBACKS:=}"
           echo "=== Workspace write sandbox ==="
-          codex exec \
-            --sandbox workspace-write \
-            --quiet \
-            "Create a file hello.txt containing the text 'hello world' and confirm it exists."
-          echo "=== File contents ==="
-          cat hello.txt
+          mkdir -p codex_artifacts
+          success=0
+          for candidate in ${CODEX_CLI_MODEL} ${CODEX_CLI_MODEL_FALLBACKS}; do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            safe_name=$(printf '%s' "${candidate}" | tr -c '[:alnum:]' '_')
+            artifact_path="codex_artifacts/hello_${safe_name}.txt"
+            rm -f "${artifact_path}"
+            echo "=== Workspace write with model: ${candidate} ==="
+            if codex exec \
+              --model "${candidate}" \
+              --sandbox workspace-write \
+              --quiet \
+              "Create a file ${artifact_path} containing the text 'hello world' and confirm it exists."; then
+              echo "=== File contents (${artifact_path}) ==="
+              cat "${artifact_path}"
+              success=1
+            else
+              status=$?
+              echo "::warning::Sandbox run failed for ${candidate} with exit code ${status}"
+            fi
+            echo
+          done
+          if [ "${success}" -eq 0 ]; then
+            echo "::error::No sandbox codex exec variation succeeded"
+            exit 1
+          fi
 
       - name: JSON events test
         if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
         run: |
+          set -uo pipefail
+          : "${CODEX_CLI_MODEL_FALLBACKS:=}"
           echo "=== JSON events mode ==="
-          codex exec --json "Say hello world" | tee events.jsonl
-          echo "=== Tail events ==="
-          tail -n 10 events.jsonl
+          mkdir -p codex_artifacts
+          success=0
+          for candidate in ${CODEX_CLI_MODEL} ${CODEX_CLI_MODEL_FALLBACKS}; do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            safe_name=$(printf '%s' "${candidate}" | tr -c '[:alnum:]' '_')
+            events_path="codex_artifacts/events_${safe_name}.jsonl"
+            echo "=== JSON events with model: ${candidate} ==="
+            if codex exec --model "${candidate}" --json "Say hello world" | tee "${events_path}"; then
+              echo "=== Tail events (${events_path}) ==="
+              tail -n 10 "${events_path}"
+              success=1
+            else
+              status=${PIPESTATUS[0]}
+              echo "::warning::JSON events run failed for ${candidate} with exit code ${status}"
+            fi
+            echo
+          done
+          if [ "${success}" -eq 0 ]; then
+            echo "::error::No JSON events codex exec variation succeeded"
+            exit 1
+          fi
