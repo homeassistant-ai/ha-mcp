@@ -2,18 +2,25 @@ name: Codex Auto-Fix on Failure
 
 on:
   workflow_run:
+    # Must exactly match the PR workflow's file name or its `name:` value.
     workflows: ["pr.yml"]
     types: [completed]
 
 permissions:
   contents: write
   pull-requests: write
+  # actions: read  # uncomment if you later fetch artifacts via the Actions API
 
 jobs:
   auto-fix:
-    # Secrets cannot be referenced in the job condition, so only gate on workflow metadata here.
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.id == github.repository_id }}
+    # Keep fork PRs blocked if that's intended; otherwise remove the repo-id check.
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion != 'success' &&
+        github.event.workflow_run.head_repository.id == github.repository_id
+      }}
     runs-on: ubuntu-latest
+
     env:
       PYTHON_VERSION: "3.13"
       FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -22,6 +29,15 @@ jobs:
       FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
+      # Optional but super helpful: confirm what conclusion you're actually seeing.
+      - name: Debug event payload
+        run: |
+          echo 'conclusion=${{ github.event.workflow_run.conclusion }}'
+          echo 'name=${{ github.event.workflow_run.name }}'
+          echo 'head_branch=${{ github.event.workflow_run.head_branch }}'
+          echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
+          echo 'run_url=${{ github.event.workflow_run.html_url }}'
+
       - name: Ensure Codex secrets available
         id: ensure_codex_secrets
         env:
@@ -32,7 +48,6 @@ jobs:
             echo "available=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-
           echo "available=false" >> "${GITHUB_OUTPUT}"
           echo "::notice::Codex secrets missing; skipping auto-fix execution."
 
@@ -85,14 +100,8 @@ jobs:
             {
               "type": "object",
               "properties": {
-                "summary": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                },
-                "testing": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                }
+                "summary": { "type": "array", "items": { "type": "string" } },
+                "testing": { "type": "array", "items": { "type": "string" } }
               },
               "required": ["summary", "testing"],
               "additionalProperties": false
@@ -121,25 +130,18 @@ jobs:
           CODEX_OUTPUT: ${{ env.CODEX_OUTPUT }}
         run: |
           python - <<'PY'
-          import json
-          import os
-
-          output_path = os.environ.get("CODEX_OUTPUT")
-          if not output_path or not os.path.exists(output_path):
-              raise SystemExit("Codex output file missing")
-
-          with open(output_path, "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-
-          summary_items = data.get("summary", [])
-          testing_items = data.get("testing", [])
-
-          summary_md = "\n".join(f"- {item}" for item in summary_items) if summary_items else "- Codex did not provide a summary."
-          testing_md = "\n".join(f"- {item}" for item in testing_items) if testing_items else "- Codex did not report any tests."
-
+          import json, os, sys
+          p = os.environ.get("CODEX_OUTPUT")
+          if not p or not os.path.exists(p):
+              sys.exit("Codex output file missing")
+          data = json.load(open(p, "r", encoding="utf-8"))
+          s = data.get("summary", []) or []
+          t = data.get("testing", []) or []
+          s_md = "\n".join(f"- {x}" for x in s) or "- Codex did not provide a summary."
+          t_md = "\n".join(f"- {x}" for x in t) or "- Codex did not report any tests."
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write("summary_markdown<<EOF\n" + summary_md + "\nEOF\n")
-              fh.write("testing_markdown<<EOF\n" + testing_md + "\nEOF\n")
+              fh.write("summary_markdown<<EOF\n" + s_md + "\nEOF\n")
+              fh.write("testing_markdown<<EOF\n" + t_md + "\nEOF\n")
           PY
 
       - name: Create pull request with fixes
@@ -170,34 +172,27 @@ jobs:
         run: |
           set -euo pipefail
           auth_path="$HOME/.codex/auth.json"
-          if [ -z "${GH_TOKEN}" ]; then
-            echo "No PAT provided; skipping secret refresh."
-            exit 0
-          fi
-          if [ ! -f "$auth_path" ]; then
-            echo "Codex auth file missing; skipping secret refresh."
+          if [ -z "${GH_TOKEN}" ] || [ ! -f "$auth_path" ]; then
+            echo "Skipping secret refresh (no PAT or missing auth)."
             exit 0
           fi
           if [ -z "${ORIGINAL_CODEX_AUTH:-}" ] || [ ! -f "$ORIGINAL_CODEX_AUTH" ]; then
-            echo "Original auth snapshot missing; skipping secret refresh."
+            echo "Original auth snapshot missing; skipping."
             exit 0
           fi
           if cmp -s "$ORIGINAL_CODEX_AUTH" "$auth_path"; then
             echo "Codex auth unchanged; no secret update needed."
             exit 0
           fi
-
           echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
           python -m pip install --quiet pynacl
           IFS=$'\t' read -r key_id public_key <<'EOF'
           $(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')
           EOF
           encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$auth_path" python - <<'PY'
-          import base64
-          import os
+          import base64, os
           from pathlib import Path
           from nacl import public
-
           key = base64.b64decode(os.environ["PUBLIC_KEY"])
           auth = Path(os.environ["AUTH_PATH"]).read_bytes()
           sealed = public.SealedBox(public.PublicKey(key))
