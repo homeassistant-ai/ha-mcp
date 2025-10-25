@@ -78,6 +78,17 @@ A production-ready Model Context Protocol (MCP) server that enables AI assistant
 
 ## Development Commands
 
+### Tool Usage Logging
+
+- Verbose tool request/response logging is controlled via the
+  `HOMEASSISTANT_LOG_ALL` environment variable. When enabled, see
+  [`docs/tool-usage-logging.md`](docs/tool-usage-logging.md) for parsing
+  scripts and optimization workflow tips.
+- CI pushes trigger the `E2E Tests` workflow and pull requests trigger the `PR
+  Validation Pipeline`; both store log output in `artifacts/tool_calls.log` and
+  run `tests/src/tool_logging/` afterwards to ensure verbose logging and
+  analysis helpers continue to function.
+
 ### Environment Setup
 ```bash
 # Install dependencies (UV required)

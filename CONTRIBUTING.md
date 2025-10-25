@@ -29,6 +29,18 @@ uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
 ```
 
+## 📊 Tool Usage Logging
+
+Set `HOMEASSISTANT_LOG_ALL=true` to capture every tool request and response in
+the server logs. This is useful when diagnosing overly verbose tools or
+preparing optimization work. Detailed usage instructions, including the
+analysis helper script, live in
+[`docs/tool-usage-logging.md`](docs/tool-usage-logging.md). The `E2E Tests`
+workflow (pushes) and the `PR Validation Pipeline` workflow (pull requests)
+enforce this by writing the combined pytest output to `artifacts/tool_calls.log`
+and running `tests/src/tool_logging/` to ensure the analysis helpers keep
+working.
+
 ## 📋 Guidelines
 
 - **Code**: Follow existing patterns, add type hints, test new features
