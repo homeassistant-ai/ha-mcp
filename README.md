@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
@@ -22,7 +22,7 @@
 
 ---
 
-![Home Assistant MCP Demo](img/demo.webp)
+![Home Assistant MCP Demo](docs/img/demo.webp)
 
 **[YouTube version →](https://youtu.be/eCO93KfSvIM)**
 
@@ -182,74 +182,43 @@ claude mcp add-json home-assistant '{
 
 ---
 
-### Method 3: Python+UV
+### Method 3: Running Python with UV
 
 **Best for:** When Docker is not available
 
+> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
+
 **Prerequisites:**
-- [Git](ttps://git-scm.com/downloads)
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-- A long-lived token: ** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
-
-**Installation Steps:**
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/homeassistant-ai/ha-mcp
-   cd ha-mcp
-   ```
-
-2. **(optional) Install dependencies and make sure uv is working:**
-   ```bash
-   uv sync
-   ```
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) and [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+  - Windows: winget install astral-sh.uv Git.Git -e
+  - MacOS: brew install git uv
+- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
+- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
 
 **Client Configuration:**
 
 <details>
 <summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
 
-**Location:**
+**Config file:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add to your `mcp.json`:
-
-Linux/WSL/macOS:
 ```json
 {
   "mcpServers": {
-
     "Home Assistant": {
-      "command": "path/to/ha-mcp/run_mcp_server.sh",
-      "args": [],
+      "command": "uvx",
+      "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
       }
     }
-
   }
 }
 ```
-
-Windows:
-```json
-{
-  "mcpServers": {
-
-    "Home Assistant": {
-      "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
-      "args": [],
-      "env": {
-        "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
-      }
-    }
-
-  }
-}
-```
+Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 
 </details>
 
@@ -257,14 +226,10 @@ Windows:
 <summary><b>💻 Claude Code</b></summary>
 
 ```bash
-claude mcp add-json home-assistant '{
-  "command": "C:\\path\\to\\ha-mcp\\run_mcp_server.bat",
-  "args": [],
-  "env": {
-    "HOMEASSISTANT_URL": "http://localhost:8123",
-    "HOMEASSISTANT_TOKEN": "your_long_lived_access_token_from_home_assistant_profile"
-  }
-}'
+claude mcp add --transport stdio home-assistant \
+  --env HOMEASSISTANT_URL=http://localhost:8123 \
+  --env HOMEASSISTANT_TOKEN=your_long_lived_token \
+  -- uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
 ```
 
 </details>
@@ -272,24 +237,36 @@ claude mcp add-json home-assistant '{
 <details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-1. **Download cloudflared binary:**
-   - Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+Run the MCP server with uvx (replace the values of the environement variables):
 
-2. **Start the MCP server with secret path:**
-   ```bash
-   export HOMEASSISTANT_URL=http://localhost:8123
-   export HOMEASSISTANT_TOKEN=your_long_lived_token
-   export MCP_SECRET_PATH=/__my_secret__
-   uv run fastmcp run fastmcp-webclient.json
-   ```
+Windows:
+```bash
+set HOMEASSISTANT_URL=http://localhost:8123
+set HOMEASSISTANT_TOKEN=your_long_lived_token
+set MCP_PORT=8086
+set MCP_SECRET_PATH=/__my_secret__
+uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
+```
+Others:
+```bash
+export HOMEASSISTANT_URL=http://localhost:8123
+export HOMEASSISTANT_TOKEN=your_long_lived_token
+export MCP_PORT=8086
+export MCP_SECRET_PATH=/__my_secret__
+uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
+```
 
-3. **In another terminal, start Cloudflare Tunnel:**
-   ```bash
-   cloudflared tunnel --url http://localhost:8086
-   ```
+Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
 
-4. **Use the URL from cloudflared output:** `https://abc-def.trycloudflare.com/__my_secret__`
+Easiest option is to download [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release)
 
+**In another terminal, start Cloudflare Tunnel:**
+
+```bash
+cloudflared tunnel --url http://localhost:8086
+```
+
+Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
 </details>
 
 **Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
@@ -405,3 +382,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
 
+## 👥 Contributors
+
+- **[@julienld](https://github.com/julienld)** — Project maintainer & core contributor.
+- **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.

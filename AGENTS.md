@@ -398,7 +398,7 @@ Home Assistant MCP Server - Current Structure
 │   ├── manager.py             # MCP prompt templates
 │   └── enhanced.py            # Enhanced prompts
 └── Utils Layer (/src/ha_mcp/utils/)
-    ├── fuzzy_search.py        # Fuzzy matching engine with fuzzywuzzy
+    ├── fuzzy_search.py        # Fuzzy matching engine with textdistance
     ├── domain_handlers.py     # Home Assistant domain-specific logic
     ├── operation_manager.py   # Async operation management
     └── usage_logger.py        # Tool usage logging
@@ -429,7 +429,7 @@ Home Assistant MCP Server - Current Structure
 - **Connection Management**: Auto-reconnect with exponential backoff
 
 #### Smart Search Engine
-- **Fuzzy Matching**: Uses `fuzzywuzzy` with `python-levenshtein` for performance
+- **Fuzzy Matching**: Uses `textdistance[extras]` for high-performance similarity scoring
 - **Multi-language**: Supports French/English entity naming conventions
 - **Area-Based Search**: Groups entities by Home Assistant areas/rooms
 - **AI Optimization**: Provides system overviews optimized for AI understanding

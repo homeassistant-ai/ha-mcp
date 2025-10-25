@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "3.1.5"
+version: "3.2.3"
 slug: "ha_mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
@@ -23,22 +23,9 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
 options:
   backup_hint: "normal"
-  secret_path: ""
 schema:
-  backup_hint:
-    required: false
-    advanced: true
-    default: "normal"
-    description: "Controls when backups are suggested before operations."
-    options:
-      - "strong"
-      - "normal"
-      - "weak"
-      - "auto"
-  secret_path:
-    required: false
-    advanced: true
-    description: "Custom secret path (overrides auto-generated). Leave empty for auto-generation."
+  backup_hint: list(strong|normal|weak|auto)
+  secret_path: str?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
