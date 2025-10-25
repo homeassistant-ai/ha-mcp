@@ -57,6 +57,8 @@ workflow (pull requests) automatically enable `HOMEASSISTANT_LOG_ALL=true` and
 store the combined pytest output in `artifacts/tool_calls.log`. Each run invokes
 the follow-up `tool_logging` test suite, which consumes the artifact and runs
 the helpers above to ensure at least one successful tool call was captured.
+Pull requests reuse the same `E2E Tests` workflow via `workflow_call`, keeping
+log instrumentation in sync without maintaining duplicate job definitions.
 Workflow failures flag regressions in verbose logging or the analysis pipeline
 long before optimization work begins.
 

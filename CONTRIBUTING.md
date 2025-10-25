@@ -39,7 +39,8 @@ analysis helper script, live in
 workflow (pushes) and the `PR Validation Pipeline` workflow (pull requests)
 enforce this by writing the combined pytest output to `artifacts/tool_calls.log`
 and running `tests/src/tool_logging/` to ensure the analysis helpers keep
-working.
+working. The PR pipeline calls the same reusable `E2E Tests` workflow so the log
+instrumentation never drifts between push and PR runs.
 
 ## 📋 Guidelines
 

@@ -12,6 +12,7 @@ on:
       - 'homeassistant-addon/**'
       - '.github/workflows/e2e-tests.yml'
   workflow_dispatch:
+  workflow_call:
 
 # Limit GITHUB_TOKEN permissions to minimum required
 permissions:
