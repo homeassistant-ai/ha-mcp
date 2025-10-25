@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'",
@@ -431,15 +431,15 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "3.2.0"
+version = "3.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "textdistance", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'arm64'", specifier = ">=4.6.0" },
-    { name = "textdistance", extra = ["extras"], marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'", specifier = ">=4.6.0" },
+    { name = "textdistance" },
+    { name = "textdistance", extra = ["extras"], marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'" },
     { name = "websockets" },
 ]
 

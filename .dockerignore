@@ -25,6 +25,7 @@ ENV/
 *~
 
 # Testing
+tests/
 .coverage
 htmlcov/
 .tox/
