@@ -74,7 +74,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
 
 def main() -> int:
     """Start the Home Assistant MCP Server."""
-    log_info("Starting Home Assistant MCP Server...")
+    log_info("Starting up Home Assistant MCP Server...")
 
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
