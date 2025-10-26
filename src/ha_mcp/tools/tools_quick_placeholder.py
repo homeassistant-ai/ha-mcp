@@ -516,7 +516,7 @@ class QuickPlaceholderScriptExecutor:
 
             if override.search_terms is not None:
                 placeholder.search_terms = [
-                    term.dict() if isinstance(term, BaseModel) else term
+                    term.model_dump() if isinstance(term, BaseModel) else term
                     for term in override.search_terms
                 ]
             if override.min_confidence is not None:

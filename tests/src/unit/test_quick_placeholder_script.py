@@ -84,6 +84,9 @@ if "pydantic" not in sys.modules:
             annotations = getattr(self, "__annotations__", {})
             return {key: getattr(self, key) for key in annotations}
 
+        def model_dump(self, *args, **kwargs):  # pragma: no cover - stub helper
+            return self.dict(*args, **kwargs)
+
     pydantic_stub.BaseModel = BaseModel
     pydantic_stub.Field = Field
     pydantic_stub.ValidationError = ValidationError
@@ -151,7 +154,9 @@ if "textdistance" not in sys.modules:
     sys.modules["textdistance"] = textdistance_stub
 
 from ha_mcp.tools.tools_quick_placeholder import (
+    PlaceholderOverrideModel,
     QuickPlaceholderScriptExecutor,
+    WeightedTermModel,
     is_obvious_match,
     normalize_confidence,
     normalize_search_terms,
@@ -193,6 +198,30 @@ def test_normalize_search_terms_with_weights() -> None:
     assert pytest.approx(terms[0].weight, rel=1e-6) == 0.25
     assert pytest.approx(terms[1].weight, rel=1e-6) == 0.75
     assert raw[0]["weight"] == 0.25
+
+
+def test_merge_placeholders_accepts_weighted_override_models() -> None:
+    client = DummyClient(states=[], scripts={})
+    executor = QuickPlaceholderScriptExecutor(client)
+
+    manifest = {"placeholders": {}, "order": []}
+    overrides = [
+        PlaceholderOverrideModel(
+            id="TARGET_LIGHT",
+            search_terms=[
+                WeightedTermModel(value="Kitchen Main", weight=0.75),
+                "kitchen light",
+            ],
+        )
+    ]
+
+    placeholders, order = executor._merge_placeholders(manifest, overrides)
+
+    assert order == ["TARGET_LIGHT"]
+    override_terms = placeholders["TARGET_LIGHT"].search_terms
+    assert override_terms[0]["value"] == "Kitchen Main"
+    assert override_terms[0]["weight"] == pytest.approx(0.75)
+    assert override_terms[1] == "kitchen light"
 
 
 def test_normalize_confidence_variants() -> None:
