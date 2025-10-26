@@ -398,12 +398,12 @@ class QuickPlaceholderScriptExecutor:
             }
 
         # All placeholders resolved - execute script
-        service_data: dict[str, Any] = {
-            "entity_id": script_id,
-            "fields": resolved_entities,
-        }
+        service_data: dict[str, Any] = {"entity_id": script_id}
+        variables: dict[str, Any] = dict(resolved_entities)
         if script_args:
-            service_data.update(script_args)
+            variables.update(script_args)
+        if variables:
+            service_data["variables"] = variables
 
         try:
             service_result = await self.client.call_service("script", "turn_on", service_data)
@@ -798,7 +798,7 @@ def register_quick_placeholder_script_tool(mcp: Any, client: Any, **_: Any) -> N
             dict[str, Any] | None,
             Field(
                 default=None,
-                description="Additional keyword arguments passed to script.turn_on",
+                description="Additional script variables merged with resolved placeholders",
             ),
         ] = None,
         elicitation_state: Annotated[
