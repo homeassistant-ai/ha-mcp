@@ -1,0 +1,124 @@
+name: PR Validation Pipeline - Auto-fix (sync)
+
+on:
+  workflow_run:
+    workflows: ["PR Validation Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+env:
+  CODEX_AUTOFIX_MODE: ${{ vars.CODEX_AUTOFIX_MODE || 'async' }}
+
+jobs:
+  summarize-pr-context:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_repository.id == github.repository_id &&
+        env.CODEX_AUTOFIX_MODE == 'sync'
+      }}
+    runs-on: ubuntu-latest
+
+    outputs:
+      pr_context: ${{ steps.fetch-pr.outputs.pr_context }}
+
+    steps:
+      - name: Fetch pull request context
+        id: fetch-pr
+        uses: ./.github/actions/codex-fetch-pr-context
+        with:
+          write-summary: 'true'
+
+  auto-fix:
+    needs: summarize-pr-context
+    if: ${{ needs.summarize-pr-context.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHON_VERSION: "3.13"
+      FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+      FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Debug event payload
+        run: |
+          echo 'conclusion=${{ github.event.workflow_run.conclusion }}'
+          echo 'name=${{ github.event.workflow_run.name }}'
+          echo 'head_branch=${{ github.event.workflow_run.head_branch }}'
+          echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
+          echo 'run_url=${{ github.event.workflow_run.html_url }}'
+
+      - name: Prepare Codex environment
+        id: prepare_codex
+        uses: ./.github/actions/codex-prepare
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          codex-auth-pat: ${{ secrets.CODEX_AUTH_PAT }}
+          require-pat: 'true'
+
+      - name: Checkout failing ref
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.FAILED_HEAD_SHA }}
+          fetch-depth: 0
+
+      - name: Install uv
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        run: uv sync --all-extras --dev
+
+      - name: Run Codex remediation
+        id: run_codex
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        uses: ./.github/actions/codex-run-sync
+        with:
+          prompt: |
+            You are working in the ha-mcp repository for a Home Assistant MCP server on GitHub. Investigate the failing "${{ env.FAILED_WORKFLOW_NAME }}" run (URL: ${{ env.FAILED_RUN_URL }}). Identify the regression and implement only the minimal code changes required to make the workflow pass. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or Docker validation suites; they will execute after the pull request is opened.
+
+            Summarise the modifications you make and list any tests you execute.
+          pr-context: ${{ needs.summarize-pr-context.outputs.pr_context }}
+
+      - name: Create pull request with fixes
+        if: ${{ steps.prepare_codex.outputs.available == 'true' && success() }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "fix(ci): auto-fix failing tests via Codex"
+          branch: codex/auto-fix-${{ github.event.workflow_run.run_id }}
+          base: ${{ env.FAILED_HEAD_BRANCH }}
+          title: "Auto-fix failing CI via Codex"
+          token: ${{ secrets.CODEX_AUTH_PAT }}
+          body: |
+            Codex automatically generated this PR in response to a CI failure on workflow `${{ env.FAILED_WORKFLOW_NAME }}`.
+            Failed run: `${{ env.FAILED_RUN_URL }}`
+            Head branch: `${{ env.FAILED_HEAD_BRANCH }}`
+
+            ## Summary
+            ${{ steps.run_codex.outputs.summary_markdown }}
+
+            ## Testing
+            ${{ steps.run_codex.outputs.testing_markdown }}
+
+      - name: Update CODEX auth secret if refreshed
+        if: ${{ always() && steps.prepare_codex.outputs.available == 'true' }}
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex_auth_path: ${{ steps.prepare_codex.outputs.codex_auth_path }}
+          original_codex_auth: ${{ steps.prepare_codex.outputs.original_codex_auth }}
+          gh_token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}

@@ -1,0 +1,73 @@
+name: PR Validation Pipeline - Auto-fix (async)
+
+on:
+  workflow_run:
+    workflows: ["PR Validation Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+env:
+  CODEX_AUTOFIX_MODE: ${{ vars.CODEX_AUTOFIX_MODE || 'async' }}
+
+jobs:
+  enqueue-async-worker:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_repository.id == github.repository_id &&
+        env.CODEX_AUTOFIX_MODE != 'sync'
+      }}
+    runs-on: ubuntu-latest
+
+    env:
+      FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+      FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Debug event payload
+        run: |
+          echo 'conclusion=${{ github.event.workflow_run.conclusion }}'
+          echo 'name=${{ github.event.workflow_run.name }}'
+          echo 'head_branch=${{ github.event.workflow_run.head_branch }}'
+          echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
+          echo 'run_url=${{ github.event.workflow_run.html_url }}'
+
+      - name: Prepare Codex environment
+        id: prepare_codex
+        uses: ./.github/actions/codex-prepare
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+
+      - name: Fetch pull request context
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        id: fetch_pr
+        uses: ./.github/actions/codex-fetch-pr-context
+
+      - name: Launch async Codex worker
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        uses: ./.github/actions/codex-run-async
+        with:
+          prompt: |
+            You are working in the ha-mcp repository for a Home Assistant MCP server on GitHub. Investigate the failing "${{ env.FAILED_WORKFLOW_NAME }}" run (URL: ${{ env.FAILED_RUN_URL }}). Identify the regression and implement only the minimal code changes required to make the workflow pass. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or Docker validation suites; they will execute after the pull request is opened.
+
+            Summarise the modifications you make and list any tests you execute.
+          pr-context: ${{ steps.fetch_pr.outputs.pr_context }}
+          failed_workflow_name: ${{ env.FAILED_WORKFLOW_NAME }}
+          failed_run_url: ${{ env.FAILED_RUN_URL }}
+          failed_head_branch: ${{ env.FAILED_HEAD_BRANCH }}
+          failed_head_sha: ${{ env.FAILED_HEAD_SHA }}
+
+      - name: Update CODEX auth secret if refreshed
+        if: ${{ always() && steps.prepare_codex.outputs.available == 'true' }}
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex_auth_path: ${{ steps.prepare_codex.outputs.codex_auth_path }}
+          original_codex_auth: ${{ steps.prepare_codex.outputs.original_codex_auth }}
+          gh_token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}

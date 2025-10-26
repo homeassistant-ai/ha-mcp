@@ -1,0 +1,77 @@
+name: Prepare Codex environment
+description: Ensure Codex secrets are available, install the CLI, and write auth.json to disk.
+inputs:
+  codex-auth:
+    description: Raw CODEX_AUTH secret material
+    required: true
+  codex-auth-pat:
+    description: Personal access token used for Codex-authenticated operations (optional)
+    required: false
+  require-pat:
+    description: "Set to 'true' to require the PAT when marking the environment available."
+    required: false
+    default: 'false'
+outputs:
+  available:
+    description: Whether all required Codex credentials were present.
+    value: ${{ steps.check.outputs.available }}
+  codex_auth_path:
+    description: Absolute path to the written auth.json file (if available).
+    value: ${{ steps.write.outputs.auth_path }}
+  original_codex_auth:
+    description: Path to the captured original auth snapshot (if available).
+    value: ${{ steps.write.outputs.original_auth }}
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        CODEX_AUTH: ${{ inputs.codex-auth }}
+        CODEX_AUTH_PAT: ${{ inputs.codex-auth-pat }}
+        REQUIRE_PAT: ${{ inputs.require-pat }}
+      run: |
+        set -euo pipefail
+        require_pat="${REQUIRE_PAT,,}"
+        if [[ -z "${CODEX_AUTH:-}" ]]; then
+          echo "::notice::CODEX_AUTH secret missing; Codex automation will be skipped." >&2
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ "$require_pat" == "true" && -z "${CODEX_AUTH_PAT:-}" ]]; then
+          echo "::notice::CODEX_AUTH_PAT secret missing; Codex automation will be skipped." >&2
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "available=true" >> "$GITHUB_OUTPUT"
+
+    - id: write
+      if: ${{ steps.check.outputs.available == 'true' }}
+      shell: bash
+      env:
+        CODEX_AUTH: ${{ inputs.codex-auth }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        auth_path="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
+        mkdir -p "$(dirname "$auth_path")"
+        printf '%s' "$CODEX_AUTH" > "$auth_path"
+        chmod 600 "$auth_path"
+        echo "auth_path=$auth_path" >> "$GITHUB_OUTPUT"
+
+        if [[ -n "${RUNNER_TEMP:-}" ]]; then
+          snapshot="$RUNNER_TEMP/codex-auth-original.json"
+          cp "$auth_path" "$snapshot"
+          echo "original_auth=$snapshot" >> "$GITHUB_OUTPUT"
+        else
+          echo "original_auth=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Codex CLI
+      if: ${{ steps.check.outputs.available == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install -g @openai/codex

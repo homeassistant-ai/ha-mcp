@@ -1,0 +1,56 @@
+name: Launch Codex async worker
+description: Start a Codex cloud worker to investigate the failing workflow asynchronously.
+inputs:
+  prompt:
+    description: Base prompt to feed into the Codex cloud worker.
+    required: true
+  pr-context:
+    description: Optional textual pull request context to append to the prompt.
+    required: false
+  failed_workflow_name:
+    description: Name of the failed workflow run
+    required: true
+  failed_run_url:
+    description: URL to the failed workflow run
+    required: true
+  failed_head_branch:
+    description: Branch associated with the failed run
+    required: true
+  failed_head_sha:
+    description: Commit SHA associated with the failed run
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PROMPT_TEXT: ${{ inputs.prompt }}
+        PR_CONTEXT: ${{ inputs.pr-context }}
+        FAILED_WORKFLOW_NAME: ${{ inputs.failed_workflow_name }}
+        FAILED_RUN_URL: ${{ inputs.failed_run_url }}
+        FAILED_HEAD_BRANCH: ${{ inputs.failed_head_branch }}
+        FAILED_HEAD_SHA: ${{ inputs.failed_head_sha }}
+      run: |
+        set -euo pipefail
+        prompt_file="$(mktemp)"
+        printf '%s' "${PROMPT_TEXT}" > "$prompt_file"
+        printf '\n' >> "$prompt_file"
+
+        if [[ -n "${PR_CONTEXT:-}" ]]; then
+          {
+            echo ""
+            echo "Pull request context:"
+            printf '%s\n' "$PR_CONTEXT"
+          } >> "$prompt_file"
+        fi
+
+        {
+          echo ""
+          echo "Failure context:"
+          echo "  - Workflow name: ${FAILED_WORKFLOW_NAME}"
+          echo "  - Run URL: ${FAILED_RUN_URL}"
+          echo "  - Head branch: ${FAILED_HEAD_BRANCH}"
+          echo "  - Head SHA: ${FAILED_HEAD_SHA}"
+        } >> "$prompt_file"
+
+        codex cloud exec --env 68f2eebb94d48191ba53625a2b09ae54 - < "$prompt_file"
