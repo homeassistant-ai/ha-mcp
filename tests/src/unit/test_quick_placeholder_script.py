@@ -261,7 +261,9 @@ def test_executor_resolves_and_runs_script() -> None:
     assert result["status"] == "resolved"
     assert result["resolved_entities"] == {"TARGET_LIGHT": "light.kitchen_main"}
     assert client.service_calls[0][0] == "script"
-    assert client.service_calls[0][2]["fields"]["TARGET_LIGHT"] == "light.kitchen_main"
+    service_data = client.service_calls[0][2]
+    assert service_data["variables"]["TARGET_LIGHT"] == "light.kitchen_main"
+    assert service_data["variables"]["brightness_pct"] == 30
 
 
 def test_executor_requests_elicitation_when_ambiguous() -> None:
