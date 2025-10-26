@@ -3,7 +3,6 @@
 import os
 import stat
 import yaml
-import pytest
 
 try:
     import tomllib  # Python 3.11+

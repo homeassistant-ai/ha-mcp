@@ -4,9 +4,7 @@ Service call and device operation tools for Home Assistant MCP server.
 This module provides service execution and WebSocket-enabled operation monitoring tools.
 """
 
-from typing import Annotated, Any, cast
-
-from pydantic import Field
+from typing import Any, cast
 
 from .util_helpers import parse_json_param
 

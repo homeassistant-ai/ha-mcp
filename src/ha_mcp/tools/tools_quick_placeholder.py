@@ -9,8 +9,8 @@ once all placeholders have been resolved.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -838,4 +838,3 @@ __all__ = [
     "normalize_confidence",
     "is_obvious_match",
 ]
-

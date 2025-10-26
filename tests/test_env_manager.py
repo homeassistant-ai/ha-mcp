@@ -218,12 +218,12 @@ class HomeAssistantTestEnvironment:
             print(f"\n🌐 Web UI: {self.ha_url}")
             print(f"   Username: {self.test_user}")
             print(f"   Password: {self.test_password}")
-            print(f"\n📋 Copy-paste for testing:")
+            print("\n📋 Copy-paste for testing:")
             print(f"   export HOMEASSISTANT_URL={self.ha_url}")
             print(f"   export HOMEASSISTANT_TOKEN={self.ha_token}")
-            print(f"\n🔑 Full API Token:")
+            print("\n🔑 Full API Token:")
             print(f"   {self.ha_token}")
-            print(f"\n🐳 Container Status: Running")
+            print("\n🐳 Container Status: Running")
             print("📊 API Health: ", end="")
 
             try:

@@ -8,10 +8,9 @@ template evaluation, and domain documentation retrieval.
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Any
 
 import httpx
-from pydantic import Field
 
 from .helpers import log_tool_usage
 from .util_helpers import add_timezone_metadata
