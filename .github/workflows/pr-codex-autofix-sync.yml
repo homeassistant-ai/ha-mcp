@@ -89,16 +89,56 @@ jobs:
         if: ${{ steps.prepare_codex.outputs.available == 'true' }}
         run: uv sync --all-extras --dev
 
+      - name: Compose Codex prompt
+        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        id: compose_prompt
+        env:
+          FAILED_WORKFLOW_NAME: ${{ env.FAILED_WORKFLOW_NAME }}
+          FAILED_RUN_URL: ${{ env.FAILED_RUN_URL }}
+          FAILED_HEAD_BRANCH: ${{ env.FAILED_HEAD_BRANCH }}
+          FAILED_HEAD_SHA: ${{ env.FAILED_HEAD_SHA }}
+          PR_CONTEXT: ${{ needs.summarize-pr-context.outputs.pr_context }}
+        run: |
+          set -euo pipefail
+          prompt_file="$(mktemp)"
+          {
+            printf 'You are working in the ha-mcp repository for a Home Assistant MCP server on GitHub. '
+            printf 'Investigate the failing "%s" run (URL: %s). Identify the regression and implement only the minimal code changes required to make the workflow pass. '
+            printf 'Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or Docker validation suites; they will execute after the pull request is opened.\n\n' \
+              "$FAILED_WORKFLOW_NAME" \
+              "$FAILED_RUN_URL"
+            echo 'Summarise the modifications you make and list any tests you execute.'
+          } > "$prompt_file"
+
+          if [[ -n "${PR_CONTEXT:-}" ]]; then
+            {
+              echo
+              echo 'Pull request context:'
+              printf '%s\n' "$PR_CONTEXT"
+            } >> "$prompt_file"
+          fi
+
+          {
+            echo
+            echo 'Failure context:'
+            printf '  - Workflow name: %s\n' "$FAILED_WORKFLOW_NAME"
+            printf '  - Run URL: %s\n' "$FAILED_RUN_URL"
+            printf '  - Head branch: %s\n' "$FAILED_HEAD_BRANCH"
+            printf '  - Head SHA: %s\n' "$FAILED_HEAD_SHA"
+          } >> "$prompt_file"
+
+          {
+            echo 'prompt<<EOF'
+            cat "$prompt_file"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Run Codex remediation
         id: run_codex
         if: ${{ steps.prepare_codex.outputs.available == 'true' }}
         uses: ./.github/actions/codex-run-sync
         with:
-          prompt: |
-            You are working in the ha-mcp repository for a Home Assistant MCP server on GitHub. Investigate the failing "${{ env.FAILED_WORKFLOW_NAME }}" run (URL: ${{ env.FAILED_RUN_URL }}). Identify the regression and implement only the minimal code changes required to make the workflow pass. Keep changes surgical and avoid unrelated refactors. Do not run end-to-end validation tests or Docker validation suites; they will execute after the pull request is opened.
-
-            Summarise the modifications you make and list any tests you execute.
-          pr-context: ${{ needs.summarize-pr-context.outputs.pr_context }}
+          prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
       - name: Create pull request with fixes
         if: ${{ steps.prepare_codex.outputs.available == 'true' && success() }}
