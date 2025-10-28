@@ -47,12 +47,18 @@ jobs:
 
     steps:
       - name: Debug event payload
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          NAME: ${{ github.event.workflow_run.name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
-          echo 'conclusion=${{ github.event.workflow_run.conclusion }}'
-          echo 'name=${{ github.event.workflow_run.name }}'
-          echo 'head_branch=${{ github.event.workflow_run.head_branch }}'
-          echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
-          echo 'run_url=${{ github.event.workflow_run.html_url }}'
+          echo "conclusion=$CONCLUSION"
+          echo "name=$NAME"
+          echo "head_branch=$HEAD_BRANCH"
+          echo "head_sha=$HEAD_SHA"
+          echo "run_url=$RUN_URL"
 
       - name: Prepare Codex environment
         id: prepare_codex
