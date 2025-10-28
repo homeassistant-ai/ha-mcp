@@ -34,7 +34,7 @@ jobs:
         run: |
           echo 'conclusion=${{ github.event.workflow_run.conclusion }}'
           echo 'name=${{ github.event.workflow_run.name }}'
-          echo 'head_branch=${{ github.event.workflow_run.head_branch }}'
+          echo "head_branch=$FAILED_HEAD_BRANCH"
           echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
           echo 'run_url=${{ github.event.workflow_run.html_url }}'
 
