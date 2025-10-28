@@ -60,37 +60,29 @@ jobs:
           echo "head_sha=$HEAD_SHA"
           echo "run_url=$RUN_URL"
 
-      - name: Prepare Codex environment
-        id: prepare_codex
-        uses: ./.github/actions/codex-prepare
-        with:
-          codex-auth: ${{ secrets.CODEX_AUTH }}
-          codex-auth-pat: ${{ secrets.CODEX_AUTH_PAT }}
-          require-pat: 'true'
-
       - name: Checkout failing ref
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
 
       - name: Install uv
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
       - name: Set up Python
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
         run: uv sync --all-extras --dev
 
       - name: Compose Codex prompt
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
         id: compose_prompt
         env:
           FAILED_WORKFLOW_NAME: ${{ env.FAILED_WORKFLOW_NAME }}
@@ -133,15 +125,19 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Run Codex remediation
-        id: run_codex
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
-        uses: ./.github/actions/codex-run-sync
+      - name: Invoke Codex automation
+        id: codex
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        uses: ./.github/actions/codex-run
         with:
+          mode: sync
           prompt: ${{ steps.compose_prompt.outputs.prompt }}
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          codex-auth-pat: ${{ secrets.CODEX_AUTH_PAT }}
+          require-pat: 'true'
 
       - name: Create pull request with fixes
-        if: ${{ steps.prepare_codex.outputs.available == 'true' && success() }}
+        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' && steps.codex.outputs.available == 'true' && success() }}
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "fix(ci): auto-fix failing tests via Codex"
@@ -155,16 +151,16 @@ jobs:
             Head branch: `${{ env.FAILED_HEAD_BRANCH }}`
 
             ## Summary
-            ${{ steps.run_codex.outputs.summary_markdown }}
+            ${{ steps.codex.outputs.summary_markdown }}
 
             ## Testing
-            ${{ steps.run_codex.outputs.testing_markdown }}
+            ${{ steps.codex.outputs.testing_markdown }}
 
       - name: Update CODEX auth secret if refreshed
-        if: ${{ always() && steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ always() && steps.codex.outputs.available == 'true' }}
         uses: ./.github/actions/codex-update-auth
         with:
-          codex_auth_path: ${{ steps.prepare_codex.outputs.codex_auth_path }}
-          original_codex_auth: ${{ steps.prepare_codex.outputs.original_codex_auth }}
+          codex_auth_path: ${{ steps.codex.outputs.codex_auth_path }}
+          original_codex_auth: ${{ steps.codex.outputs.original_codex_auth }}
           gh_token: ${{ secrets.CODEX_AUTH_PAT }}
           repository: ${{ github.repository }}

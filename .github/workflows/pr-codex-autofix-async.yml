@@ -38,19 +38,13 @@ jobs:
           echo 'head_sha=${{ github.event.workflow_run.head_sha }}'
           echo 'run_url=${{ github.event.workflow_run.html_url }}'
 
-      - name: Prepare Codex environment
-        id: prepare_codex
-        uses: ./.github/actions/codex-prepare
-        with:
-          codex-auth: ${{ secrets.CODEX_AUTH }}
-
       - name: Fetch pull request context
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' }}
         id: fetch_pr
         uses: ./.github/actions/codex-fetch-pr-context
 
       - name: Compose Codex prompt
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ secrets.CODEX_AUTH != '' }}
         id: compose_prompt
         env:
           FAILED_WORKFLOW_NAME: ${{ env.FAILED_WORKFLOW_NAME }}
@@ -93,17 +87,20 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Launch async Codex worker
-        if: ${{ steps.prepare_codex.outputs.available == 'true' }}
-        uses: ./.github/actions/codex-run-async
+      - name: Invoke Codex automation
+        if: ${{ secrets.CODEX_AUTH != '' }}
+        id: codex
+        uses: ./.github/actions/codex-run
         with:
+          mode: async
           prompt: ${{ steps.compose_prompt.outputs.prompt }}
+          codex-auth: ${{ secrets.CODEX_AUTH }}
 
       - name: Update CODEX auth secret if refreshed
-        if: ${{ always() && steps.prepare_codex.outputs.available == 'true' }}
+        if: ${{ always() && steps.codex.outputs.available == 'true' }}
         uses: ./.github/actions/codex-update-auth
         with:
-          codex_auth_path: ${{ steps.prepare_codex.outputs.codex_auth_path }}
-          original_codex_auth: ${{ steps.prepare_codex.outputs.original_codex_auth }}
+          codex_auth_path: ${{ steps.codex.outputs.codex_auth_path }}
+          original_codex_auth: ${{ steps.codex.outputs.original_codex_auth }}
           gh_token: ${{ secrets.CODEX_AUTH_PAT }}
           repository: ${{ github.repository }}

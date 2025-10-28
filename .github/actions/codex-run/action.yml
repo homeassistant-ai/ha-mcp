@@ -1,0 +1,252 @@
+name: Execute Codex automation
+description: Prepare authentication (if required) and invoke Codex in async or sync mode.
+inputs:
+  mode:
+    description: "Execution mode: 'async' launches a cloud worker, 'sync' runs remediation locally."
+    required: false
+    default: async
+  prompt:
+    description: Fully composed prompt to feed into Codex.
+    required: true
+  codex-auth:
+    description: Raw CODEX_AUTH secret material used for authentication.
+    required: false
+  codex-auth-pat:
+    description: Personal access token used for Codex-authenticated Git operations.
+    required: false
+  require-pat:
+    description: "Set to 'true' to require the PAT before marking the environment as available."
+    required: false
+    default: 'false'
+outputs:
+  available:
+    description: Whether Codex credentials were present and usable.
+    value: ${{ steps.export.outputs.available }}
+  codex_auth_path:
+    description: Absolute path to the written auth.json file, if created.
+    value: ${{ steps.export.outputs.codex_auth_path }}
+  original_codex_auth:
+    description: Path to the original auth snapshot, if captured.
+    value: ${{ steps.export.outputs.original_codex_auth }}
+  summary_markdown:
+    description: Markdown summary of Codex changes (sync mode only).
+    value: ${{ steps.export.outputs.summary_markdown }}
+  testing_markdown:
+    description: Markdown list of Codex-reported tests (sync mode only).
+    value: ${{ steps.export.outputs.testing_markdown }}
+runs:
+  using: composite
+  steps:
+    - id: resolve_state
+      shell: bash
+      env:
+        CODEX_ENV_PREPARED: ${{ env.CODEX_ENV_PREPARED }}
+        CODEX_AVAILABLE: ${{ env.CODEX_AVAILABLE }}
+      run: |
+        set -euo pipefail
+        if [[ "${CODEX_ENV_PREPARED:-}" == "true" ]]; then
+          echo "skip_prep=true" >> "$GITHUB_OUTPUT"
+          echo "preexisting_available=${CODEX_AVAILABLE:-false}" >> "$GITHUB_OUTPUT"
+        else
+          echo "skip_prep=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: check_credentials
+      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' }}
+      shell: bash
+      env:
+        CODEX_AUTH: ${{ inputs.codex-auth }}
+        CODEX_AUTH_PAT: ${{ inputs.codex-auth-pat }}
+        REQUIRE_PAT: ${{ inputs.require-pat }}
+      run: |
+        set -euo pipefail
+        require_pat="${REQUIRE_PAT,,}"
+        if [[ -z "${CODEX_AUTH:-}" ]]; then
+          echo "::notice::CODEX_AUTH secret missing; Codex automation will be skipped." >&2
+          {
+            echo "CODEX_ENV_PREPARED=true"
+            echo "CODEX_AVAILABLE=false"
+          } >> "$GITHUB_ENV"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ "$require_pat" == "true" && -z "${CODEX_AUTH_PAT:-}" ]]; then
+          echo "::notice::CODEX_AUTH_PAT secret missing; Codex automation will be skipped." >&2
+          {
+            echo "CODEX_ENV_PREPARED=true"
+            echo "CODEX_AVAILABLE=false"
+          } >> "$GITHUB_ENV"
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        {
+          echo "CODEX_ENV_PREPARED=true"
+          echo "CODEX_AVAILABLE=true"
+        } >> "$GITHUB_ENV"
+        echo "available=true" >> "$GITHUB_OUTPUT"
+
+    - id: write_auth
+      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' && steps.check_credentials.outputs.available == 'true' }}
+      shell: bash
+      env:
+        CODEX_AUTH: ${{ inputs.codex-auth }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        auth_path="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
+        mkdir -p "$(dirname "$auth_path")"
+        printf '%s' "$CODEX_AUTH" > "$auth_path"
+        chmod 600 "$auth_path"
+        echo "auth_path=$auth_path" >> "$GITHUB_OUTPUT"
+
+        if [[ -n "${RUNNER_TEMP:-}" ]]; then
+          snapshot="$RUNNER_TEMP/codex-auth-original.json"
+          cp "$auth_path" "$snapshot"
+          echo "original_auth=$snapshot" >> "$GITHUB_OUTPUT"
+          {
+            echo "CODEX_ORIGINAL_AUTH=$snapshot"
+          } >> "$GITHUB_ENV"
+        else
+          echo "original_auth=" >> "$GITHUB_OUTPUT"
+          echo "CODEX_ORIGINAL_AUTH=" >> "$GITHUB_ENV"
+        fi
+
+        echo "CODEX_AUTH_PATH=$auth_path" >> "$GITHUB_ENV"
+
+    - name: Install Codex CLI
+      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' && steps.check_credentials.outputs.available == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v codex >/dev/null 2>&1; then
+          npm install -g @openai/codex
+        fi
+
+    - id: capture_availability
+      shell: bash
+      env:
+        CODEX_AVAILABLE: ${{ env.CODEX_AVAILABLE }}
+        PREEXISTING: ${{ steps.resolve_state.outputs.preexisting_available }}
+        CHECKED: ${{ steps.check_credentials.outputs.available }}
+      run: |
+        set -euo pipefail
+        available="${CODEX_AVAILABLE:-}"
+        if [[ -z "$available" ]]; then
+          available="${CHECKED:-${PREEXISTING:-false}}"
+          if [[ -z "$available" ]]; then
+            available=false
+          fi
+          echo "CODEX_AVAILABLE=$available" >> "$GITHUB_ENV"
+        fi
+        echo "available=$available" >> "$GITHUB_OUTPUT"
+
+    - id: run_async
+      if: ${{ steps.capture_availability.outputs.available == 'true' && inputs.mode == 'async' }}
+      shell: bash
+      env:
+        PROMPT_TEXT: ${{ inputs.prompt }}
+      run: |
+        set -euo pipefail
+        printf '%s\n' "${PROMPT_TEXT}" | \
+          codex cloud exec --env 68f2eebb94d48191ba53625a2b09ae54 -
+
+    - id: run_sync
+      if: ${{ steps.capture_availability.outputs.available == 'true' && inputs.mode == 'sync' }}
+      shell: bash
+      env:
+        PROMPT_TEXT: ${{ inputs.prompt }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+
+        temp_dir="${RUNNER_TEMP:-$(mktemp -d)}"
+        schema="$temp_dir/codex-output-schema.json"
+        cat <<'JSON' > "$schema"
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "array", "items": { "type": "string" } },
+    "testing": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["summary", "testing"],
+  "additionalProperties": false
+}
+JSON
+
+        prompt_file="$(mktemp)"
+        printf '%s\n' "${PROMPT_TEXT}" > "$prompt_file"
+
+        output_file="$temp_dir/codex-output.json"
+        export CODEX_QUIET_MODE=1
+        codex exec \
+          --full-auto \
+          --skip-git-repo-check \
+          --output-schema "$schema" \
+          -o "$output_file" \
+          - < "$prompt_file"
+
+        echo "output_path=$output_file" >> "$GITHUB_OUTPUT"
+
+    - id: parse
+      if: ${{ steps.run_sync.outcome == 'success' }}
+      shell: bash
+      env:
+        OUTPUT_PATH: ${{ steps.run_sync.outputs.output_path }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${OUTPUT_PATH:-}" || ! -f "$OUTPUT_PATH" ]]; then
+          echo "Codex output file missing" >&2
+          exit 1
+        fi
+
+        python - <<'PY'
+import json
+import os
+
+path = os.environ['OUTPUT_PATH']
+with open(path, 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+summary = data.get('summary') or []
+testing = data.get('testing') or []
+summary_md = '\n'.join(f"- {item}" for item in summary) or '- Codex did not provide a summary.'
+testing_md = '\n'.join(f"- {item}" for item in testing) or '- Codex did not report any tests.'
+with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+    out.write(f"summary_md<<EOF\n{summary_md}\nEOF\n")
+    out.write(f"testing_md<<EOF\n{testing_md}\nEOF\n")
+PY
+
+    - id: export
+      shell: bash
+      env:
+        AVAILABLE: ${{ steps.capture_availability.outputs.available }}
+        AUTH_PATH: ${{ env.CODEX_AUTH_PATH }}
+        ORIGINAL_AUTH: ${{ env.CODEX_ORIGINAL_AUTH }}
+        SUMMARY_MD: ${{ steps.parse.outputs.summary_md }}
+        TESTING_MD: ${{ steps.parse.outputs.testing_md }}
+      run: |
+        set -euo pipefail
+        echo "available=$AVAILABLE" >> "$GITHUB_OUTPUT"
+        echo "codex_auth_path=${AUTH_PATH:-}" >> "$GITHUB_OUTPUT"
+        echo "original_codex_auth=${ORIGINAL_AUTH:-}" >> "$GITHUB_OUTPUT"
+
+        if [[ -n "${SUMMARY_MD:-}" ]]; then
+          {
+            echo 'summary_markdown<<EOF'
+            printf '%s\n' "$SUMMARY_MD"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+        else
+          echo 'summary_markdown=' >> "$GITHUB_OUTPUT"
+        fi
+
+        if [[ -n "${TESTING_MD:-}" ]]; then
+          {
+            echo 'testing_markdown<<EOF'
+            printf '%s\n' "$TESTING_MD"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+        else
+          echo 'testing_markdown=' >> "$GITHUB_OUTPUT"
+        fi
