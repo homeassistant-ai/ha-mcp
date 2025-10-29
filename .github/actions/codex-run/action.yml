@@ -2,7 +2,7 @@ name: Execute Codex automation
 description: Prepare authentication (if required) and invoke Codex in async or sync mode.
 inputs:
   mode:
-    description: "Execution mode: 'async' launches a cloud worker, 'sync' runs remediation locally."
+    description: "Execution mode: 'async' launches a cloud worker, 'sync' runs remediation locally, 'comment' posts a PR failure notice."
     required: false
     default: async
   prompt:
@@ -42,8 +42,20 @@ runs:
       env:
         CODEX_ENV_PREPARED: ${{ env.CODEX_ENV_PREPARED }}
         CODEX_AVAILABLE: ${{ env.CODEX_AVAILABLE }}
+        MODE: ${{ inputs.mode }}
       run: |
         set -euo pipefail
+
+        if [[ "${MODE:-}" == "comment" ]]; then
+          echo "skip_prep=true" >> "$GITHUB_OUTPUT"
+          echo "preexisting_available=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "CODEX_ENV_PREPARED=true"
+            echo "CODEX_AVAILABLE=false"
+          } >> "$GITHUB_ENV"
+          exit 0
+        fi
+
         if [[ "${CODEX_ENV_PREPARED:-}" == "true" ]]; then
           echo "skip_prep=true" >> "$GITHUB_OUTPUT"
           echo "preexisting_available=${CODEX_AVAILABLE:-false}" >> "$GITHUB_OUTPUT"
@@ -188,6 +200,63 @@ JSON
           - < "$prompt_file"
 
         echo "output_path=$output_file" >> "$GITHUB_OUTPUT"
+
+    - name: Comment token unavailable
+      if: ${{ inputs.mode == 'comment' && env.GH_TOKEN_CODEX_COMMENT == '' }}
+      shell: bash
+      run: |
+        echo '::notice::GH_TOKEN_CODEX_COMMENT is not set; skipping PR comment.'
+
+    - id: run_comment
+      if: ${{ inputs.mode == 'comment' && env.GH_TOKEN_CODEX_COMMENT != '' }}
+      uses: actions/github-script@v7
+      env:
+        COMMENT_TOKEN: ${{ env.GH_TOKEN_CODEX_COMMENT }}
+      with:
+        github-token: ${{ env.GH_TOKEN_CODEX_COMMENT }}
+        script: |
+          const run = context.payload.workflow_run;
+          if (!run) {
+            core.setFailed('workflow_run payload missing.');
+            return;
+          }
+
+          const owner = run.head_repository?.owner?.login;
+          const repo = run.head_repository?.name;
+          if (!owner || !repo) {
+            core.setFailed('Failed to resolve repository details for workflow_run.');
+            return;
+          }
+
+          let pr = (run.pull_requests && run.pull_requests[0]) || null;
+          if (!pr) {
+            const prsForCommit = await github.request(
+              'GET /repos/{owner}/{repo}/commits/{ref}/pulls',
+              { owner, repo, ref: run.head_sha, mediaType: { previews: ['groot'] } }
+            );
+            pr = prsForCommit.data?.[0] || null;
+          }
+
+          if (!pr) {
+            core.notice('No associated pull request found; skipping PR comment.');
+            return;
+          }
+
+          const bodyLines = [
+            '@codex PR is failing',
+            '',
+            `Workflow: ${run.name}`,
+            `Run URL: ${run.html_url}`,
+            `Head branch: ${run.head_branch}`,
+            `Head SHA: ${run.head_sha}`,
+          ];
+
+          await github.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: pr.number,
+            body: bodyLines.join('\n'),
+          });
 
     - id: parse
       if: ${{ steps.run_sync.outcome == 'success' }}

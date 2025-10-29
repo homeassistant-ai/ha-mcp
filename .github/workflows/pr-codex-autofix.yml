@@ -14,7 +14,7 @@ jobs:
       ${{
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.id == github.repository_id &&
-        env.CODEX_AUTOFIX_MODE != 'sync'
+        env.CODEX_AUTOFIX_MODE == 'async'
       }}
     runs-on: ubuntu-latest
     permissions:
@@ -262,3 +262,48 @@ jobs:
           original_codex_auth: ${{ steps.codex.outputs.original_codex_auth }}
           gh_token: ${{ secrets.CODEX_AUTH_PAT }}
           repository: ${{ github.repository }}
+
+  comment-on-pr:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_repository.id == github.repository_id &&
+        env.CODEX_AUTOFIX_MODE == 'comment'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+      actions: read
+
+    env:
+      FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+      FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      FAILED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN_CODEX_COMMENT: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+
+    steps:
+      - name: Debug event payload
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          NAME: ${{ github.event.workflow_run.name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "conclusion=$CONCLUSION"
+          echo "name=$NAME"
+          echo "head_branch=$HEAD_BRANCH"
+          echo "head_sha=$HEAD_SHA"
+          echo "run_url=$RUN_URL"
+
+      - name: Fetch pull request context
+        id: fetch_pr
+        uses: ./.github/actions/codex-fetch-pr-context
+
+      - name: Post PR failure comment
+        uses: ./.github/actions/codex-run
+        with:
+          mode: comment
+          prompt: 'Codex comment mode does not use this prompt.'
