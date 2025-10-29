@@ -61,11 +61,11 @@ wheels = [
 
 [[package]]
 name = "beartype"
-version = "0.22.3"
+version = "0.22.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/86/51/97f0d11d613d3b9650bd75588ff5206a408afcdc337ab7108dafb4c8d1ec/beartype-0.22.3.tar.gz", hash = "sha256:391c457bd6463d6fb0ec5d7e28ad44c336ae02dbaaae0fc55c053b071554855b", size = 1571548, upload-time = "2025-10-23T06:20:03.783Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/77/af43bdf737723b28130f2cb595ec0f23e0e757d211fe068fd0ccdb77d786/beartype-0.22.4.tar.gz", hash = "sha256:68284c7803efd190b1b4639a0ab1a17677af9571b8a2ef5a169d10cb8955b01f", size = 1578210, upload-time = "2025-10-26T03:30:50.352Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/03/1faffcbda0c872a299f0c54a5be91a738e2f6cee6ff8143c481fa51f1f0a/beartype-0.22.3-py3-none-any.whl", hash = "sha256:2f36eb8ea8d5eb693d2307639756c43db73c3d1153dbba62261d8c08dbe2946d", size = 1312115, upload-time = "2025-10-23T06:20:01.136Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/eb/f25ad1a7726b2fe21005c3580b35fa7bfe09646faf7c8f41867747987a35/beartype-0.22.4-py3-none-any.whl", hash = "sha256:7967a1cee01fee42e47da69c58c92da10ba5bcfb8072686e48487be5201e3d10", size = 1318387, upload-time = "2025-10-26T03:30:48.135Z" },
 ]
 
 [[package]]
@@ -469,7 +469,7 @@ wheels = [
 
 [[package]]
 name = "fastmcp"
-version = "2.13.0"
+version = "2.13.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -487,9 +487,9 @@ dependencies = [
     { name = "rich" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/3b/c30af894db2c3ec439d0e4168ba7ce705474cabdd0a599033ad9a19ad977/fastmcp-2.13.0.tar.gz", hash = "sha256:57f7b7503363e1babc0d1a13af18252b80366a409e1de85f1256cce66a4bee35", size = 7767346, upload-time = "2025-10-25T12:54:10.957Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/bd/ad8a0cc9ea3e8bfe8fb63a00be985d4c887c3c0a454d26c712c160af489f/fastmcp-2.13.0.1.tar.gz", hash = "sha256:d6dbd52a6b06fc1797db9fe0b487db966b4a4d34d9c7dd87b9918d5ec775dcb7", size = 7768846, upload-time = "2025-10-26T15:43:00.567Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/7f/09942135f506953fc61bb81b9e5eaf50a8eea923b83d9135bd959168ef2d/fastmcp-2.13.0-py3-none-any.whl", hash = "sha256:bdff1399d3b7ebb79286edfd43eb660182432514a5ab8e4cbfb45f1d841d2aa0", size = 367134, upload-time = "2025-10-25T12:54:09.284Z" },
+    { url = "https://files.pythonhosted.org/packages/90/0c/7e966e01240f7a9347d22d09e9d60cb46eaad68ca2ba24830755dab2c55c/fastmcp-2.13.0.1-py3-none-any.whl", hash = "sha256:60a8313b48803a2ddfad2d0fe8b9dd1f231aba7564c0551cad8447527ffe46e2", size = 367504, upload-time = "2025-10-26T15:42:58.98Z" },
 ]
 
 [[package]]
@@ -1448,11 +1448,11 @@ wheels = [
 
 [[package]]
 name = "python-dotenv"
-version = "1.1.1"
+version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f6/b0/4bc07ccd3572a2f9df7e6782f52b0c6c90dcbb803ac4a167702d7d0dfe1e/python_dotenv-1.1.1.tar.gz", hash = "sha256:a8a6399716257f45be6a007360200409fce5cda2661e3dec71d23dc15f6189ab", size = 41978, upload-time = "2025-06-24T04:21:07.341Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/26/19cadc79a718c5edbec86fd4919a6b6d3f681039a2f6d66d14be94e75fb9/python_dotenv-1.2.1.tar.gz", hash = "sha256:42667e897e16ab0d66954af0e60a9caa94f0fd4ecf3aaf6d2d260eec1aa36ad6", size = 44221, upload-time = "2025-10-26T15:12:10.434Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/ed/539768cf28c661b5b068d66d96a2f155c4971a5d55684a514c1a0e0dec2f/python_dotenv-1.1.1-py3-none-any.whl", hash = "sha256:31f23644fe2602f88ff55e1f5c79ba497e01224ee7737937930c448e4d0e24dc", size = 20556, upload-time = "2025-06-24T04:21:06.073Z" },
+    { url = "https://files.pythonhosted.org/packages/14/1b/a298b06749107c305e1fe0f814c6c74aea7b2f1e10989cb30f544a1b3253/python_dotenv-1.2.1-py3-none-any.whl", hash = "sha256:b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61", size = 21230, upload-time = "2025-10-26T15:12:09.109Z" },
 ]
 
 [[package]]
@@ -1845,15 +1845,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.48.0"
+version = "0.49.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/a5/d6f429d43394057b67a6b5bbe6eae2f77a6bf7459d961fdb224bf206eee6/starlette-0.48.0.tar.gz", hash = "sha256:7e8cee469a8ab2352911528110ce9088fdc6a37d9876926e73da7ce4aa4c7a46", size = 2652949, upload-time = "2025-09-13T08:41:05.699Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/36/70878596a60339cd9f78ee58b9ca8548f235a02d21be649ca73c35ccdd5a/starlette-0.49.0.tar.gz", hash = "sha256:cb75dfe3267b99caf9036db355601f8c6092c4d50d132b3724cb373766cb2ab1", size = 2654292, upload-time = "2025-10-28T08:11:42.379Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/72/2db2f49247d0a18b4f1bb9a5a39a0162869acf235f3a96418363947b3d46/starlette-0.48.0-py3-none-any.whl", hash = "sha256:0764ca97b097582558ecb498132ed0c7d942f233f365b86ba37770e026510659", size = 73736, upload-time = "2025-09-13T08:41:03.869Z" },
+    { url = "https://files.pythonhosted.org/packages/98/c4/da4392a59f3f1c9da2fa7bafd697ed14cf5f2ee2102c5cd4a4a1c5985e42/starlette-0.49.0-py3-none-any.whl", hash = "sha256:6f3988f55dda3fd36e5640aeaceee5b691063e0ebc4d7851e1c3a6695fbdc8ba", size = 74057, upload-time = "2025-10-28T08:11:40.895Z" },
 ]
 
 [[package]]
