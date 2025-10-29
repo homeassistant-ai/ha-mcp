@@ -1,0 +1,99 @@
+name: Fetch Codex PR context
+description: Resolve the pull request associated with a failed workflow run and produce a textual summary for Codex prompts.
+inputs:
+  write-summary:
+    description: "Whether to write the generated context to the job summary."
+    required: false
+    default: 'false'
+outputs:
+  pr_context:
+    description: Human-readable text describing the workflow run and associated pull request.
+    value: ${{ steps.fetch.outputs.pr_context }}
+runs:
+  using: composite
+  steps:
+    - name: Gather pull request context
+      id: fetch
+      uses: actions/github-script@v7
+      env:
+        WRITE_SUMMARY: ${{ inputs.write-summary }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const run = context.payload.workflow_run;
+          if (!run) {
+            core.setFailed('workflow_run payload missing.');
+            return;
+          }
+
+          const owner = run.head_repository?.owner?.login;
+          const repo = run.head_repository?.name;
+          if (!owner || !repo) {
+            core.setFailed('Failed to resolve repository details for workflow_run.');
+            return;
+          }
+
+          const octokit = github;
+          let pr = (run.pull_requests && run.pull_requests[0]) || null;
+          if (!pr) {
+            const prsForCommit = await octokit.request(
+              'GET /repos/{owner}/{repo}/commits/{ref}/pulls',
+              { owner, repo, ref: run.head_sha, mediaType: { previews: ['groot'] } }
+            );
+            pr = prsForCommit.data?.[0] || null;
+          }
+          if (!pr) {
+            core.setFailed('Could not determine the associated pull request for this workflow run.');
+            return;
+          }
+
+          const { data: prFull } = await octokit.rest.pulls.get({
+            owner,
+            repo,
+            pull_number: pr.number,
+          });
+
+          const labelNames = (prFull.labels || [])
+            .map(label => (typeof label === 'string' ? label : label.name))
+            .filter(Boolean)
+            .join(', ');
+          const reviewers = (prFull.requested_reviewers || [])
+            .map(reviewer => reviewer.login)
+            .join(', ');
+          const teams = (prFull.requested_teams || [])
+            .map(team => team.slug)
+            .join(', ');
+          const milestone = prFull.milestone ? prFull.milestone.title : '';
+          const assignees = (prFull.assignees || [])
+            .map(assignee => assignee.login)
+            .join(', ');
+
+          const lines = [
+            `Repository: ${owner}/${repo}`,
+            `Workflow run: ${run.name} (ID ${run.id})`,
+            `Conclusion: ${run.conclusion}`,
+            `Run URL: ${run.html_url}`,
+            `Pull request #${prFull.number}: ${prFull.title || ''}`,
+            `State: ${prFull.state} | Draft: ${prFull.draft} | Merged: ${prFull.merged} | Mergeable: ${prFull.mergeable}`,
+            `Author: ${prFull.user?.login || ''}`,
+            `Created: ${prFull.created_at} | Updated: ${prFull.updated_at}`,
+            `Base: ${prFull.base?.ref || ''} (${prFull.base?.sha || ''})`,
+            `Head: ${prFull.head?.ref || ''} (${prFull.head?.sha || ''})`,
+            `Labels: ${labelNames || 'none'}`,
+            `Requested reviewers: ${reviewers || 'none'}`,
+            `Requested teams: ${teams || 'none'}`,
+            `Milestone: ${milestone || 'none'}`,
+            `Assignees: ${assignees || 'none'}`,
+            'Pull request body:',
+            prFull.body || '(empty)',
+          ];
+
+          const contextText = lines.join('\n');
+          core.setOutput('pr_context', contextText);
+
+          if ((process.env.WRITE_SUMMARY || '').toLowerCase() === 'true') {
+            await core.summary
+              .addHeading('PR Failure Context')
+              .addCodeBlock(contextText, 'text')
+              .write();
+          }
