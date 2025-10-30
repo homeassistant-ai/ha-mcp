@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Always create a feature branch** before making any changes
 - Use naming convention: `feature/description` or `fix/description`
 - Example: `git checkout -b feature/add-new-tool`
-- A pre-commit hook is installed to prevent direct commits to master
+- Do not commit directly to `master` (policy enforced by review, not tooling)
 - All changes must go through Pull Requests
 
 ```bash
@@ -52,7 +52,7 @@ gh pr checks 8  # Check status
 **Test failure handling:**
 - Check logs: `gh run view <run-id> --log-failed`
 - Fix code and push again
-- Tests auto-run on every push
+- GitHub Actions run on PRs targeting `master` and on pushes to the `main`/`master` branches
 
 ## 📝 Updating This File (AGENTS.md)
 
@@ -116,6 +116,7 @@ cp .env.example .env
 **IMPORTANT: Test paths corrected in v1.0.3+**
 - E2E tests are in `tests/src/e2e/` NOT `tests/e2e/`
 - Test runner is at `tests/src/e2e/run_tests.py`
+- These tests require the Docker CLI; if Docker isn't available locally, rely on the GitHub Actions workflow that runs on pull requests targeting `main`
 
 ```bash
 # Prerequisites: Tests use testcontainers - Docker daemon must be running
@@ -293,45 +294,29 @@ docker run -d --name ha-mcp-local \
 #### Docker Test Environment (for E2E tests)
 
 ```bash
-# Initialize and start test Home Assistant instance
-cd tests/
-./init_test_env.sh               # Copy initial state to haconfig/
-docker compose up -d             # Start container on port 8124
-docker logs homeassistant-test -f  # Watch startup logs
+# Launch the interactive Home Assistant test environment manager
+uv run hamcp-test-env
 
-# Test API connectivity
-curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6iTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac" http://localhost:8124/api/config
-
-# Reset environment to initial state
-docker compose down
-./init_test_env.sh
-docker compose up -d
-
-# Clean up test environment
-docker compose down
+# Non-interactive mode (auto-start, run tests, then shut down)
+uv run hamcp-test-env --no-interactive
 ```
 
-### Test Data and Environment States
-```bash
-# Test environment state snapshots are saved to tests/data/
-# These files document the available entities in the Docker test environment
+- The manager provisions a Home Assistant container with the baseline config from
+  `tests/initial_test_state/` and prints the URL/port once the instance is ready.
+- `tests/test_constants.py` centralizes the long-lived access token and credentials
+  used by both the manager and the test suite.
+- While the container is running, execute tests in another terminal, e.g.
+  `uv run pytest tests/src/e2e/ -v --tb=short`.
+- The manager supports repeated test runs without restarting the container and
+  handles cleanup when you exit.
 
-# View latest test environment snapshot
-ls -la tests/data/test_environment_state_*.json
+### Test Environment State
 
-# The snapshots contain:
-# - Available entities by domain (light, climate, cover, etc.)
-# - Entity counts and examples
-# - Home Assistant version and configuration
-# - Recommended test entities for each domain
-
-# Test entities available in Docker environment:
-# - Lights: light.bed_light, light.ceiling_lights, light.kitchen_lights, etc.
-# - Climate: climate.ecobee, climate.heatpump, climate.hvac
-# - Covers: cover.kitchen_window, cover.garage_door, cover.pergola_roof
-# - Switches: switch.ac, switch.decorative_lights, etc.
-# - Sensors: Many available for monitoring tests
-```
+- Baseline Home Assistant configuration files live in `tests/initial_test_state/`.
+- To refresh the baseline or rotate credentials, follow the step-by-step guide in
+  `tests/README.md` ("Updating Test Environment" section).
+- The helper script copies the baseline into a temporary directory for each run, so
+  editing files in `tests/initial_test_state/` keeps all developers in sync.
 
 ### Home Assistant Add-on Repository Requirements
 
