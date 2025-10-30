@@ -1,0 +1,9 @@
+---
+configuration:
+  backup_hint:
+    name: Backup hint
+    description: Controls when backup reminders are shown before risky operations.
+  secret_path:
+    name: Secret path override
+    description: |
+      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.

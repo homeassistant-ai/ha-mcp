@@ -61,10 +61,10 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
 
     # Generate new secret path
     new_path = generate_secret_path()
+    log_info("Generated new secret path with 128-bit entropy")
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         secret_file.write_text(new_path)
-        log_info(f"Generated new secret path with 128-bit entropy")
         return new_path
     except Exception as e:
         log_error(f"Failed to save secret path: {e}")

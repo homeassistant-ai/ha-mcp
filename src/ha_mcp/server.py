@@ -11,11 +11,8 @@ from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
 from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
-from .tools.convenience import create_convenience_tools
 from .tools.device_control import create_device_control_tools
 from .tools.smart_search import create_smart_search_tools
-from .prompts.manager import register_mcp_prompts
-from .resources.manager import register_mcp_resources
 from .tools.registry import ToolsRegistry
 
 logger = logging.getLogger(__name__)
@@ -37,12 +34,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Initialize smart tools
         self.smart_tools = create_smart_search_tools(self.client)
         self.device_tools = create_device_control_tools(self.client)
-        self.convenience_tools = create_convenience_tools(self.client)
 
         # Initialize tools registry
         self.tools_registry = ToolsRegistry(self)
 
-        # Register all tools, resources, and prompts
+        # Register all tools and expert prompts
         self._initialize_server()
 
     def _initialize_server(self) -> None:
@@ -53,10 +49,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Register enhanced tools and prompts for first/second interaction success
         self.register_enhanced_tools()
         self.register_enhanced_prompts()
-
-        # Register MCP resources and prompts
-        register_mcp_resources(self.mcp)
-        register_mcp_prompts(self.mcp)
 
     # Helper methods required by EnhancedToolsMixin
 
@@ -111,7 +103,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
             logger.error(f"❌ Error testing connection: {e}")
 
         # Log available tools count
-        logger.info("🔧 Smart server with 20+ enhanced tools loaded")
+        logger.info("🔧 Smart server with enhanced tools loaded")
 
         # Run the MCP server with async compatibility
         await self.mcp.run_async()

@@ -94,6 +94,7 @@ call_service_enhanced("light", "turn_on", entity_id=f"light.{room or "living_roo
 2. Use brightness_pct (0-100) instead of brightness (0-255) for user-friendly control
 3. Add transition=2 for smooth changes
 4. Color temp guide: 2700K=warm, 4000K=neutral, 6500K=cool
+5. Need hardware-specific parameters? Call ha_get_domain_docs("light") for the latest integration guidance
 
 ## Troubleshooting
 - Unsupported feature: Check entity's supported_color_modes
@@ -165,6 +166,7 @@ call_service_enhanced("climate", "set_preset_mode",
 2. Validate temperature range using min_temp/max_temp attributes
 3. Use gradual adjustments (±2-3 degrees) for efficiency
 4. Consider presets for common scenarios (away, sleep, eco)
+5. Pull official references with ha_get_domain_docs("climate") when unsure about supported modes
 
 ## Parameter Validation
 - **temperature**: Must be within entity's min_temp to max_temp
@@ -617,6 +619,7 @@ area_info = get_entities_by_area_enhanced("room_name")
 - **@mcp.prompt("input-helper-expert")** - For user inputs and toggles
 - **@mcp.prompt("sensor-monitoring-expert")** - For data monitoring
 - **@mcp.prompt("automation-expert")** - For automation/scene/script control
+- **ha_get_domain_docs("<domain>")** - Fetch live Home Assistant docs when you need authoritative parameters
 
 ### Step 4: Parameter Validation
 1. Check entity capabilities with get_entity_state_comprehensive()

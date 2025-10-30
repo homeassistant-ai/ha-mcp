@@ -58,14 +58,18 @@ class TestAddonStructure:
         assert "ports" in config, "ports section required for HTTP transport"
         assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
 
-        # Verify secret_path configuration (advanced option for custom overrides)
-        assert "secret_path" in config["options"], "options must include secret_path field"
-        assert config["options"]["secret_path"] == "", "default secret_path should be empty (auto-generate)"
+        # Verify secret_path configuration (optional advanced override)
+        assert "secret_path" not in config["options"], \
+            "secret_path should be optional and omitted so Supervisor treats it as advanced"
         assert "secret_path" in config["schema"], "schema must include secret_path field"
+        assert config["schema"]["secret_path"] == "str?", \
+            "secret_path schema should be optional string (str?)"
 
         # Verify backup_hint configuration
         assert "backup_hint" in config["options"], "options must include backup_hint field"
         assert config["options"]["backup_hint"] == "normal", "default backup_hint should be normal"
+        assert config["schema"]["backup_hint"] == "list(strong|normal|weak|auto)", \
+            "backup_hint schema must enumerate allowed values"
 
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
