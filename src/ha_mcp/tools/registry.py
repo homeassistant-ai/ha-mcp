@@ -14,6 +14,7 @@ from .tools_config_scripts import register_config_script_tools
 from .tools_search import register_search_tools
 from .tools_service import register_service_tools
 from .tools_utility import register_utility_tools
+from .tools_script_runner import register_script_runner_tools
 
 
 class ToolsRegistry:
@@ -37,6 +38,9 @@ class ToolsRegistry:
         register_service_tools(
             self.mcp, self.client, self.device_tools
         )
+
+        # Register dynamic script generation and execution helpers
+        register_script_runner_tools(self.mcp, self.client)
 
         # Register config management tools (helpers, scripts, automations)
         register_config_helper_tools(self.mcp, self.client)
