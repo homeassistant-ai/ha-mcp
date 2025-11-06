@@ -189,9 +189,9 @@ claude mcp add-json home-assistant '{
 > **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
 
 **Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/) and [Git binary](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
-  - Windows: winget install astral-sh.uv Git.Git -e
-  - MacOS: brew install git uv
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+  - Windows: winget install astral-sh.uv -e
+  - MacOS: brew install uv
 - Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
 - A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
 
@@ -209,7 +209,7 @@ claude mcp add-json home-assistant '{
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
+      "args": ["ha-mcp"],
       "env": {
         "HOMEASSISTANT_URL": "http://localhost:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"
@@ -229,7 +229,7 @@ Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 claude mcp add --transport stdio home-assistant \
   --env HOMEASSISTANT_URL=http://localhost:8123 \
   --env HOMEASSISTANT_TOKEN=your_long_lived_token \
-  -- uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp
+  -- uvx ha-mcp
 ```
 
 </details>
@@ -245,7 +245,7 @@ set HOMEASSISTANT_URL=http://localhost:8123
 set HOMEASSISTANT_TOKEN=your_long_lived_token
 set MCP_PORT=8086
 set MCP_SECRET_PATH=/__my_secret__
-uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
+uvx --from ha-mcp ha-mcp-web
 ```
 Others:
 ```bash
@@ -253,7 +253,7 @@ export HOMEASSISTANT_URL=http://localhost:8123
 export HOMEASSISTANT_TOKEN=your_long_lived_token
 export MCP_PORT=8086
 export MCP_SECRET_PATH=/__my_secret__
-uvx --from=git+https://github.com/homeassistant-ai/ha-mcp ha-mcp-web
+uvx --from ha-mcp ha-mcp-web
 ```
 
 Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.

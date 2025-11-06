@@ -4,12 +4,12 @@ _Based on steps shared by @kingbear2._
 
 This guide walks through running the ha-mcp server locally on Windows with Claude using the [uv](https://docs.astral.sh/uv/) package manager. Expect the process to take about 10 minutes.
 
-## 1. Install uv and git
+## 1. Install uv
 
 Open **PowerShell** or **cmd** and run:
 
 ```powershell
-winget install astral-sh.uv Git.Git -e
+winget install astral-sh.uv -e
 ```
 
 ## 2. Configure Claude Desktop
@@ -22,7 +22,7 @@ winget install astral-sh.uv Git.Git -e
       "mcpServers": {
         "Home Assistant": {
           "command": "uvx",
-          "args": ["--from=git+https://github.com/homeassistant-ai/ha-mcp", "ha-mcp"],
+          "args": ["ha-mcp"],
           "env": {
             "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
             "HOMEASSISTANT_TOKEN": "your_long_lived_token"
