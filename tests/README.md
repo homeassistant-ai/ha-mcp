@@ -33,6 +33,28 @@ uv run pytest tests/src/e2e/basic/ -v               # Basic connectivity
 uv run pytest tests/src/e2e/workflows/automation/ -v # Automation tests
 ```
 
+### Manual Branch Testing
+
+Need to validate unpublished changes from a feature branch? Use `uvx` with the
+Git URL so you can run the project directly from that branch:
+
+```bash
+# FastMCP STDIO entry point
+uvx --from git+https://github.com/homeassistant-ai/ha-mcp.git@branchname ha-mcp
+
+# FastMCP HTTP server
+uvx --from git+https://github.com/homeassistant-ai/ha-mcp.git@branchname ha-mcp-web
+```
+
+Replace `branchname` with the branch you want to exercise (for example,
+`feature/manual-test-instructions`). If you are working from a fork, swap
+`homeassistant-ai` with your GitHub username to target your repository in both
+commands. When using these commands, adapt the corresponding `uvx` setup in
+[README.md → Method 3: Running Python with UV](../README.md#method-3-running-python-with-uv)
+so your environment variables and client configuration match the guidance in the
+main installation instructions. This ensures your manual testing matches the
+code under review.
+
 ## 📁 Structure
 
 ```
