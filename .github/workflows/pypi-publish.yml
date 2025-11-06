@@ -1,0 +1,37 @@
+name: PyPI Publish
+
+on:
+  workflow_run:
+    workflows: ["SemVer Release"]
+    types: [completed]
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Publish Package
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ha-mcp
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: master
+        fetch-depth: 0
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Build distribution
+      run: uv build
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        packages-dir: dist
+        skip-existing: true
