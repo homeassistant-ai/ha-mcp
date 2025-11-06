@@ -6,12 +6,14 @@ on:
     types: [completed]
 
 env:
+  WORKFLOW_ENABLED: 'false'
   CODEX_AUTOFIX_MODE: ${{ vars.CODEX_AUTOFIX_MODE || 'async' }}
 
 jobs:
   enqueue-async-worker:
     if: >
       ${{
+        env.WORKFLOW_ENABLED == 'true' &&
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.id == github.repository_id &&
         env.CODEX_AUTOFIX_MODE == 'async'
@@ -107,6 +109,7 @@ jobs:
   summarize-pr-context:
     if: >
       ${{
+        env.WORKFLOW_ENABLED == 'true' &&
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.id == github.repository_id &&
         env.CODEX_AUTOFIX_MODE == 'sync'
@@ -129,7 +132,7 @@ jobs:
 
   auto-fix:
     needs: summarize-pr-context
-    if: ${{ needs.summarize-pr-context.result == 'success' }}
+    if: ${{ env.WORKFLOW_ENABLED == 'true' && needs.summarize-pr-context.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
