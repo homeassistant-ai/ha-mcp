@@ -5,17 +5,14 @@ on:
     workflows: ["PR Validation Pipeline"]
     types: [completed]
 
-env:
-  CODEX_AUTOFIX_MODE: ${{ vars.CODEX_AUTOFIX_MODE || 'async' }}
-
 jobs:
   enqueue-async-worker:
     if: >
       ${{
-        !(env.CODEX_AUTOFIX_MODE == 'disabled') &&
+        !(coalesce(vars.CODEX_AUTOFIX_MODE, 'async') == 'disabled') &&
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.id == github.repository_id &&
-        env.CODEX_AUTOFIX_MODE == 'async'
+        coalesce(vars.CODEX_AUTOFIX_MODE, 'async') == 'async'
       }}
     runs-on: ubuntu-latest
     permissions:
@@ -24,6 +21,9 @@ jobs:
       actions: read
 
     env:
+      CODEX_AUTOFIX_MODE: ${{ coalesce(vars.CODEX_AUTOFIX_MODE, 'async') }}
+      CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+      CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
       FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
       FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
       FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -39,12 +39,12 @@ jobs:
           echo 'run_url=${{ github.event.workflow_run.html_url }}'
 
       - name: Fetch pull request context
-        if: ${{ secrets.CODEX_AUTH != '' }}
+        if: ${{ env.CODEX_AUTH != '' }}
         id: fetch_pr
         uses: ./.github/actions/codex-fetch-pr-context
 
       - name: Compose Codex prompt
-        if: ${{ secrets.CODEX_AUTH != '' }}
+        if: ${{ env.CODEX_AUTH != '' }}
         id: compose_prompt
         env:
           FAILED_WORKFLOW_NAME: ${{ env.FAILED_WORKFLOW_NAME }}
@@ -88,13 +88,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Invoke Codex automation
-        if: ${{ secrets.CODEX_AUTH != '' }}
+        if: ${{ env.CODEX_AUTH != '' }}
         id: codex
         uses: ./.github/actions/codex-run
         with:
           mode: async
           prompt: ${{ steps.compose_prompt.outputs.prompt }}
-          codex-auth: ${{ secrets.CODEX_AUTH }}
+          codex-auth: ${{ env.CODEX_AUTH }}
 
       - name: Update CODEX auth secret if refreshed
         if: ${{ always() && steps.codex.outputs.available == 'true' }}
@@ -102,16 +102,16 @@ jobs:
         with:
           codex_auth_path: ${{ steps.codex.outputs.codex_auth_path }}
           original_codex_auth: ${{ steps.codex.outputs.original_codex_auth }}
-          gh_token: ${{ secrets.CODEX_AUTH_PAT }}
+          gh_token: ${{ env.CODEX_AUTH_PAT }}
           repository: ${{ github.repository }}
 
   summarize-pr-context:
     if: >
       ${{
-        !(env.CODEX_AUTOFIX_MODE == 'disabled') &&
+        !(coalesce(vars.CODEX_AUTOFIX_MODE, 'async') == 'disabled') &&
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.id == github.repository_id &&
-        env.CODEX_AUTOFIX_MODE == 'sync'
+        coalesce(vars.CODEX_AUTOFIX_MODE, 'async') == 'sync'
       }}
     runs-on: ubuntu-latest
     permissions:
@@ -131,7 +131,11 @@ jobs:
 
   auto-fix:
     needs: summarize-pr-context
-    if: ${{ !(env.CODEX_AUTOFIX_MODE == 'disabled') && needs.summarize-pr-context.result == 'success' }}
+    if: >
+      ${{
+        !(coalesce(vars.CODEX_AUTOFIX_MODE, 'async') == 'disabled') &&
+        needs.summarize-pr-context.result == 'success'
+      }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,6 +144,9 @@ jobs:
 
     env:
       PYTHON_VERSION: "3.13"
+      CODEX_AUTOFIX_MODE: ${{ coalesce(vars.CODEX_AUTOFIX_MODE, 'async') }}
+      CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
+      CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
       FAILED_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
       FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
       FAILED_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -161,28 +168,28 @@ jobs:
           echo "run_url=$RUN_URL"
 
       - name: Checkout failing ref
-        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        if: ${{ env.CODEX_AUTH != '' && env.CODEX_AUTH_PAT != '' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ env.FAILED_HEAD_SHA }}
           fetch-depth: 0
 
       - name: Install uv
-        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        if: ${{ env.CODEX_AUTH != '' && env.CODEX_AUTH_PAT != '' }}
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
       - name: Set up Python
-        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        if: ${{ env.CODEX_AUTH != '' && env.CODEX_AUTH_PAT != '' }}
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        if: ${{ env.CODEX_AUTH != '' && env.CODEX_AUTH_PAT != '' }}
         run: uv sync --all-extras --dev
 
       - name: Compose Codex prompt
-        if: ${{ secrets.CODEX_AUTH != '' && secrets.CODEX_AUTH_PAT != '' }}
+        if: ${{ env.CODEX_AUTH != '' && env.CODEX_AUTH_PAT != '' }}
         id: compose_prompt
         env:
           FAILED_WORKFLOW_NAME: ${{ env.FAILED_WORKFLOW_NAME }}
