@@ -44,6 +44,7 @@ dependencies = [
 ha-mcp = "ha_mcp.__main__:main"
 hamcp-test-env = "tests.test_env_manager:main"
 ha-mcp-web = "ha_mcp.__main__:main_web"
+ha-mcp-sse = "ha_mcp.__main__:main_sse"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
