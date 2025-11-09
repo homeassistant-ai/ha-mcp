@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: read
       packages: write  # Required to push to GHCR
+      id-token: write  # Required for MCP Registry OIDC authentication
 
     steps:
     - uses: actions/checkout@v5
@@ -72,3 +73,66 @@ jobs:
         cache-to: type=gha,mode=max
         build-args: |
           BUILD_VERSION=${{ steps.version.outputs.version }}
+
+    - name: Wait for PyPI release propagation
+      run: |
+        set -euo pipefail
+        VERSION="${{ steps.version.outputs.version }}"
+        echo "Waiting for ha-mcp==$VERSION to appear on PyPI..."
+        for attempt in {1..30}; do
+          if curl -s https://pypi.org/pypi/ha-mcp/json | jq -e ".releases[\"$VERSION\"] | length > 0" >/dev/null; then
+            echo "Found ha-mcp==$VERSION on PyPI"
+            exit 0
+          fi
+          echo "Attempt $attempt: package not available yet, retrying in 10s"
+          sleep 10
+        done
+        echo "Timed out waiting for PyPI release" >&2
+        exit 1
+
+    - name: Install MCP Publisher CLI
+      run: |
+        set -euo pipefail
+        curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+    - name: Prepare server manifest for publish
+      run: |
+        set -euo pipefail
+        VERSION="${{ steps.version.outputs.version }}"
+        IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"
+        jq --arg version "$VERSION" --arg image "$IMAGE" '
+          .version = $version
+          | .packages = (.packages | map(
+            if .registryType == "pypi" then .version = $version
+            elif .registryType == "oci" then .identifier = $image
+            else . end
+          ))
+        ' server.json > server.json.tmp
+        mv server.json.tmp server.json
+        cat server.json
+
+    - name: Validate server manifest
+      run: |
+        set -euo pipefail
+        python -m pip install --quiet jsonschema
+        python - <<'PY'
+import json
+import urllib.request
+from jsonschema import validate
+
+schema_url = "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
+with urllib.request.urlopen(schema_url) as resp:
+    schema = json.load(resp)
+
+with open("server.json", "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+validate(instance=data, schema=schema)
+print("server.json schema validation succeeded")
+PY
+
+    - name: Login to MCP Registry
+      run: ./mcp-publisher login github-oidc
+
+    - name: Publish server to MCP Registry
+      run: ./mcp-publisher publish --server server.json

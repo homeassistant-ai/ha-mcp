@@ -8,7 +8,8 @@ FROM ghcr.io/astral-sh/uv:0.9.5-python3.11-bookworm-slim
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \
       org.opencontainers.image.source="https://github.com/homeassistant-ai/ha-mcp" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      io.modelcontextprotocol.server.name="io.github.homeassistant-ai/ha-mcp"
 
 WORKDIR /app
 

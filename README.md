@@ -3,6 +3,8 @@
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
+  <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
+
   <p align="center">
     <a href="https://github.com/homeassistant-ai/ha-mcp"><img src="https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant" alt="Home Assistant Add-on"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
