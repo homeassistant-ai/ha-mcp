@@ -163,21 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --quiet jsonschema
-          python - <<'PY'
-          import json
-          import urllib.request
-          from jsonschema import validate
-
-          schema_url = "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
-          with urllib.request.urlopen(schema_url) as resp:
-              schema = json.load(resp)
-
-          with open("server.json", "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-
-          validate(instance=data, schema=schema)
-          print("server.json schema validation succeeded")
-          PY
+          python scripts/validate_server_manifest.py server.json
 
       - name: Login to MCP Registry
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
