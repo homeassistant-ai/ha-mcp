@@ -13,18 +13,12 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  publish:
-    name: Publish PyPI Package, Docker Image, and MCP Server
+  prepare:
+    name: Prepare release metadata
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    environment:
-      name: pypi
-      url: https://pypi.org/p/ha-mcp
-    permissions:
-      contents: read
-      packages: write  # Required to push to GHCR
-      id-token: write  # Required for PyPI trusted publishing and MCP Registry OIDC authentication
-
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -38,6 +32,24 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Release version: $VERSION"
 
+  publish_pypi:
+    name: Publish PyPI package
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ha-mcp
+    permissions:
+      contents: read
+      id-token: write  # Required for PyPI trusted publishing
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: master
+        fetch-depth: 0
+
     - name: Install uv
       uses: astral-sh/setup-uv@v7
 
@@ -49,6 +61,21 @@ jobs:
       with:
         packages-dir: dist
         skip-existing: true
+
+  publish_docker:
+    name: Publish Docker image
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # Required to push to GHCR
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: master
+        fetch-depth: 0
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -66,9 +93,9 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ github.repository }}
         tags: |
-          type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }}
-          type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }}
-          type=semver,pattern={{major}},value=v${{ steps.version.outputs.version }}
+          type=semver,pattern={{version}},value=v${{ env.VERSION }}
+          type=semver,pattern={{major}}.{{minor}},value=v${{ env.VERSION }}
+          type=semver,pattern={{major}},value=v${{ env.VERSION }}
           type=raw,value=latest
 
     - name: Build and push Docker image
@@ -85,34 +112,41 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
         build-args: |
-          BUILD_VERSION=${{ steps.version.outputs.version }}
+          BUILD_VERSION=${{ env.VERSION }}
 
-    - name: Wait for PyPI release propagation
+  publish_mcp:
+    name: Publish MCP server manifest
+    needs: [publish_pypi, publish_docker, prepare]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    permissions:
+      contents: read
+      id-token: write  # Required for MCP Registry OIDC authentication
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository }}:v${{ needs.prepare.outputs.version }}
+    steps:
+    - name: Report upstream job results
       run: |
-        set -euo pipefail
-        VERSION="${{ steps.version.outputs.version }}"
-        echo "Waiting for ha-mcp==$VERSION to appear on PyPI..."
-        for attempt in {1..30}; do
-          if curl -s https://pypi.org/pypi/ha-mcp/json | jq -e ".releases[\"$VERSION\"] | length > 0" >/dev/null; then
-            echo "Found ha-mcp==$VERSION on PyPI"
-            exit 0
-          fi
-          echo "Attempt $attempt: package not available yet, retrying in 10s"
-          sleep 10
-        done
-        echo "Timed out waiting for PyPI release" >&2
-        exit 1
+        echo "PyPI publish conclusion: ${{ needs.publish_pypi.result }}"
+        echo "Docker publish conclusion: ${{ needs.publish_docker.result }}"
+
+    - uses: actions/checkout@v5
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
+      with:
+        ref: master
+        fetch-depth: 0
 
     - name: Install MCP Publisher CLI
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
       run: |
         set -euo pipefail
         curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
     - name: Prepare server manifest for publish
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
       run: |
         set -euo pipefail
-        VERSION="${{ steps.version.outputs.version }}"
-        IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"
         jq --arg version "$VERSION" --arg image "$IMAGE" '
           .version = $version
           | .packages = (.packages | map(
@@ -125,6 +159,7 @@ jobs:
         cat server.json
 
     - name: Validate server manifest
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
       run: |
         set -euo pipefail
         python -m pip install --quiet jsonschema
@@ -145,7 +180,14 @@ print("server.json schema validation succeeded")
 PY
 
     - name: Login to MCP Registry
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
       run: ./mcp-publisher login github-oidc
 
     - name: Publish server to MCP Registry
+      if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
       run: ./mcp-publisher publish --server server.json
+
+    - name: Skip MCP publish
+      if: ${{ needs.publish_pypi.result != 'success' || needs.publish_docker.result != 'success' }}
+      run: |
+        echo "Skipping MCP publish because one or more upstream publish jobs failed."
