@@ -93,9 +93,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=v${{ env.VERSION }}
-            type=semver,pattern={{major}}.{{minor}},value=v${{ env.VERSION }}
-            type=semver,pattern={{major}},value=v${{ env.VERSION }}
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -124,7 +124,7 @@ jobs:
       id-token: write  # Required for MCP Registry OIDC authentication
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      IMAGE: ghcr.io/${{ github.repository }}:v${{ needs.prepare.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.version }}
     steps:
       - name: Report upstream job results
         run: |
