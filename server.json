@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.homeassistant-ai/ha-mcp",
+  "title": "Home Assistant MCP Server",
+  "description": "Comprehensive Model Context Protocol server for managing Home Assistant through AI assistants.",
+  "version": "3.4.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "ha-mcp",
+      "version": "3.4.0",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/homeassistant-ai/ha-mcp:latest",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
