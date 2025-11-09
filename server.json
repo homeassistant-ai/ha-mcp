@@ -18,7 +18,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/homeassistant-ai/ha-mcp:{{VERSION}}",
+      "identifier": "{{OCI_IMAGE}}",
       "transport": {
         "type": "stdio"
       }

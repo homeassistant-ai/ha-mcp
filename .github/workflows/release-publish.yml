@@ -143,19 +143,15 @@ jobs:
           set -euo pipefail
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
-      - name: Prepare server manifest for publish
+      - name: Render server manifest for publish
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         run: |
           set -euo pipefail
-          jq --arg version "$VERSION" --arg image "$IMAGE" '
-            .version = $version
-            | .packages = (.packages | map(
-              if .registryType == "pypi" then .version = $version
-              elif .registryType == "oci" then .identifier = $image
-              else . end
-            ))
-          ' server.json > server.json.tmp
-          mv server.json.tmp server.json
+          python scripts/render_server_manifest.py \
+            --input server.json \
+            --output server.json \
+            --version "$VERSION" \
+            --oci-image "$IMAGE"
           cat server.json
 
       - name: Validate server manifest
