@@ -3,7 +3,7 @@
 # Python 3.11 - Security support until 2027-10
 # uv version pinned - Dependabot will create PRs for updates
 
-FROM ghcr.io/astral-sh/uv:0.9.5-python3.11-bookworm-slim
+FROM ghcr.io/astral-sh/uv:0.9.8-python3.11-bookworm-slim
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \
