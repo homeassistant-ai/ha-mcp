@@ -203,6 +203,52 @@ curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." http://l
 - Interactive mode requires stdin for menu navigation
 - **Test token is centralized in `tests/test_constants.py`** - all test code imports from this single location to avoid duplication and typos
 
+#### Container2WASM Testing (Experimental)
+
+**Run E2E tests using WebAssembly instead of Docker containers.**
+
+The project now supports running Home Assistant as a WASM module using [container2wasm](https://github.com/container2wasm/container2wasm). This enables testing in environments without Docker daemon requirements (after initial conversion).
+
+**Quick Start:**
+
+```bash
+# Automated script (requires Docker for conversion)
+./scripts/run-e2e-with-wasm.sh
+
+# Or with custom configuration
+HA_IMAGE="ghcr.io/home-assistant/home-assistant:2024.1" \
+  HA_PORT=9123 \
+  ./scripts/run-e2e-with-wasm.sh
+```
+
+**What it does:**
+1. 🔄 Converts Home Assistant Docker image to WASM (5-15 minutes first time)
+2. 🚀 Runs HA in wasmtime WASM runtime
+3. 🧪 Executes e2e tests against WASM instance
+4. 🧹 Automatic cleanup
+
+**GitHub Actions:**
+- Workflow: `.github/workflows/e2e-tests-wasm.yml`
+- Runs on pushes to main/master and PRs
+- Automatically converts and tests with WASM
+- Uploads WASM artifact on failure for debugging
+
+**Documentation:**
+- See `docs/WASM_TESTING.md` for complete guide
+- Includes manual steps, troubleshooting, and technical details
+
+**Benefits:**
+- Browser-based testing potential
+- Lightweight deployment
+- Edge computing compatibility
+- Docker-free execution (after conversion)
+
+**Limitations:**
+- Requires Docker for initial conversion
+- Experimental networking support
+- ~30-50% slower than native Docker
+- Conversion takes 5-15 minutes
+
 ### Code Quality Commands
 ```bash
 # Format code

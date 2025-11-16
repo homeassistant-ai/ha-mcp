@@ -1,0 +1,157 @@
+name: E2E Tests with Container2WASM
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - 'homeassistant-addon/**'
+      - '.github/workflows/e2e-tests-wasm.yml'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/e2e-tests-wasm.yml'
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+  C2W_VERSION: "v0.8.3"
+  HA_IMAGE: "ghcr.io/home-assistant/home-assistant:stable"
+
+jobs:
+  e2e-tests-wasm:
+    name: E2E Tests (WASM Runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install project dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Download and install container2wasm
+      run: |
+        echo "📦 Downloading container2wasm ${C2W_VERSION}..."
+        curl -L https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/container2wasm-${C2W_VERSION}-linux-amd64.tar.gz -o /tmp/c2w.tar.gz
+        tar -xzf /tmp/c2w.tar.gz -C /tmp
+        sudo mv /tmp/c2w /usr/local/bin/
+        sudo mv /tmp/c2w-net /usr/local/bin/
+        c2w --version
+
+    - name: Install wasmtime
+      run: |
+        echo "🚀 Installing wasmtime..."
+        curl https://wasmtime.dev/install.sh -sSf | bash
+        echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+    - name: Pull Home Assistant Docker image
+      run: |
+        echo "🏠 Pulling Home Assistant image..."
+        docker pull ${HA_IMAGE}
+
+    - name: Convert Home Assistant to WASM
+      run: |
+        echo "🔄 Converting Home Assistant container to WASM..."
+        echo "This may take several minutes..."
+        c2w ${HA_IMAGE} /tmp/homeassistant.wasm
+        ls -lh /tmp/homeassistant.wasm
+        echo "✅ WASM conversion complete"
+
+    - name: Prepare Home Assistant config
+      run: |
+        echo "📁 Preparing Home Assistant configuration..."
+        mkdir -p /tmp/ha-config
+        cp -r tests/initial_test_state/* /tmp/ha-config/
+        chmod -R 755 /tmp/ha-config
+        ls -la /tmp/ha-config
+
+    - name: Start Home Assistant in WASM runtime
+      run: |
+        echo "🚀 Starting Home Assistant in WASM runtime..."
+        # Note: This is a proof of concept. Actual implementation may need adjustments
+        # for port mapping and configuration mounting with wasmtime
+        export PATH="$HOME/.wasmtime/bin:$PATH"
+
+        # Start wasmtime in background with port mapping
+        # Mount config directory and expose port 8123
+        wasmtime run \
+          --tcplisten localhost:8123 \
+          --mapdir /config::/tmp/ha-config \
+          --env TZ=UTC \
+          /tmp/homeassistant.wasm &
+
+        WASM_PID=$!
+        echo "WASM_PID=$WASM_PID" >> $GITHUB_ENV
+        echo "⏳ Waiting for Home Assistant to start..."
+        sleep 30
+
+    - name: Wait for Home Assistant API
+      run: |
+        echo "🔍 Checking Home Assistant API readiness..."
+        for i in {1..60}; do
+          if curl -f http://localhost:8123/api/ 2>/dev/null; then
+            echo "✅ Home Assistant API is ready!"
+            exit 0
+          fi
+          echo "Attempt $i/60: API not ready yet..."
+          sleep 2
+        done
+        echo "❌ Home Assistant API failed to start"
+        exit 1
+
+    - name: Run E2E tests against WASM runtime
+      run: |
+        echo "🧪 Running E2E tests against WASM-based Home Assistant..."
+        uv run pytest tests/src/e2e/ \
+          -v \
+          --tb=short \
+          -m "not slow"
+      env:
+        HOMEASSISTANT_URL: "http://localhost:8123"
+        HOMEASSISTANT_TOKEN: "test-token"
+
+    - name: Stop WASM runtime
+      if: always()
+      run: |
+        if [ ! -z "$WASM_PID" ]; then
+          echo "🛑 Stopping WASM runtime (PID: $WASM_PID)..."
+          kill $WASM_PID || true
+        fi
+
+    - name: Upload WASM artifact (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: homeassistant-wasm
+        path: /tmp/homeassistant.wasm
+        retention-days: 7
+
+    - name: Show logs on failure
+      if: failure()
+      run: |
+        echo "📄 Container2WASM conversion logs:"
+        echo "WASM file size: $(ls -lh /tmp/homeassistant.wasm 2>/dev/null || echo 'not found')"
+        echo ""
+        echo "📄 Test configuration:"
+        ls -la /tmp/ha-config/ || true
