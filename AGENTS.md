@@ -72,47 +72,6 @@ gh pr checks 8  # Check status
 
 **Rule of thumb:** If you struggled with something, document it so next time is easier!
 
-## 🏗️ Code Refactoring Patterns
-
-### Registry Module Refactoring (v3.1.0)
-
-**Pattern:** Split monolithic tool registry into focused modules with orchestrator pattern.
-
-**When to use:** When a module exceeds ~1000 lines or contains multiple distinct responsibilities.
-
-**Structure:**
-```
-tools/
-├── registry.py              # Orchestrator only (76 lines)
-├── util_helpers.py          # Shared utilities
-├── tools_*.py               # Tool modules (with registration functions)
-└── service_classes.py       # Business logic (no prefix)
-```
-
-**Key principles:**
-1. **Flat structure** - All modules at same level (no nested directories)
-2. **Clear naming** - `tools_*` prefix for tool modules, no prefix for service classes
-3. **Shared utilities** - Extract common functions to `util_helpers.py`
-4. **Registration functions** - Each module exports `register_*_tools(mcp, client, **kwargs)`
-5. **Orchestrator pattern** - Registry imports and calls registration functions
-
-**Example registration function:**
-```python
-def register_search_tools(mcp: Any, client: Any, smart_tools: Any, **kwargs) -> None:
-    """Register search and discovery tools with the MCP server."""
-
-    @mcp.tool
-    async def ha_search_entities(...) -> dict[str, Any]:
-        # Tool implementation
-        pass
-```
-
-**Benefits:**
-- 96% reduction in orchestrator file size (2106 → 76 lines)
-- Clear module boundaries based on functional areas
-- Easier to navigate and maintain
-- Better testability and scalability
-
 # Home Assistant MCP Server
 
 A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems through REST API and WebSocket connections. The project provides fuzzy search, real-time monitoring, and AI-optimized device control with comprehensive test coverage.
