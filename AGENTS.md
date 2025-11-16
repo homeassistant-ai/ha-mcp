@@ -72,6 +72,47 @@ gh pr checks 8  # Check status
 
 **Rule of thumb:** If you struggled with something, document it so next time is easier!
 
+## 🏗️ Code Refactoring Patterns
+
+### Registry Module Refactoring (v3.1.0)
+
+**Pattern:** Split monolithic tool registry into focused modules with orchestrator pattern.
+
+**When to use:** When a module exceeds ~1000 lines or contains multiple distinct responsibilities.
+
+**Structure:**
+```
+tools/
+├── registry.py              # Orchestrator only (76 lines)
+├── util_helpers.py          # Shared utilities
+├── tools_*.py               # Tool modules (with registration functions)
+└── service_classes.py       # Business logic (no prefix)
+```
+
+**Key principles:**
+1. **Flat structure** - All modules at same level (no nested directories)
+2. **Clear naming** - `tools_*` prefix for tool modules, no prefix for service classes
+3. **Shared utilities** - Extract common functions to `util_helpers.py`
+4. **Registration functions** - Each module exports `register_*_tools(mcp, client, **kwargs)`
+5. **Orchestrator pattern** - Registry imports and calls registration functions
+
+**Example registration function:**
+```python
+def register_search_tools(mcp: Any, client: Any, smart_tools: Any, **kwargs) -> None:
+    """Register search and discovery tools with the MCP server."""
+
+    @mcp.tool
+    async def ha_search_entities(...) -> dict[str, Any]:
+        # Tool implementation
+        pass
+```
+
+**Benefits:**
+- 96% reduction in orchestrator file size (2106 → 76 lines)
+- Clear module boundaries based on functional areas
+- Easier to navigate and maintain
+- Better testability and scalability
+
 # Home Assistant MCP Server
 
 A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems through REST API and WebSocket connections. The project provides fuzzy search, real-time monitoring, and AI-optimized device control with comprehensive test coverage.
@@ -359,11 +400,18 @@ Home Assistant MCP Server - Current Structure
 │   ├── websocket_client.py    # WebSocket client for real-time monitoring
 │   └── websocket_listener.py  # Background WebSocket listener service
 ├── Tools Layer (/src/ha_mcp/tools/)
-│   ├── registry.py            # Centralized tool registration
-│   ├── smart_search.py        # Fuzzy entity search and AI tools
-│   ├── device_control.py      # Smart device control with WebSocket verification
-│   ├── convenience.py         # Scene/automation/weather convenience tools
-│   └── enhanced.py            # Enhanced tool implementations
+│   ├── registry.py                   # Orchestrator for tool registration (76 lines)
+│   ├── util_helpers.py               # Shared utility functions
+│   ├── tools_search.py               # 4 search/discovery tools
+│   ├── tools_service.py              # 4 service call/operation tools
+│   ├── tools_config_helpers.py       # 3 helper config management tools
+│   ├── tools_config_scripts.py       # 3 script config management tools
+│   ├── tools_config_automations.py   # 3 automation config management tools
+│   ├── tools_utility.py              # 3 utility tools (logbook, templates, docs)
+│   ├── backup.py                     # Backup service and tools
+│   ├── device_control.py             # Smart device control service with WebSocket verification
+│   ├── smart_search.py               # Fuzzy entity search service
+│   └── enhanced.py                   # Enhanced tool implementations
 ├── Resources Layer (/src/ha_mcp/resources/)
 │   └── manager.py             # MCP resource management
 ├── Prompts Layer (/src/ha_mcp/prompts/)
@@ -379,7 +427,10 @@ Home Assistant MCP Server - Current Structure
 ### Key Design Patterns
 
 #### Tools Registry Pattern
-- **Central Registration**: `tools/registry.py` manages all 20+ MCP tools in one place
+- **Orchestrator Architecture**: `tools/registry.py` (76 lines) acts as orchestrator, importing registration functions from specialized modules
+- **Modular Organization**: Tools split into focused modules (`tools_search.py`, `tools_service.py`, `tools_config_*.py`, `tools_utility.py`)
+- **Shared Utilities**: Common functions extracted to `util_helpers.py` (parse_json_param, add_timezone_metadata, etc.)
+- **Service Layer Separation**: Business logic in service classes (device_control.py, smart_search.py) separate from tool modules
 - **Decorator-Based**: Uses `@log_tool_usage` for automatic logging and metrics
 - **Type Safety**: All tools use Pydantic models for parameter validation
 
