@@ -535,6 +535,7 @@ class HomeAssistantWebSocketClient:
         return self._state.is_ready
 
 
+
 class WebSocketManager:
     """Singleton manager for Home Assistant WebSocket connections."""
 

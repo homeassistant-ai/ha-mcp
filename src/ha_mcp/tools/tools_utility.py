@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant utility tools."""
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_get_logbook(
         hours_back: int = 1,
@@ -72,7 +72,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_eval_template(
         template: str, timeout: int = 3, report_errors: bool = True
@@ -275,7 +275,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def ha_get_domain_docs(domain: str) -> dict[str, Any]:
         """Get comprehensive documentation for Home Assistant entity domains."""
         domain = domain.lower().strip()
