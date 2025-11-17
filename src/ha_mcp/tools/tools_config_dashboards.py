@@ -414,6 +414,23 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 update_data["show_in_sidebar"] = show_in_sidebar
 
             result = await client.send_websocket_message(update_data)
+
+            # Check if update failed
+            if isinstance(result, dict) and not result.get("success", True):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "action": "update_metadata",
+                    "dashboard_id": dashboard_id,
+                    "error": str(error_msg),
+                    "suggestions": [
+                        "Verify dashboard ID exists using ha_config_list_dashboards()",
+                        "Check that you have admin permissions",
+                    ],
+                }
+
             return {
                 "success": True,
                 "action": "update_metadata",
