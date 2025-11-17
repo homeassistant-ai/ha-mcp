@@ -47,7 +47,7 @@
 ### 🔧 Manage
 - **Automation and Scripts**: Create, modify, delete, enable/disable, and trigger Home Assistant automations
 - **Helper Entity Management**: Create, modify, and delete input_boolean, input_number, input_select, input_text, input_datetime, and input_button entities
-- **Dashboard Management**: Create, update, and delete Lovelace dashboards with full configuration control. Support for strategy-based dashboards (home, areas, map)
+- **Dashboard Management (Beta)**: Create, update, and delete Lovelace dashboards with full configuration control. Support for strategy-based dashboards (home, areas, map)
 - **Backup and Restore**: Create fast local backups (excludes database) and restore with safety mechanisms
 
 ---

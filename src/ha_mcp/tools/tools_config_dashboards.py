@@ -40,6 +40,7 @@ def _get_resources_dir() -> Path:
             if hasattr(resources_dir, '__fspath__'):
                 return Path(str(resources_dir))
     except (ImportError, AttributeError):
+        # If importlib.resources or its attributes are unavailable, fall back to relative path
         pass
 
     # Last resort: return the relative path and let it fail with clear error
@@ -309,11 +310,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 # Check if dashboard creation was successful
                 if isinstance(create_result, dict) and not create_result.get("success", True):
+                    error_msg = create_result.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
                     return {
                         "success": False,
                         "action": "create",
                         "url_path": url_path,
-                        "error": create_result.get("error", {}).get("message", "Unknown error during dashboard creation"),
+                        "error": str(error_msg),
                     }
 
                 # Extract dashboard ID from create response
