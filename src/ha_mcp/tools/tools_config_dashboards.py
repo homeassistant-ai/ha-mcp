@@ -4,9 +4,12 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
+import json
 import logging
+from pathlib import Path
 from typing import Annotated, Any, cast
 
+import httpx
 from pydantic import Field
 
 from .helpers import log_tool_usage
@@ -14,11 +17,18 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
+# Resource files path
+RESOURCES_DIR = Path(__file__).parent.parent / "resources"
+CARD_DOCS_BASE_URL = (
+    "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
+    "refs/heads/current/source/_dashboards"
+)
+
 
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_config_list_dashboards() -> dict[str, Any]:
         """
@@ -52,7 +62,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             logger.error(f"Error listing dashboards: {e}")
             return {"success": False, "action": "list", "error": str(e)}
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_config_get_dashboard(
         url_path: Annotated[
@@ -174,11 +184,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
         3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
 
-        DASHBOARD DOCUMENTATION RESOURCES:
-        Access comprehensive dashboard documentation via MCP resources:
-        - ha-dashboard://guide - Curated dashboard guide (structure, views, cards, features)
-        - ha-dashboard://card-types - List of all 41 available card types
-        - ha-dashboard://card-docs/{card-type} - Card-specific documentation (e.g., ha-dashboard://card-docs/light)
+        DASHBOARD DOCUMENTATION:
+        Access comprehensive dashboard documentation via these tools:
+        - ha_get_dashboard_guide() - Curated guide (structure, views, cards, features, pitfalls)
+        - ha_get_card_types() - List of all 41 available card types
+        - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "light", "thermostat")
 
         EXAMPLES:
 
@@ -560,4 +570,146 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Use ha_config_list_dashboards() to see available dashboards",
                     "Cannot delete YAML-mode or default dashboard",
                 ],
+            }
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    @log_tool_usage
+    def ha_get_dashboard_guide() -> dict[str, Any]:
+        """
+        Get comprehensive dashboard configuration guide for AI agents.
+
+        Returns a curated reference guide covering:
+        - Critical validation rules (url_path hyphen requirement)
+        - Dashboard structure and view types
+        - Card categories and configuration
+        - Features, actions, and visibility conditions
+        - Common pitfalls and best practices
+        - Strategy-based dashboard support
+
+        The guide is optimized for AI agents with grep-able syntax reference.
+
+        EXAMPLES:
+        - Get full guide: ha_get_dashboard_guide()
+        """
+        try:
+            guide_path = RESOURCES_DIR / "dashboard_guide.md"
+            guide_content = guide_path.read_text()
+            return {
+                "success": True,
+                "action": "get_guide",
+                "guide": guide_content,
+                "format": "markdown",
+            }
+        except Exception as e:
+            logger.error(f"Error reading dashboard guide: {e}")
+            return {
+                "success": False,
+                "action": "get_guide",
+                "error": str(e),
+            }
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    @log_tool_usage
+    def ha_get_card_types() -> dict[str, Any]:
+        """
+        Get list of all available Home Assistant dashboard card types.
+
+        Returns all 41 card types that can be used in dashboard configurations,
+        along with documentation URLs.
+
+        EXAMPLES:
+        - Get card types: ha_get_card_types()
+
+        Use ha_get_card_documentation(card_type) to get detailed docs for a specific card.
+        """
+        try:
+            types_path = RESOURCES_DIR / "card_types.json"
+            card_types_data = json.loads(types_path.read_text())
+            return {
+                "success": True,
+                "action": "get_card_types",
+                "card_types": card_types_data["card_types"],
+                "total_count": card_types_data["total_count"],
+                "documentation_base_url": card_types_data["documentation_base_url"],
+            }
+        except Exception as e:
+            logger.error(f"Error reading card types: {e}")
+            return {
+                "success": False,
+                "action": "get_card_types",
+                "error": str(e),
+            }
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    @log_tool_usage
+    async def ha_get_card_documentation(
+        card_type: Annotated[
+            str,
+            Field(
+                description="Card type name (e.g., 'light', 'thermostat', 'entity'). "
+                "Use ha_get_card_types() to see all available types."
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """
+        Fetch detailed documentation for a specific dashboard card type.
+
+        Returns the official Home Assistant documentation for the specified card type
+        in markdown format, fetched directly from the Home Assistant documentation repository.
+
+        EXAMPLES:
+        - Get light card docs: ha_get_card_documentation("light")
+        - Get thermostat card docs: ha_get_card_documentation("thermostat")
+        - Get entity card docs: ha_get_card_documentation("entity")
+
+        First use ha_get_card_types() to see all 41 available card types.
+        """
+        try:
+            # Validate card type exists
+            types_path = RESOURCES_DIR / "card_types.json"
+            card_types_data = json.loads(types_path.read_text())
+
+            if card_type not in card_types_data["card_types"]:
+                available = ", ".join(card_types_data["card_types"][:10])
+                return {
+                    "success": False,
+                    "action": "get_card_documentation",
+                    "card_type": card_type,
+                    "error": f"Unknown card type '{card_type}'",
+                    "suggestions": [
+                        f"Available types include: {available}...",
+                        "Use ha_get_card_types() to see full list of 41 card types",
+                    ],
+                }
+
+            # Fetch documentation from GitHub
+            doc_url = f"{CARD_DOCS_BASE_URL}/{card_type}.markdown"
+
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                response = await http_client.get(doc_url)
+                response.raise_for_status()
+                return {
+                    "success": True,
+                    "action": "get_card_documentation",
+                    "card_type": card_type,
+                    "documentation": response.text,
+                    "format": "markdown",
+                    "source_url": doc_url,
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to fetch card docs for {card_type}: {e}")
+            return {
+                "success": False,
+                "action": "get_card_documentation",
+                "card_type": card_type,
+                "error": f"Failed to fetch documentation (HTTP {e.response.status_code})",
+                "source_url": doc_url,
+            }
+        except Exception as e:
+            logger.error(f"Error fetching card docs for {card_type}: {e}")
+            return {
+                "success": False,
+                "action": "get_card_documentation",
+                "card_type": card_type,
+                "error": str(e),
             }

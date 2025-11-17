@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant script configuration tools."""
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_config_get_script(
         script_id: Annotated[

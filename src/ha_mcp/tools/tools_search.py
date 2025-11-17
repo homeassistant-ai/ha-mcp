@@ -15,7 +15,7 @@ from .util_helpers import add_timezone_metadata
 def register_search_tools(mcp, client, smart_tools, **kwargs):
     """Register search and discovery tools with the MCP server."""
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_search_entities(
         query: str,
@@ -204,7 +204,7 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_get_overview(
         detail_level: Annotated[
@@ -251,7 +251,7 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_deep_search(
         query: str,
@@ -295,7 +295,7 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
         result = await smart_tools.deep_search(query, search_types, limit)
         return cast(dict[str, Any], result)
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
         """Get detailed state information for a Home Assistant entity with timezone metadata."""
