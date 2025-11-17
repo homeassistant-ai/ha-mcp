@@ -84,6 +84,10 @@ class TestDashboardLifecycle:
         assert create_data["action"] in ["create", "set"]
         assert create_data.get("dashboard_created") is True or create_data.get("action") == "create"
 
+        # Extract dashboard ID for later operations
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None, "Dashboard creation should return dashboard_id"
+
         # Small delay for HA to process
         await asyncio.sleep(1)
 
@@ -129,14 +133,14 @@ class TestDashboardLifecycle:
         logger.info("Updating dashboard metadata...")
         meta_data = await mcp.call_tool_success(
             "ha_config_update_dashboard_metadata",
-            {"dashboard_id": "test-e2e-dashboard", "title": "Updated E2E Dashboard"},
+            {"dashboard_id": dashboard_id, "title": "Updated E2E Dashboard"},
         )
         assert meta_data["success"] is True
 
         # 6. Delete dashboard
         logger.info("Deleting test dashboard...")
         delete_data = await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"dashboard_id": "test-e2e-dashboard"}
+            "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
         )
         assert delete_data["success"] is True
 
@@ -165,6 +169,8 @@ class TestDashboardLifecycle:
             },
         )
         assert create_data["success"] is True
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
 
         await asyncio.sleep(1)
 
@@ -177,7 +183,7 @@ class TestDashboardLifecycle:
 
         # Cleanup
         await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"dashboard_id": "test-strategy-dashboard"}
+            "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
         )
 
         logger.info("Strategy-based dashboard test completed successfully")
@@ -204,24 +210,26 @@ class TestDashboardLifecycle:
         mcp = MCPAssertions(mcp_client)
 
         # Create dashboard
-        await mcp.call_tool_success(
+        create_data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {"url_path": "test-partial-update", "title": "Original Title"},
         )
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
 
         await asyncio.sleep(1)
 
         # Update only title
         meta_data = await mcp.call_tool_success(
             "ha_config_update_dashboard_metadata",
-            {"dashboard_id": "test-partial-update", "title": "New Title"},
+            {"dashboard_id": dashboard_id, "title": "New Title"},
         )
         assert meta_data["success"] is True
         assert "title" in meta_data.get("updated_fields", {})
 
         # Cleanup
         await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"dashboard_id": "test-partial-update"}
+            "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
         )
 
         logger.info("Partial metadata update test completed successfully")
@@ -237,6 +245,8 @@ class TestDashboardLifecycle:
             {"url_path": "test-no-config", "title": "No Config Dashboard"},
         )
         assert create_data["success"] is True
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
 
         await asyncio.sleep(1)
 
@@ -246,7 +256,7 @@ class TestDashboardLifecycle:
 
         # Cleanup
         await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"dashboard_id": "test-no-config"}
+            "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
         )
 
         logger.info("Dashboard without config test completed successfully")

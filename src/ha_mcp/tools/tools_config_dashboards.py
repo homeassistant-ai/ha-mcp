@@ -227,6 +227,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             dashboard_exists = any(d.get("url_path") == url_path for d in existing_dashboards)
 
             # If dashboard doesn't exist, create it
+            dashboard_id = None
             if not dashboard_exists:
                 # Use provided title or generate from url_path
                 dashboard_title = title or url_path.replace("-", " ").title()
@@ -242,6 +243,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 if icon:
                     create_data["icon"] = icon
                 create_result = await client.send_websocket_message(create_data)
+
+                # Extract dashboard ID from create response
+                if isinstance(create_result, dict) and "result" in create_result:
+                    dashboard_info = create_result["result"]
+                    dashboard_id = dashboard_info.get("id")
+                elif isinstance(create_result, dict):
+                    dashboard_id = create_result.get("id")
+            else:
+                # If dashboard already exists, get its ID from the list
+                for dashboard in existing_dashboards:
+                    if dashboard.get("url_path") == url_path:
+                        dashboard_id = dashboard.get("id")
+                        break
 
             # Set config if provided
             config_updated = False
@@ -268,6 +282,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "success": True,
                 "action": "create" if not dashboard_exists else "update",
                 "url_path": url_path,
+                "dashboard_id": dashboard_id,
                 "dashboard_created": not dashboard_exists,
                 "config_updated": config_updated,
                 "message": f"Dashboard {url_path} {'created' if not dashboard_exists else 'updated'} successfully",
