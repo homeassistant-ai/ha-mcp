@@ -16,11 +16,10 @@ production-level functionality and compatibility.
 """
 
 import asyncio
+import ast
 import json
 import logging
 from typing import Any
-
-import pytest
 
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions
@@ -38,15 +37,15 @@ def parse_mcp_result(result) -> dict[str, Any]:
             try:
                 return json.loads(response_text)
             except json.JSONDecodeError:
-                # Try Python literal evaluation
+                # Try Python literal evaluation (safe alternative to eval)
                 try:
                     fixed_text = (
                         response_text.replace("true", "True")
                         .replace("false", "False")
                         .replace("null", "None")
                     )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
+                    return ast.literal_eval(fixed_text)
+                except (SyntaxError, ValueError):
                     return {"raw_response": response_text, "parse_error": True}
 
         return {
@@ -191,7 +190,6 @@ class TestDashboardLifecycle:
     async def test_url_path_validation(self, mcp_client):
         """Test that url_path must contain hyphen."""
         logger.info("Starting url_path validation test")
-        mcp = MCPAssertions(mcp_client)
 
         # Try to create dashboard without hyphen
         result = await mcp_client.call_tool(
@@ -264,7 +262,6 @@ class TestDashboardLifecycle:
     async def test_metadata_update_requires_at_least_one_field(self, mcp_client):
         """Test that metadata update requires at least one field."""
         logger.info("Starting metadata update validation test")
-        mcp = MCPAssertions(mcp_client)
 
         # Try to update metadata with no fields
         result = await mcp_client.call_tool(
@@ -283,7 +280,6 @@ class TestDashboardErrorHandling:
     async def test_get_nonexistent_dashboard(self, mcp_client):
         """Test getting config for non-existent dashboard."""
         logger.info("Starting get nonexistent dashboard test")
-        mcp = MCPAssertions(mcp_client)
 
         result = await mcp_client.call_tool(
             "ha_config_get_dashboard", {"url_path": "nonexistent-dashboard-12345"}
@@ -297,7 +293,6 @@ class TestDashboardErrorHandling:
     async def test_delete_nonexistent_dashboard(self, mcp_client):
         """Test deleting non-existent dashboard."""
         logger.info("Starting delete nonexistent dashboard test")
-        mcp = MCPAssertions(mcp_client)
 
         result = await mcp_client.call_tool(
             "ha_config_delete_dashboard", {"dashboard_id": "nonexistent-dashboard-67890"}

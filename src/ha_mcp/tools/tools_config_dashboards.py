@@ -121,7 +121,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             str | dict[str, Any] | None,
             Field(
                 description="Dashboard configuration with views and cards. "
-                "Can be dict, JSON string, or YAML string. "
+                "Can be dict or JSON string. "
                 "Omit or set to None to create dashboard without initial config."
             ),
         ] = None,
@@ -243,6 +243,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 if icon:
                     create_data["icon"] = icon
                 create_result = await client.send_websocket_message(create_data)
+
+                # Check if dashboard creation was successful
+                if isinstance(create_result, dict) and not create_result.get("success", True):
+                    return {
+                        "success": False,
+                        "action": "create",
+                        "url_path": url_path,
+                        "error": create_result.get("error", {}).get("message", "Unknown error during dashboard creation"),
+                    }
 
                 # Extract dashboard ID from create response
                 if isinstance(create_result, dict) and "result" in create_result:
