@@ -431,25 +431,26 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "3.2.0"
+version = "3.4.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "textdistance", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'arm64'", specifier = ">=4.6.0" },
-    { name = "textdistance", extra = ["extras"], marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'", specifier = ">=4.6.0" },
+    { name = "textdistance" },
+    { name = "textdistance", extra = ["extras"], marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'" },
     { name = "websockets" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "black" },
     { name = "build" },
     { name = "docker" },
     { name = "isort" },
     { name = "mypy" },
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -459,52 +460,30 @@ dev = [
     { name = "testcontainers" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "build" },
-    { name = "docker" },
-    { name = "mypy" },
-    { name = "psutil" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "testcontainers" },
-]
-
 [package.metadata]
 requires-dist = [
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.2" },
-    { name = "docker", marker = "extra == 'dev'", specifier = ">=7.1.0" },
     { name = "fastmcp", specifier = ">=2.11.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "requests", marker = "extra == 'dev'", specifier = ">=2.25.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.13.0" },
     { name = "textdistance", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'arm64'", specifier = ">=4.6.0" },
     { name = "textdistance", extras = ["extras"], marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'", specifier = ">=4.6.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "black", specifier = ">=23.0.0" },
     { name = "build", specifier = ">=1.2.2" },
     { name = "docker", specifier = ">=7.1.0" },
+    { name = "isort", specifier = ">=5.12.0" },
     { name = "mypy", specifier = ">=1.17.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "requests", specifier = ">=2.25.0" },
     { name = "ruff", specifier = ">=0.12.12" },
     { name = "testcontainers", specifier = ">=4.13.0" },
 ]

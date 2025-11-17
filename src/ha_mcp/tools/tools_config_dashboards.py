@@ -84,7 +84,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if url_path:
                 data["url_path"] = url_path
 
-            config = await client.send_websocket_message(data)
+            response = await client.send_websocket_message(data)
+            # Extract config from WebSocket response
+            config = response.get("result") if isinstance(response, dict) else response
             return {
                 "success": True,
                 "action": "get",
