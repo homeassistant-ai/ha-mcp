@@ -9,6 +9,7 @@ from typing import Any
 
 from .backup import register_backup_tools
 from .tools_config_automations import register_config_automation_tools
+from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
 from .tools_config_scripts import register_config_script_tools
 from .tools_search import register_search_tools
@@ -38,10 +39,11 @@ class ToolsRegistry:
             self.mcp, self.client, self.device_tools
         )
 
-        # Register config management tools (helpers, scripts, automations)
+        # Register config management tools (helpers, scripts, automations, dashboards)
         register_config_helper_tools(self.mcp, self.client)
         register_config_script_tools(self.mcp, self.client)
         register_config_automation_tools(self.mcp, self.client)
+        register_config_dashboard_tools(self.mcp, self.client)
 
         # Register utility tools (logbook, templates, docs)
         register_utility_tools(self.mcp, self.client)

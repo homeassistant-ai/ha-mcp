@@ -534,6 +534,131 @@ class HomeAssistantWebSocketClient:
         """Check if WebSocket is connected and authenticated."""
         return self._state.is_ready
 
+    # Dashboard management methods
+
+    async def list_dashboards(self) -> list[dict[str, Any]]:
+        """List all storage-mode dashboards.
+
+        Returns:
+            List of dashboard configs with metadata
+        """
+        result = await self.send_command({"type": "lovelace/dashboards/list"})
+        if isinstance(result, dict) and "result" in result:
+            return result["result"]
+        return result if isinstance(result, list) else []
+
+    async def create_dashboard(
+        self,
+        url_path: str,
+        title: str,
+        icon: str | None = None,
+        require_admin: bool = False,
+        show_in_sidebar: bool = True,
+    ) -> dict[str, Any]:
+        """Create a new storage-mode dashboard.
+
+        Args:
+            url_path: Unique URL path (must contain hyphen)
+            title: Dashboard display name
+            icon: Optional MDI icon name
+            require_admin: Restrict to admin users
+            show_in_sidebar: Show in sidebar navigation
+
+        Returns:
+            Created dashboard config
+        """
+        data: dict[str, Any] = {
+            "type": "lovelace/dashboards/create",
+            "url_path": url_path,
+            "title": title,
+            "require_admin": require_admin,
+            "show_in_sidebar": show_in_sidebar,
+        }
+        if icon:
+            data["icon"] = icon
+        return await self.send_command(data)
+
+    async def update_dashboard(
+        self,
+        dashboard_id: str,
+        title: str | None = None,
+        icon: str | None = None,
+        require_admin: bool | None = None,
+        show_in_sidebar: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update dashboard metadata.
+
+        Args:
+            dashboard_id: Dashboard ID (typically same as url_path)
+            title: New title
+            icon: New icon
+            require_admin: New admin requirement
+            show_in_sidebar: New sidebar visibility
+
+        Returns:
+            Updated dashboard config
+        """
+        data: dict[str, Any] = {
+            "type": "lovelace/dashboards/update",
+            "dashboard_id": dashboard_id,
+        }
+        if title is not None:
+            data["title"] = title
+        if icon is not None:
+            data["icon"] = icon
+        if require_admin is not None:
+            data["require_admin"] = require_admin
+        if show_in_sidebar is not None:
+            data["show_in_sidebar"] = show_in_sidebar
+        return await self.send_command(data)
+
+    async def delete_dashboard(self, dashboard_id: str) -> dict[str, Any]:
+        """Delete a storage-mode dashboard.
+
+        Args:
+            dashboard_id: Dashboard ID to delete
+
+        Returns:
+            Deletion response
+        """
+        return await self.send_command(
+            {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
+        )
+
+    async def get_dashboard_config(
+        self, url_path: str | None = None, force: bool = False
+    ) -> dict[str, Any]:
+        """Get dashboard configuration/content.
+
+        Args:
+            url_path: Dashboard URL path (None for default dashboard)
+            force: Force reload from storage (bypass cache)
+
+        Returns:
+            Dashboard configuration
+        """
+        data: dict[str, Any] = {"type": "lovelace/config", "force": force}
+        if url_path:
+            data["url_path"] = url_path
+        return await self.send_command(data)
+
+    async def save_dashboard_config(
+        self, config: dict[str, Any] | str, url_path: str | None = None
+    ) -> dict[str, Any]:
+        """Save dashboard configuration/content.
+
+        Args:
+            config: Dashboard configuration (dict or string)
+            url_path: Dashboard URL path (None for default dashboard)
+
+        Returns:
+            Save response
+        """
+        data: dict[str, Any] = {"type": "lovelace/config/save", "config": config}
+        if url_path:
+            data["url_path"] = url_path
+        return await self.send_command(data)
+
 
 class WebSocketManager:
     """Singleton manager for Home Assistant WebSocket connections."""

@@ -7,22 +7,46 @@ This module provides common helper functions used across multiple tool registrat
 import json
 from typing import Any
 
+try:
+    import yaml
+
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+
 
 def parse_json_param(
     param: str | dict | list | None, param_name: str = "parameter"
 ) -> dict | list | None:
     """
-    Parse flexibly JSON string or return existing dict/list.
+    Parse configuration from JSON/YAML string or return existing dict/list.
+
+    Supports multiple input formats:
+    1. Dict/list (passthrough)
+    2. JSON string (parsed with json.loads)
+    3. YAML string (parsed with yaml.safe_load, if PyYAML available)
+
+    Tries JSON first for performance, falls back to YAML if available.
 
     Args:
-        param: JSON string, dict, list, or None
-        param_name: Parameter name for error context
+        param: Config as dict, list, JSON string, or YAML string
+        param_name: Parameter name for error messages
 
     Returns:
-        Parsed dict/list or original value if already correct type
+        Parsed dict/list or None
 
     Raises:
-        ValueError: If JSON parsing fails
+        ValueError: If parsing fails or wrong type
+
+    Examples:
+        # Dict passthrough
+        parse_json_param({"views": []}) → {"views": []}
+
+        # JSON string
+        parse_json_param('{"views": []}') → {"views": []}
+
+        # YAML string (if PyYAML available)
+        parse_json_param('views:\\n  - title: Home') → {"views": [{"title": "Home"}]}
     """
     if param is None:
         return None
@@ -31,6 +55,7 @@ def parse_json_param(
         return param
 
     if isinstance(param, str):
+        # Try JSON first (faster, MCP-native)
         try:
             parsed = json.loads(param)
             if not isinstance(parsed, (dict, list)):
@@ -38,8 +63,22 @@ def parse_json_param(
                     f"{param_name} must be a JSON object or array, got {type(parsed).__name__}"
                 )
             return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}")
+        except json.JSONDecodeError:
+            # Fallback to YAML if available
+            if YAML_AVAILABLE:
+                try:
+                    parsed = yaml.safe_load(param)
+                    if not isinstance(parsed, (dict, list)):
+                        raise ValueError(
+                            f"{param_name} must be object/array, got {type(parsed).__name__}"
+                        )
+                    return parsed
+                except yaml.YAMLError as e:
+                    raise ValueError(f"Invalid JSON/YAML in {param_name}: {e}")
+            else:
+                raise ValueError(
+                    f"Invalid JSON in {param_name}. YAML parsing not available (PyYAML not installed)."
+                )
 
     raise ValueError(
         f"{param_name} must be string, dict, list, or None, got {type(param).__name__}"
