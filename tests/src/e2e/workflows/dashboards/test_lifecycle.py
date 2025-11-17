@@ -67,7 +67,7 @@ class TestDashboardLifecycle:
 
         # 1. Create dashboard with initial config
         logger.info("Creating test dashboard...")
-        create_result = await mcp.call_tool_success(
+        create_data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
                 "url_path": "test-e2e-dashboard",
@@ -80,7 +80,6 @@ class TestDashboardLifecycle:
                 },
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data["success"] is True
         assert create_data["action"] in ["create", "set"]
         assert create_data.get("dashboard_created") is True or create_data.get("action") == "create"
@@ -90,8 +89,7 @@ class TestDashboardLifecycle:
 
         # 2. List dashboards - verify exists
         logger.info("Listing dashboards...")
-        list_result = await mcp.call_tool_success("ha_config_list_dashboards", {})
-        list_data = parse_mcp_result(list_result)
+        list_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
         assert list_data["success"] is True
         assert any(
             d.get("url_path") == "test-e2e-dashboard" for d in list_data.get("dashboards", [])
@@ -99,17 +97,16 @@ class TestDashboardLifecycle:
 
         # 3. Get dashboard config
         logger.info("Getting dashboard config...")
-        get_result = await mcp.call_tool_success(
+        get_data = await mcp.call_tool_success(
             "ha_config_get_dashboard", {"url_path": "test-e2e-dashboard"}
         )
-        get_data = parse_mcp_result(get_result)
         assert get_data["success"] is True
         assert "config" in get_data
         assert "views" in get_data["config"]
 
         # 4. Update config (add another card)
         logger.info("Updating dashboard config...")
-        update_result = await mcp.call_tool_success(
+        update_data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
                 "url_path": "test-e2e-dashboard",
@@ -126,30 +123,26 @@ class TestDashboardLifecycle:
                 },
             },
         )
-        update_data = parse_mcp_result(update_result)
         assert update_data["success"] is True
 
         # 5. Update metadata (change title)
         logger.info("Updating dashboard metadata...")
-        meta_result = await mcp.call_tool_success(
+        meta_data = await mcp.call_tool_success(
             "ha_config_update_dashboard_metadata",
             {"dashboard_id": "test-e2e-dashboard", "title": "Updated E2E Dashboard"},
         )
-        meta_data = parse_mcp_result(meta_result)
         assert meta_data["success"] is True
 
         # 6. Delete dashboard
         logger.info("Deleting test dashboard...")
-        delete_result = await mcp.call_tool_success(
+        delete_data = await mcp.call_tool_success(
             "ha_config_delete_dashboard", {"dashboard_id": "test-e2e-dashboard"}
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data["success"] is True
 
         # 7. Verify deletion
         await asyncio.sleep(1)
-        list_after_result = await mcp.call_tool_success("ha_config_list_dashboards", {})
-        list_after_data = parse_mcp_result(list_after_result)
+        list_after_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
         assert not any(
             d.get("url_path") == "test-e2e-dashboard"
             for d in list_after_data.get("dashboards", [])
@@ -163,7 +156,7 @@ class TestDashboardLifecycle:
         mcp = MCPAssertions(mcp_client)
 
         # Create dashboard with strategy config
-        create_result = await mcp.call_tool_success(
+        create_data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
                 "url_path": "test-strategy-dashboard",
@@ -171,14 +164,12 @@ class TestDashboardLifecycle:
                 "config": {"strategy": {"type": "home", "favorite_entities": []}},
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data["success"] is True
 
         await asyncio.sleep(1)
 
         # Verify it exists
-        list_result = await mcp.call_tool_success("ha_config_list_dashboards", {})
-        list_data = parse_mcp_result(list_result)
+        list_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
         assert any(
             d.get("url_path") == "test-strategy-dashboard"
             for d in list_data.get("dashboards", [])
@@ -221,11 +212,10 @@ class TestDashboardLifecycle:
         await asyncio.sleep(1)
 
         # Update only title
-        meta_result = await mcp.call_tool_success(
+        meta_data = await mcp.call_tool_success(
             "ha_config_update_dashboard_metadata",
             {"dashboard_id": "test-partial-update", "title": "New Title"},
         )
-        meta_data = parse_mcp_result(meta_result)
         assert meta_data["success"] is True
         assert "title" in meta_data.get("updated_fields", {})
 
@@ -242,18 +232,16 @@ class TestDashboardLifecycle:
         mcp = MCPAssertions(mcp_client)
 
         # Create dashboard without config
-        create_result = await mcp.call_tool_success(
+        create_data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {"url_path": "test-no-config", "title": "No Config Dashboard"},
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data["success"] is True
 
         await asyncio.sleep(1)
 
         # Verify it exists
-        list_result = await mcp.call_tool_success("ha_config_list_dashboards", {})
-        list_data = parse_mcp_result(list_result)
+        list_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
         assert any(d.get("url_path") == "test-no-config" for d in list_data.get("dashboards", []))
 
         # Cleanup
