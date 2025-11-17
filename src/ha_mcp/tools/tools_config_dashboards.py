@@ -168,6 +168,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
 
+        DISCOVERING ENTITY IDs FOR DASHBOARDS:
+        Use these tools to find entity IDs to include in your dashboard config:
+        1. ha_get_overview(detail_level="full") - Get all entities organized by domain/area
+        2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
+        3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
+
         EXAMPLES:
 
         Create empty dashboard:
