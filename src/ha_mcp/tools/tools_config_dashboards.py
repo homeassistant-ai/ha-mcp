@@ -85,6 +85,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 data["url_path"] = url_path
 
             response = await client.send_websocket_message(data)
+
+            # Check if request failed
+            if isinstance(response, dict) and not response.get("success", True):
+                error_msg = response.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "action": "get",
+                    "url_path": url_path,
+                    "error": str(error_msg),
+                    "suggestions": [
+                        "Verify dashboard exists using ha_config_list_dashboards()",
+                        "Check if you have permission to access this dashboard",
+                        "Use None for default dashboard",
+                    ],
+                }
+
             # Extract config from WebSocket response
             config = response.get("result") if isinstance(response, dict) else response
             return {
@@ -284,7 +302,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 save_data: dict[str, Any] = {"type": "lovelace/config/save", "config": config_dict}
                 if url_path:
                     save_data["url_path"] = url_path
-                await client.send_websocket_message(save_data)
+                save_result = await client.send_websocket_message(save_data)
+
+                # Check if save failed
+                if isinstance(save_result, dict) and not save_result.get("success", True):
+                    error_msg = save_result.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": "set",
+                        "url_path": url_path,
+                        "error": f"Failed to save dashboard config: {error_msg}",
+                        "suggestions": [
+                            "Verify config format is valid Lovelace JSON",
+                            "Check that you have admin permissions",
+                            "Ensure all entity IDs in config exist",
+                        ],
+                    }
+
                 config_updated = True
 
             return {
@@ -308,7 +344,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Ensure url_path is unique (not already in use for different dashboard type)",
                     "Verify url_path contains a hyphen",
                     "Check that you have admin permissions",
-                    "Verify config format is valid Lovelace YAML/JSON",
+                    "Verify config format is valid Lovelace JSON",
                 ],
             }
 
@@ -429,7 +465,41 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
             )
-            # Delete operations are idempotent - success even if dashboard doesn't exist
+
+            # Check response for error indication
+            if isinstance(response, dict) and not response.get("success", True):
+                error_msg = response.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_str = error_msg.get("message", str(error_msg))
+                else:
+                    error_str = str(error_msg)
+
+                logger.error(f"Error deleting dashboard: {error_str}")
+
+                # If the error is "not found" / "doesn't exist", treat as success (idempotent)
+                if "unable to find" in error_str.lower() or "not found" in error_str.lower():
+                    return {
+                        "success": True,
+                        "action": "delete",
+                        "dashboard_id": dashboard_id,
+                        "message": "Dashboard already deleted or does not exist",
+                    }
+
+                # For other errors, return failure
+                return {
+                    "success": False,
+                    "action": "delete",
+                    "dashboard_id": dashboard_id,
+                    "error": error_str,
+                    "suggestions": [
+                        "Verify dashboard exists and is storage-mode",
+                        "Check that you have admin permissions",
+                        "Use ha_config_list_dashboards() to see available dashboards",
+                        "Cannot delete YAML-mode or default dashboard",
+                    ],
+                }
+
+            # Delete successful
             return {
                 "success": True,
                 "action": "delete",
