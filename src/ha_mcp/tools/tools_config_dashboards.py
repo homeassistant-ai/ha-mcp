@@ -174,6 +174,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
         3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
 
+        DASHBOARD DOCUMENTATION RESOURCES:
+        Access comprehensive dashboard documentation via MCP resources:
+        - ha-dashboard://guide - Curated dashboard guide (structure, views, cards, features)
+        - ha-dashboard://card-types - List of all 41 available card types
+        - ha-dashboard://card-docs/{card-type} - Card-specific documentation (e.g., ha-dashboard://card-docs/light)
+
         EXAMPLES:
 
         Create empty dashboard:

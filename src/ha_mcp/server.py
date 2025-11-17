@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
 from .prompts.enhanced import EnhancedPromptsMixin
+from .resources import register_dashboard_resources
 from .tools.enhanced import EnhancedToolsMixin
 from .tools.device_control import create_device_control_tools
 from .tools.smart_search import create_smart_search_tools
@@ -49,6 +50,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Register enhanced tools and prompts for first/second interaction success
         self.register_enhanced_tools()
         self.register_enhanced_prompts()
+
+        # Register dashboard documentation resources
+        register_dashboard_resources(self.mcp)
 
     # Helper methods required by EnhancedToolsMixin
 
