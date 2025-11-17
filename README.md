@@ -47,7 +47,8 @@
 ### 🔧 Manage
 - **Automation and Scripts**: Create, modify, delete, enable/disable, and trigger Home Assistant automations
 - **Helper Entity Management**: Create, modify, and delete input_boolean, input_number, input_select, input_text, input_datetime, and input_button entities
-- **Backup and Restore**: Create fast local backups (excludes database) and restore with safety mechanisms
+- **Dashboard Management**: Create, update, and delete Lovelace dashboards with full configuration control. Support for strategy-based dashboards (home, areas, map)
+- **Backup and Restore**: Create fast local backboards (excludes database) and restore with safety mechanisms
 
 ---
 
@@ -308,6 +309,11 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 | `ha_config_set_automation` | Create/update automations | `ha_config_set_automation(config)` |
 | `ha_config_get_automation` | Get automation configuration | `ha_config_get_automation("automation.id")` |
 | `ha_config_remove_automation` | Delete automations | `ha_config_remove_automation("automation.id")` |
+| `ha_config_list_dashboards` | List all storage-mode dashboards | `ha_config_list_dashboards()` |
+| `ha_config_get_dashboard` | Get dashboard configuration | `ha_config_get_dashboard("lovelace-mobile")` |
+| `ha_config_set_dashboard` | Create/update dashboard | `ha_config_set_dashboard("my-dash", config)` |
+| `ha_config_update_dashboard_metadata` | Update dashboard title/icon | `ha_config_update_dashboard_metadata("my-dash", title="New")` |
+| `ha_config_delete_dashboard` | Delete dashboard | `ha_config_delete_dashboard("my-dash")` |
 
 ### History & Insights Tools
 | Tool | Description | Example |
