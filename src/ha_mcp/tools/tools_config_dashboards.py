@@ -597,7 +597,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
-    def ha_get_dashboard_guide() -> dict[str, Any]:
+    async def ha_get_dashboard_guide() -> dict[str, Any]:
         """
         Get comprehensive dashboard configuration guide for AI agents.
 
@@ -638,7 +638,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
-    def ha_get_card_types() -> dict[str, Any]:
+    async def ha_get_card_types() -> dict[str, Any]:
         """
         Get list of all available Home Assistant dashboard card types.
 
