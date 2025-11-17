@@ -34,7 +34,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         - List dashboards: ha_config_list_dashboards()
         """
         try:
-            dashboards = await client.websocket_client.list_dashboards()
+            result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+            if isinstance(result, dict) and "result" in result:
+                dashboards = result["result"]
+            elif isinstance(result, list):
+                dashboards = result
+            else:
+                dashboards = []
+
             return {
                 "success": True,
                 "action": "list",
@@ -72,9 +79,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: url_path=None retrieves the default dashboard configuration.
         """
         try:
-            config = await client.websocket_client.get_dashboard_config(
-                url_path=url_path or None, force=force_reload
-            )
+            # Build WebSocket message
+            data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
+            if url_path:
+                data["url_path"] = url_path
+
+            config = await client.send_websocket_message(data)
             return {
                 "success": True,
                 "action": "get",
@@ -205,7 +215,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
 
             # Check if dashboard exists
-            existing_dashboards = await client.websocket_client.list_dashboards()
+            result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+            if isinstance(result, dict) and "result" in result:
+                existing_dashboards = result["result"]
+            elif isinstance(result, list):
+                existing_dashboards = result
+            else:
+                existing_dashboards = []
             dashboard_exists = any(d.get("url_path") == url_path for d in existing_dashboards)
 
             # If dashboard doesn't exist, create it
@@ -213,13 +229,17 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # Use provided title or generate from url_path
                 dashboard_title = title or url_path.replace("-", " ").title()
 
-                create_result = await client.websocket_client.create_dashboard(
-                    url_path=url_path,
-                    title=dashboard_title,
-                    icon=icon,
-                    require_admin=require_admin,
-                    show_in_sidebar=show_in_sidebar,
-                )
+                # Build create message
+                create_data: dict[str, Any] = {
+                    "type": "lovelace/dashboards/create",
+                    "url_path": url_path,
+                    "title": dashboard_title,
+                    "require_admin": require_admin,
+                    "show_in_sidebar": show_in_sidebar,
+                }
+                if icon:
+                    create_data["icon"] = icon
+                create_result = await client.send_websocket_message(create_data)
 
             # Set config if provided
             config_updated = False
@@ -234,9 +254,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     }
 
                 config_dict = cast(dict[str, Any], parsed_config)
-                await client.websocket_client.save_dashboard_config(
-                    config=config_dict, url_path=url_path
-                )
+
+                # Build save config message
+                save_data: dict[str, Any] = {"type": "lovelace/config/save", "config": config_dict}
+                if url_path:
+                    save_data["url_path"] = url_path
+                await client.send_websocket_message(save_data)
                 config_updated = True
 
             return {
@@ -314,13 +337,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             }
 
         try:
-            result = await client.websocket_client.update_dashboard(
-                dashboard_id=dashboard_id,
-                title=title,
-                icon=icon,
-                require_admin=require_admin,
-                show_in_sidebar=show_in_sidebar,
-            )
+            # Build update message
+            update_data: dict[str, Any] = {
+                "type": "lovelace/dashboards/update",
+                "dashboard_id": dashboard_id,
+            }
+            if title is not None:
+                update_data["title"] = title
+            if icon is not None:
+                update_data["icon"] = icon
+            if require_admin is not None:
+                update_data["require_admin"] = require_admin
+            if show_in_sidebar is not None:
+                update_data["show_in_sidebar"] = show_in_sidebar
+
+            result = await client.send_websocket_message(update_data)
             return {
                 "success": True,
                 "action": "update_metadata",
@@ -369,7 +400,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            await client.websocket_client.delete_dashboard(dashboard_id)
+            await client.send_websocket_message(
+                {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
+            )
             return {
                 "success": True,
                 "action": "delete",

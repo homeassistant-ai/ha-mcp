@@ -197,7 +197,7 @@ class TestDashboardLifecycle:
         mcp = MCPAssertions(mcp_client)
 
         # Try to create dashboard without hyphen
-        result = await mcp.call_tool(
+        result = await mcp_client.call_tool(
             "ha_config_set_dashboard",
             {"url_path": "nodash", "title": "Invalid Dashboard"},
         )
@@ -269,7 +269,7 @@ class TestDashboardLifecycle:
         mcp = MCPAssertions(mcp_client)
 
         # Try to update metadata with no fields
-        result = await mcp.call_tool(
+        result = await mcp_client.call_tool(
             "ha_config_update_dashboard_metadata", {"dashboard_id": "test-dashboard"}
         )
         data = parse_mcp_result(result)
@@ -287,7 +287,7 @@ class TestDashboardErrorHandling:
         logger.info("Starting get nonexistent dashboard test")
         mcp = MCPAssertions(mcp_client)
 
-        result = await mcp.call_tool(
+        result = await mcp_client.call_tool(
             "ha_config_get_dashboard", {"url_path": "nonexistent-dashboard-12345"}
         )
         data = parse_mcp_result(result)
@@ -301,7 +301,7 @@ class TestDashboardErrorHandling:
         logger.info("Starting delete nonexistent dashboard test")
         mcp = MCPAssertions(mcp_client)
 
-        result = await mcp.call_tool(
+        result = await mcp_client.call_tool(
             "ha_config_delete_dashboard", {"dashboard_id": "nonexistent-dashboard-67890"}
         )
         data = parse_mcp_result(result)
