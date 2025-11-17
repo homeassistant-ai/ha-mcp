@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 # Import test utilities
-from ...utilities.assertions import MCPAssertions
+from tests.src.e2e.utilities.assertions import MCPAssertions
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
