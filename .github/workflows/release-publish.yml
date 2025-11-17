@@ -180,7 +180,7 @@ jobs:
           fi
 
           # If version already exists, treat as success
-          if echo "$OUTPUT" | grep -qi "version.*already.*exist\|already.*published\|conflict\|duplicate"; then
+          if echo "$OUTPUT" | grep -qi "cannot publish duplicate version\|version.*already.*exist\|already.*published"; then
             echo "⚠ Version $VERSION already exists in MCP Registry (published previously)"
             echo "✓ Treating as success"
             exit 0
