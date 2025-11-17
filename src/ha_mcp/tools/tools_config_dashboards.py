@@ -402,9 +402,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            await client.send_websocket_message(
+            response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
             )
+            # Check if delete was successful
+            if not isinstance(response, dict) or not response.get("success"):
+                error_msg = response.get("error", "Delete failed") if isinstance(response, dict) else "Delete failed"
+                return {
+                    "success": False,
+                    "action": "delete",
+                    "dashboard_id": dashboard_id,
+                    "error": str(error_msg),
+                }
+
             return {
                 "success": True,
                 "action": "delete",
