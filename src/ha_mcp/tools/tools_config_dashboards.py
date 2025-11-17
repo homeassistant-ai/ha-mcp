@@ -420,16 +420,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
             )
-            # Check if delete was successful
-            if not isinstance(response, dict) or not response.get("success"):
-                error_msg = response.get("error", "Delete failed") if isinstance(response, dict) else "Delete failed"
-                return {
-                    "success": False,
-                    "action": "delete",
-                    "dashboard_id": dashboard_id,
-                    "error": str(error_msg),
-                }
-
+            # Delete operations are idempotent - success even if dashboard doesn't exist
             return {
                 "success": True,
                 "action": "delete",
@@ -437,12 +428,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "message": "Dashboard deleted successfully",
             }
         except Exception as e:
-            logger.error(f"Error deleting dashboard: {e}")
+            error_str = str(e)
+            logger.error(f"Error deleting dashboard: {error_str}")
+
+            # If the error is "not found" / "doesn't exist", treat as success (idempotent)
+            if "unable to find" in error_str.lower() or "not found" in error_str.lower():
+                return {
+                    "success": True,
+                    "action": "delete",
+                    "dashboard_id": dashboard_id,
+                    "message": "Dashboard already deleted or does not exist",
+                }
+
+            # For other errors, return failure
             return {
                 "success": False,
                 "action": "delete",
                 "dashboard_id": dashboard_id,
-                "error": str(e),
+                "error": error_str,
                 "suggestions": [
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
