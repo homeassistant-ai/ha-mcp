@@ -303,3 +303,63 @@ class TestDashboardErrorHandling:
         assert data["success"] is True
 
         logger.info("Delete nonexistent dashboard test completed successfully")
+
+
+class TestDashboardDocumentationTools:
+    """Test dashboard documentation tools."""
+
+    async def test_get_dashboard_guide(self, mcp_client):
+        """Test ha_get_dashboard_guide returns the guide."""
+        logger.info("Testing ha_get_dashboard_guide")
+        mcp = MCPAssertions(mcp_client)
+
+        data = await mcp.call_tool_success("ha_get_dashboard_guide", {})
+
+        assert data["success"] is True
+        assert data["action"] == "get_guide"
+        assert "guide" in data
+        assert data["format"] == "markdown"
+
+        # Verify guide contains key sections
+        guide_content = data["guide"]
+        assert "url_path MUST contain hyphen" in guide_content
+        assert "Dashboard Structure" in guide_content
+        assert "Card Categories" in guide_content
+
+        logger.info("ha_get_dashboard_guide test passed")
+
+    async def test_get_card_types(self, mcp_client):
+        """Test ha_get_card_types returns all card types."""
+        logger.info("Testing ha_get_card_types")
+        mcp = MCPAssertions(mcp_client)
+
+        data = await mcp.call_tool_success("ha_get_card_types", {})
+
+        assert data["success"] is True
+        assert data["action"] == "get_card_types"
+        assert "card_types" in data
+        assert "total_count" in data
+        assert data["total_count"] == 41
+
+        # Verify some common card types are present
+        card_types = data["card_types"]
+        assert "light" in card_types
+        assert "entity" in card_types
+
+        logger.info("ha_get_card_types test passed")
+
+    async def test_get_card_documentation_invalid(self, mcp_client):
+        """Test ha_get_card_documentation with invalid card type."""
+        logger.info("Testing ha_get_card_documentation with invalid card type")
+        mcp = MCPAssertions(mcp_client)
+
+        data = await mcp.call_tool_failure(
+            "ha_get_card_documentation",
+            {"card_type": "nonexistent-card-type"},
+            expected_error="Unknown card type",
+        )
+
+        assert data["success"] is False
+        assert data["card_type"] == "nonexistent-card-type"
+
+        logger.info("ha_get_card_documentation (invalid) test passed")

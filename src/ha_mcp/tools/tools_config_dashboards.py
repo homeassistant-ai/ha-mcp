@@ -17,12 +17,33 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
-# Resource files path
-RESOURCES_DIR = Path(__file__).parent.parent / "resources"
+# Card documentation base URL
 CARD_DOCS_BASE_URL = (
     "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
     "refs/heads/current/source/_dashboards"
 )
+
+
+def _get_resources_dir() -> Path:
+    """Get resources directory path, works for both dev and installed package."""
+    # Try to find resources directory relative to this file
+    resources_dir = Path(__file__).parent.parent / "resources"
+    if resources_dir.exists():
+        return resources_dir
+
+    # Fallback: try to find in package data (for installed packages)
+    try:
+        import importlib.resources as pkg_resources
+        # For Python 3.9+
+        if hasattr(pkg_resources, 'files'):
+            resources_dir = pkg_resources.files('ha_mcp') / 'resources'
+            if hasattr(resources_dir, '__fspath__'):
+                return Path(str(resources_dir))
+    except (ImportError, AttributeError):
+        pass
+
+    # Last resort: return the relative path and let it fail with clear error
+    return resources_dir
 
 
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -179,10 +200,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
 
         DISCOVERING ENTITY IDs FOR DASHBOARDS:
-        Use these tools to find entity IDs to include in your dashboard config:
-        1. ha_get_overview(detail_level="full") - Get all entities organized by domain/area
+        Do NOT guess entity IDs - use these tools to find exact entity IDs:
+        1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
         2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
         3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
+
+        If unsure about entity IDs, ALWAYS use one of these tools first.
 
         DASHBOARD DOCUMENTATION:
         Access comprehensive dashboard documentation via these tools:
@@ -592,7 +615,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         - Get full guide: ha_get_dashboard_guide()
         """
         try:
-            guide_path = RESOURCES_DIR / "dashboard_guide.md"
+            resources_dir = _get_resources_dir()
+            guide_path = resources_dir / "dashboard_guide.md"
             guide_content = guide_path.read_text()
             return {
                 "success": True,
@@ -606,6 +630,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "success": False,
                 "action": "get_guide",
                 "error": str(e),
+                "suggestions": [
+                    "Ensure dashboard_guide.md exists in resources directory",
+                    f"Attempted path: {resources_dir / 'dashboard_guide.md' if 'resources_dir' in locals() else 'unknown'}",
+                ],
             }
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -623,7 +651,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Use ha_get_card_documentation(card_type) to get detailed docs for a specific card.
         """
         try:
-            types_path = RESOURCES_DIR / "card_types.json"
+            resources_dir = _get_resources_dir()
+            types_path = resources_dir / "card_types.json"
             card_types_data = json.loads(types_path.read_text())
             return {
                 "success": True,
@@ -638,6 +667,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "success": False,
                 "action": "get_card_types",
                 "error": str(e),
+                "suggestions": [
+                    "Ensure card_types.json exists in resources directory",
+                    f"Attempted path: {resources_dir / 'card_types.json' if 'resources_dir' in locals() else 'unknown'}",
+                ],
             }
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -666,7 +699,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         """
         try:
             # Validate card type exists
-            types_path = RESOURCES_DIR / "card_types.json"
+            resources_dir = _get_resources_dir()
+            types_path = resources_dir / "card_types.json"
             card_types_data = json.loads(types_path.read_text())
 
             if card_type not in card_types_data["card_types"]:
