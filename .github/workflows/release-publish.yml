@@ -167,7 +167,28 @@ jobs:
 
       - name: Publish server to MCP Registry
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
-        run: ./mcp-publisher publish --server server.json
+        run: |
+          set +e  # Don't exit on error
+          OUTPUT=$(./mcp-publisher publish --server server.json 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          # If publish succeeded, we're done
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✓ Successfully published to MCP Registry"
+            exit 0
+          fi
+
+          # If version already exists, treat as success
+          if echo "$OUTPUT" | grep -qi "cannot publish duplicate version\|version.*already.*exist\|already.*published"; then
+            echo "⚠ Version $VERSION already exists in MCP Registry (published previously)"
+            echo "✓ Treating as success"
+            exit 0
+          fi
+
+          # Any other error is a real failure
+          echo "✗ Failed to publish to MCP Registry"
+          exit $EXIT_CODE
 
       - name: Skip MCP publish
         if: ${{ needs.publish_pypi.result != 'success' || needs.publish_docker.result != 'success' }}
