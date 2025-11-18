@@ -200,6 +200,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
 
+        MODERN DASHBOARD BEST PRACTICES (2024+):
+        - Use "sections" view type (default) with grid-based layouts
+        - Use "tile" cards as primary card type (replaces legacy entity/light/climate cards)
+        - Use "grid" cards for multi-column layouts within sections
+        - Create multiple views with navigation paths (avoid single-view endless scrolling)
+        - Use "area" cards with navigation for hierarchical organization
+
         DISCOVERING ENTITY IDs FOR DASHBOARDS:
         Do NOT guess entity IDs - use these tools to find exact entity IDs:
         1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
@@ -209,10 +216,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         If unsure about entity IDs, ALWAYS use one of these tools first.
 
         DASHBOARD DOCUMENTATION:
-        Access comprehensive dashboard documentation via these tools:
-        - ha_get_dashboard_guide() - Curated guide (structure, views, cards, features, pitfalls)
+        - ha_get_dashboard_guide() - Complete guide (structure, views, cards, features, pitfalls)
         - ha_get_card_types() - List of all 41 available card types
-        - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "light", "thermostat")
+        - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "tile", "grid")
 
         EXAMPLES:
 
@@ -223,16 +229,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             icon="mdi:cellphone"
         )
 
-        Create dashboard with initial config:
+        Create dashboard with modern sections view:
         ha_config_set_dashboard(
             url_path="home-dashboard",
             title="Home Overview",
             config={
                 "views": [{
                     "title": "Home",
-                    "cards": [{
-                        "type": "entities",
-                        "entities": ["light.living_room"]
+                    "type": "sections",
+                    "sections": [{
+                        "title": "Climate",
+                        "cards": [{
+                            "type": "tile",
+                            "entity": "climate.living_room",
+                            "features": [{"type": "target-temperature"}]
+                        }]
                     }]
                 }]
             }
@@ -250,22 +261,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             }
         )
 
+        Note: Strategy dashboards cannot be converted to custom dashboards via this tool.
+        Use the "Take Control" feature in the Home Assistant interface to convert them.
+
         Update existing dashboard config:
         ha_config_set_dashboard(
             url_path="existing-dashboard",
             config={
                 "views": [{
                     "title": "Updated View",
-                    "cards": [{"type": "markdown", "content": "Updated!"}]
+                    "type": "sections",
+                    "sections": [{
+                        "cards": [{"type": "markdown", "content": "Updated!"}]
+                    }]
                 }]
             }
         )
 
         Note: If dashboard exists, only the config is updated. To change metadata
         (title, icon), use ha_config_update_dashboard_metadata().
-
-        Strategy types available: home, areas, map, original-states, iframe
-        See documentation for strategy-specific configuration options.
         """
         try:
             # Validate url_path contains hyphen
@@ -607,6 +621,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         Returns a curated reference guide covering:
         - Critical validation rules (url_path hyphen requirement)
+        - Modern dashboard patterns (sections, tile cards, grid layouts, navigation)
         - Dashboard structure and view types
         - Card categories and configuration
         - Features, actions, and visibility conditions
@@ -646,8 +661,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         """
         Get list of all available Home Assistant dashboard card types.
 
-        Returns all 41 card types that can be used in dashboard configurations,
-        along with documentation URLs.
+        Returns all 41 card types that can be used in dashboard configurations.
 
         EXAMPLES:
         - Get card types: ha_get_card_types()
