@@ -327,13 +327,15 @@ async def test_deep_search_no_results(mcp_client):
 
     # Verify we get empty results
     # Filter out any test entities that may not have been cleaned up from parallel tests
-    # Common test entity prefixes: deep_search, concurrent_test, test_, e2e_
-    test_prefixes = ["deep_search", "concurrent_test", "test_", "e2e_", "bulk_"]
+    # Common test entity prefixes: deep_search, concurrent_test, test_, e2e_, bulk_
+    test_prefixes = ("deep_search", "concurrent_test", "test_", "e2e_", "bulk_")
 
     def is_test_entity(entity_id: str) -> bool:
         """Check if entity_id appears to be from a test."""
-        entity_lower = entity_id.lower()
-        return any(prefix in entity_lower for prefix in test_prefixes)
+        # Extract object_id (part after domain) to avoid false positives
+        # e.g., "input_text.concurrent_test_3" -> "concurrent_test_3"
+        object_id = entity_id.lower().split('.')[-1]
+        return object_id.startswith(test_prefixes)
 
     automations = [a for a in data.get("automations", []) if not is_test_entity(a.get("entity_id", ""))]
     scripts = [s for s in data.get("scripts", []) if not is_test_entity(s.get("entity_id", ""))]
