@@ -327,12 +327,22 @@ async def test_deep_search_no_results(mcp_client):
 
     # Verify we get empty results
     # Filter out any test entities that may not have been cleaned up from parallel tests
-    automations = [a for a in data.get("automations", []) if "deep_search" not in a.get("entity_id", "").lower()]
-    scripts = [s for s in data.get("scripts", []) if "deep_search" not in s.get("entity_id", "").lower()]
-    helpers = [h for h in data.get("helpers", []) if "deep_search" not in h.get("entity_id", "").lower()]
+    # Common test entity prefixes: deep_search, concurrent_test, test_, e2e_, bulk_
+    test_prefixes = ("deep_search", "concurrent_test", "test_", "e2e_", "bulk_")
+
+    def is_test_entity(entity_id: str) -> bool:
+        """Check if entity_id appears to be from a test."""
+        # Extract object_id (part after domain) to avoid false positives
+        # e.g., "input_text.concurrent_test_3" -> "concurrent_test_3"
+        object_id = entity_id.lower().split('.')[-1]
+        return object_id.startswith(test_prefixes)
+
+    automations = [a for a in data.get("automations", []) if not is_test_entity(a.get("entity_id", ""))]
+    scripts = [s for s in data.get("scripts", []) if not is_test_entity(s.get("entity_id", ""))]
+    helpers = [h for h in data.get("helpers", []) if not is_test_entity(h.get("entity_id", ""))]
 
     assert len(automations) == 0, "Should have no automation matches"
     assert len(scripts) == 0, "Should have no script matches"
-    assert len(helpers) == 0, "Should have no helper matches"
+    assert len(helpers) == 0, f"Should have no helper matches, but found: {helpers}"
 
     logger.info("✅ Correctly returned empty results for non-matching query")
