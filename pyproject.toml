@@ -77,7 +77,7 @@ line_length = 88
 known_first_party = ["ha_mcp"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
