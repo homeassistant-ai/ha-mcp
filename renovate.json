@@ -5,7 +5,7 @@
   ],
   "timezone": "UTC",
   "schedule": [
-    "every monday after 9am"
+    "after 9am on monday"
   ],
   "customManagers": [
     {
