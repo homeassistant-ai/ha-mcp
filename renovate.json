@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "UTC",
+  "schedule": ["after 9am on monday"],
+  "packageRules": [
+    {
+      "description": "Python version upgrades - wait 6 months after release",
+      "matchManagers": ["asdf"],
+      "matchPackageNames": ["python"],
+      "minimumReleaseAge": "180 days"
+    }
+  ],
+  "labels": ["dependencies", "python-upgrade"]
+}
