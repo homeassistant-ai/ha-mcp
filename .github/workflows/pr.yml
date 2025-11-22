@@ -11,10 +11,26 @@ env:
   UV_CACHE_DIR: /tmp/.uv-cache
 
 jobs:
+  # Load Python versions from centralized config
+  get-python-versions:
+    name: Get Python Versions
+    runs-on: ubuntu-latest
+    outputs:
+      python-versions: ${{ steps.versions.outputs.python-versions }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read Python versions
+        id: versions
+        run: |
+          PREVIOUS=$(jq -r '.previous' .python-versions.json)
+          CURRENT=$(jq -r '.current' .python-versions.json)
+          echo "python-versions=[\"$PREVIOUS\", \"$CURRENT\"]" >> $GITHUB_OUTPUT
+
   # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (Python ${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: get-python-versions
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -22,9 +38,7 @@ jobs:
         os:
           - ubuntu-latest           # Linux x64
           - ubuntu-24.04-arm        # Linux ARM64
-        python-version:
-          - "3.12"                  # Supported until 2025-04
-          - "3.13"                  # Supported until 2026-10
+        python-version: ${{ fromJSON(needs.get-python-versions.outputs.python-versions) }}
         include:
           - os: ubuntu-latest
             pytest_workers: 3
