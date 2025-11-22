@@ -1,0 +1,158 @@
+name: Check Python Version Support
+
+on:
+  schedule:
+    # Run on the 1st of every month at 9:00 UTC
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-python-versions:
+    name: Check if Python version upgrade needed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Python EOL data
+        id: fetch
+        run: |
+          # Fetch Python version data from endoflife.date API
+          PYTHON_DATA=$(curl -s "https://endoflife.date/api/v1/products/python/")
+
+          # Get current date in ISO format
+          CURRENT_DATE=$(date -u +%Y-%m-%d)
+
+          # Find the earliest actively supported version (latest version with support=true)
+          # and the version before it
+          SUPPORTED_VERSIONS=$(echo "$PYTHON_DATA" | jq -r --arg date "$CURRENT_DATE" '
+            map(select(.eol > $date and .support != false))
+            | sort_by(.cycle | split(".") | map(tonumber))
+            | reverse
+            | .[0:2]
+            | {
+                latest: .[0].cycle,
+                previous: .[1].cycle,
+                latest_eol: .[0].eol,
+                previous_eol: .[1].eol
+              }
+          ')
+
+          LATEST_VERSION=$(echo "$SUPPORTED_VERSIONS" | jq -r '.latest')
+          PREVIOUS_VERSION=$(echo "$SUPPORTED_VERSIONS" | jq -r '.previous')
+          LATEST_EOL=$(echo "$SUPPORTED_VERSIONS" | jq -r '.latest_eol')
+          PREVIOUS_EOL=$(echo "$SUPPORTED_VERSIONS" | jq -r '.previous_eol')
+
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+          echo "latest_eol=$LATEST_EOL" >> $GITHUB_OUTPUT
+          echo "previous_eol=$PREVIOUS_EOL" >> $GITHUB_OUTPUT
+
+          # Get current supported versions from pyproject.toml (if repo checked out)
+          echo "Recommended versions: $PREVIOUS_VERSION and $LATEST_VERSION"
+
+      - uses: actions/checkout@v5
+
+      - name: Check current supported versions
+        id: check
+        run: |
+          # Extract requires-python from pyproject.toml
+          REQUIRES_PYTHON=$(grep 'requires-python' pyproject.toml | sed 's/.*">=\([0-9.]*\),<\([0-9.]*\)".*/\1 \2/')
+          MIN_VERSION=$(echo "$REQUIRES_PYTHON" | awk '{print $1}')
+          MAX_VERSION=$(echo "$REQUIRES_PYTHON" | awk '{print $2}')
+
+          echo "min_version=$MIN_VERSION" >> $GITHUB_OUTPUT
+          echo "max_version=$MAX_VERSION" >> $GITHUB_OUTPUT
+
+          # Compare versions
+          RECOMMENDED_MIN="${{ steps.fetch.outputs.previous_version }}"
+          RECOMMENDED_MAX="${{ steps.fetch.outputs.latest_version }}"
+
+          # Simple version comparison (works for X.Y format)
+          MIN_NEEDS_UPDATE=false
+          MAX_NEEDS_UPDATE=false
+
+          if [ "$MIN_VERSION" != "$RECOMMENDED_MIN" ]; then
+            MIN_NEEDS_UPDATE=true
+          fi
+
+          # Check if max version is too low (need to support newer Python)
+          if [ "${RECOMMENDED_MAX%%.*}" -gt "${MAX_VERSION%%.*}" ] || \
+             [ "${RECOMMENDED_MAX%%.*}" -eq "${MAX_VERSION%%.*}" -a "${RECOMMENDED_MAX##*.}" -ge "${MAX_VERSION##*.}" ]; then
+            MAX_NEEDS_UPDATE=true
+          fi
+
+          echo "min_needs_update=$MIN_NEEDS_UPDATE" >> $GITHUB_OUTPUT
+          echo "max_needs_update=$MAX_NEEDS_UPDATE" >> $GITHUB_OUTPUT
+
+      - name: Create issue if upgrade needed
+        if: steps.check.outputs.min_needs_update == 'true' || steps.check.outputs.max_needs_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentMin = '${{ steps.check.outputs.min_version }}';
+            const currentMax = '${{ steps.check.outputs.max_version }}';
+            const recommendedMin = '${{ steps.fetch.outputs.previous_version }}';
+            const recommendedMax = '${{ steps.fetch.outputs.latest_version }}';
+            const latestEOL = '${{ steps.fetch.outputs.latest_eol }}';
+            const previousEOL = '${{ steps.fetch.outputs.previous_eol }}';
+
+            const title = `[Python Upgrade] Update supported Python versions to ${recommendedMin} and ${recommendedMax}`;
+            const body = `## Python Version Support Update Needed
+
+            Our current Python support policy is to maintain compatibility with the two most recent actively supported Python versions.
+
+            ### Current Configuration
+            - **Supported versions**: Python ${currentMin} - ${currentMax}
+            - **From**: \`requires-python = ">=${currentMin},<${currentMax}"\`
+
+            ### Recommended Configuration
+            - **Supported versions**: Python ${recommendedMin} and ${recommendedMax}
+            - **Update to**: \`requires-python = ">=${recommendedMin},<${parseFloat(recommendedMax) + 0.1}"\`
+
+            ### Python Support Timeline
+            - **Python ${recommendedMax}**: Supported until ${latestEOL}
+            - **Python ${recommendedMin}**: Security support until ${previousEOL}
+
+            ### Action Items
+            - [ ] Update \`requires-python\` in \`pyproject.toml\`
+            - [ ] Update Python classifiers in \`pyproject.toml\`
+            - [ ] Update Python version matrix in \`.github/workflows/pr.yml\`
+            - [ ] Update other workflow files if needed
+            - [ ] Test all changes
+            - [ ] Update documentation if needed
+
+            ### Reference
+            - Python EOL dates: https://endoflife.date/python
+            - Current policy: Support 2 most recent actively supported versions
+
+            ---
+            🤖 This issue was automatically created by the [Check Python Version Support workflow](https://github.com/${{ github.repository }}/actions/workflows/check-python-versions.yml).
+            `;
+
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'python-upgrade'
+            });
+
+            const existingIssue = issues.data.find(issue =>
+              issue.title.includes(recommendedMin) && issue.title.includes(recommendedMax)
+            );
+
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['python-upgrade', 'automation', 'dependencies']
+              });
+              console.log('Created new issue for Python version upgrade');
+            } else {
+              console.log('Issue already exists, skipping creation');
+            }
