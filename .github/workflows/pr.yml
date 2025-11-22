@@ -14,9 +14,13 @@ env:
 jobs:
   # Comprehensive E2E validation for all PRs
   e2e-validation:
-    name: E2E Validation
-    runs-on: ubuntu-latest
+    name: E2E Validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
 
     steps:
     - uses: actions/checkout@v5
