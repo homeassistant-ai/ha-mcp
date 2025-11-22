@@ -37,4 +37,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
-          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^jq.*", "^sed.*", "^git add.*"]'
+          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^jq.*", "^sed.*", "^git add.*", "^echo.*", "^cut.*", "^mv.*"]'

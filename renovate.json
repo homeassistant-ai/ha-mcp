@@ -29,6 +29,10 @@
       "postUpgradeTasks": {
         "commands": [
           "PYTHON_CURRENT=$(jq -r '.current' .python-versions.json)",
+          "PYTHON_MAJOR=$(echo $PYTHON_CURRENT | cut -d. -f1)",
+          "PYTHON_MINOR=$(echo $PYTHON_CURRENT | cut -d. -f2)",
+          "PYTHON_NEXT=\"${PYTHON_MAJOR}.$((PYTHON_MINOR + 1))\"",
+          "jq --arg current \"$PYTHON_CURRENT\" --arg next \"$PYTHON_NEXT\" '.minimum = $current | .maximum_exclusive = $next' .python-versions.json > .python-versions.json.tmp && mv .python-versions.json.tmp .python-versions.json",
           "PYTHON_MIN=$(jq -r '.minimum' .python-versions.json)",
           "PYTHON_MAX=$(jq -r '.maximum_exclusive' .python-versions.json)",
           "sed -i \"s/requires-python = \\\">=.*,<.*\\\"/requires-python = \\\">=${PYTHON_MIN},<${PYTHON_MAX}\\\"/\" pyproject.toml",
