@@ -25,7 +25,6 @@ jobs:
         python-version:
           - "3.12"                  # Supported until 2025-04
           - "3.13"                  # Supported until 2026-10
-          # Python 3.14 excluded: pydantic-core (via PyO3) doesn't support 3.14 yet
         include:
           - os: ubuntu-latest
             pytest_workers: 3
