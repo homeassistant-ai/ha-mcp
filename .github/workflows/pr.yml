@@ -14,9 +14,20 @@ env:
 jobs:
   # Comprehensive E2E validation for all PRs
   e2e-validation:
-    name: E2E Validation
-    runs-on: ubuntu-latest
+    name: E2E Validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest           # Linux x64
+          - ubuntu-24.04-arm        # Linux ARM64
+        include:
+          - os: ubuntu-latest
+            pytest_workers: 3
+          - os: ubuntu-24.04-arm
+            pytest_workers: 4
 
     steps:
     - uses: actions/checkout@v5
@@ -35,11 +46,11 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev
 
-    - name: Run full E2E test suite (n=3 optimal)
+    - name: Run full E2E test suite
       run: |
-        echo "🚀 Running full E2E test suite with 2 workers..."
+        echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
         uv run pytest tests/src/e2e/ \
-          -n3 \
+          -n${{ matrix.pytest_workers }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
