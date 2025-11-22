@@ -24,7 +24,7 @@
       "description": "Python version upgrades - wait 6 months after release, support current version only",
       "matchDatasources": ["python-version"],
       "matchPackageNames": ["python"],
-      "minimumReleaseAge": "180 days",
+      "minimumReleaseAge": "6 days",
       "allowedVersions": ">=3.13",
       "postUpgradeTasks": {
         "commands": [
