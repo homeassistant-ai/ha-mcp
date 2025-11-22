@@ -27,7 +27,7 @@ jobs:
           - os: ubuntu-latest
             pytest_workers: 3
           - os: ubuntu-24.04-arm
-            pytest_workers: 4
+            pytest_workers: 6
 
     steps:
     - uses: actions/checkout@v5
