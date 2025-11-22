@@ -25,7 +25,7 @@
       "matchDatasources": ["python-version"],
       "matchPackageNames": ["python"],
       "minimumReleaseAge": "6 days",
-      "allowedVersions": ">=3.12 <3.14",
+      "allowedVersions": ">=3.12 <3.15",
       "postUpgradeTasks": {
         "commands": [
           "PYTHON_CURRENT=$(jq -r '.current' .python-versions.json)",
