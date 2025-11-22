@@ -8,7 +8,7 @@
       "description": "Python version upgrades - wait 6 months after release",
       "matchManagers": ["asdf"],
       "matchPackageNames": ["python"],
-      "minimumReleaseAge": "6 days"
+      "minimumReleaseAge": "180 days"
     }
   ],
   "labels": ["dependencies", "python-upgrade"]
