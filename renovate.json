@@ -5,7 +5,7 @@
   ],
   "timezone": "UTC",
   "schedule": [
-    "after 9am on the first day of the month"
+    "every monday after 9am"
   ],
   "packageRules": [
     {
@@ -20,20 +20,14 @@
           "PYTHON_PREVIOUS=$(jq -r '.previous' .python-versions.json)",
           "PYTHON_MIN=$(jq -r '.minimum' .python-versions.json)",
           "PYTHON_MAX=$(jq -r '.maximum_exclusive' .python-versions.json)",
-          "echo \"Updating Python versions: current=${PYTHON_CURRENT}, previous=${PYTHON_PREVIOUS}, minimum=${PYTHON_MIN}\"",
-          "# Update pyproject.toml requires-python",
-          "sed -i 's/requires-python = \">=.*,<.*\"/requires-python = \"'>=${PYTHON_MIN},<${PYTHON_MAX}\"/' pyproject.toml",
-          "# Update pyproject.toml classifiers - remove old versions and add new ones",
+          "sed -i \"s/requires-python = \\\">=.*,<.*\\\"/requires-python = \\\">=${PYTHON_MIN},<${PYTHON_MAX}\\\"/\" pyproject.toml",
           "sed -i '/Programming Language :: Python :: 3\\.[0-9]\\+/d' pyproject.toml",
-          "sed -i '/Programming Language :: Python :: 3\",/a\\    \"Programming Language :: Python :: ${PYTHON_PREVIOUS}\",\\n    \"Programming Language :: Python :: ${PYTHON_CURRENT}\",' pyproject.toml",
-          "# Update mypy python_version in pyproject.toml to minimum supported version",
-          "sed -i 's/python_version = \"3\\.[0-9]\\+\"/python_version = \"${PYTHON_MIN}\"/' pyproject.toml",
-          "# Update Dockerfiles to use minimum supported version",
-          "sed -i 's/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_MIN}-bookworm-slim/' Dockerfile",
-          "sed -i 's/python3\\.[0-9]\\+-bookworm/python${PYTHON_MIN}-bookworm/' homeassistant-addon/Dockerfile",
-          "sed -i 's/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_MIN} - Security/' Dockerfile homeassistant-addon/Dockerfile",
-          "# Update workflow PYTHON_VERSION env vars to current version",
-          "sed -i 's/PYTHON_VERSION: \"3\\.[0-9]\\+\"/PYTHON_VERSION: \"${PYTHON_CURRENT}\"/' .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml",
+          "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_PREVIOUS}\\\",\\\\n    \\\"Programming Language :: Python :: ${PYTHON_CURRENT}\\\",\" pyproject.toml",
+          "sed -i \"s/python_version = \\\"3\\.[0-9]\\+\\\"/python_version = \\\"${PYTHON_MIN}\\\"/\" pyproject.toml",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_MIN}-bookworm-slim/\" Dockerfile",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm/python${PYTHON_MIN}-bookworm/\" homeassistant-addon/Dockerfile",
+          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_MIN} - Security/\" Dockerfile homeassistant-addon/Dockerfile",
+          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_CURRENT}\\\"/\" .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml",
           "git add .python-versions.json pyproject.toml Dockerfile homeassistant-addon/Dockerfile .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml"
         ],
         "fileFilters": [
