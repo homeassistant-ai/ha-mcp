@@ -7,6 +7,18 @@
   "schedule": [
     "every monday after 9am"
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^\\.python-versions\\.json$"],
+      "matchStrings": [
+        "\"current\":\\s*\"(?<currentValue>\\d+\\.\\d+)\""
+      ],
+      "datasourceTemplate": "python-version",
+      "depNameTemplate": "python",
+      "versioningTemplate": "python"
+    }
+  ],
   "packageRules": [
     {
       "description": "Python version upgrades - wait 6 months after release, support current + previous",
