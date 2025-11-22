@@ -8,13 +8,12 @@ on:
   workflow_dispatch:
 
 env:
-  PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
 
 jobs:
   # Comprehensive E2E validation for all PRs
   e2e-validation:
-    name: E2E Validation (${{ matrix.os }})
+    name: E2E Validation (Python ${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -23,6 +22,10 @@ jobs:
         os:
           - ubuntu-latest           # Linux x64
           - ubuntu-24.04-arm        # Linux ARM64
+        python-version:
+          - "3.12"                  # Supported until 2025-04
+          - "3.13"                  # Supported until 2026-10
+          - "3.14"                  # Supported until 2027-10
         include:
           - os: ubuntu-latest
             pytest_workers: 3
@@ -41,7 +44,7 @@ jobs:
         version: "latest"
 
     - name: Set up Python
-      run: uv python install ${{ env.PYTHON_VERSION }}
+      run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
