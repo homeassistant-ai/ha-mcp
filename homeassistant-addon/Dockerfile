@@ -1,10 +1,10 @@
 # Home Assistant MCP Server Add-on
 # Uses same uv base as standalone for consistency
-# Python 3.11 - Security support until 2027-10
+# Python 3.12 - Security support until 2028-10
 # No bashio needed - pure Python startup script
 # Multi-platform uv image supports all HA architectures automatically
 
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 
 WORKDIR /app
 
