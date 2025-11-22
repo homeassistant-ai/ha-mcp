@@ -21,24 +21,23 @@
   ],
   "packageRules": [
     {
-      "description": "Python version upgrades - wait 6 months after release, support current + previous",
+      "description": "Python version upgrades - wait 6 months after release, support current version only",
       "matchDatasources": ["python-version"],
       "matchPackageNames": ["python"],
       "minimumReleaseAge": "180 days",
-      "allowedVersions": ">=3.12 <3.15",
+      "allowedVersions": ">=3.13",
       "postUpgradeTasks": {
         "commands": [
           "PYTHON_CURRENT=$(jq -r '.current' .python-versions.json)",
-          "PYTHON_PREVIOUS=$(jq -r '.previous' .python-versions.json)",
           "PYTHON_MIN=$(jq -r '.minimum' .python-versions.json)",
           "PYTHON_MAX=$(jq -r '.maximum_exclusive' .python-versions.json)",
           "sed -i \"s/requires-python = \\\">=.*,<.*\\\"/requires-python = \\\">=${PYTHON_MIN},<${PYTHON_MAX}\\\"/\" pyproject.toml",
           "sed -i '/Programming Language :: Python :: 3\\.[0-9]\\+/d' pyproject.toml",
-          "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_PREVIOUS}\\\",\\\\n    \\\"Programming Language :: Python :: ${PYTHON_CURRENT}\\\",\" pyproject.toml",
-          "sed -i \"s/python_version = \\\"3\\.[0-9]\\+\\\"/python_version = \\\"${PYTHON_MIN}\\\"/\" pyproject.toml",
-          "sed -i \"s/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_MIN}-bookworm-slim/\" Dockerfile",
-          "sed -i \"s/python3\\.[0-9]\\+-bookworm/python${PYTHON_MIN}-bookworm/\" homeassistant-addon/Dockerfile",
-          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_MIN} - Security/\" Dockerfile homeassistant-addon/Dockerfile",
+          "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_CURRENT}\\\",\" pyproject.toml",
+          "sed -i \"s/python_version = \\\"3\\.[0-9]\\+\\\"/python_version = \\\"${PYTHON_CURRENT}\\\"/\" pyproject.toml",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_CURRENT}-bookworm-slim/\" Dockerfile",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm/python${PYTHON_CURRENT}-bookworm/\" homeassistant-addon/Dockerfile",
+          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_CURRENT} - Security/\" Dockerfile homeassistant-addon/Dockerfile",
           "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_CURRENT}\\\"/\" .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml",
           "git add .python-versions.json pyproject.toml Dockerfile homeassistant-addon/Dockerfile .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml"
         ],
@@ -58,15 +57,15 @@
       "commitMessageExtra": "to {{newVersion}}",
       "prBodyNotes": [
         "This PR updates Python version support following our policy:",
-        "- Support 2 versions: current and previous actively supported versions",
+        "- Support current version only",
         "- Wait 6 months after release before upgrading",
         "",
         "Updated files:",
         "- `.python-versions.json` - Centralized version tracking",
         "- `pyproject.toml` - Package metadata, version constraints, and mypy config",
-        "- `Dockerfile` and `homeassistant-addon/Dockerfile` - Docker base images (set to minimum)",
+        "- `Dockerfile` and `homeassistant-addon/Dockerfile` - Docker base images",
         "- `.github/workflows/pr.yml` - Test matrix (dynamic from JSON)",
-        "- `.github/workflows/*.yml` - Workflow PYTHON_VERSION env vars (set to current)"
+        "- `.github/workflows/*.yml` - Workflow PYTHON_VERSION env vars"
       ]
     },
     {

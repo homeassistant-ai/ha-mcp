@@ -1,9 +1,9 @@
 # Home Assistant MCP Server - Production Docker Image
 # Uses uv for fast, reliable Python package management
-# Python 3.12 - Security support until 2028-10
+# Python 3.13 - Security support until 2029-10
 # uv version pinned - Dependabot will create PRs for updates
 
-FROM ghcr.io/astral-sh/uv:0.9.9-python3.12-bookworm-slim
+FROM ghcr.io/astral-sh/uv:0.9.9-python3.13-bookworm-slim
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \

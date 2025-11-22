@@ -1,7 +1,6 @@
 {
-  "description": "Centralized Python version configuration - support 2 versions: current and previous",
+  "description": "Centralized Python version configuration - support single current version",
   "current": "3.13",
-  "previous": "3.12",
-  "minimum": "3.12",
+  "minimum": "3.13",
   "maximum_exclusive": "3.14"
 }

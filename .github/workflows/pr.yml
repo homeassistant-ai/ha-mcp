@@ -22,9 +22,8 @@ jobs:
       - name: Read Python versions
         id: versions
         run: |
-          PREVIOUS=$(jq -r '.previous' .python-versions.json)
           CURRENT=$(jq -r '.current' .python-versions.json)
-          echo "python-versions=[\"$PREVIOUS\", \"$CURRENT\"]" >> $GITHUB_OUTPUT
+          echo "python-versions=[\"$CURRENT\"]" >> $GITHUB_OUTPUT
 
   # Comprehensive E2E validation for all PRs
   e2e-validation:
