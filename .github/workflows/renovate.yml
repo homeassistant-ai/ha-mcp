@@ -1,0 +1,40 @@
+name: Renovate
+
+on:
+  schedule:
+    # Run every Monday at 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'
+        required: false
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - info
+          - warn
+          - error
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@v44.0.3
+        with:
+          configurationFile: renovate.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^cat.*", "^echo.*", "^cut.*", "^sed.*", "^git add.*"]'

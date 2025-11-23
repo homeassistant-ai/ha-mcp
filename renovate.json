@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "UTC",
+  "schedule": ["after 9am on monday"],
+  "packageRules": [
+    {
+      "description": "Python version upgrades - wait 6 months after release",
+      "matchManagers": ["asdf"],
+      "matchPackageNames": ["python"],
+      "minimumReleaseAge": "180 days",
+      "postUpgradeTasks": {
+        "commands": [
+          "PYTHON_VERSION=$(cat .python-version)",
+          "PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)",
+          "PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)",
+          "PYTHON_NEXT=\"${PYTHON_MAJOR}.$((PYTHON_MINOR + 1))\"",
+          "sed -i \"s/requires-python = \\\">=3\\.[0-9]\\+,<3\\.[0-9]\\+\\\"/requires-python = \\\">=${PYTHON_VERSION},<${PYTHON_NEXT}\\\"/\" pyproject.toml",
+          "sed -i '/Programming Language :: Python :: 3\\.[0-9]\\+/d' pyproject.toml",
+          "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_VERSION}\\\",\" pyproject.toml",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_VERSION}-bookworm-slim/\" Dockerfile",
+          "sed -i \"s/python3\\.[0-9]\\+-bookworm/python${PYTHON_VERSION}-bookworm/\" homeassistant-addon/Dockerfile",
+          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_VERSION} - Security/\" Dockerfile homeassistant-addon/Dockerfile",
+          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml",
+          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml"
+        ],
+        "fileFilters": [
+          ".python-version",
+          "pyproject.toml",
+          "Dockerfile",
+          "homeassistant-addon/Dockerfile",
+          ".github/workflows/pr.yml",
+          ".github/workflows/test.yml",
+          ".github/workflows/e2e-tests.yml",
+          ".github/workflows/semver-release.yml"
+        ],
+        "executionMode": "branch"
+      }
+    }
+  ],
+  "labels": ["dependencies", "python-upgrade"]
+}
