@@ -69,7 +69,7 @@ Then add to your Claude Desktop configuration file:
   "mcpServers": {
     "home-assistant": {
       "command": "mcp-proxy",
-      "args": ["http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "args": ["--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
@@ -79,7 +79,7 @@ Replace the URL in `args` with the one from your add-on logs.
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** mcp-proxy converts the HTTP/SSE endpoint to stdio that Claude Desktop can use.
+**How it works:** mcp-proxy converts the HTTP endpoint to stdio that Claude Desktop can use.
 
 </details>
 
