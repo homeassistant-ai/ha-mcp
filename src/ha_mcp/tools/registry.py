@@ -8,6 +8,7 @@ from specialized modules.
 from typing import Any
 
 from .backup import register_backup_tools
+from .tools_calendar import register_calendar_tools
 from .tools_config_automations import register_config_automation_tools
 from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
@@ -50,3 +51,6 @@ class ToolsRegistry:
 
         # Register backup tools
         register_backup_tools(self.mcp, self.client)
+
+        # Register calendar tools
+        register_calendar_tools(self.mcp, self.client)
