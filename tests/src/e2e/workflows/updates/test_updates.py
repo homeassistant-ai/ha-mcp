@@ -206,7 +206,7 @@ class TestUpdateManagement:
 
         async with MCPAssertions(mcp_client) as mcp:
             # Test with non-existent entity
-            result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_get_release_notes",
                 {"entity_id": "update.nonexistent_entity_xyz"},
                 expected_error="not found",
@@ -214,7 +214,7 @@ class TestUpdateManagement:
             logger.info("Non-existent entity test passed")
 
             # Test with invalid format (not starting with "update.")
-            result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_get_release_notes",
                 {"entity_id": "light.invalid_entity"},
                 expected_error="Invalid entity_id format",

@@ -322,8 +322,11 @@ def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
     """
     Determine if an update entity supports fetching release notes.
 
-    Most entities support the WebSocket update/release_notes command,
-    except for HA OS and Supervisor which only have release_url.
+    Returns True if the entity supports release notes through any method:
+    - WebSocket update/release_notes command (native HA support)
+    - GitHub API/raw CDN fallback (when release_url is available)
+
+    Most entities will return True as they have either native support or a release_url.
     """
     # Check for supported_features that indicate release notes support
     # Feature flag 1 = install, 2 = specific_version, 4 = progress, 8 = backup
@@ -331,13 +334,9 @@ def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
     supported_features = attributes.get("supported_features", 0)
     has_release_notes_feature = (supported_features & 16) != 0
 
-    # Even without the feature flag, most entities can return release notes
-    # The exceptions are HA OS and Supervisor which only have URLs
-    if "operating_system" in entity_id.lower():
-        return False
-    if "supervisor" in entity_id.lower() and "home_assistant" in entity_id.lower():
-        return False
-
+    # Entity supports release notes if it has either:
+    # 1. Native WebSocket support (feature flag)
+    # 2. A release_url (can fetch from GitHub)
     return has_release_notes_feature or attributes.get("release_url") is not None
 
 
@@ -401,7 +400,7 @@ async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None
         # https://github.com/owner/repo/releases/tag/v1.2.3
         # https://github.com/owner/repo/releases/v1.2.3
 
-        github_pattern = r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/(.+)"
+        github_pattern = r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/([^/?#]+)"
         match = re.match(github_pattern, release_url)
 
         if not match:
