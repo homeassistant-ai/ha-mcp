@@ -31,3 +31,11 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         verbosity: "2"
+
+    - name: Copy changelog to addon directory
+      if: steps.semantic.outputs.released == 'true'
+      run: |
+        cp CHANGELOG.md homeassistant-addon/CHANGELOG.md
+        git add homeassistant-addon/CHANGELOG.md
+        git commit -m "chore(addon): sync changelog for Home Assistant add-on"
+        git push
