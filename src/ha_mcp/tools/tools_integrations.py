@@ -120,14 +120,26 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if query and query.strip():
                 from ..utils.fuzzy_search import calculate_ratio
 
-                # Perform fuzzy search
+                # Perform fuzzy search with both exact and fuzzy matching
                 matches = []
+                query_lower = query.strip().lower()
+
                 for entry in formatted_entries:
-                    # Combine domain and title for searching
-                    searchable_text = f"{entry['domain']} {entry['title']}"
-                    score = calculate_ratio(query.strip().lower(), searchable_text.lower())
-                    if score >= 70:  # threshold
-                        matches.append((score, entry))
+                    domain_lower = entry['domain'].lower()
+                    title_lower = entry['title'].lower()
+
+                    # Check for exact substring matches first (highest priority)
+                    if query_lower in domain_lower or query_lower in title_lower:
+                        # Exact substring match gets score of 100
+                        matches.append((100, entry))
+                    else:
+                        # Try fuzzy matching on domain and title separately
+                        domain_score = calculate_ratio(query_lower, domain_lower)
+                        title_score = calculate_ratio(query_lower, title_lower)
+                        best_score = max(domain_score, title_score)
+
+                        if best_score >= 70:  # threshold for fuzzy matches
+                            matches.append((best_score, entry))
 
                 # Sort by score descending
                 matches.sort(key=lambda x: x[0], reverse=True)
