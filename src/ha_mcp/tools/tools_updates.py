@@ -155,7 +155,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - New features relevant to your setup
 
         For entities without native release notes (like HA OS), this tool
-        fetches from GitHub releases automatically.
+        fetches from GitHub releases automatically with fallback to raw CDN.
 
         Args:
             entity_id: Update entity ID (e.g., "update.home_assistant_core_update")
@@ -165,7 +165,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - entity_id: The requested entity
             - version: Version the release notes are for
             - release_notes: Markdown-formatted changelog
-            - source: Where the notes came from ("websocket" or "github_api")
+            - source: Where the notes came from ("websocket", "github_api", or "github_raw")
         """
         try:
             # Validate entity_id format
@@ -210,14 +210,14 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Fallback: Try to fetch from GitHub if release_url is available
             release_url = attributes.get("release_url")
             if release_url:
-                github_notes = await _fetch_github_release_notes(release_url)
-                if github_notes:
+                github_result = await _fetch_github_release_notes(release_url)
+                if github_result:
                     return {
                         "success": True,
                         "entity_id": entity_id,
                         "version": latest_version,
-                        "release_notes": github_notes,
-                        "source": "github_api",
+                        "release_notes": github_result["notes"],
+                        "source": github_result["source"],
                         "release_url": release_url,
                         "title": attributes.get("title", entity_id),
                     }
@@ -380,9 +380,13 @@ def _categorize_update(entity_id: str, attributes: dict[str, Any]) -> str:
     return "other"
 
 
-async def _fetch_github_release_notes(release_url: str) -> str | None:
+async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None:
     """
-    Fetch release notes from GitHub releases API.
+    Fetch release notes from GitHub releases API with fallback to raw CDN.
+
+    Tries multiple sources in order:
+    1. GitHub API (best formatting, but rate limited)
+    2. GitHub raw content CDN (no rate limits, but may not have release notes)
 
     Parses GitHub release URLs and fetches the release body from the API.
 
@@ -390,7 +394,7 @@ async def _fetch_github_release_notes(release_url: str) -> str | None:
         release_url: URL to a GitHub release page
 
     Returns:
-        Release notes markdown or None if fetch fails
+        Dictionary with 'notes' and 'source' keys, or None if fetch fails
     """
     try:
         # Parse GitHub URL patterns:
@@ -406,10 +410,10 @@ async def _fetch_github_release_notes(release_url: str) -> str | None:
 
         owner, repo, tag = match.groups()
 
-        # Fetch from GitHub API
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
-
         async with httpx.AsyncClient(timeout=15.0) as http_client:
+            # Try 1: GitHub API (has release notes in structured format)
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+
             response = await http_client.get(
                 api_url,
                 headers={
@@ -422,10 +426,52 @@ async def _fetch_github_release_notes(release_url: str) -> str | None:
                 release_data = response.json()
                 body = release_data.get("body", "")
                 if body:
-                    return str(body)
+                    return {"notes": str(body), "source": "github_api"}
+            elif response.status_code == 403:
+                # Check if rate limited
+                remaining = response.headers.get("X-RateLimit-Remaining", "0")
+                if remaining == "0":
+                    logger.warning(
+                        f"GitHub API rate limit exceeded for {api_url}, trying raw CDN fallback"
+                    )
+            else:
+                logger.debug(
+                    f"GitHub API returned status {response.status_code} for {api_url}"
+                )
+
+            # Try 2: GitHub raw content CDN (for markdown files)
+            # Common locations: CHANGELOG.md, RELEASES.md, docs/releases/{tag}.md
+            raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}"
+
+            changelog_paths = [
+                "CHANGELOG.md",
+                "RELEASES.md",
+                "RELEASE_NOTES.md",
+                f"docs/releases/{tag}.md",
+                "docs/CHANGELOG.md",
+            ]
+
+            for path in changelog_paths:
+                raw_url = f"{raw_base}/{path}"
+                try:
+                    response = await http_client.get(
+                        raw_url,
+                        headers={"User-Agent": "HomeAssistant-MCP-Server"},
+                    )
+
+                    if response.status_code == 200:
+                        content = response.text
+                        if content and len(content) > 50:  # Basic content validation
+                            logger.debug(
+                                f"Successfully fetched release notes from raw CDN: {raw_url}"
+                            )
+                            return {"notes": content, "source": "github_raw"}
+                except Exception as raw_error:
+                    logger.debug(f"Failed to fetch from {raw_url}: {raw_error}")
+                    continue
 
             logger.debug(
-                f"GitHub API returned status {response.status_code} for {api_url}"
+                f"Could not fetch release notes from API or raw CDN for {release_url}"
             )
             return None
 
