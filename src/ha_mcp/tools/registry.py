@@ -15,6 +15,7 @@ from .tools_config_scripts import register_config_script_tools
 from .tools_search import register_search_tools
 from .tools_service import register_service_tools
 from .tools_utility import register_utility_tools
+from .tools_zones import register_zone_tools
 
 
 class ToolsRegistry:
@@ -50,3 +51,6 @@ class ToolsRegistry:
 
         # Register backup tools
         register_backup_tools(self.mcp, self.client)
+
+        # Register zone management tools
+        register_zone_tools(self.mcp, self.client)
