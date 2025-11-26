@@ -9,6 +9,7 @@ from typing import Any
 
 from .backup import register_backup_tools
 from .tools_areas import register_area_tools
+from .tools_blueprints import register_blueprint_tools
 from .tools_calendar import register_calendar_tools
 from .tools_config_automations import register_config_automation_tools
 from .tools_config_dashboards import register_config_dashboard_tools
@@ -90,3 +91,6 @@ class ToolsRegistry:
 
         # Register calendar tools
         register_calendar_tools(self.mcp, self.client)
+
+        # Register blueprint tools
+        register_blueprint_tools(self.mcp, self.client)
