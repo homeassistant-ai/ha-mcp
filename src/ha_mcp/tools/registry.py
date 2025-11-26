@@ -20,6 +20,7 @@ from .tools_search import register_search_tools
 from .tools_service import register_service_tools
 from .tools_services import register_services_tools
 from .tools_system import register_system_tools
+from .tools_todo import register_todo_tools
 from .tools_updates import register_update_tools
 from .tools_utility import register_utility_tools
 from .tools_zones import register_zone_tools
@@ -82,3 +83,6 @@ class ToolsRegistry:
 
         # Register label management tools
         register_label_tools(self.mcp, self.client)
+
+        # Register todo/shopping list tools
+        register_todo_tools(self.mcp, self.client)
