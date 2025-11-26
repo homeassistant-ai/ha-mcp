@@ -46,27 +46,8 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Check Home Assistant configuration for errors.
 
-        This tool validates the Home Assistant configuration files without
-        applying any changes. Use this before restarting Home Assistant to
-        ensure the configuration is valid.
-
-        **Returns:**
-        - result: "valid" if configuration is OK, "invalid" if there are errors
-        - errors: List of configuration errors (if any)
-
-        **Example Usage:**
-        ```python
-        # Check if configuration is valid before restart
-        result = ha_check_config()
-        if result["result"] == "valid":
-            ha_restart()  # Safe to restart
-        ```
-
-        **Common Errors Detected:**
-        - YAML syntax errors
-        - Invalid entity references
-        - Missing required fields
-        - Invalid service calls in automations/scripts
+        Validates configuration files without applying changes.
+        Always run this before ha_restart() to ensure configuration is valid.
         """
         try:
             config_result = await client.check_config()
@@ -325,26 +306,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Get Home Assistant system information.
 
-        Returns comprehensive system information including:
-        - Home Assistant version
-        - Installation type (Core, Supervisor, OS)
-        - Python version
-        - Location and timezone settings
-        - Loaded components
-        - Configuration directory
-
-        **Example Usage:**
-        ```python
-        info = ha_get_system_info()
-        print(f"Running HA version {info['version']}")
-        print(f"Installation type: {info['installation_type']}")
-        ```
-
-        **Use Cases:**
-        - Checking Home Assistant version for compatibility
-        - Debugging installation issues
-        - Verifying timezone/location settings
-        - Listing loaded integrations
+        Returns version, location settings, timezone, loaded components, and configuration paths.
         """
         try:
             config = await client.get_config()
@@ -388,30 +350,8 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Get Home Assistant system health information.
 
-        Returns health check results from various Home Assistant components
-        including integrations, system resources, and connectivity status.
-
-        **Returns:**
-        - Integration-specific health data
-        - System resource usage (if available)
-        - Network connectivity status
-        - Database health (if applicable)
-
-        **Example Usage:**
-        ```python
-        health = ha_get_system_health()
-        for component, status in health["health_info"].items():
-            print(f"{component}: {status}")
-        ```
-
-        **Use Cases:**
-        - Diagnosing connectivity issues with cloud services
-        - Checking database health
-        - Monitoring system resource usage
-        - Debugging integration problems
-
-        **Note:** Available health information depends on your Home Assistant
-        installation type and loaded integrations.
+        Returns health check results from integrations, system resources, and connectivity.
+        Available information varies by installation type and loaded integrations.
         """
         ws_client = None
 
