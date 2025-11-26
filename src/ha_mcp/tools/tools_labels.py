@@ -21,7 +21,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
-    async def ha_list_labels() -> dict[str, Any]:
+    async def ha_config_list_labels() -> dict[str, Any]:
         """
         List all Home Assistant labels with their configurations.
 
@@ -36,9 +36,9 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         to categorize and organize entities, devices, and areas.
 
         EXAMPLES:
-        - List all labels: ha_list_labels()
+        - List all labels: ha_config_list_labels()
 
-        Use ha_create_label() to create new labels.
+        Use ha_config_set_label() to create or update labels.
         Use ha_assign_label() to assign labels to entities.
         """
         try:
@@ -73,10 +73,86 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    @log_tool_usage
+    async def ha_config_get_label(
+        label_id: Annotated[
+            str,
+            Field(description="ID of the label to retrieve"),
+        ],
+    ) -> dict[str, Any]:
+        """
+        Get a specific Home Assistant label by ID.
+
+        Returns complete configuration for a single label including:
+        - ID (label_id)
+        - Name
+        - Color (optional)
+        - Icon (optional)
+        - Description (optional)
+
+        EXAMPLES:
+        - Get label: ha_config_get_label("my_label_id")
+
+        Use ha_config_list_labels() to find available label IDs.
+        """
+        try:
+            # Get all labels and find the one we want
+            message: dict[str, Any] = {
+                "type": "config/label_registry/list",
+            }
+
+            result = await client.send_websocket_message(message)
+
+            if result.get("success"):
+                labels = result.get("result", [])
+                label = next(
+                    (lbl for lbl in labels if lbl.get("label_id") == label_id), None
+                )
+
+                if label:
+                    return {
+                        "success": True,
+                        "label": label,
+                        "message": f"Found label: {label.get('name', label_id)}",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Label not found: {label_id}",
+                        "label_id": label_id,
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to get label: {result.get('error', 'Unknown error')}",
+                    "label_id": label_id,
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting label: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to get label: {str(e)}",
+                "label_id": label_id,
+                "suggestions": [
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                    "Use ha_config_list_labels() to find valid label IDs",
+                ],
+            }
+
     @mcp.tool
     @log_tool_usage
-    async def ha_create_label(
+    async def ha_config_set_label(
         name: Annotated[str, Field(description="Display name for the label")],
+        label_id: Annotated[
+            str | None,
+            Field(
+                description="Label ID for updates. If not provided, creates a new label.",
+                default=None,
+            ),
+        ] = None,
         color: Annotated[
             str | None,
             Field(
@@ -100,127 +176,42 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Create a new Home Assistant label.
+        Create or update a Home Assistant label.
+
+        Creates a new label if label_id is not provided, or updates an existing label if label_id is provided.
 
         Labels are a flexible tagging system that can be applied to entities,
         devices, and areas for organization and automation purposes.
 
         EXAMPLES:
-        - Create simple label: ha_create_label("Critical")
-        - Create colored label: ha_create_label("Outdoor", color="green")
-        - Create label with icon: ha_create_label("Battery Powered", icon="mdi:battery")
-        - Create full label: ha_create_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
+        - Create simple label: ha_config_set_label("Critical")
+        - Create colored label: ha_config_set_label("Outdoor", color="green")
+        - Create label with icon: ha_config_set_label("Battery Powered", icon="mdi:battery")
+        - Create full label: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
+        - Update label: ha_config_set_label("Updated Name", label_id="my_label_id", color="blue")
 
         After creating a label, use ha_assign_label() to assign it to entities.
         """
         try:
+            # Determine if this is a create or update
+            action = "update" if label_id else "create"
+
             message: dict[str, Any] = {
-                "type": "config/label_registry/create",
+                "type": f"config/label_registry/{action}",
                 "name": name,
             }
 
-            if color:
-                message["color"] = color
-            if icon:
-                message["icon"] = icon
-            if description:
-                message["description"] = description
+            if action == "update":
+                message["label_id"] = label_id
+                # For updates, check if at least one field besides label_id is provided
+                if not any([name is not None, color is not None, icon is not None, description is not None]):
+                    return {
+                        "success": False,
+                        "error": "At least one field (name, color, icon, or description) must be provided for update",
+                        "label_id": label_id,
+                    }
 
-            result = await client.send_websocket_message(message)
-
-            if result.get("success"):
-                label_data = result.get("result", {})
-                return {
-                    "success": True,
-                    "label_id": label_data.get("label_id"),
-                    "label_data": label_data,
-                    "message": f"Successfully created label: {name}",
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to create label: {result.get('error', 'Unknown error')}",
-                    "name": name,
-                }
-
-        except Exception as e:
-            logger.error(f"Error creating label: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to create label: {str(e)}",
-                "name": name,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify the label name is valid",
-                    "Check if a label with this name already exists",
-                ],
-            }
-
-    @mcp.tool
-    @log_tool_usage
-    async def ha_update_label(
-        label_id: Annotated[
-            str,
-            Field(description="ID of the label to update"),
-        ],
-        name: Annotated[
-            str | None,
-            Field(
-                description="New display name for the label",
-                default=None,
-            ),
-        ] = None,
-        color: Annotated[
-            str | None,
-            Field(
-                description="New color for the label (e.g., 'red', 'blue', or hex like '#FF5733')",
-                default=None,
-            ),
-        ] = None,
-        icon: Annotated[
-            str | None,
-            Field(
-                description="New Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
-                default=None,
-            ),
-        ] = None,
-        description: Annotated[
-            str | None,
-            Field(
-                description="New description for the label",
-                default=None,
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Update an existing Home Assistant label.
-
-        Updates the properties of a label. Only provided fields will be updated;
-        fields not specified will retain their current values.
-
-        EXAMPLES:
-        - Update name: ha_update_label("my_label_id", name="New Name")
-        - Update color: ha_update_label("my_label_id", color="blue")
-        - Update multiple: ha_update_label("my_label_id", name="Updated", icon="mdi:star", color="gold")
-
-        Use ha_list_labels() to find label IDs.
-        """
-        try:
-            # Check if at least one field to update is provided
-            if not any([name, color, icon, description]):
-                return {
-                    "success": False,
-                    "error": "At least one field (name, color, icon, or description) must be provided for update",
-                    "label_id": label_id,
-                }
-
-            message: dict[str, Any] = {
-                "type": "config/label_registry/update",
-                "label_id": label_id,
-            }
-
-            if name is not None:
-                message["name"] = name
+            # Add optional fields only if they are explicitly provided (not None)
             if color is not None:
                 message["color"] = color
             if icon is not None:
@@ -232,34 +223,36 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if result.get("success"):
                 label_data = result.get("result", {})
+                action_past = "created" if action == "create" else "updated"
                 return {
                     "success": True,
-                    "label_id": label_id,
+                    "label_id": label_data.get("label_id"),
                     "label_data": label_data,
-                    "message": f"Successfully updated label: {label_id}",
+                    "message": f"Successfully {action_past} label: {name}",
                 }
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to update label: {result.get('error', 'Unknown error')}",
-                    "label_id": label_id,
+                    "error": f"Failed to {action} label: {result.get('error', 'Unknown error')}",
+                    "name": name,
                 }
 
         except Exception as e:
-            logger.error(f"Error updating label: {e}")
+            logger.error(f"Error setting label: {e}")
             return {
                 "success": False,
-                "error": f"Failed to update label: {str(e)}",
-                "label_id": label_id,
+                "error": f"Failed to set label: {str(e)}",
+                "name": name,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify the label_id exists using ha_list_labels()",
+                    "Verify the label name is valid",
+                    "For updates, verify the label_id exists using ha_config_list_labels()",
                 ],
             }
 
     @mcp.tool
     @log_tool_usage
-    async def ha_delete_label(
+    async def ha_config_remove_label(
         label_id: Annotated[
             str,
             Field(description="ID of the label to delete"),
@@ -272,9 +265,9 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         from all entities, devices, and areas that have it assigned.
 
         EXAMPLES:
-        - Delete label: ha_delete_label("my_label_id")
+        - Delete label: ha_config_remove_label("my_label_id")
 
-        Use ha_list_labels() to find label IDs.
+        Use ha_config_list_labels() to find label IDs.
 
         **WARNING:** Deleting a label will remove it from all assigned entities.
         This action cannot be undone.
@@ -308,7 +301,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "label_id": label_id,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify the label_id exists using ha_list_labels()",
+                    "Verify the label_id exists using ha_config_list_labels()",
                 ],
             }
 
@@ -339,21 +332,40 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Assign multiple labels: ha_assign_label("light.bedroom", ["critical", "outdoor"])
         - Clear all labels: ha_assign_label("light.bedroom", [])
 
-        Use ha_list_labels() to find available label IDs.
+        Use ha_config_list_labels() to find available label IDs.
         Use ha_search_entities() to find entity IDs.
 
         **NOTE:** This sets the complete list of labels for the entity. Any labels
         not included in the list will be removed from the entity.
         """
         try:
-            # Parse labels parameter - can be string, list, or JSON string
-            parsed_labels = parse_string_list_param(labels, "labels")
+            # Handle different input types for labels parameter
+            parsed_labels: list[str]
 
-            # Ensure we have a list
-            if parsed_labels is None:
-                parsed_labels = []
-            elif isinstance(parsed_labels, str):
-                parsed_labels = [parsed_labels]
+            if isinstance(labels, list):
+                # Already a list
+                parsed_labels = labels
+            elif isinstance(labels, str):
+                # Could be a plain string label ID or a JSON array string
+                try:
+                    # Try to parse as JSON array first
+                    import json
+                    parsed = json.loads(labels)
+                    if isinstance(parsed, list):
+                        parsed_labels = parsed
+                    else:
+                        # JSON parsed but not a list, treat as single label ID
+                        parsed_labels = [labels]
+                except json.JSONDecodeError:
+                    # Not valid JSON, treat as a single plain label ID
+                    parsed_labels = [labels]
+            else:
+                # Unexpected type, return error
+                return {
+                    "success": False,
+                    "error": f"Invalid labels parameter type: expected str or list[str], got {type(labels).__name__}",
+                    "entity_id": entity_id,
+                }
 
             message: dict[str, Any] = {
                 "type": "config/entity_registry/update",
@@ -380,12 +392,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "labels": parsed_labels,
                 }
 
-        except ValueError as e:
-            return {
-                "success": False,
-                "error": f"Invalid labels parameter: {e}",
-                "entity_id": entity_id,
-            }
         except Exception as e:
             logger.error(f"Error assigning labels: {e}")
             return {
@@ -395,6 +401,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify the entity_id exists using ha_search_entities()",
-                    "Verify the label IDs exist using ha_list_labels()",
+                    "Verify the label IDs exist using ha_config_list_labels()",
                 ],
             }
