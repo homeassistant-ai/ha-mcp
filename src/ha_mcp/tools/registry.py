@@ -20,6 +20,7 @@ from .tools_service import register_service_tools
 from .tools_system import register_system_tools
 from .tools_updates import register_update_tools
 from .tools_utility import register_utility_tools
+from .tools_zones import register_zone_tools
 
 
 class ToolsRegistry:
@@ -70,3 +71,6 @@ class ToolsRegistry:
 
         # Register entity and device registry tools
         register_registry_tools(self.mcp, self.client)
+
+        # Register zone management tools
+        register_zone_tools(self.mcp, self.client)
