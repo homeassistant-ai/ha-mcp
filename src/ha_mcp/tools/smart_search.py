@@ -19,13 +19,14 @@ class SmartSearchTools:
         self, client: HomeAssistantClient | None = None, fuzzy_threshold: int = 60
     ):
         """Initialize with Home Assistant client."""
-        # Only load settings if client not provided
+        # Always load settings for configuration access
+        self.settings = get_global_settings()
+
+        # Use provided client or create new one
         if client is None:
-            self.settings = get_global_settings()
             self.client = HomeAssistantClient()
             fuzzy_threshold = self.settings.fuzzy_threshold
         else:
-            self.settings = None  # type: ignore[assignment]
             self.client = client
 
         self.fuzzy_searcher = create_fuzzy_searcher(threshold=fuzzy_threshold)
