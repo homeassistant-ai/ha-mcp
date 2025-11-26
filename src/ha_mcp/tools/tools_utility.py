@@ -22,14 +22,44 @@ logger = logging.getLogger(__name__)
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant utility tools."""
 
+    # Default and maximum limits for logbook entries
+    DEFAULT_LOGBOOK_LIMIT = 50
+    MAX_LOGBOOK_LIMIT = 500
+
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_get_logbook(
         hours_back: int = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
-        """Get Home Assistant logbook entries for the specified time period."""
+        """
+        Get Home Assistant logbook entries for the specified time period.
+
+        Returns paginated logbook entries to prevent excessively large responses.
+
+        **Parameters:**
+        - hours_back: Number of hours to look back (default: 1)
+        - entity_id: Optional entity ID to filter entries
+        - end_time: Optional end time in ISO format (defaults to now)
+        - limit: Maximum number of entries to return (default: 50, max: 500)
+        - offset: Number of entries to skip for pagination (default: 0)
+
+        **Pagination:**
+        When the logbook has more entries than the limit, use offset to get
+        additional pages. The response includes `has_more` to indicate if
+        more entries are available.
+
+        **Example:**
+        - First page: ha_get_logbook(hours_back=24, limit=50, offset=0)
+        - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
+        """
+
+        # Apply limit constraints
+        effective_limit = limit if limit is not None else DEFAULT_LOGBOOK_LIMIT
+        effective_limit = max(1, min(effective_limit, MAX_LOGBOOK_LIMIT))
 
         # Calculate start time
         if end_time:
@@ -53,15 +83,39 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
                 return await add_timezone_metadata(client, no_entries_data)
 
+            # Get total count before pagination
+            total_entries = len(response) if isinstance(response, list) else 1
+
+            # Apply pagination
+            if isinstance(response, list):
+                paginated_entries = response[offset : offset + effective_limit]
+                has_more = (offset + effective_limit) < total_entries
+            else:
+                paginated_entries = response
+                has_more = False
+
             logbook_data = {
                 "success": True,
-                "entries": response,
+                "entries": paginated_entries,
                 "period": f"{hours_back} hours back from {end_dt.isoformat()}",
                 "start_time": start_timestamp,
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
-                "total_entries": len(response) if isinstance(response, list) else 1,
+                "total_entries": total_entries,
+                "returned_entries": len(paginated_entries) if isinstance(paginated_entries, list) else 1,
+                "limit": effective_limit,
+                "offset": offset,
+                "has_more": has_more,
             }
+
+            # Add helpful message when results are truncated
+            if has_more:
+                next_offset = offset + effective_limit
+                logbook_data["pagination_hint"] = (
+                    f"Showing {len(paginated_entries)} of {total_entries} entries. "
+                    f"Use offset={next_offset} to get the next page."
+                )
+
             return await add_timezone_metadata(client, logbook_data)
 
         except Exception as e:
