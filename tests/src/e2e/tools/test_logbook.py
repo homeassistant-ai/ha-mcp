@@ -11,6 +11,14 @@ from ..utilities.assertions import assert_mcp_success, parse_mcp_result
 logger = logging.getLogger(__name__)
 
 
+def get_logbook_data(result_data: dict) -> dict:
+    """Extract logbook data from MCP result, handling nested structure."""
+    # Handle nested data structure from MCP response
+    if "data" in result_data and isinstance(result_data["data"], dict):
+        return result_data["data"]
+    return result_data
+
+
 @pytest.mark.asyncio
 async def test_logbook_basic(mcp_client):
     """Test basic logbook retrieval with default parameters."""
@@ -21,7 +29,8 @@ async def test_logbook_basic(mcp_client):
         {"hours_back": 1},
     )
 
-    data = assert_mcp_success(result, "Basic logbook retrieval")
+    raw_data = assert_mcp_success(result, "Basic logbook retrieval")
+    data = get_logbook_data(raw_data)
 
     # Verify response structure
     assert "entries" in data, "Response should contain entries"
@@ -51,7 +60,8 @@ async def test_logbook_with_custom_limit(mcp_client):
         {"hours_back": 1, "limit": 10},
     )
 
-    data = assert_mcp_success(result, "Logbook with custom limit")
+    raw_data = assert_mcp_success(result, "Logbook with custom limit")
+    data = get_logbook_data(raw_data)
 
     # Verify custom limit is applied
     assert data["limit"] == 10, f"Limit should be 10, got {data['limit']}"
@@ -72,7 +82,8 @@ async def test_logbook_limit_capped_at_maximum(mcp_client):
         {"hours_back": 1, "limit": 1000},  # Request more than maximum
     )
 
-    data = assert_mcp_success(result, "Logbook with excessive limit")
+    raw_data = assert_mcp_success(result, "Logbook with excessive limit")
+    data = get_logbook_data(raw_data)
 
     # Verify limit is capped at 500
     assert data["limit"] == 500, (
@@ -92,7 +103,8 @@ async def test_logbook_minimum_limit(mcp_client):
         {"hours_back": 1, "limit": 0},  # Request zero
     )
 
-    data = assert_mcp_success(result, "Logbook with zero limit")
+    raw_data = assert_mcp_success(result, "Logbook with zero limit")
+    data = get_logbook_data(raw_data)
 
     # Verify limit is at least 1
     assert data["limit"] >= 1, f"Limit should be at least 1, got {data['limit']}"
@@ -110,7 +122,8 @@ async def test_logbook_pagination_with_offset(mcp_client):
         "ha_get_logbook",
         {"hours_back": 24, "limit": 5, "offset": 0},
     )
-    first_data = assert_mcp_success(first_page, "First page")
+    first_raw = assert_mcp_success(first_page, "First page")
+    first_data = get_logbook_data(first_raw)
 
     # Skip test if not enough entries for pagination
     if first_data["total_entries"] <= 5:
@@ -124,7 +137,8 @@ async def test_logbook_pagination_with_offset(mcp_client):
         "ha_get_logbook",
         {"hours_back": 24, "limit": 5, "offset": 5},
     )
-    second_data = assert_mcp_success(second_page, "Second page")
+    second_raw = assert_mcp_success(second_page, "Second page")
+    second_data = get_logbook_data(second_raw)
 
     # Verify offset is applied
     assert second_data["offset"] == 5, "Offset should be 5"
@@ -160,7 +174,8 @@ async def test_logbook_has_more_indicator(mcp_client):
         "ha_get_logbook",
         {"hours_back": 24, "limit": 2, "offset": 0},
     )
-    data = assert_mcp_success(result, "Small limit query")
+    raw_data = assert_mcp_success(result, "Small limit query")
+    data = get_logbook_data(raw_data)
 
     total = data["total_entries"]
     has_more = data["has_more"]
@@ -192,7 +207,8 @@ async def test_logbook_entity_filter(mcp_client):
         "ha_get_logbook",
         {"hours_back": 24, "entity_id": "sun.sun", "limit": 50},
     )
-    data = assert_mcp_success(result, "Entity filtered query")
+    raw_data = assert_mcp_success(result, "Entity filtered query")
+    data = get_logbook_data(raw_data)
 
     # Verify entity filter is recorded in response
     assert data.get("entity_filter") == "sun.sun", (
@@ -221,9 +237,10 @@ async def test_logbook_response_metadata(mcp_client):
         "ha_get_logbook",
         {"hours_back": 2, "limit": 10},
     )
-    data = assert_mcp_success(result, "Metadata check")
+    raw_data = assert_mcp_success(result, "Metadata check")
+    data = get_logbook_data(raw_data)
 
-    # Verify all expected metadata fields
+    # Verify all expected metadata fields in the data section
     required_fields = [
         "success",
         "entries",
@@ -241,10 +258,13 @@ async def test_logbook_response_metadata(mcp_client):
     for field in required_fields:
         assert field in data, f"Missing required field: {field}"
 
-    # Verify timezone metadata is included
-    assert "timezone" in data or "ha_timezone" in data, (
-        "Timezone metadata should be included"
+    # Verify timezone metadata is included (may be in raw_data or data)
+    has_timezone = (
+        "metadata" in raw_data
+        or "home_assistant_timezone" in data
+        or "ha_timezone" in data
     )
+    assert has_timezone, "Timezone metadata should be included"
 
     logger.info("All required metadata fields present")
 
@@ -264,7 +284,8 @@ async def test_logbook_empty_result(mcp_client):
     )
 
     # Parse result - may be success with no entries or error
-    data = parse_mcp_result(result)
+    raw_data = parse_mcp_result(result)
+    data = get_logbook_data(raw_data)
 
     # Either success with empty entries or explicit error is acceptable
     if data.get("success"):
