@@ -47,12 +47,21 @@ def register_scene_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id = state.get("entity_id", "")
                 if entity_id.startswith("scene."):
                     attributes = state.get("attributes", {})
+                    # entity_id attribute can be a list, string, or None
+                    entity_ids_attr = attributes.get("entity_id")
+                    if isinstance(entity_ids_attr, list):
+                        entity_count = len(entity_ids_attr)
+                    elif isinstance(entity_ids_attr, str) and entity_ids_attr:
+                        entity_count = 1
+                    else:
+                        entity_count = 0
+
                     scenes.append(
                         {
                             "entity_id": entity_id,
                             "friendly_name": attributes.get("friendly_name", entity_id),
                             "icon": attributes.get("icon"),
-                            "entity_count": len(attributes.get("entity_id", [])),
+                            "entity_count": entity_count,
                             "state": state.get("state"),
                         }
                     )

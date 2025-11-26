@@ -201,7 +201,7 @@ class TestSceneLifecycle:
             },
         )
 
-        create_data = assert_mcp_success(create_result, "scene creation")
+        assert_mcp_success(create_result, "scene creation")
         cleanup_tracker.track("scene", entity_id)
 
         # Activate with transition
