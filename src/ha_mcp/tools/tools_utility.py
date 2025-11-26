@@ -61,6 +61,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         effective_limit = limit if limit is not None else DEFAULT_LOGBOOK_LIMIT
         effective_limit = max(1, min(effective_limit, MAX_LOGBOOK_LIMIT))
 
+        # Ensure offset is non-negative
+        offset = max(0, offset)
+
         # Calculate start time
         if end_time:
             end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))

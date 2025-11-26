@@ -149,14 +149,11 @@ async def test_logbook_pagination_with_offset(mcp_client):
 
     if first_entries and second_entries:
         # Compare first entry of each page - should be different
-        first_entry = first_entries[0] if first_entries else None
-        second_entry = second_entries[0] if second_entries else None
-
-        if first_entry and second_entry:
-            # Entries should be different
-            assert first_entry != second_entry, (
-                "First and second page should have different entries"
-            )
+        first_entry = first_entries[0]
+        second_entry = second_entries[0]
+        assert first_entry != second_entry, (
+            "First and second page should have different entries"
+        )
 
     logger.info(
         f"Pagination working: page 1 has {len(first_entries)} entries, "
