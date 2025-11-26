@@ -144,7 +144,7 @@ class TestLabelLifecycle:
                 },
             )
 
-            update_data = assert_mcp_success(update_result, "update label")
+            assert_mcp_success(update_result, "update label")
             logger.info("Label updated successfully")
 
             # 5. VERIFY: Check update was applied
@@ -168,7 +168,7 @@ class TestLabelLifecycle:
                 {"label_id": label_id},
             )
 
-            delete_data = assert_mcp_success(delete_result, "delete label")
+            assert_mcp_success(delete_result, "delete label")
             created_label_ids.remove(label_id)  # Remove from cleanup list
             logger.info("Label deleted successfully")
 
