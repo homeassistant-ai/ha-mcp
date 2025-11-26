@@ -74,7 +74,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # The API returns {"result": "valid"} or {"result": "invalid", "errors": [...]}
             is_valid = config_result.get("result") == "valid"
-            errors = config_result.get("errors", [])
+            errors = config_result.get("errors") or []  # Handle None case
 
             return {
                 "success": True,
@@ -431,13 +431,13 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "details": health_response,
                 }
 
-            health_info = health_response.get("result", {})
+            health_info = health_response.get("result") or {}
 
             return {
                 "success": True,
                 "health_info": health_info,
-                "component_count": len(health_info),
-                "message": f"Retrieved health info for {len(health_info)} components",
+                "component_count": len(health_info) if isinstance(health_info, dict) else 0,
+                "message": f"Retrieved health info for {len(health_info) if isinstance(health_info, dict) else 0} components",
             }
 
         except Exception as e:
