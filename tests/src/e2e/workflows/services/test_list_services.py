@@ -341,7 +341,7 @@ async def test_service_discovery_integration(mcp_client):
             "entity_id": test_light,
         },
     )
-    call_data = assert_mcp_success(call_result, "call discovered service")
+    assert_mcp_success(call_result, "call discovered service")
 
     logger.info("Successfully called discovered service")
     logger.info("Service discovery integration test passed")
