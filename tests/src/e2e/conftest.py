@@ -457,6 +457,20 @@ class TestDataFactory:
         config.update(overrides)
         return config
 
+    @staticmethod
+    def scene_config(
+        name: str,
+        entities: dict[str, dict[str, Any]],
+        **overrides
+    ) -> dict[str, Any]:
+        """Create a scene configuration for testing."""
+        config = {
+            "name": f"Test {name} Scene E2E",
+            "entities": entities,
+        }
+        config.update(overrides)
+        return config
+
 
 @pytest.fixture
 def test_data_factory() -> TestDataFactory:
