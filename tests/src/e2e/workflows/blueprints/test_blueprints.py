@@ -144,8 +144,8 @@ class TestBlueprintManagement:
             # Check for metadata if available
             if "metadata" in detail_result:
                 meta = detail_result["metadata"]
-                logger.info(f"  Description: {meta.get('description', 'N/A')[:100]}...")
-                logger.info(f"  Author: {meta.get('author', 'N/A')}")
+                logger.info(f"  Description: {(meta.get('description') or 'N/A')[:100]}...")
+                logger.info(f"  Author: {meta.get('author') or 'N/A'}")
 
             # Check for inputs if available
             if "inputs" in detail_result:
@@ -203,7 +203,7 @@ class TestBlueprintManagement:
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try with invalid URL format
-            result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_import_blueprint",
                 {"url": "not-a-valid-url"},
                 expected_error="Invalid URL",
@@ -284,7 +284,7 @@ async def test_blueprint_discovery_workflow(mcp_client):
                 inputs = detail_result["inputs"]
                 logger.info(f"Blueprint requires {len(inputs)} inputs:")
                 for input_name, input_config in list(inputs.items())[:3]:
-                    logger.info(f"  - {input_name}: {input_config.get('description', 'No description')[:50]}")
+                    logger.info(f"  - {input_name}: {(input_config.get('description') or 'No description')[:50]}")
         else:
             logger.info("Step 3: Skipped (no blueprints available)")
 
