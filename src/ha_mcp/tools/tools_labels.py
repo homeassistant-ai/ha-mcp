@@ -203,13 +203,8 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if action == "update":
                 message["label_id"] = label_id
-                # For updates, check if at least one field besides label_id is provided
-                if not any([name is not None, color is not None, icon is not None, description is not None]):
-                    return {
-                        "success": False,
-                        "error": "At least one field (name, color, icon, or description) must be provided for update",
-                        "label_id": label_id,
-                    }
+                # Note: name is always provided as it's a required parameter
+                # The validation of at least one field is satisfied by name being required
 
             # Add optional fields only if they are explicitly provided (not None)
             if color is not None:
