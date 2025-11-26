@@ -27,19 +27,9 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_config_list_areas() -> dict[str, Any]:
         """
-        List all Home Assistant areas (rooms) with their configurations.
+        List all Home Assistant areas (rooms).
 
-        Returns all areas with:
-        - Area ID, name, and icon
-        - Floor assignment (if any)
-        - Aliases for voice assistants
-        - Picture URL (if set)
-
-        EXAMPLES:
-        - List all areas: ha_config_list_areas()
-
-        Use this to discover existing areas before creating new ones or
-        to find area IDs for entity assignment.
+        Returns area ID, name, icon, floor assignment, aliases, and picture URL.
         """
         try:
             message: dict[str, Any] = {
@@ -122,18 +112,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Create or update a Home Assistant area (room).
 
-        Areas are used to organize entities and devices by physical location.
-        They enable features like "Turn off all lights in the living room".
-
-        EXAMPLES:
-        - Create area: ha_config_set_area("Living Room")
-        - Create with floor: ha_config_set_area("Master Bedroom", floor_id="first_floor")
-        - Create with icon: ha_config_set_area("Kitchen", icon="mdi:stove")
-        - Create with aliases: ha_config_set_area("Living Room", aliases=["lounge", "family room"])
-        - Update area: ha_config_set_area("Family Room", area_id="living_room")
-        - Remove floor: ha_config_set_area("Bedroom", area_id="bedroom", floor_id="")
-
-        After creating an area, you can assign entities to it using their entity registry settings.
+        Provide name only to create a new area. Provide area_id to update existing.
+        Areas organize entities by physical location for room-based control.
         """
         try:
             # Parse aliases if provided as string
@@ -236,16 +216,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Delete a Home Assistant area.
 
-        WARNING: Deleting an area will:
-        - Remove the area from all assigned entities and devices
-        - Break any automations or scripts that reference this area
-
-        The entities and devices themselves are NOT deleted, they just become unassigned.
-
-        EXAMPLES:
-        - Delete area: ha_config_remove_area("guest_room")
-
-        Use ha_config_list_areas() first to verify the area ID.
+        Entities and devices in the area are not deleted, just unassigned.
+        May break automations referencing this area.
         """
         try:
             message: dict[str, Any] = {
@@ -290,18 +262,9 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_config_list_floors() -> dict[str, Any]:
         """
-        List all Home Assistant floors with their configurations.
+        List all Home Assistant floors.
 
-        Returns all floors with:
-        - Floor ID, name, and icon
-        - Level (numeric ordering, e.g., 0=ground, 1=first, -1=basement)
-        - Aliases for voice assistants
-
-        EXAMPLES:
-        - List all floors: ha_config_list_floors()
-
-        Use this to discover existing floors before creating new ones or
-        to find floor IDs for area assignment.
+        Returns floor ID, name, icon, level (0=ground, 1=first, -1=basement), and aliases.
         """
         try:
             message: dict[str, Any] = {
@@ -377,18 +340,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Create or update a Home Assistant floor.
 
-        Floors organize areas into vertical levels of a building.
-        They enable features like "Turn off all lights downstairs".
-
-        EXAMPLES:
-        - Create floor: ha_config_set_floor("Ground Floor")
-        - Create with level: ha_config_set_floor("First Floor", level=1)
-        - Create basement: ha_config_set_floor("Basement", level=-1, icon="mdi:home-floor-b")
-        - Create with aliases: ha_config_set_floor("Ground Floor", aliases=["downstairs", "main level"])
-        - Update floor: ha_config_set_floor("Main Floor", floor_id="ground_floor")
-        - Remove icon: ha_config_set_floor("Basement", floor_id="basement", icon="")
-
-        After creating a floor, assign areas to it using ha_config_set_area().
+        Provide name only to create a new floor. Provide floor_id to update existing.
+        Floors organize areas into vertical levels for building-wide control.
         """
         try:
             # Parse aliases if provided as string
@@ -486,16 +439,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Delete a Home Assistant floor.
 
-        WARNING: Deleting a floor will:
-        - Remove the floor assignment from all areas on that floor
-        - Break any automations or scripts that reference this floor
-
-        The areas themselves are NOT deleted, they just become unassigned from the floor.
-
-        EXAMPLES:
-        - Delete floor: ha_config_remove_floor("third_floor")
-
-        Use ha_config_list_floors() first to verify the floor ID.
+        Areas on this floor are not deleted, just unassigned.
+        May break automations referencing this floor.
         """
         try:
             message: dict[str, Any] = {
