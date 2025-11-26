@@ -22,56 +22,13 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         query: str | None = None,
     ) -> dict[str, Any]:
         """
-        List installed/configured Home Assistant integrations (config entries).
+        List configured Home Assistant integrations (config entries).
 
-        This tool returns information about all configured integrations in your
-        Home Assistant instance, including their status, configuration source,
-        and capabilities.
+        Returns integration details including domain, title, state, and capabilities.
+        Use the optional query parameter to fuzzy search by domain or title.
 
-        **Parameters:**
-        - query: Optional fuzzy keyword search to filter integrations by domain or title
-                 (e.g., 'mqtt', 'hue', 'zwave', 'homeassistant')
-
-        **Response includes for each integration:**
-        - entry_id: Unique identifier for the config entry
-        - domain: Integration domain (e.g., 'mqtt', 'hue')
-        - title: User-friendly name/title
-        - state: Current state (loaded, setup_error, not_loaded, etc.)
-        - source: How it was added (user, discovery, import, etc.)
-        - supports_options: Whether the integration has a configuration UI
-        - supports_unload: Whether the integration can be unloaded
-        - disabled_by: Why it's disabled (if applicable)
-
-        **Common Use Cases:**
-        - Check which integrations are installed and their status
-        - Troubleshoot integration errors (state: setup_error)
-        - Verify integration configuration after setup
-        - Monitor integration health across your system
-
-        **Examples:**
-
-        List all integrations:
-        ```python
-        ha_list_integrations()
-        ```
-
-        Find MQTT-related integrations:
-        ```python
-        ha_list_integrations(query="mqtt")
-        ```
-
-        Find Z-Wave integrations:
-        ```python
-        ha_list_integrations(query="zwave")
-        ```
-
-        **States explained:**
-        - 'loaded': Integration is running normally
-        - 'setup_error': Integration failed to set up
-        - 'setup_retry': Integration is retrying setup
-        - 'not_loaded': Integration is configured but not loaded
-        - 'failed_unload': Integration failed to unload
-        - 'migration_error': Configuration migration failed
+        States: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
+        'failed_unload', 'migration_error'.
         """
         try:
             # Use REST API endpoint for config entries
