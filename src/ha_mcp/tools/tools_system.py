@@ -34,7 +34,6 @@ RELOAD_TARGETS = {
     "zones": ("zone", "reload"),
     "core": ("homeassistant", "reload_core_config"),
     "themes": ("frontend", "reload_themes"),
-    "customize": ("homeassistant", "reload_custom_templates"),
 }
 
 
@@ -147,11 +146,12 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
+        restart_initiated = False
         try:
             # Check configuration first as a safety measure
             config_result = await client.check_config()
             if config_result.get("result") != "valid":
-                errors = config_result.get("errors", [])
+                errors = config_result.get("errors") or []
                 return {
                     "success": False,
                     "error": "Configuration is invalid - restart aborted",
@@ -162,7 +162,9 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ),
                 }
 
-            # Call the restart service
+            # Call the restart service - mark as initiated before the call
+            # as the connection may be closed before we get a response
+            restart_initiated = True
             await client.call_service("homeassistant", "restart", {})
 
             return {
@@ -179,8 +181,11 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             error_msg = str(e)
-            # Connection errors during restart are expected
-            if "connect" in error_msg.lower() or "closed" in error_msg.lower():
+            # Connection errors after restart initiated are expected
+            # (HA closes connections during restart)
+            if restart_initiated and (
+                "connect" in error_msg.lower() or "closed" in error_msg.lower()
+            ):
                 return {
                     "success": True,
                     "message": (
