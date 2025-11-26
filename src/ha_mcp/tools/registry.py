@@ -14,6 +14,7 @@ from .tools_config_helpers import register_config_helper_tools
 from .tools_config_scripts import register_config_script_tools
 from .tools_search import register_search_tools
 from .tools_service import register_service_tools
+from .tools_todo import register_todo_tools
 from .tools_utility import register_utility_tools
 
 
@@ -50,3 +51,6 @@ class ToolsRegistry:
 
         # Register backup tools
         register_backup_tools(self.mcp, self.client)
+
+        # Register todo/shopping list tools
+        register_todo_tools(self.mcp, self.client)
