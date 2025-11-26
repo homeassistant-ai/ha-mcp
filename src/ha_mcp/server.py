@@ -21,15 +21,25 @@ logger = logging.getLogger(__name__)
 class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
     """Home Assistant MCP Server with smart tools and fuzzy search."""
 
-    def __init__(self, client: HomeAssistantClient | None = None):
+    def __init__(
+        self,
+        client: HomeAssistantClient | None = None,
+        server_name: str = "ha-mcp",
+        server_version: str = "0.1.0",
+    ):
         """Initialize the smart MCP server."""
-        self.settings = get_global_settings()
-        self.client = client or HomeAssistantClient()
+        # Only load settings if client not provided (need settings for HomeAssistantClient)
+        if client is None:
+            self.settings = get_global_settings()
+            self.client = HomeAssistantClient()
+            server_name = self.settings.mcp_server_name
+            server_version = self.settings.mcp_server_version
+        else:
+            self.settings = None  # type: ignore[assignment]
+            self.client = client
 
         # Create FastMCP server
-        self.mcp = FastMCP(
-            name=self.settings.mcp_server_name, version=self.settings.mcp_server_version
-        )
+        self.mcp = FastMCP(name=server_name, version=server_version)
 
         # Initialize smart tools
         self.smart_tools = create_smart_search_tools(self.client)

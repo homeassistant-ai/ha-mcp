@@ -15,13 +15,21 @@ logger = logging.getLogger(__name__)
 class SmartSearchTools:
     """Smart search tools with fuzzy matching and AI optimization."""
 
-    def __init__(self, client: HomeAssistantClient | None = None):
+    def __init__(
+        self, client: HomeAssistantClient | None = None, fuzzy_threshold: int = 60
+    ):
         """Initialize with Home Assistant client."""
+        # Always load settings for configuration access
         self.settings = get_global_settings()
-        self.client = client or HomeAssistantClient()
-        self.fuzzy_searcher = create_fuzzy_searcher(
-            threshold=self.settings.fuzzy_threshold
-        )
+
+        # Use provided client or create new one
+        if client is None:
+            self.client = HomeAssistantClient()
+            fuzzy_threshold = self.settings.fuzzy_threshold
+        else:
+            self.client = client
+
+        self.fuzzy_searcher = create_fuzzy_searcher(threshold=fuzzy_threshold)
 
     async def smart_entity_search(
         self, query: str, limit: int = 10, include_attributes: bool = False

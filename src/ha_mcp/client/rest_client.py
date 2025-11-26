@@ -63,11 +63,17 @@ class HomeAssistantClient:
             token: Long-lived access token (defaults to config)
             timeout: Request timeout in seconds (defaults to config)
         """
-        settings = get_global_settings()
-
-        self.base_url = (base_url or settings.homeassistant_url).rstrip("/")
-        self.token = token or settings.homeassistant_token
-        self.timeout = timeout or settings.timeout
+        # Only load settings if we need to use fallback values
+        if base_url is None or token is None:
+            settings = get_global_settings()
+            self.base_url = (base_url or settings.homeassistant_url).rstrip("/")
+            self.token = token or settings.homeassistant_token
+            self.timeout = timeout if timeout is not None else settings.timeout
+        else:
+            # All required parameters provided, use them directly without loading settings
+            self.base_url = base_url.rstrip("/")
+            self.token = token
+            self.timeout = timeout if timeout is not None else 30  # Default timeout
 
         # Create HTTP client with authentication headers
         self.httpx_client = httpx.AsyncClient(
