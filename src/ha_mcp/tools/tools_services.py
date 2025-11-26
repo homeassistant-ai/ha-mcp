@@ -196,8 +196,12 @@ def _process_services(
                 "domain": domain,
                 "service": service_name,
                 "fields": fields,
-                "target": service_def.get("target"),
             }
+
+            # Add target only if present
+            target = service_def.get("target")
+            if target is not None:
+                services[service_key]["target"] = target
 
     # Sort domains alphabetically
     sorted_domains = sorted(domains_seen)
@@ -275,7 +279,7 @@ def _get_field_type(selector: dict[str, Any]) -> str:
     # Check for common selector types
     if "number" in selector:
         num_sel = selector["number"]
-        if "min" in num_sel and "max" in num_sel:
+        if isinstance(num_sel, dict) and "min" in num_sel and "max" in num_sel:
             return f"number ({num_sel['min']}-{num_sel['max']})"
         return "number"
 
@@ -286,19 +290,21 @@ def _get_field_type(selector: dict[str, Any]) -> str:
         return "text"
 
     if "select" in selector:
-        options = selector["select"].get("options", [])
-        if options and len(options) <= 5:
-            # Show options inline for small lists
-            option_values = [
-                opt.get("value", opt) if isinstance(opt, dict) else opt
-                for opt in options
-            ]
-            return f"select ({', '.join(str(v) for v in option_values)})"
+        select_sel = selector["select"]
+        if isinstance(select_sel, dict):
+            options = select_sel.get("options", [])
+            if options and len(options) <= 5:
+                # Show options inline for small lists
+                option_values = [
+                    opt.get("value", opt) if isinstance(opt, dict) else opt
+                    for opt in options
+                ]
+                return f"select ({', '.join(str(v) for v in option_values)})"
         return "select"
 
     if "entity" in selector:
         entity_sel = selector["entity"]
-        if "domain" in entity_sel:
+        if isinstance(entity_sel, dict) and "domain" in entity_sel:
             domains = entity_sel["domain"]
             if isinstance(domains, list):
                 return f"entity ({', '.join(domains)})"
