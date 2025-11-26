@@ -20,6 +20,10 @@ from ...utilities.assertions import parse_mcp_result
 
 logger = logging.getLogger(__name__)
 
+# Delay constants for registry operations (in seconds)
+REGISTRY_OPERATION_DELAY = 0.5  # Time to wait after create/delete for registry sync
+BATCH_OPERATION_DELAY = 0.2  # Time to wait between batch operations
+
 
 def generate_unique_name(prefix: str) -> str:
     """Generate a unique name for test entities to avoid conflicts."""
@@ -57,7 +61,7 @@ class TestAreaLifecycle:
         logger.info(f"Created area: {area_name} (ID: {area_id})")
 
         # 2. LIST: Verify area exists in list
-        await asyncio.sleep(0.5)  # Allow time for registration
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)  # Allow time for registration
         list_result = await mcp_client.call_tool("ha_list_areas", {})
 
         list_data = parse_mcp_result(list_result)
@@ -85,7 +89,7 @@ class TestAreaLifecycle:
         logger.info(f"Deleted area: {area_id}")
 
         # 4. VERIFY: Area no longer in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         verify_result = await mcp_client.call_tool("ha_list_areas", {})
         verify_data = parse_mcp_result(verify_result)
 
@@ -138,7 +142,7 @@ class TestAreaLifecycle:
         logger.info(f"Updated area: {area_id}")
 
         # 3. VERIFY: Check changes in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_areas", {})
         list_data = parse_mcp_result(list_result)
 
@@ -194,7 +198,7 @@ class TestAreaLifecycle:
         logger.info(f"Created area with aliases: {area_id}")
 
         # 2. VERIFY: Check aliases in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_areas", {})
         list_data = parse_mcp_result(list_result)
 
@@ -252,7 +256,7 @@ class TestFloorLifecycle:
         logger.info(f"Created floor: {floor_name} (ID: {floor_id})")
 
         # 2. LIST: Verify floor exists in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_floors", {})
 
         list_data = parse_mcp_result(list_result)
@@ -283,7 +287,7 @@ class TestFloorLifecycle:
         logger.info(f"Deleted floor: {floor_id}")
 
         # 4. VERIFY: Floor no longer in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         verify_result = await mcp_client.call_tool("ha_list_floors", {})
         verify_data = parse_mcp_result(verify_result)
 
@@ -338,7 +342,7 @@ class TestFloorLifecycle:
         logger.info(f"Updated floor: {floor_id}")
 
         # 3. VERIFY: Check changes in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_floors", {})
         list_data = parse_mcp_result(list_result)
 
@@ -398,7 +402,7 @@ class TestFloorLifecycle:
         logger.info(f"Created floor with aliases: {floor_id}")
 
         # 2. VERIFY: Check aliases in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_floors", {})
         list_data = parse_mcp_result(list_result)
 
@@ -473,7 +477,7 @@ class TestAreaFloorIntegration:
         logger.info(f"Created area on floor: {area_id}")
 
         # 3. VERIFY: Check floor assignment in list
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_areas", {})
         list_data = parse_mcp_result(list_result)
 
@@ -503,7 +507,7 @@ class TestAreaFloorIntegration:
         logger.info("Removed floor assignment")
 
         # 5. VERIFY: Floor assignment removed
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         verify_result = await mcp_client.call_tool("ha_list_areas", {})
         verify_data = parse_mcp_result(verify_result)
 
@@ -575,10 +579,10 @@ class TestAreaFloorIntegration:
             cleanup_tracker.track("area", area_id)
             logger.info(f"Created area: {name} (ID: {area_id})")
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(BATCH_OPERATION_DELAY)
 
         # 3. VERIFY: All areas on floor
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(REGISTRY_OPERATION_DELAY)
         list_result = await mcp_client.call_tool("ha_list_areas", {})
         list_data = parse_mcp_result(list_result)
 
@@ -593,7 +597,7 @@ class TestAreaFloorIntegration:
         # 4. CLEANUP: Delete areas first, then floor
         for area_id in area_ids:
             await mcp_client.call_tool("ha_delete_area", {"area_id": area_id})
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(BATCH_OPERATION_DELAY)
 
         await mcp_client.call_tool("ha_delete_floor", {"floor_id": floor_id})
         logger.info("Cleanup completed")
