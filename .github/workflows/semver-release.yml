@@ -36,6 +36,8 @@ jobs:
       if: steps.semantic.outputs.released == 'true'
       run: |
         cp CHANGELOG.md homeassistant-addon/CHANGELOG.md
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
         git add homeassistant-addon/CHANGELOG.md
-        git commit -m "chore(addon): sync changelog for Home Assistant add-on"
+        git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
         git push
