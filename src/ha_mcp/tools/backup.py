@@ -28,10 +28,10 @@ def _get_backup_hint_text() -> str:
     Returns:
         Backup hint text appropriate for the configured hint level.
     """
-    from ..config import get_global_settings
+    import os
 
-    settings = get_global_settings()
-    hint = getattr(settings, "backup_hint", "normal")
+    # Get hint from environment directly to avoid requiring full settings
+    hint = os.getenv("BACKUP_HINT", "normal").lower()
 
     hints = {
         "strong": "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
