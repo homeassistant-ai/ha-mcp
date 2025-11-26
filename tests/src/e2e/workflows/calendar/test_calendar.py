@@ -293,7 +293,7 @@ class TestCalendarEventLifecycle:
         end = (now + timedelta(days=1, hours=1)).isoformat()
 
         result = await mcp_client.call_tool(
-            "ha_create_calendar_event",
+            "ha_config_set_calendar_event",
             {
                 "entity_id": "not_a_valid_calendar",
                 "summary": "Test Event",
