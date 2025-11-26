@@ -16,6 +16,11 @@ from ...utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
+# Integration states that indicate problems
+# Source: Home Assistant config entry states
+# https://github.com/home-assistant/core/blob/dev/homeassistant/config_entries.py
+PROBLEM_STATES = ["setup_error", "failed_unload", "migration_error"]
+
 
 @pytest.mark.integrations
 class TestListIntegrations:
@@ -78,129 +83,80 @@ class TestListIntegrations:
             f"State summary total ({total_from_summary}) should match total ({total})"
         )
 
-        # Verify filters applied shows no filters
-        assert data["filters_applied"]["domain"] is None
-        assert data["filters_applied"]["type_filter"] is None
+        # Verify no query was applied
+        assert data["query"] is None
 
         logger.info("All integrations listed successfully")
 
-    async def test_filter_by_domain(self, mcp_client):
+    async def test_search_by_query(self, mcp_client):
         """
-        Test: Filter integrations by domain
+        Test: Search integrations by query
 
-        This test validates filtering integrations by a specific domain.
-        We first get all integrations to find a valid domain to filter by.
+        This test validates searching integrations using fuzzy keyword matching.
+        We first get all integrations to find a valid domain to search for.
         """
-        logger.info("Testing ha_list_integrations with domain filter...")
+        logger.info("Testing ha_list_integrations with query search...")
 
         # First, get all integrations to find a valid domain
         all_result = await mcp_client.call_tool("ha_list_integrations", {})
         all_data = assert_mcp_success(all_result, "get all integrations")
 
         if all_data["total"] == 0:
-            pytest.skip("No integrations available to test domain filtering")
+            pytest.skip("No integrations available to test query search")
 
         # Find a domain that has entries
         test_domain = all_data["entries"][0]["domain"]
-        expected_count = sum(
-            1 for e in all_data["entries"] if e["domain"] == test_domain
+
+        logger.info(f"Searching by query: {test_domain}")
+
+        # Now search by that domain
+        search_result = await mcp_client.call_tool(
+            "ha_list_integrations", {"query": test_domain}
         )
 
-        logger.info(f"Filtering by domain: {test_domain} (expected {expected_count} entries)")
+        search_data = assert_mcp_success(search_result, f"search by query {test_domain}")
 
-        # Now filter by that domain
-        filtered_result = await mcp_client.call_tool(
-            "ha_list_integrations", {"domain": test_domain}
+        # Fuzzy search should find at least the matching domain(s)
+        assert search_data["total"] > 0, (
+            f"Expected at least 1 entry for query {test_domain}, "
+            f"got {search_data['total']}"
         )
 
-        filtered_data = assert_mcp_success(filtered_result, f"filter by domain {test_domain}")
-
-        # Verify filtering worked
-        assert filtered_data["total"] == expected_count, (
-            f"Expected {expected_count} entries for domain {test_domain}, "
-            f"got {filtered_data['total']}"
-        )
-
-        # Verify all entries are from the specified domain
-        for entry in filtered_data["entries"]:
-            assert entry["domain"] == test_domain, (
-                f"Entry domain {entry['domain']} should match filter {test_domain}"
+        # Verify all entries match the query (domain or title contains search term)
+        for entry in search_data["entries"]:
+            domain_matches = test_domain.lower() in entry["domain"].lower()
+            title_matches = test_domain.lower() in entry["title"].lower()
+            assert domain_matches or title_matches, (
+                f"Entry domain {entry['domain']} or title {entry['title']} "
+                f"should match query {test_domain}"
             )
 
-        # Verify filters applied
-        assert filtered_data["filters_applied"]["domain"] == test_domain
+        # Verify query was recorded
+        assert search_data["query"] == test_domain
 
-        logger.info(f"Domain filter test passed: {filtered_data['total']} entries")
+        logger.info(f"Query search test passed: {search_data['total']} entries")
 
-    async def test_filter_by_nonexistent_domain(self, mcp_client):
+    async def test_search_by_nonexistent_query(self, mcp_client):
         """
-        Test: Filter by domain that doesn't exist
+        Test: Search by query that doesn't match anything
 
         This should return empty results, not an error.
         """
-        logger.info("Testing ha_list_integrations with nonexistent domain...")
+        logger.info("Testing ha_list_integrations with nonexistent query...")
 
         result = await mcp_client.call_tool(
-            "ha_list_integrations", {"domain": "nonexistent_domain_xyz"}
+            "ha_list_integrations", {"query": "nonexistent_integration_xyz_12345"}
         )
 
-        data = assert_mcp_success(result, "filter by nonexistent domain")
+        data = assert_mcp_success(result, "search by nonexistent query")
 
         # Should succeed but with empty results
-        assert data["total"] == 0, "Should have 0 results for nonexistent domain"
+        assert data["total"] == 0, "Should have 0 results for nonexistent query"
         assert len(data["entries"]) == 0, "Entries should be empty"
-        assert data["filters_applied"]["domain"] == "nonexistent_domain_xyz"
+        assert data["query"] == "nonexistent_integration_xyz_12345"
 
-        logger.info("Nonexistent domain filter test passed")
+        logger.info("Nonexistent query search test passed")
 
-    async def test_filter_by_type(self, mcp_client):
-        """
-        Test: Filter integrations by type
-
-        This tests the type_filter parameter which groups integrations
-        by their function (hub, device, service, etc.).
-        """
-        logger.info("Testing ha_list_integrations with type filter...")
-
-        # Test system type filter
-        result = await mcp_client.call_tool(
-            "ha_list_integrations", {"type_filter": "system"}
-        )
-
-        data = assert_mcp_success(result, "filter by type 'system'")
-
-        # Verify filters applied
-        assert data["filters_applied"]["type_filter"] == "system"
-
-        # Log results - even if empty, filter should work
-        logger.info(f"System type filter returned {data['total']} entries")
-
-        if data["entries"]:
-            domains = [e["domain"] for e in data["entries"]]
-            logger.info(f"System domains found: {domains}")
-
-        logger.info("Type filter test passed")
-
-    async def test_combined_filters(self, mcp_client):
-        """
-        Test: Combine domain and type filters
-
-        Both filters should be applied together.
-        """
-        logger.info("Testing ha_list_integrations with combined filters...")
-
-        result = await mcp_client.call_tool(
-            "ha_list_integrations",
-            {"domain": "homeassistant", "type_filter": "system"},
-        )
-
-        data = assert_mcp_success(result, "combined filters")
-
-        # Verify both filters are recorded
-        assert data["filters_applied"]["domain"] == "homeassistant"
-        assert data["filters_applied"]["type_filter"] == "system"
-
-        logger.info(f"Combined filters returned {data['total']} entries")
 
     async def test_integration_states(self, mcp_client):
         """
@@ -223,8 +179,7 @@ class TestListIntegrations:
             logger.info(f"Loaded integrations: {state_summary['loaded']}")
 
         # Check for any problematic states
-        problem_states = ["setup_error", "failed_unload", "migration_error"]
-        for state in problem_states:
+        for state in PROBLEM_STATES:
             if state in state_summary and state_summary[state] > 0:
                 logger.warning(f"Found {state_summary[state]} integrations in {state} state")
 

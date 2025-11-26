@@ -19,8 +19,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
     async def ha_list_integrations(
-        domain: str | None = None,
-        type_filter: str | None = None,
+        query: str | None = None,
     ) -> dict[str, Any]:
         """
         List installed/configured Home Assistant integrations (config entries).
@@ -30,15 +29,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         and capabilities.
 
         **Parameters:**
-        - domain: Optional filter by integration domain (e.g., 'mqtt', 'zwave_js', 'hue')
-        - type_filter: Optional filter by integration type. Valid values:
-          - 'hub' - Integration hubs (Hue, Z-Wave, Zigbee)
-          - 'device' - Device integrations
-          - 'service' - Service integrations (cloud services, APIs)
-          - 'helper' - Helper integrations
-          - 'entity' - Entity integrations
-          - 'hardware' - Hardware integrations
-          - 'system' - System integrations
+        - query: Optional fuzzy keyword search to filter integrations by domain or title
+                 (e.g., 'mqtt', 'hue', 'zwave', 'homeassistant')
 
         **Response includes for each integration:**
         - entry_id: Unique identifier for the config entry
@@ -63,14 +55,14 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ha_list_integrations()
         ```
 
-        List only MQTT integrations:
+        Find MQTT-related integrations:
         ```python
-        ha_list_integrations(domain="mqtt")
+        ha_list_integrations(query="mqtt")
         ```
 
-        List all hub-type integrations:
+        Find Z-Wave integrations:
         ```python
-        ha_list_integrations(type_filter="hub")
+        ha_list_integrations(query="zwave")
         ```
 
         **States explained:**
@@ -83,6 +75,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Use REST API endpoint for config entries
+            # Note: Using _request() directly as there's no public wrapper method
+            # for the config_entries endpoint in the client API
             response = await client._request(
                 "GET", "/config/config_entries/entry"
             )
@@ -95,18 +89,6 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             entries = response
-
-            # Filter by domain if specified
-            if domain:
-                entries = [e for e in entries if e.get("domain") == domain]
-
-            # Filter by type if specified
-            # Note: Home Assistant doesn't expose type directly in config entries,
-            # but we can filter by common domains associated with types
-            if type_filter:
-                type_domains = _get_domains_for_type(type_filter)
-                if type_domains:
-                    entries = [e for e in entries if e.get("domain") in type_domains]
 
             # Format entries for response
             formatted_entries = []
@@ -134,6 +116,35 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 formatted_entries.append(formatted_entry)
 
+            # Apply fuzzy search filter if query provided
+            if query and query.strip():
+                from ..utils.fuzzy_search import create_fuzzy_searcher
+
+                fuzzy_searcher = create_fuzzy_searcher(threshold=70)
+
+                # Convert integrations to searchable format
+                searchable_items = []
+                for entry in formatted_entries:
+                    # Combine domain and title for searching
+                    searchable_text = f"{entry['domain']} {entry['title']}"
+                    searchable_items.append({
+                        "text": searchable_text,
+                        "domain": entry["domain"],
+                        "title": entry["title"],
+                        "entry": entry
+                    })
+
+                # Perform fuzzy search
+                matches = []
+                for item in searchable_items:
+                    score = fuzzy_searcher.calculate_similarity(query.strip(), item["text"])
+                    if score >= 70:  # threshold
+                        matches.append((score, item["entry"]))
+
+                # Sort by score descending
+                matches.sort(key=lambda x: x[0], reverse=True)
+                formatted_entries = [match[1] for match in matches]
+
             # Group by state for summary
             state_summary: dict[str, int] = {}
             for entry in formatted_entries:
@@ -145,10 +156,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "total": len(formatted_entries),
                 "entries": formatted_entries,
                 "state_summary": state_summary,
-                "filters_applied": {
-                    "domain": domain,
-                    "type_filter": type_filter,
-                },
+                "query": query if query else None,
             }
 
         except Exception as e:
@@ -162,111 +170,3 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure your token has sufficient permissions",
                 ],
             }
-
-
-def _get_domains_for_type(type_filter: str) -> list[str] | None:
-    """
-    Get list of domains associated with integration type.
-
-    This is a best-effort mapping since Home Assistant doesn't expose
-    integration types directly in the config entries API.
-    """
-    type_mappings = {
-        "hub": [
-            "hue",
-            "zwave_js",
-            "zha",
-            "zigbee2mqtt",
-            "homekit_controller",
-            "matter",
-            "thread",
-            "insteon",
-            "lutron",
-            "lutron_caseta",
-            "deconz",
-            "homematic",
-            "knx",
-            "unifi",
-        ],
-        "device": [
-            "esphome",
-            "shelly",
-            "tasmota",
-            "sonoff",
-            "tuya",
-            "xiaomi_miio",
-            "yeelight",
-            "tplink",
-            "wemo",
-            "lifx",
-            "nanoleaf",
-            "ring",
-            "nest",
-            "ecobee",
-        ],
-        "service": [
-            "google_assistant",
-            "alexa",
-            "ifttt",
-            "pushover",
-            "telegram_bot",
-            "slack",
-            "discord",
-            "spotify",
-            "plex",
-            "openweathermap",
-            "met",
-            "accuweather",
-        ],
-        "helper": [
-            "input_boolean",
-            "input_number",
-            "input_text",
-            "input_select",
-            "input_datetime",
-            "input_button",
-            "counter",
-            "timer",
-            "group",
-            "template",
-        ],
-        "entity": [
-            "mqtt",
-            "rest",
-            "template",
-            "command_line",
-            "file",
-            "generic",
-            "local_file",
-            "trend",
-            "derivative",
-            "min_max",
-            "statistics",
-        ],
-        "hardware": [
-            "bluetooth",
-            "usb",
-            "serial",
-            "gpio",
-            "rpi_power",
-            "hardware",
-        ],
-        "system": [
-            "homeassistant",
-            "default_config",
-            "frontend",
-            "logger",
-            "recorder",
-            "history",
-            "logbook",
-            "system_log",
-            "persistent_notification",
-            "automation",
-            "script",
-            "scene",
-            "person",
-            "zone",
-        ],
-    }
-
-    return type_mappings.get(type_filter.lower())
