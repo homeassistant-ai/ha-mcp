@@ -13,9 +13,7 @@ production-level functionality and compatibility.
 """
 
 import asyncio
-import json
 import logging
-from typing import Any
 
 import pytest
 
@@ -24,34 +22,6 @@ from ...utilities.assertions import MCPAssertions
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def enhanced_parse_mcp_result(result) -> dict[str, Any]:
-    """Enhanced MCP result parser with better error handling."""
-    try:
-        if hasattr(result, "content") and result.content:
-            response_text = str(result.content[0].text)
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                try:
-                    fixed_text = (
-                        response_text.replace("true", "True")
-                        .replace("false", "False")
-                        .replace("null", "None")
-                    )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
-                    return {"raw_response": response_text, "parse_error": True}
-
-        return {
-            "content": (
-                str(result.content[0]) if hasattr(result, "content") else str(result)
-            )
-        }
-    except Exception as e:
-        logger.warning(f"Failed to parse MCP result: {e}")
-        return {"error": "Failed to parse result", "exception": str(e)}
 
 
 @pytest.mark.zone
@@ -168,7 +138,7 @@ class TestZoneLifecycle:
             logger.info("Zone update verified")
 
             # 5. DELETE: Remove zone
-            delete_data = await mcp.call_tool_success(
+            await mcp.call_tool_success(
                 "ha_delete_zone",
                 {"zone_id": zone_id},
             )
@@ -223,7 +193,7 @@ class TestZoneLifecycle:
             logger.info("Passive mode verified")
 
             # Update passive mode to False
-            update_data = await mcp.call_tool_success(
+            await mcp.call_tool_success(
                 "ha_update_zone",
                 {
                     "zone_id": zone_id,
@@ -341,7 +311,7 @@ class TestZoneLifecycle:
 
         async with MCPAssertions(mcp_client) as mcp:
             # Test: Invalid latitude (out of range)
-            invalid_lat_data = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_create_zone",
                 {
                     "name": "Invalid Latitude",
@@ -354,7 +324,7 @@ class TestZoneLifecycle:
             logger.info("Invalid latitude properly rejected")
 
             # Test: Invalid longitude (out of range)
-            invalid_lon_data = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_create_zone",
                 {
                     "name": "Invalid Longitude",
@@ -367,7 +337,7 @@ class TestZoneLifecycle:
             logger.info("Invalid longitude properly rejected")
 
             # Test: Invalid radius (zero or negative)
-            invalid_radius_data = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_create_zone",
                 {
                     "name": "Invalid Radius",
@@ -380,7 +350,7 @@ class TestZoneLifecycle:
             logger.info("Invalid radius properly rejected")
 
             # Test: Update with no fields
-            no_fields_data = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_update_zone",
                 {
                     "zone_id": "some_zone_id",
@@ -390,7 +360,7 @@ class TestZoneLifecycle:
             logger.info("Update with no fields properly rejected")
 
             # Test: Delete non-existent zone
-            delete_nonexistent = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_delete_zone",
                 {
                     "zone_id": "nonexistent_zone_xyz_123",
