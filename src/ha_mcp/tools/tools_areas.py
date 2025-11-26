@@ -77,9 +77,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_config_set_area(
         name: Annotated[
-            str,
-            Field(description="Name for the area (e.g., 'Living Room', 'Kitchen')"),
-        ],
+            str | None,
+            Field(
+                description="Name for the area (required for create, optional for update, e.g., 'Living Room', 'Kitchen')",
+                default=None,
+            ),
+        ] = None,
         area_id: Annotated[
             str | None,
             Field(
@@ -161,7 +164,13 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 operation = "update"
             else:
-                # CREATE operation
+                # CREATE operation - name is required
+                if not name:
+                    return {
+                        "success": False,
+                        "error": "name is required when creating a new area",
+                    }
+
                 message: dict[str, Any] = {
                     "type": "config/area_registry/create",
                     "name": name,
@@ -182,27 +191,29 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if result.get("success"):
                 area_data = result.get("result", {})
+                area_name = name or area_data.get("name", area_id)
                 return {
                     "success": True,
                     "area": area_data,
                     "area_id": area_data.get("area_id", area_id),
-                    "message": f"Successfully {operation}d area: {name}",
+                    "message": f"Successfully {operation}d area: {area_name}",
                 }
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                return {
+                error_response = {
                     "success": False,
                     "error": f"Failed to {operation} area: {error_msg}",
-                    "name": name,
                 }
+                if name:
+                    error_response["name"] = name
+                return error_response
 
         except Exception as e:
             logger.error(f"Error in ha_config_set_area: {e}")
-            return {
+            error_response = {
                 "success": False,
                 "error": f"Failed to set area: {str(e)}",
-                "name": name,
                 "suggestions": [
                     "Check Home Assistant connection",
                     "For create: Verify the name is unique",
@@ -210,6 +221,9 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "If assigning to a floor, verify floor_id exists",
                 ],
             }
+            if name:
+                error_response["name"] = name
+            return error_response
 
     @mcp.tool
     @log_tool_usage
@@ -325,9 +339,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_config_set_floor(
         name: Annotated[
-            str,
-            Field(description="Name for the floor (e.g., 'Ground Floor', 'Basement')"),
-        ],
+            str | None,
+            Field(
+                description="Name for the floor (required for create, optional for update, e.g., 'Ground Floor', 'Basement')",
+                default=None,
+            ),
+        ] = None,
         floor_id: Annotated[
             str | None,
             Field(
@@ -400,7 +417,13 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 operation = "update"
             else:
-                # CREATE operation
+                # CREATE operation - name is required
+                if not name:
+                    return {
+                        "success": False,
+                        "error": "name is required when creating a new floor",
+                    }
+
                 message: dict[str, Any] = {
                     "type": "config/floor_registry/create",
                     "name": name,
@@ -419,33 +442,38 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if result.get("success"):
                 floor_data = result.get("result", {})
+                floor_name = name or floor_data.get("name", floor_id)
                 return {
                     "success": True,
                     "floor": floor_data,
                     "floor_id": floor_data.get("floor_id", floor_id),
-                    "message": f"Successfully {operation}d floor: {name}",
+                    "message": f"Successfully {operation}d floor: {floor_name}",
                 }
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                return {
+                error_response = {
                     "success": False,
                     "error": f"Failed to {operation} floor: {error_msg}",
-                    "name": name,
                 }
+                if name:
+                    error_response["name"] = name
+                return error_response
 
         except Exception as e:
             logger.error(f"Error in ha_config_set_floor: {e}")
-            return {
+            error_response = {
                 "success": False,
                 "error": f"Failed to set floor: {str(e)}",
-                "name": name,
                 "suggestions": [
                     "Check Home Assistant connection",
                     "For create: Verify the name is unique",
                     "For update: Verify the floor_id exists using ha_config_list_floors()",
                 ],
             }
+            if name:
+                error_response["name"] = name
+            return error_response
 
     @mcp.tool
     @log_tool_usage
