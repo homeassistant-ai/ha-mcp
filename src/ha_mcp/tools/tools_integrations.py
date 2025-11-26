@@ -118,28 +118,16 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Apply fuzzy search filter if query provided
             if query and query.strip():
-                from ..utils.fuzzy_search import create_fuzzy_searcher
-
-                fuzzy_searcher = create_fuzzy_searcher(threshold=70)
-
-                # Convert integrations to searchable format
-                searchable_items = []
-                for entry in formatted_entries:
-                    # Combine domain and title for searching
-                    searchable_text = f"{entry['domain']} {entry['title']}"
-                    searchable_items.append({
-                        "text": searchable_text,
-                        "domain": entry["domain"],
-                        "title": entry["title"],
-                        "entry": entry
-                    })
+                from ..utils.fuzzy_search import calculate_ratio
 
                 # Perform fuzzy search
                 matches = []
-                for item in searchable_items:
-                    score = fuzzy_searcher.calculate_similarity(query.strip(), item["text"])
+                for entry in formatted_entries:
+                    # Combine domain and title for searching
+                    searchable_text = f"{entry['domain']} {entry['title']}"
+                    score = calculate_ratio(query.strip().lower(), searchable_text.lower())
                     if score >= 70:  # threshold
-                        matches.append((score, item["entry"]))
+                        matches.append((score, entry))
 
                 # Sort by score descending
                 matches.sort(key=lambda x: x[0], reverse=True)
