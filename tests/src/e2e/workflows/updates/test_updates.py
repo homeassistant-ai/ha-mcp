@@ -421,11 +421,17 @@ async def test_update_tools_discovery(mcp_client):
     """
     logger.info("Testing update tools discovery...")
 
-    # Get available tools
+    # Get available tools - FastMCP returns a list directly
     tools = await mcp_client.list_tools()
 
+    # Handle both list and object response types
+    if hasattr(tools, "tools"):
+        tool_list = tools.tools
+    else:
+        tool_list = tools
+
     # Convert to list of tool names
-    tool_names = [tool.name for tool in tools.tools]
+    tool_names = [tool.name for tool in tool_list]
 
     # Check that update tools are registered
     expected_tools = [
