@@ -2,13 +2,13 @@
 Calendar Management E2E Tests
 
 Tests the calendar event management tools:
-- ha_list_calendars - List all calendar entities
-- ha_get_calendar_events - Get events from a calendar
-- ha_create_calendar_event - Create a calendar event
-- ha_delete_calendar_event - Delete a calendar event
+- ha_config_get_calendar_events - Get events from a calendar
+- ha_config_set_calendar_event - Create a calendar event
+- ha_config_remove_calendar_event - Delete a calendar event
 
 Note: These tests require calendar integrations to be configured in Home Assistant.
 The tests are designed to work with the demo integration's calendar or local calendar.
+Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities.
 """
 
 import logging
@@ -25,56 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.calendar
-class TestCalendarListAndDiscovery:
-    """Test calendar listing and discovery functionality."""
+class TestCalendarEvents:
+    """Test calendar event retrieval functionality."""
 
-    async def test_list_calendars(self, mcp_client):
-        """
-        Test: List all available calendars
-
-        This test validates that the ha_list_calendars tool
-        can retrieve all calendar entities from Home Assistant.
-        """
-        logger.info("Testing ha_list_calendars...")
-
-        result = await mcp_client.call_tool("ha_list_calendars", {})
-        data = assert_mcp_success(result, "list calendars")
-
-        # Should return a list of calendars (may be empty if no calendars configured)
-        assert "calendars" in data, "Response should contain 'calendars' key"
-        assert "count" in data, "Response should contain 'count' key"
-        assert isinstance(data["calendars"], list), "Calendars should be a list"
-
-        logger.info(f"Found {data['count']} calendar(s)")
-
-        # If calendars exist, validate their structure
-        for calendar in data["calendars"]:
-            assert "entity_id" in calendar, "Calendar should have entity_id"
-            assert calendar["entity_id"].startswith(
-                "calendar."
-            ), "Calendar entity_id should start with 'calendar.'"
-            assert "state" in calendar, "Calendar should have state"
-            assert "friendly_name" in calendar, "Calendar should have friendly_name"
-            logger.info(
-                f"  - {calendar['entity_id']}: {calendar.get('friendly_name', 'Unknown')}"
-            )
-
-        logger.info("ha_list_calendars test completed successfully")
-
-    async def test_search_calendars_via_entities(self, mcp_client):
-        """
-        Test: Search for calendars using entity search
-
-        Validates that calendars can also be discovered via the
-        general entity search functionality.
-        """
-        logger.info("Testing calendar discovery via ha_search_entities...")
-
+    async def _find_calendar_entity(self, mcp_client) -> str | None:
+        """Find an available calendar entity for testing."""
         result = await mcp_client.call_tool(
             "ha_search_entities",
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
-
         data = parse_mcp_result(result)
 
         # Handle nested data structure
@@ -83,33 +42,11 @@ class TestCalendarListAndDiscovery:
         else:
             results = data.get("results", [])
 
-        logger.info(f"Entity search found {len(results)} calendar(s)")
-
-        # All results should be calendar entities
-        for entity in results:
-            entity_id = entity.get("entity_id", "")
-            assert entity_id.startswith(
-                "calendar."
-            ), f"Entity {entity_id} should be a calendar"
-
-        logger.info("Calendar search via entities test completed")
-
-
-@pytest.mark.calendar
-class TestCalendarEvents:
-    """Test calendar event retrieval functionality."""
-
-    async def _find_calendar_entity(self, mcp_client) -> str | None:
-        """Find an available calendar entity for testing."""
-        result = await mcp_client.call_tool("ha_list_calendars", {})
-        data = parse_mcp_result(result)
-
-        calendars = data.get("calendars", [])
-        if not calendars:
+        if not results:
             return None
 
         # Return the first calendar found
-        return calendars[0].get("entity_id")
+        return results[0].get("entity_id")
 
     async def test_get_calendar_events_default_range(self, mcp_client):
         """
@@ -121,10 +58,12 @@ class TestCalendarEvents:
         if not calendar_entity:
             pytest.skip("No calendar entities available for testing")
 
-        logger.info(f"Testing ha_get_calendar_events with {calendar_entity}...")
+        logger.info(
+            f"Testing ha_config_get_calendar_events with {calendar_entity}..."
+        )
 
         result = await mcp_client.call_tool(
-            "ha_get_calendar_events", {"entity_id": calendar_entity}
+            "ha_config_get_calendar_events", {"entity_id": calendar_entity}
         )
 
         data = assert_mcp_success(result, "get calendar events")
@@ -142,7 +81,7 @@ class TestCalendarEvents:
         for event in data["events"]:
             logger.info(f"  - Event: {event.get('summary', 'Untitled')}")
 
-        logger.info("ha_get_calendar_events default range test completed")
+        logger.info("ha_config_get_calendar_events default range test completed")
 
     async def test_get_calendar_events_custom_range(self, mcp_client):
         """
@@ -155,7 +94,7 @@ class TestCalendarEvents:
             pytest.skip("No calendar entities available for testing")
 
         logger.info(
-            f"Testing ha_get_calendar_events with custom range for {calendar_entity}..."
+            f"Testing ha_config_get_calendar_events with custom range for {calendar_entity}..."
         )
 
         # Set a custom time range (next 30 days)
@@ -164,7 +103,7 @@ class TestCalendarEvents:
         end = (now + timedelta(days=30)).isoformat()
 
         result = await mcp_client.call_tool(
-            "ha_get_calendar_events",
+            "ha_config_get_calendar_events",
             {
                 "entity_id": calendar_entity,
                 "start": start,
@@ -182,7 +121,7 @@ class TestCalendarEvents:
         logger.info(
             f"Retrieved {data['count']} event(s) with max_results=5, total_available={data.get('total_available', 'unknown')}"
         )
-        logger.info("ha_get_calendar_events custom range test completed")
+        logger.info("ha_config_get_calendar_events custom range test completed")
 
     async def test_get_calendar_events_invalid_entity(self, mcp_client):
         """
@@ -190,10 +129,11 @@ class TestCalendarEvents:
 
         Verifies proper error handling for non-existent calendars.
         """
-        logger.info("Testing ha_get_calendar_events with invalid entity...")
+        logger.info("Testing ha_config_get_calendar_events with invalid entity...")
 
         result = await mcp_client.call_tool(
-            "ha_get_calendar_events", {"entity_id": "calendar.nonexistent_calendar_xyz"}
+            "ha_config_get_calendar_events",
+            {"entity_id": "calendar.nonexistent_calendar_xyz"},
         )
 
         data = parse_mcp_result(result)
@@ -211,10 +151,12 @@ class TestCalendarEvents:
 
         Verifies validation of entity_id format.
         """
-        logger.info("Testing ha_get_calendar_events with invalid entity format...")
+        logger.info(
+            "Testing ha_config_get_calendar_events with invalid entity format..."
+        )
 
         result = await mcp_client.call_tool(
-            "ha_get_calendar_events", {"entity_id": "not_a_calendar_entity"}
+            "ha_config_get_calendar_events", {"entity_id": "not_a_calendar_entity"}
         )
 
         data = parse_mcp_result(result)
@@ -236,21 +178,29 @@ class TestCalendarEventLifecycle:
 
     async def _find_writable_calendar(self, mcp_client) -> str | None:
         """Find a calendar that supports event creation."""
-        result = await mcp_client.call_tool("ha_list_calendars", {})
+        result = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"query": "calendar", "domain_filter": "calendar", "limit": 10},
+        )
         data = parse_mcp_result(result)
 
-        calendars = data.get("calendars", [])
-        if not calendars:
+        # Handle nested data structure
+        if "data" in data:
+            results = data.get("data", {}).get("results", [])
+        else:
+            results = data.get("results", [])
+
+        if not results:
             return None
 
         # Prefer local calendar if available (usually writable)
-        for cal in calendars:
+        for cal in results:
             entity_id = cal.get("entity_id", "")
             if "local" in entity_id.lower():
                 return entity_id
 
         # Fall back to first calendar
-        return calendars[0].get("entity_id")
+        return results[0].get("entity_id")
 
     async def test_create_calendar_event(self, mcp_client, cleanup_tracker):
         """
@@ -262,7 +212,7 @@ class TestCalendarEventLifecycle:
         if not calendar_entity:
             pytest.skip("No calendar entities available for testing")
 
-        logger.info(f"Testing ha_create_calendar_event in {calendar_entity}...")
+        logger.info(f"Testing ha_config_set_calendar_event in {calendar_entity}...")
 
         # Create an event for tomorrow
         now = datetime.now()
@@ -275,7 +225,7 @@ class TestCalendarEventLifecycle:
 
         try:
             result = await mcp_client.call_tool(
-                "ha_create_calendar_event",
+                "ha_config_set_calendar_event",
                 {
                     "entity_id": calendar_entity,
                     "summary": event_summary,
@@ -299,7 +249,7 @@ class TestCalendarEventLifecycle:
 
                 # Verify event appears in calendar
                 events_result = await mcp_client.call_tool(
-                    "ha_get_calendar_events",
+                    "ha_config_get_calendar_events",
                     {
                         "entity_id": calendar_entity,
                         "start": start.isoformat(),
@@ -328,7 +278,7 @@ class TestCalendarEventLifecycle:
             logger.warning(f"Event creation test encountered error: {e}")
             pytest.skip(f"Calendar event creation not available: {e}")
 
-        logger.info("ha_create_calendar_event test completed")
+        logger.info("ha_config_set_calendar_event test completed")
 
     async def test_create_calendar_event_invalid_entity(self, mcp_client):
         """
@@ -336,7 +286,7 @@ class TestCalendarEventLifecycle:
 
         Verifies proper error handling for invalid entity.
         """
-        logger.info("Testing ha_create_calendar_event with invalid entity...")
+        logger.info("Testing ha_config_set_calendar_event with invalid entity...")
 
         now = datetime.now()
         start = (now + timedelta(days=1)).isoformat()
@@ -372,11 +322,13 @@ class TestCalendarEventLifecycle:
         if not calendar_entity:
             pytest.skip("No calendar entities available for testing")
 
-        logger.info(f"Testing ha_delete_calendar_event for {calendar_entity}...")
+        logger.info(
+            f"Testing ha_config_remove_calendar_event for {calendar_entity}..."
+        )
 
         # Try to delete with a fake UID (will likely fail, but tests the API)
         result = await mcp_client.call_tool(
-            "ha_delete_calendar_event",
+            "ha_config_remove_calendar_event",
             {"entity_id": calendar_entity, "uid": "nonexistent-event-uid-xyz"},
         )
 
@@ -390,7 +342,7 @@ class TestCalendarEventLifecycle:
             logger.info(f"Delete failed as expected: {data.get('error', 'Unknown')}")
             assert "suggestions" in data, "Should provide helpful suggestions"
 
-        logger.info("ha_delete_calendar_event test completed")
+        logger.info("ha_config_remove_calendar_event test completed")
 
     async def test_delete_calendar_event_invalid_entity(self, mcp_client):
         """
@@ -398,10 +350,10 @@ class TestCalendarEventLifecycle:
 
         Verifies proper error handling for invalid entity format.
         """
-        logger.info("Testing ha_delete_calendar_event with invalid entity...")
+        logger.info("Testing ha_config_remove_calendar_event with invalid entity...")
 
         result = await mcp_client.call_tool(
-            "ha_delete_calendar_event",
+            "ha_config_remove_calendar_event",
             {"entity_id": "not_a_valid_calendar", "uid": "some-event-uid"},
         )
 
@@ -426,28 +378,20 @@ async def test_calendar_tools_overview(mcp_client):
     """
     logger.info("Verifying calendar tools registration...")
 
-    # List all calendars (validates ha_list_calendars is registered)
-    list_result = await mcp_client.call_tool("ha_list_calendars", {})
-    list_data = parse_mcp_result(list_result)
-    assert (
-        "calendars" in list_data or "error" in list_data
-    ), "ha_list_calendars should return calendars or error"
-    logger.info("ha_list_calendars tool is registered and functional")
-
     # Test get events tool registration (even if it fails due to invalid entity)
     get_result = await mcp_client.call_tool(
-        "ha_get_calendar_events", {"entity_id": "calendar.test"}
+        "ha_config_get_calendar_events", {"entity_id": "calendar.test"}
     )
     get_data = parse_mcp_result(get_result)
     assert (
         "events" in get_data or "error" in get_data
-    ), "ha_get_calendar_events should return events or error"
-    logger.info("ha_get_calendar_events tool is registered and functional")
+    ), "ha_config_get_calendar_events should return events or error"
+    logger.info("ha_config_get_calendar_events tool is registered and functional")
 
     # Test create event tool registration
     now = datetime.now()
     create_result = await mcp_client.call_tool(
-        "ha_create_calendar_event",
+        "ha_config_set_calendar_event",
         {
             "entity_id": "calendar.test",
             "summary": "Test",
@@ -458,17 +402,18 @@ async def test_calendar_tools_overview(mcp_client):
     create_data = parse_mcp_result(create_result)
     assert (
         "event" in create_data or "error" in create_data
-    ), "ha_create_calendar_event should return event or error"
-    logger.info("ha_create_calendar_event tool is registered and functional")
+    ), "ha_config_set_calendar_event should return event or error"
+    logger.info("ha_config_set_calendar_event tool is registered and functional")
 
     # Test delete event tool registration
     delete_result = await mcp_client.call_tool(
-        "ha_delete_calendar_event", {"entity_id": "calendar.test", "uid": "test-uid"}
+        "ha_config_remove_calendar_event",
+        {"entity_id": "calendar.test", "uid": "test-uid"},
     )
     delete_data = parse_mcp_result(delete_result)
     assert (
         "uid" in delete_data or "error" in delete_data
-    ), "ha_delete_calendar_event should return uid or error"
-    logger.info("ha_delete_calendar_event tool is registered and functional")
+    ), "ha_config_remove_calendar_event should return uid or error"
+    logger.info("ha_config_remove_calendar_event tool is registered and functional")
 
     logger.info("All calendar tools are properly registered")

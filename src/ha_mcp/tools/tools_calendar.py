@@ -2,84 +2,51 @@
 Calendar event management tools for Home Assistant MCP server.
 
 This module provides tools for managing calendar events in Home Assistant,
-including listing calendars, retrieving events, creating events, and deleting events.
+including retrieving events, creating events, and deleting events.
+
+Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities.
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
+
+from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
 
 
-def register_calendar_tools(mcp, client, **kwargs):
+def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register calendar management tools with the MCP server."""
 
-    @mcp.tool
-    async def ha_list_calendars() -> dict[str, Any]:
-        """
-        List all calendar entities in Home Assistant.
-
-        Returns a list of calendar entities with their current state and attributes.
-
-        **Example Usage:**
-        ```python
-        # List all available calendars
-        calendars = ha_list_calendars()
-        ```
-
-        **Returns:**
-        - List of calendar entities with entity_id, state, and friendly_name
-        - Each calendar includes attributes like supported features
-        """
-        try:
-            # Get all entity states and filter for calendar domain
-            states = await client.get_states()
-            calendars = []
-
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                if entity_id.startswith("calendar."):
-                    calendars.append(
-                        {
-                            "entity_id": entity_id,
-                            "state": state.get("state"),
-                            "friendly_name": state.get("attributes", {}).get(
-                                "friendly_name", entity_id
-                            ),
-                            "attributes": state.get("attributes", {}),
-                        }
-                    )
-
-            return {
-                "success": True,
-                "calendars": calendars,
-                "count": len(calendars),
-                "message": f"Found {len(calendars)} calendar(s)",
-            }
-
-        except Exception as error:
-            logger.error(f"Failed to list calendars: {error}")
-            return {
-                "success": False,
-                "error": str(error),
-                "calendars": [],
-                "suggestions": [
-                    "Verify Home Assistant connection is active",
-                    "Check if calendar integrations are configured",
-                    "Try ha_search_entities(query='calendar') for entity search",
-                ],
-            }
-
-    @mcp.tool
-    async def ha_get_calendar_events(
-        entity_id: str,
-        start: str | None = None,
-        end: str | None = None,
-        max_results: int = 20,
+    @mcp.tool(annotations={"readOnlyHint": True})
+    @log_tool_usage
+    async def ha_config_get_calendar_events(
+        entity_id: Annotated[
+            str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
+        ],
+        start: Annotated[
+            str | None,
+            Field(
+                description="Start datetime in ISO format (default: now)", default=None
+            ),
+        ] = None,
+        end: Annotated[
+            str | None,
+            Field(
+                description="End datetime in ISO format (default: 7 days from start)",
+                default=None,
+            ),
+        ] = None,
+        max_results: Annotated[
+            int,
+            Field(description="Maximum number of events to return", default=20),
+        ] = 20,
     ) -> dict[str, Any]:
         """
-        Get events from a calendar entity.
+        Retrieve calendar events from a calendar entity.
 
         Retrieves calendar events within a specified time range.
 
@@ -92,15 +59,17 @@ def register_calendar_tools(mcp, client, **kwargs):
         **Example Usage:**
         ```python
         # Get events for the next week
-        events = ha_get_calendar_events("calendar.family")
+        events = ha_config_get_calendar_events("calendar.family")
 
         # Get events for a specific date range
-        events = ha_get_calendar_events(
+        events = ha_config_get_calendar_events(
             "calendar.work",
             start="2024-01-01T00:00:00",
             end="2024-01-31T23:59:59"
         )
         ```
+
+        **Note:** To find calendar entities, use ha_search_entities(query='calendar', domain_filter='calendar')
 
         **Returns:**
         - List of calendar events with summary, start, end, description, location
@@ -113,7 +82,7 @@ def register_calendar_tools(mcp, client, **kwargs):
                     "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
                     "entity_id": entity_id,
                     "suggestions": [
-                        "Use ha_list_calendars() to find available calendar entities",
+                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
                 }
@@ -161,7 +130,7 @@ def register_calendar_tools(mcp, client, **kwargs):
 
             # Provide helpful error messages
             suggestions = [
-                f"Verify calendar entity '{entity_id}' exists using ha_list_calendars()",
+                f"Verify calendar entity '{entity_id}' exists using ha_search_entities(query='calendar', domain_filter='calendar')",
                 "Check start/end datetime format (ISO 8601)",
                 "Ensure calendar integration supports event retrieval",
             ]
@@ -178,13 +147,23 @@ def register_calendar_tools(mcp, client, **kwargs):
             }
 
     @mcp.tool
-    async def ha_create_calendar_event(
-        entity_id: str,
-        summary: str,
-        start: str,
-        end: str,
-        description: str | None = None,
-        location: str | None = None,
+    @log_tool_usage
+    async def ha_config_set_calendar_event(
+        entity_id: Annotated[
+            str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
+        ],
+        summary: Annotated[str, Field(description="Event title/summary")],
+        start: Annotated[
+            str, Field(description="Event start datetime in ISO format")
+        ],
+        end: Annotated[str, Field(description="Event end datetime in ISO format")],
+        description: Annotated[
+            str | None,
+            Field(description="Optional event description", default=None),
+        ] = None,
+        location: Annotated[
+            str | None, Field(description="Optional event location", default=None)
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create a new event in a calendar.
@@ -202,7 +181,7 @@ def register_calendar_tools(mcp, client, **kwargs):
         **Example Usage:**
         ```python
         # Create a simple event
-        result = ha_create_calendar_event(
+        result = ha_config_set_calendar_event(
             "calendar.family",
             summary="Doctor appointment",
             start="2024-01-15T14:00:00",
@@ -210,7 +189,7 @@ def register_calendar_tools(mcp, client, **kwargs):
         )
 
         # Create an event with details
-        result = ha_create_calendar_event(
+        result = ha_config_set_calendar_event(
             "calendar.work",
             summary="Team meeting",
             start="2024-01-16T10:00:00",
@@ -231,7 +210,7 @@ def register_calendar_tools(mcp, client, **kwargs):
                     "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
                     "entity_id": entity_id,
                     "suggestions": [
-                        "Use ha_list_calendars() to find available calendar entities",
+                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
                 }
@@ -295,11 +274,23 @@ def register_calendar_tools(mcp, client, **kwargs):
             }
 
     @mcp.tool
-    async def ha_delete_calendar_event(
-        entity_id: str,
-        uid: str,
-        recurrence_id: str | None = None,
-        recurrence_range: str | None = None,
+    @log_tool_usage
+    async def ha_config_remove_calendar_event(
+        entity_id: Annotated[
+            str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
+        ],
+        uid: Annotated[str, Field(description="Unique identifier of the event to delete")],
+        recurrence_id: Annotated[
+            str | None,
+            Field(description="Optional recurrence ID for recurring events", default=None),
+        ] = None,
+        recurrence_range: Annotated[
+            str | None,
+            Field(
+                description="Optional recurrence range ('THIS_AND_FUTURE' to delete this and future occurrences)",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Delete an event from a calendar.
@@ -315,13 +306,13 @@ def register_calendar_tools(mcp, client, **kwargs):
         **Example Usage:**
         ```python
         # Delete a single event
-        result = ha_delete_calendar_event(
+        result = ha_config_remove_calendar_event(
             "calendar.family",
             uid="event-12345"
         )
 
         # Delete a recurring event instance and future occurrences
-        result = ha_delete_calendar_event(
+        result = ha_config_remove_calendar_event(
             "calendar.work",
             uid="recurring-event-67890",
             recurrence_id="20240115T100000",
@@ -330,7 +321,7 @@ def register_calendar_tools(mcp, client, **kwargs):
         ```
 
         **Note:**
-        To get the event UID, first use ha_get_calendar_events() to list events.
+        To get the event UID, first use ha_config_get_calendar_events() to list events.
         The UID is returned in each event's data.
 
         **Returns:**
@@ -344,7 +335,7 @@ def register_calendar_tools(mcp, client, **kwargs):
                     "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
                     "entity_id": entity_id,
                     "suggestions": [
-                        "Use ha_list_calendars() to find available calendar entities",
+                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
                 }
@@ -380,7 +371,7 @@ def register_calendar_tools(mcp, client, **kwargs):
             suggestions = [
                 f"Verify calendar entity '{entity_id}' exists",
                 f"Verify event with UID '{uid}' exists in the calendar",
-                "Use ha_get_calendar_events() to find the correct event UID",
+                "Use ha_config_get_calendar_events() to find the correct event UID",
                 "Some calendar integrations may not support event deletion",
             ]
 
