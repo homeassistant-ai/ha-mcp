@@ -80,6 +80,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "success": False,
                     "error": "No logbook entries found",
                     "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                    "entity_filter": entity_id,
                 }
                 return await add_timezone_metadata(client, no_entries_data)
 
