@@ -52,6 +52,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         additional pages. The response includes `has_more` to indicate if
         more entries are available.
 
+        **IMPORTANT - Pagination Stability:**
+        Pagination is performed client-side on the full result set returned
+        by Home Assistant. If new logbook entries are created between page
+        requests, results may shift and items could be missed or duplicated
+        across pages. For best results, use consistent time ranges (start/end)
+        and retrieve pages in quick succession.
+
         **Example:**
         - First page: ha_get_logbook(hours_back=24, limit=50, offset=0)
         - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
@@ -84,6 +91,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": "No logbook entries found",
                     "period": f"{hours_back} hours back from {end_dt.isoformat()}",
                     "entity_filter": entity_id,
+                    "total_entries": 0,
+                    "returned_entries": 0,
+                    "limit": effective_limit,
+                    "offset": offset,
+                    "has_more": False,
                 }
                 return await add_timezone_metadata(client, no_entries_data)
 
@@ -115,9 +127,21 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Add helpful message when results are truncated
             if has_more:
                 next_offset = offset + effective_limit
+                # Build complete parameter string for reproducible pagination
+                param_parts = [
+                    f"hours_back={hours_back}",
+                    f"limit={effective_limit}",
+                    f"offset={next_offset}"
+                ]
+                if entity_id:
+                    param_parts.append(f"entity_id={entity_id}")
+                if end_time:
+                    param_parts.append(f"end_time={end_time}")
+
+                param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
-                    f"Showing {len(paginated_entries)} of {total_entries} entries. "
-                    f"Use offset={next_offset} to get the next page."
+                    f"Showing entries {offset + 1}-{offset + len(paginated_entries)} of {total_entries}. "
+                    f"To get the next page, use: ha_get_logbook({param_str})"
                 )
 
             return await add_timezone_metadata(client, logbook_data)
