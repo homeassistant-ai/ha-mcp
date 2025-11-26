@@ -12,10 +12,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import (
-    assert_mcp_success,
-    parse_mcp_result,
-)
+from ...utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
@@ -294,15 +291,8 @@ async def test_integration_discovery(mcp_client):
     logger.info("Testing basic integration discovery...")
 
     result = await mcp_client.call_tool("ha_list_integrations", {})
-    data = parse_mcp_result(result)
+    data = assert_mcp_success(result, "integration discovery")
 
-    # Handle nested data structure
-    if "data" in data:
-        actual_data = data["data"]
-    else:
-        actual_data = data
+    assert "entries" in data, "Response should contain entries"
 
-    assert actual_data.get("success"), f"Integration listing failed: {actual_data.get('error')}"
-    assert "entries" in actual_data, "Response should contain entries"
-
-    logger.info(f"Integration discovery test passed: found {actual_data['total']} integrations")
+    logger.info(f"Integration discovery test passed: found {data['total']} integrations")
