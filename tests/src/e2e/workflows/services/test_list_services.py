@@ -39,7 +39,6 @@ class TestServiceDiscovery:
         logger.info(f"Found {len(domains)} domains")
 
         # Should have services
-        services = data.get("services", {})
         total_count = data.get("total_count", 0)
         assert total_count > 0, "Should return at least one service"
         logger.info(f"Found {total_count} total services")

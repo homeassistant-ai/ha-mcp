@@ -456,7 +456,7 @@ class TestLabelValidation:
             )
 
             # This should succeed - updating with the same name is allowed
-            update_data = assert_mcp_success(update_result, "update label")
+            assert_mcp_success(update_result, "update label")
             logger.info("Update with minimal parameters succeeded as expected")
 
         finally:
