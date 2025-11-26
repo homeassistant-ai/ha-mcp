@@ -454,13 +454,15 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if result.get("success"):
-                device_entry = result.get("result", {}).get("device_entry", {})
+                # The result is the device entry directly (from dict_repr)
+                device_entry = result.get("result", {})
                 return {
                     "success": True,
                     "device_id": device_id,
                     "updates": updates_made,
                     "device_entry": {
                         "name": device_entry.get("name_by_user") or device_entry.get("name"),
+                        "name_by_user": device_entry.get("name_by_user"),
                         "area_id": device_entry.get("area_id"),
                         "disabled_by": device_entry.get("disabled_by"),
                         "labels": device_entry.get("labels", []),
