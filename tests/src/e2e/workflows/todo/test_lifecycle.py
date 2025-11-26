@@ -14,6 +14,7 @@ production-level functionality and compatibility.
 Tests are designed for Docker Home Assistant test environment with testcontainers.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -46,8 +47,8 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                         .replace("false", "False")
                         .replace("null", "None")
                     )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
+                    return ast.literal_eval(fixed_text)
+                except (SyntaxError, ValueError):
                     return {"raw_response": response_text, "parse_error": True}
 
         return {
@@ -232,7 +233,7 @@ class TestTodoItemOperations:
 
             # 3. UPDATE: Mark item as completed
             logger.info("Marking item as completed...")
-            update_result = await mcp.call_tool_success(
+            await mcp.call_tool_success(
                 "ha_update_todo_item",
                 {
                     "entity_id": todo_entity,
@@ -265,7 +266,7 @@ class TestTodoItemOperations:
 
             # 4. REMOVE: Remove the item
             logger.info("Removing item...")
-            remove_result = await mcp.call_tool_success(
+            await mcp.call_tool_success(
                 "ha_remove_todo_item",
                 {
                     "entity_id": todo_entity,
@@ -352,7 +353,7 @@ class TestTodoErrorHandling:
 
         async with MCPAssertions(mcp_client) as mcp:
             # Test with invalid prefix
-            invalid_result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_get_todo_items",
                 {"entity_id": "light.invalid"},
                 expected_error="todo.",
@@ -360,7 +361,7 @@ class TestTodoErrorHandling:
             logger.info("Invalid prefix error handled correctly")
 
             # Test with non-existent entity
-            nonexistent_result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_get_todo_items",
                 {"entity_id": "todo.nonexistent_xyz_12345"},
             )
@@ -386,7 +387,7 @@ class TestTodoErrorHandling:
             todo_entity = list_result["todo_lists"][0]["entity_id"]
 
             # Try to update without any update fields
-            result = await mcp.call_tool_failure(
+            await mcp.call_tool_failure(
                 "ha_update_todo_item",
                 {
                     "entity_id": todo_entity,
@@ -424,7 +425,7 @@ class TestTodoAdvancedFeatures:
 
             # Try to add with description
             try:
-                add_result = await mcp.call_tool_success(
+                await mcp.call_tool_success(
                     "ha_add_todo_item",
                     {
                         "entity_id": todo_entity,
@@ -477,7 +478,7 @@ class TestTodoAdvancedFeatures:
             await wait_for_item_in_list(mcp_client, todo_entity, original_name)
 
             # Rename item
-            rename_result = await mcp.call_tool_success(
+            await mcp.call_tool_success(
                 "ha_update_todo_item",
                 {
                     "entity_id": todo_entity,
@@ -543,7 +544,7 @@ class TestTodoBulkOperations:
             # Add items
             added_items = []
             for item_name in items_to_add:
-                result = await mcp.call_tool_success(
+                await mcp.call_tool_success(
                     "ha_add_todo_item",
                     {"entity_id": todo_entity, "summary": item_name}
                 )
