@@ -108,7 +108,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - action: List of actions to execute
 
         OPTIONAL CONFIG FIELDS:
-        - description: Detailed description
+        - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
         - condition: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
         - max: Maximum concurrent executions (for queued/parallel modes)
@@ -120,6 +120,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         Simple time-based automation:
         ha_config_set_automation({
             "alias": "Morning Lights",
+            "description": "Turn on bedroom lights at 7 AM to help wake up",
             "trigger": [{"platform": "time", "at": "07:00:00"}],
             "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
