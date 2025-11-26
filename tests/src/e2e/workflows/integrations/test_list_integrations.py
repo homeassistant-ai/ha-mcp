@@ -43,7 +43,7 @@ class TestListIntegrations:
         assert "total" in data, "Response should include total count"
         assert "entries" in data, "Response should include entries list"
         assert "state_summary" in data, "Response should include state summary"
-        assert "filters_applied" in data, "Response should include filters applied"
+        assert "query" in data, "Response should include query field"
 
         total = data["total"]
         entries = data["entries"]
