@@ -30,7 +30,7 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
     Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
 
     Args:
-        time_str: Time string in ISO format or relative format (e.g., "24h", "7d", "2w")
+        time_str: Time string in ISO format or relative format (e.g., "24h", "7d", "2w", "1m" where 1m = 30 days)
         default_hours: Default hours to go back if time_str is None
 
     Returns:
@@ -359,7 +359,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         start_time: Annotated[
             str | None,
             Field(
-                description="Start time: ISO datetime or relative (e.g., '30d', '6m', '1y'). Default: 30d ago",
+                description="Start time: ISO datetime or relative (e.g., '30d', '6m', '12m'). Default: 30d ago",
                 default=None,
             ),
         ] = None,
@@ -400,7 +400,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **Parameters:**
         - entity_ids: Entity ID(s) with state_class attribute (required)
-        - start_time: Start of period - ISO datetime or relative ('30d', '6m', '1y'). Default: 30d ago
+        - start_time: Start of period - ISO datetime or relative ('30d', '6m', '12m'). Default: 30d ago
         - end_time: End of period - ISO datetime. Default: now
         - period: Aggregation: '5minute', 'hour', 'day', 'week', 'month'. Default: 'day'
         - statistic_types: Types to include: 'mean', 'min', 'max', 'sum', 'state', 'change'. Default: all
@@ -435,7 +435,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Compare multiple sensors
         ha_get_statistics(
             entity_ids=["sensor.solar_production", "sensor.grid_consumption"],
-            start_time="1y",
+            start_time="12m",
             period="month",
             statistic_types=["sum"]
         )
@@ -487,7 +487,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": str(e),
                     "suggestions": [
                         "Use ISO format: '2025-01-01T00:00:00Z'",
-                        "Use relative format: '30d', '6m', '1y'",
+                        "Use relative format: '30d', '6m', '12m'",
                     ],
                 }
 
