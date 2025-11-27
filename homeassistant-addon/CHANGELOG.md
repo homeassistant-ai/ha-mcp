@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v3.7.0 (2025-11-27)
+
+### Bug Fixes
+
+- **deps**: Switch dependabot from pip to uv ecosystem (#147)
+  ([#147](https://github.com/homeassistant-ai/ha-mcp/pull/147),
+  [`4fcec1c`](https://github.com/homeassistant-ai/ha-mcp/commit/4fcec1c533950e3c3435a4c61dae61793d768f1a))
+
+### Features
+
+- **addon**: Add changelog for Home Assistant add-on updates (#119)
+  ([#119](https://github.com/homeassistant-ai/ha-mcp/pull/119),
+  [`eaa2559`](https://github.com/homeassistant-ai/ha-mcp/commit/eaa2559c88398ca8d5edc0aa574321222dcbd2cc))
+
+
 ## v3.6.2 (2025-11-26)
 
 ### Bug Fixes

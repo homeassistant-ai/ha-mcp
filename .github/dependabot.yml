@@ -45,8 +45,8 @@ updates:
       prefix: "ci"
       include: "scope"
 
-  # Update Python dependencies via pip (reads pyproject.toml)
-  - package-ecosystem: "pip"
+  # Update Python dependencies via uv (reads uv.lock)
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
