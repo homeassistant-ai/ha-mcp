@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.1.0 (2025-11-27)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9a38ec3`](https://github.com/homeassistant-ai/ha-mcp/commit/9a38ec3f38547dfaf1456f97efc98dafdca2059e))
+
+### Documentation
+
+- Update README with all 63 tools (#168)
+  ([#168](https://github.com/homeassistant-ai/ha-mcp/pull/168),
+  [`9392502`](https://github.com/homeassistant-ai/ha-mcp/commit/93925028a81835b96f05cf84a4bec6fdd90a6a0e))
+
+### Features
+
+- **tests**: Pin Home Assistant container version with Renovate tracking (#167)
+  ([#167](https://github.com/homeassistant-ai/ha-mcp/pull/167),
+  [`e22a061`](https://github.com/homeassistant-ai/ha-mcp/commit/e22a061f0ae7ffe2c730b61485060af167e83441))
+
+
 ## v4.0.1 (2025-11-27)
 
 ### Bug Fixes
