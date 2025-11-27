@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata
+from .util_helpers import add_timezone_metadata, parse_string_list_param
 
 
 def register_search_tools(mcp, client, smart_tools, **kwargs):
@@ -166,6 +166,57 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
                         return await add_timezone_metadata(client, empty_area_data)
 
             # Regular entity search (no area filter)
+            # Handle empty query with domain_filter - list all entities of that domain
+            if domain_filter and (not query or not query.strip()):
+                # Get all entities directly from the client
+                all_entities = await client.get_states()
+
+                # Filter by domain
+                filtered_entities = [
+                    e for e in all_entities
+                    if e.get("entity_id", "").startswith(f"{domain_filter}.")
+                ]
+
+                # Format results to match fuzzy search output
+                results = []
+                for entity in filtered_entities[:limit]:
+                    entity_id = entity.get("entity_id", "")
+                    attributes = entity.get("attributes", {})
+                    results.append({
+                        "entity_id": entity_id,
+                        "friendly_name": attributes.get("friendly_name", entity_id),
+                        "domain": domain_filter,
+                        "state": entity.get("state", "unknown"),
+                        "score": 100,  # Perfect match since we're listing by domain
+                        "match_type": "domain_listing",
+                    })
+
+                # Group by domain if requested (will be single domain in this case)
+                if group_by_domain:
+                    by_domain = {domain_filter: results}
+                    domain_list_data = {
+                        "success": True,
+                        "query": query,
+                        "domain_filter": domain_filter,
+                        "total_matches": len(filtered_entities),
+                        "results": results,
+                        "by_domain": by_domain,
+                        "search_type": "domain_listing",
+                        "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
+                    }
+                    return await add_timezone_metadata(client, domain_list_data)
+                else:
+                    domain_list_data = {
+                        "success": True,
+                        "query": query,
+                        "domain_filter": domain_filter,
+                        "total_matches": len(filtered_entities),
+                        "results": results,
+                        "search_type": "domain_listing",
+                        "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
+                    }
+                    return await add_timezone_metadata(client, domain_list_data)
+
             result = await smart_tools.smart_entity_search(query, limit)
 
             # Convert 'matches' to 'results' for backward compatibility
@@ -260,12 +311,12 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
     async def ha_deep_search(
         query: str,
         search_types: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
                     "Types to search in: 'automation', 'script', 'helper'. Pass as a list of strings, "
-                    "e.g. ['automation']. Default: all types"
+                    "e.g. ['automation'], or a JSON array string '[\"automation\"]'. Default: all types"
                 ),
             ),
         ] = None,
@@ -296,7 +347,9 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
             - config: Full configuration for matched items
             - score: Match quality score (higher is better)
         """
-        result = await smart_tools.deep_search(query, search_types, limit)
+        # Parse search_types to handle JSON string input from MCP clients
+        parsed_search_types = parse_string_list_param(search_types, "search_types")
+        result = await smart_tools.deep_search(query, parsed_search_types, limit)
         return cast(dict[str, Any], result)
 
     @mcp.tool(annotations={"readOnlyHint": True})
