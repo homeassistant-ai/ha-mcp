@@ -51,7 +51,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     groups.append(
                         {
                             "entity_id": entity_id,
-                            "object_id": entity_id.replace("group.", ""),
+                            "object_id": entity_id.removeprefix("group."),
                             "state": state.get("state"),
                             "friendly_name": attributes.get("friendly_name"),
                             "icon": attributes.get("icon"),
@@ -149,7 +149,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not entities:
                 return {
                     "success": False,
-                    "error": "entities list cannot be empty",
+                    "error": "Entities list cannot be empty",
                     "object_id": object_id,
                 }
 
@@ -273,10 +273,12 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ("add_entities", add_entities),
                 ("remove_entities", remove_entities),
             ]
-            provided_ops = [(name, val) for name, val in entity_ops if val is not None]
+            provided_ops = [
+                (op_name, val) for op_name, val in entity_ops if val is not None
+            ]
 
             if len(provided_ops) > 1:
-                op_names = [op[0] for op in provided_ops]
+                op_names = [op_name for op_name, _ in provided_ops]
                 return {
                     "success": False,
                     "error": f"Only one of entities, add_entities, or remove_entities can be provided. Got: {op_names}",
@@ -314,8 +316,20 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if all_on is not None:
                 service_data["all"] = all_on
             if entities is not None:
+                if not entities:
+                    return {
+                        "success": False,
+                        "error": "Entities list cannot be empty",
+                        "object_id": object_id,
+                    }
                 service_data["entities"] = entities
             if add_entities is not None:
+                if not add_entities:
+                    return {
+                        "success": False,
+                        "error": "add_entities list cannot be empty",
+                        "object_id": object_id,
+                    }
                 service_data["add_entities"] = add_entities
             if remove_entities is not None:
                 service_data["remove_entities"] = remove_entities
