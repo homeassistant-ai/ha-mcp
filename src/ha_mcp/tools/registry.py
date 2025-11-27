@@ -12,6 +12,7 @@ from .tools_addons import register_addon_tools
 from .tools_areas import register_area_tools
 from .tools_blueprints import register_blueprint_tools
 from .tools_calendar import register_calendar_tools
+from .tools_camera import register_camera_tools
 from .tools_config_automations import register_config_automation_tools
 from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
@@ -106,3 +107,6 @@ class ToolsRegistry:
 
         # Register add-on management tools (Supervisor only)
         register_addon_tools(self.mcp, self.client)
+
+        # Register camera tools
+        register_camera_tools(self.mcp, self.client)
