@@ -4,7 +4,7 @@ Control Home Assistant with AI assistants via Model Context Protocol.
 
 ## About
 
-This add-on enables Claude, ChatGPT, and other AI assistants to control your Home Assistant installation. It provides 20+ tools for device control, automation management, entity search, and system queries.
+This add-on enables Claude, ChatGPT, and other AI assistants to control your Home Assistant installation. It provides 70+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, and more.
 
 **Key Features:**
 - Zero configuration - auto-discovers Home Assistant connection

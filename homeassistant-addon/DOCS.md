@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 20+ tools for device control, automation management, entity search, backup/restore, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 70+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -262,7 +262,7 @@ If the add-on is slow or unresponsive:
 
 ## Available Tools
 
-The add-on provides 20+ MCP tools for controlling Home Assistant:
+The add-on provides 70+ MCP tools for controlling Home Assistant:
 
 ### Core Tools
 - `ha_search_entities` - Fuzzy entity search
@@ -270,32 +270,44 @@ The add-on provides 20+ MCP tools for controlling Home Assistant:
 - `ha_get_overview` - System overview
 - `ha_get_state` - Entity state with details
 - `ha_call_service` - Universal service control
+- `ha_list_services` - List available services
 
 ### Configuration Management
-- `ha_config_set_helper` - Create/update helpers
-- `ha_config_remove_helper` - Delete helpers
-- `ha_config_set_script` - Create/update scripts
-- `ha_config_get_script` - Get script configuration
-- `ha_config_remove_script` - Delete scripts
-- `ha_config_set_automation` - Create/update automations
-- `ha_config_get_automation` - Get automation configuration
-- `ha_config_remove_automation` - Delete automations
+- **Helpers**: `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper`
+- **Scripts**: `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`
+- **Automations**: `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`
+- **Dashboards**: `ha_config_list_dashboards`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`
+- **Areas & Floors**: `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor`
+- **Labels**: `ha_config_list_labels`, `ha_config_set_label`, `ha_config_remove_label`, `ha_assign_label`
+- **Zones**: `ha_list_zones`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`
+
+### Todo & Calendar
+- **Todo Lists**: `ha_list_todo_lists`, `ha_get_todo_items`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item`
+- **Calendar**: `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event`
 
 ### Device Control
 - `ha_bulk_control` - Multi-device control with verification
 - `ha_get_operation_status` - Check operation status
-- `ha_get_bulk_status` - Check multiple operations
+- `ha_list_devices`, `ha_get_device`, `ha_update_device`, `ha_remove_device`
+- `ha_rename_entity` - Rename entity ID
 
-### History & Insights
-- `ha_get_logbook` - Historical events
+### System & Updates
+- `ha_check_config`, `ha_restart`, `ha_reload_core`
+- `ha_get_system_info`, `ha_get_system_health`
+- `ha_list_updates`, `ha_get_release_notes`, `ha_get_system_version`
+
+### Blueprints
+- `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint`
 
 ### Backup & Restore
 - `ha_backup_create` - Fast local backups
 - `ha_backup_restore` - Restore from backup
 
-### Advanced
+### Utility
+- `ha_get_logbook` - Historical events
 - `ha_eval_template` - Evaluate Jinja2 templates
 - `ha_get_domain_docs` - Domain documentation
+- `ha_list_integrations` - List installed integrations
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 
