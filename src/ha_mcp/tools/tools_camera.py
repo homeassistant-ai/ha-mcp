@@ -55,7 +55,7 @@ def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Notes:**
         - Only cameras exposed to Home Assistant are accessible
         - The existing HA authentication/authorization applies
-        - Images are returned as JPEG format
+        - Images are returned in their native format (JPEG, PNG, or GIF)
         - Use width/height parameters for large high-resolution cameras to reduce
           token usage when full resolution is not needed
 
@@ -139,11 +139,7 @@ def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Return FastMCP Image object which automatically converts to MCP ImageContent
             return Image(data=image_data, format=image_format)
 
-        except PermissionError:
-            raise
-        except ValueError:
-            raise
-        except RuntimeError:
+        except (PermissionError, ValueError, RuntimeError):
             raise
         except Exception as e:
             logger.error(f"Error retrieving camera image from {entity_id}: {e}")
