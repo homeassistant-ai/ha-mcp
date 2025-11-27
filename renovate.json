@@ -8,7 +8,7 @@
       "customType": "regex",
       "fileMatch": ["tests/.*\\.py$"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n.*[\"'](?<depName2>[^:]+):(?<currentValue>[^\"']+)[\"']"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n.*[\"'][^:]+:(?<currentValue>[^\"']+)[\"']"
       ],
       "depNameTemplate": "{{{depName}}}",
       "datasourceTemplate": "{{{datasource}}}"
