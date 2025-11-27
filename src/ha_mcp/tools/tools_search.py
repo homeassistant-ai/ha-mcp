@@ -26,18 +26,22 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
     ) -> dict[str, Any]:
         """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
 
-        BEST PRACTICE: Before performing searches or starting any task, call ha_get_overview() first to understand:
+        **Listing Entities by Domain:**
+        Use domain_filter with an empty query to list all entities of a specific type:
+        - ha_search_entities(query="", domain_filter="calendar") - List all calendars
+        - ha_search_entities(query="", domain_filter="todo") - List all todo lists
+        - ha_search_entities(query="", domain_filter="scene") - List all scenes
+        - ha_search_entities(query="", domain_filter="zone") - List all zones (as entities)
+
+        **BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:
         - Smart home size and scale (total entities, domains, areas)
         - Language used in entity naming (French/English/mixed)
         - Available areas/rooms and their entity distribution
-        - System capabilities (controllable devices, sensors, automations)
 
         Choose overview detail level based on task:
         - 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches
         - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
-        - 'full': Maximum detail (includes states, device types, services) - for deep analysis
-
-        This context helps tailor search strategies, understand naming conventions, and make informed decisions."""
+        - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
         try:
             # If area_filter is provided, use area-based search
             if area_filter:

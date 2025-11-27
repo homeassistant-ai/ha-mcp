@@ -23,8 +23,13 @@ class DeviceControlTools:
 
     def __init__(self, client: HomeAssistantClient | None = None):
         """Initialize device control tools."""
-        self.settings = get_global_settings()
-        self.client = client or HomeAssistantClient()
+        # Only load settings if client not provided
+        if client is None:
+            self.settings = get_global_settings()
+            self.client = HomeAssistantClient()
+        else:
+            self.settings = None  # type: ignore[assignment]
+            self.client = client
         self._listener_started = False
 
     async def _ensure_websocket_listener(self) -> None:
