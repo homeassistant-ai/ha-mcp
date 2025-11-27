@@ -191,31 +191,19 @@ def register_search_tools(mcp, client, smart_tools, **kwargs):
                         "match_type": "domain_listing",
                     })
 
-                # Group by domain if requested (will be single domain in this case)
+                # Build response data (avoid duplication by conditionally adding by_domain)
+                domain_list_data = {
+                    "success": True,
+                    "query": query,
+                    "domain_filter": domain_filter,
+                    "total_matches": len(filtered_entities),
+                    "results": results,
+                    "search_type": "domain_listing",
+                    "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
+                }
                 if group_by_domain:
-                    by_domain = {domain_filter: results}
-                    domain_list_data = {
-                        "success": True,
-                        "query": query,
-                        "domain_filter": domain_filter,
-                        "total_matches": len(filtered_entities),
-                        "results": results,
-                        "by_domain": by_domain,
-                        "search_type": "domain_listing",
-                        "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
-                    }
-                    return await add_timezone_metadata(client, domain_list_data)
-                else:
-                    domain_list_data = {
-                        "success": True,
-                        "query": query,
-                        "domain_filter": domain_filter,
-                        "total_matches": len(filtered_entities),
-                        "results": results,
-                        "search_type": "domain_listing",
-                        "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
-                    }
-                    return await add_timezone_metadata(client, domain_list_data)
+                    domain_list_data["by_domain"] = {domain_filter: results}
+                return await add_timezone_metadata(client, domain_list_data)
 
             result = await smart_tools.smart_entity_search(query, limit)
 

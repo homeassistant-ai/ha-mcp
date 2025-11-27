@@ -22,7 +22,9 @@ async def test_search_entities_basic_query(mcp_client):
         "ha_search_entities",
         {"query": "light", "limit": 5},
     )
-    data = assert_mcp_success(result, "Basic entity search")
+    raw_data = assert_mcp_success(result, "Basic entity search")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert "results" in data
@@ -44,7 +46,9 @@ async def test_search_entities_empty_query_with_domain_filter(mcp_client):
         "ha_search_entities",
         {"query": "", "domain_filter": "light", "limit": 50},
     )
-    data = assert_mcp_success(result, "Empty query with domain_filter=light")
+    raw_data = assert_mcp_success(result, "Empty query with domain_filter=light")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert data.get("search_type") == "domain_listing", \
@@ -75,7 +79,9 @@ async def test_search_entities_whitespace_query_with_domain_filter(mcp_client):
         "ha_search_entities",
         {"query": "   ", "domain_filter": "light", "limit": 50},
     )
-    data = assert_mcp_success(result, "Whitespace query with domain_filter")
+    raw_data = assert_mcp_success(result, "Whitespace query with domain_filter")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert data.get("search_type") == "domain_listing"
@@ -93,7 +99,9 @@ async def test_search_entities_domain_filter_with_query(mcp_client):
         "ha_search_entities",
         {"query": "bed", "domain_filter": "light", "limit": 10},
     )
-    data = assert_mcp_success(result, "Domain filter with query")
+    raw_data = assert_mcp_success(result, "Domain filter with query")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     # When there's a query, it should use fuzzy search
@@ -117,7 +125,9 @@ async def test_search_entities_group_by_domain(mcp_client):
         "ha_search_entities",
         {"query": "", "domain_filter": "light", "group_by_domain": True, "limit": 50},
     )
-    data = assert_mcp_success(result, "Group by domain")
+    raw_data = assert_mcp_success(result, "Group by domain")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert "by_domain" in data
@@ -139,7 +149,9 @@ async def test_search_entities_nonexistent_domain(mcp_client):
         "ha_search_entities",
         {"query": "", "domain_filter": "nonexistent_domain_xyz", "limit": 10},
     )
-    data = assert_mcp_success(result, "Nonexistent domain")
+    raw_data = assert_mcp_success(result, "Nonexistent domain")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert data.get("total_matches") == 0
@@ -158,7 +170,9 @@ async def test_search_entities_limit_respected(mcp_client):
         "ha_search_entities",
         {"query": "", "domain_filter": "light", "limit": 1000},
     )
-    data_all = assert_mcp_success(result_all, "Get all lights")
+    raw_data_all = assert_mcp_success(result_all, "Get all lights")
+    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+    data_all = raw_data_all.get("data", raw_data_all)
     total_lights = data_all.get("total_matches", 0)
 
     if total_lights <= 2:
@@ -169,7 +183,8 @@ async def test_search_entities_limit_respected(mcp_client):
         "ha_search_entities",
         {"query": "", "domain_filter": "light", "limit": 2},
     )
-    data_limited = assert_mcp_success(result_limited, "Limited lights")
+    raw_data_limited = assert_mcp_success(result_limited, "Limited lights")
+    data_limited = raw_data_limited.get("data", raw_data_limited)
 
     assert len(data_limited.get("results", [])) == 2, "Expected exactly 2 results with limit=2"
     # total_matches should still show the actual count
@@ -191,7 +206,9 @@ async def test_search_entities_multiple_domains(mcp_client):
             "ha_search_entities",
             {"query": "", "domain_filter": domain, "limit": 100},
         )
-        data = parse_mcp_result(result)
+        raw_data = parse_mcp_result(result)
+        # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
+        data = raw_data.get("data", raw_data)
 
         if data.get("success"):
             count = len(data.get("results", []))
