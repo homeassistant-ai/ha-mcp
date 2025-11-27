@@ -69,6 +69,16 @@ class TestExtractFriendlyNameFromEntityId:
         result = _extract_friendly_name_from_entity_id("switch.garage_door")
         assert result == "garage_door"
 
+    def test_malformed_entity_id_no_dot(self):
+        """Entity ID without dot is handled gracefully."""
+        result = _extract_friendly_name_from_entity_id("malformed_entity_id")
+        assert result == "malformed_entity_id"
+
+    def test_empty_string(self):
+        """Empty string is handled gracefully."""
+        result = _extract_friendly_name_from_entity_id("")
+        assert result == ""
+
 
 class TestBuildMqttTopic:
     """Test _build_mqtt_topic function."""

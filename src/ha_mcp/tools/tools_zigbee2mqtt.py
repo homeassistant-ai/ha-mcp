@@ -21,8 +21,8 @@ from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
 
-# Common Z2M entity patterns
-Z2M_ENTITY_PATTERNS = [
+# Common Z2M entity patterns (compiled for performance)
+_Z2M_ENTITY_PATTERN_STRINGS = [
     r"^sensor\..*_linkquality$",  # Link quality sensors
     r"^sensor\..*_battery$",  # Battery sensors from Z2M
     r"^binary_sensor\..*_contact$",  # Contact sensors
@@ -40,10 +40,12 @@ Z2M_ENTITY_PATTERNS = [
     r"^sensor\..*_humidity$",  # Humidity sensors
     r"^sensor\..*_pressure$",  # Pressure sensors
     r"^sensor\..*_illuminance.*$",  # Light level sensors
-    r"^cover\..*$",  # Covers/blinds
-    r"^climate\..*$",  # Climate devices
-    r"^lock\..*$",  # Smart locks
+    # Note: cover, climate, lock patterns removed as too broad - causes false positives
+    # These domains are detected via device registry checks instead
 ]
+
+# Pre-compile patterns for performance (compiled once at module load)
+Z2M_ENTITY_PATTERNS = [re.compile(p) for p in _Z2M_ENTITY_PATTERN_STRINGS]
 
 # Z2M-specific attribute names that indicate a Z2M device
 Z2M_ATTRIBUTE_INDICATORS = [
@@ -99,9 +101,12 @@ def _extract_friendly_name_from_entity_id(entity_id: str) -> str:
         entity_id: The entity ID to parse
 
     Returns:
-        Extracted friendly name suitable for MQTT topics
+        Extracted friendly name suitable for MQTT topics.
+        Returns the original entity_id if it's malformed (no dot separator).
     """
-    # Remove domain prefix
+    # Remove domain prefix (handle malformed entity IDs gracefully)
+    if "." not in entity_id:
+        return entity_id
     _, object_id = entity_id.split(".", 1)
 
     # Common Z2M suffixes to strip
@@ -154,9 +159,9 @@ def _is_likely_z2m_entity(entity: dict[str, Any]) -> bool:
         if indicator in attributes:
             return True
 
-    # Check entity ID patterns
+    # Check entity ID patterns (patterns are pre-compiled)
     for pattern in Z2M_ENTITY_PATTERNS:
-        if re.match(pattern, entity_id):
+        if pattern.match(entity_id):
             return True
 
     return False
@@ -522,19 +527,21 @@ def register_zigbee2mqtt_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         best_score = 100
                         break
 
-                    # Partial match scoring
+                    # Partial match scoring (with division by zero protection)
                     if friendly_name_lower in device_name_normalized:
-                        score = len(friendly_name_lower) / len(device_name_normalized) * 80
-                        if score > best_score:
-                            best_match = device
-                            best_score = score
+                        if len(device_name_normalized) > 0:
+                            score = len(friendly_name_lower) / len(device_name_normalized) * 80
+                            if score > best_score:
+                                best_match = device
+                                best_score = score
                     elif device_name_normalized in friendly_name_lower:
-                        score = (
-                            len(device_name_normalized) / len(friendly_name_lower) * 70
-                        )
-                        if score > best_score:
-                            best_match = device
-                            best_score = score
+                        if len(friendly_name_lower) > 0:
+                            score = (
+                                len(device_name_normalized) / len(friendly_name_lower) * 70
+                            )
+                            if score > best_score:
+                                best_match = device
+                                best_score = score
 
                 target_device = best_match
 
