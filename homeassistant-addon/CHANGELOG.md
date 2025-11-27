@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v4.0.0 (2025-11-27)
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#148) ([#148](https://github.com/homeassistant-ai/ha-mcp/pull/148),
+  [`bbae36e`](https://github.com/homeassistant-ai/ha-mcp/commit/bbae36e57a258eed38b3e81926ec66a6430fab06))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`39359ad`](https://github.com/homeassistant-ai/ha-mcp/commit/39359ad482bfb943c276acfe63611635baa05f27))
+
+### Features
+
+- Major release with 11 new tool modules (#146)
+  ([#146](https://github.com/homeassistant-ai/ha-mcp/pull/146),
+  [`ca3a25e`](https://github.com/homeassistant-ai/ha-mcp/commit/ca3a25e065fde77fc62182cc098837174c90539f))
+
+
 ## v3.7.0 (2025-11-27)
 
 ### Bug Fixes
