@@ -25,6 +25,7 @@ from .tools_system import register_system_tools
 from .tools_todo import register_todo_tools
 from .tools_updates import register_update_tools
 from .tools_utility import register_utility_tools
+from .tools_zigbee2mqtt import register_zigbee2mqtt_tools
 from .tools_zones import register_zone_tools
 
 
@@ -94,3 +95,6 @@ class ToolsRegistry:
 
         # Register blueprint tools
         register_blueprint_tools(self.mcp, self.client)
+
+        # Register Zigbee2MQTT discovery and query tools
+        register_zigbee2mqtt_tools(self.mcp, self.client)
