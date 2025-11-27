@@ -99,7 +99,8 @@ class HomeAssistantTestEnvironment:
 
         # Create and start container
         self.container = (
-            DockerContainer("ghcr.io/home-assistant/home-assistant:stable")
+            # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+            DockerContainer("ghcr.io/home-assistant/home-assistant:2025.11.3")
             .with_bind_ports(8123, None)  # Random host port
             .with_volume_mapping(str(config_dir), "/config", "rw")
             .with_env("TZ", "UTC")

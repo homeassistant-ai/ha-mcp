@@ -104,7 +104,8 @@ def ha_container_with_fresh_config():
     )
 
     # Create testcontainer with automatic port assignment
-    container = DockerContainer("ghcr.io/home-assistant/home-assistant:stable")
+    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+    container = DockerContainer("ghcr.io/home-assistant/home-assistant:2025.11.3")
     container = container.with_exposed_ports(
         8123
     )  # Expose port, let testcontainers assign host port
