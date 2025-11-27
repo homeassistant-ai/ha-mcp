@@ -7,9 +7,8 @@ This module provides tools to:
 - Support automation creation with ZHA event triggers
 
 ZHA devices are identified by:
-- Having 'zha' in their config_entry domain
-- Having IEEE addresses in their connections (format: ieee, XX:XX:XX:XX:XX:XX:XX:XX)
-- Having identifiers with 'zha' prefix
+- Having 'zha' in their device identifiers (format: ["zha", "IEEE_ADDRESS"])
+- Having IEEE addresses in their connections (format: ["ieee", "XX:XX:XX:XX:XX:XX:XX:XX"])
 """
 
 import logging
@@ -135,17 +134,13 @@ def register_zha_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             break
 
                 # Also check connections for IEEE address (format: ["ieee", "XX:XX:..."])
+                # This supplements the identifier-based IEEE address if not already found
                 if not ieee_address:
                     for connection in connections:
                         if isinstance(connection, (list, tuple)) and len(connection) >= 2:
                             if connection[0] == "ieee":
                                 ieee_address = connection[1]
-                                # If we found IEEE in connections but not in ZHA identifiers,
-                                # it might still be ZHA - check config entries
-                                if not is_zha:
-                                    # Device might be ZHA if it has IEEE connection
-                                    # This is a fallback detection method
-                                    pass
+                                break
 
                 if not is_zha:
                     continue
