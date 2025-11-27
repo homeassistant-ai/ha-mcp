@@ -27,6 +27,7 @@ from .tools_todo import register_todo_tools
 from .tools_traces import register_trace_tools
 from .tools_updates import register_update_tools
 from .tools_utility import register_utility_tools
+from .tools_zha import register_zha_tools
 from .tools_zones import register_zone_tools
 
 
@@ -102,3 +103,6 @@ class ToolsRegistry:
 
         # Register trace/debug tools
         register_trace_tools(self.mcp, self.client)
+
+        # Register ZHA (Zigbee Home Automation) device detection tools
+        register_zha_tools(self.mcp, self.client)
