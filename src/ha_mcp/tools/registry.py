@@ -18,6 +18,7 @@ from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
 from .tools_config_scripts import register_config_script_tools
 from .tools_groups import register_group_tools
+from .tools_history import register_history_tools
 from .tools_integrations import register_integration_tools
 from .tools_labels import register_label_tools
 from .tools_registry import register_registry_tools
@@ -62,6 +63,9 @@ class ToolsRegistry:
 
         # Register utility tools (logbook, templates, docs)
         register_utility_tools(self.mcp, self.client)
+
+        # Register history tools (state history, statistics)
+        register_history_tools(self.mcp, self.client)
 
         # Register update management tools
         register_update_tools(self.mcp, self.client)
