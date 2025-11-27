@@ -225,17 +225,17 @@ def _format_detailed_trace(
     # Extract trigger information
     trigger_trace = trace.get("trace", {}).get("trigger", [])
     if trigger_trace:
-        trigger_step = trigger_trace[0] if trigger_trace else {}
+        trigger_step = trigger_trace[0]
         trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
         result["trigger"] = {
             "platform": trigger_vars.get("platform"),
             "description": trigger_vars.get("description"),
         }
-        # Add state change details if present
+        # Add state change details if present (use safe dictionary access)
         if "to_state" in trigger_vars:
-            result["trigger"]["to_state"] = trigger_vars["to_state"].get("state")
+            result["trigger"]["to_state"] = trigger_vars.get("to_state", {}).get("state")
         if "from_state" in trigger_vars:
-            result["trigger"]["from_state"] = trigger_vars["from_state"].get("state")
+            result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
 

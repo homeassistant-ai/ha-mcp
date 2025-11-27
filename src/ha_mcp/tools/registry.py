@@ -11,7 +11,6 @@ from .backup import register_backup_tools
 from .tools_areas import register_area_tools
 from .tools_blueprints import register_blueprint_tools
 from .tools_calendar import register_calendar_tools
-from .tools_traces import register_trace_tools
 from .tools_config_automations import register_config_automation_tools
 from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
@@ -24,6 +23,7 @@ from .tools_service import register_service_tools
 from .tools_services import register_services_tools
 from .tools_system import register_system_tools
 from .tools_todo import register_todo_tools
+from .tools_traces import register_trace_tools
 from .tools_updates import register_update_tools
 from .tools_utility import register_utility_tools
 from .tools_zones import register_zone_tools
