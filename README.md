@@ -283,7 +283,7 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 
 ---
 
-## 🛠️ Available Tools (63 tools)
+## 🛠️ Available Tools (71 tools)
 
 <details>
 <summary><b>🔍 Search & Discovery (4 tools)</b></summary>
@@ -339,7 +339,7 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 </details>
 
 <details>
-<summary><b>📊 Dashboards (7 tools)</b></summary>
+<summary><b>📊 Dashboards (8 tools)</b></summary>
 
 | Tool | Description |
 |------|-------------|
@@ -434,7 +434,7 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 </details>
 
 <details>
-<summary><b>🔄 System & Updates (6 tools)</b></summary>
+<summary><b>🔄 System & Updates (8 tools)</b></summary>
 
 | Tool | Description |
 |------|-------------|

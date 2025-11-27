@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 60+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 70+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -262,7 +262,7 @@ If the add-on is slow or unresponsive:
 
 ## Available Tools
 
-The add-on provides 60+ MCP tools for controlling Home Assistant:
+The add-on provides 70+ MCP tools for controlling Home Assistant:
 
 ### Core Tools
 - `ha_search_entities` - Fuzzy entity search
