@@ -11,6 +11,7 @@ from .backup import register_backup_tools
 from .tools_areas import register_area_tools
 from .tools_blueprints import register_blueprint_tools
 from .tools_calendar import register_calendar_tools
+from .tools_traces import register_trace_tools
 from .tools_config_automations import register_config_automation_tools
 from .tools_config_dashboards import register_config_dashboard_tools
 from .tools_config_helpers import register_config_helper_tools
@@ -94,3 +95,6 @@ class ToolsRegistry:
 
         # Register blueprint tools
         register_blueprint_tools(self.mcp, self.client)
+
+        # Register trace/debug tools
+        register_trace_tools(self.mcp, self.client)
