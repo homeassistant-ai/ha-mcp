@@ -212,8 +212,8 @@ async def list_available_addons(
                 "installed": addon.get("installed", False),
                 "repository": addon.get("repository"),
                 "url": addon.get("url"),
-                "icon": addon.get("icon", False),
-                "logo": addon.get("logo", False),
+                "icon": addon.get("icon"),
+                "logo": addon.get("logo"),
             }
             formatted_addons.append(addon_info)
 
