@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.0.1 (2025-11-27)
+
+### Bug Fixes
+
+- **search**: Resolve search_types validation and domain_filter issues (#165)
+  ([#165](https://github.com/homeassistant-ai/ha-mcp/pull/165),
+  [`64c97b3`](https://github.com/homeassistant-ai/ha-mcp/commit/64c97b318164d79863915b2baabb7ba8d88c316a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`83db30b`](https://github.com/homeassistant-ai/ha-mcp/commit/83db30b23a537ef72aa53d9f731837d3909cf33a))
+
+
 ## v4.0.0 (2025-11-27)
 
 ### Build System
