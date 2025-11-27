@@ -36,19 +36,26 @@
 - **Fuzzy Entity Search**: Comprehensive search with similar words tolerance
 - **Deep Configuration Search**: Search within automation triggers, script sequences, and helper configurations
 - **AI-Optimized System Overview**: Complete system analysis showing entity counts, areas, and device status
-- **Intelligent Entity Matching**: Advanced search across all Home Assistant entities with partial name matching
 - **Template Evaluation**: Evaluate Home Assistant templates for dynamic data processing and calculations
 - **Logbook Data Access**: Query logbook entries with date filtering and entity-specific searches
 
 ### 🏠 Control
 - **Universal Service Control**: Execute any Home Assistant service with full parameter support
 - **Real-time State Access**: Get detailed entity states with attributes, timestamps, and context information
+- **Bulk Device Control**: Control multiple devices simultaneously with WebSocket verification
 
 ### 🔧 Manage
-- **Automation and Scripts**: Create, modify, delete, enable/disable, and trigger Home Assistant automations
-- **Helper Entity Management**: Create, modify, and delete input_boolean, input_number, input_select, input_text, input_datetime, and input_button entities
-- **Dashboard Management**: Create, update, and delete Lovelace dashboards with full configuration control. Support for strategy-based dashboards (home, areas, map)
-- **Backup and Restore**: Create fast local backups (excludes database) and restore with safety mechanisms
+- **Automations and Scripts**: Create, modify, delete, enable/disable, and trigger automations
+- **Helper Entities**: Manage input_boolean, input_number, input_select, input_text, input_datetime, input_button
+- **Dashboards**: Create, update, delete Lovelace dashboards with strategy support
+- **Areas and Floors**: Organize your smart home with areas and floor hierarchy
+- **Labels**: Create and assign labels to entities and areas
+- **Zones**: Define geographic zones for presence detection
+- **Todo Lists**: Manage shopping lists and todo items
+- **Calendar Events**: Create and manage calendar events
+- **Blueprints**: Import and manage automation/script blueprints
+- **Device Registry**: View and manage device information
+- **Backup and Restore**: Create fast local backups and restore with safety mechanisms
 
 ---
 
@@ -276,61 +283,190 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 
 ---
 
-## 🛠️ Available Tools
+## 🛠️ Available Tools (63 tools)
 
-### Search & Discovery Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_search_entities` | Comprehensive entity search with fuzzy matching | `ha_search_entities("lumiere salon")` |
-| `ha_deep_search` | Search within automation/script/helper configurations | `ha_deep_search("light.turn_on")` |
-| `ha_get_overview` | AI-optimized system overview with entity counts | `ha_get_overview()` |
+<details>
+<summary><b>🔍 Search & Discovery (4 tools)</b></summary>
 
-### Core Home Assistant API Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_get_state` | Get entity state with attributes and context | `ha_get_state("light.living_room")` |
-| `ha_call_service` | Execute any Home Assistant service (universal control) | `ha_call_service("light", "turn_on", {"entity_id": "light.all"})` |
+| Tool | Description |
+|------|-------------|
+| `ha_search_entities` | Fuzzy entity search with domain filtering |
+| `ha_deep_search` | Search within automation/script/helper configurations |
+| `ha_get_overview` | AI-optimized system overview with entity counts |
+| `ha_get_state` | Get entity state with attributes and context |
+</details>
 
-### Device Control Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_bulk_control` | Control multiple devices with WebSocket verification | `ha_bulk_control([{"entity_id": "light.all", "action": "turn_on"}])` |
-| `ha_get_operation_status` | Check status of device operations | `ha_get_operation_status("operation_id")` |
-| `ha_get_bulk_status` | Check status of multiple operations | `ha_get_bulk_status(["op1", "op2"])` |
+<details>
+<summary><b>🎮 Service & Device Control (5 tools)</b></summary>
 
-### Configuration Management Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_config_set_helper` | Create/update helper entities | `ha_config_set_helper("input_boolean", "test")` |
-| `ha_config_remove_helper` | Delete helper entities | `ha_config_remove_helper("input_boolean", "test")` |
-| `ha_config_set_script` | Create/update scripts | `ha_config_set_script("script_id", config)` |
-| `ha_config_get_script` | Get script configuration | `ha_config_get_script("script_id")` |
-| `ha_config_remove_script` | Delete scripts | `ha_config_remove_script("script_id")` |
-| `ha_config_set_automation` | Create/update automations | `ha_config_set_automation(config)` |
-| `ha_config_get_automation` | Get automation configuration | `ha_config_get_automation("automation.id")` |
-| `ha_config_remove_automation` | Delete automations | `ha_config_remove_automation("automation.id")` |
-| `ha_config_list_dashboards` | List all storage-mode dashboards | `ha_config_list_dashboards()` |
-| `ha_config_get_dashboard` | Get dashboard configuration | `ha_config_get_dashboard("lovelace-mobile")` |
-| `ha_config_set_dashboard` | Create/update dashboard | `ha_config_set_dashboard("my-dash", config)` |
-| `ha_config_update_dashboard_metadata` | Update dashboard title/icon | `ha_config_update_dashboard_metadata("my-dash", title="New")` |
-| `ha_config_delete_dashboard` | Delete dashboard | `ha_config_delete_dashboard("my-dash")` |
+| Tool | Description |
+|------|-------------|
+| `ha_call_service` | Execute any Home Assistant service |
+| `ha_bulk_control` | Control multiple devices with WebSocket verification |
+| `ha_get_operation_status` | Check status of device operations |
+| `ha_get_bulk_status` | Check status of multiple operations |
+| `ha_list_services` | List available services by domain |
+</details>
 
-### History & Insights Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_get_logbook` | Access historical logbook entries | `ha_get_logbook(hours_back=24)` |
+<details>
+<summary><b>⚙️ Automations (3 tools)</b></summary>
 
-### Backup & Restore Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_backup_create` | Create fast local backup | `ha_backup_create("backup_name")` |
-| `ha_backup_restore` | Restore from backup | `ha_backup_restore("backup_id")` |
+| Tool | Description |
+|------|-------------|
+| `ha_config_get_automation` | Get automation configuration |
+| `ha_config_set_automation` | Create/update automations |
+| `ha_config_remove_automation` | Delete automations |
+</details>
 
-### Template & Documentation Tools
-| Tool | Description | Example |
-|------|-------------|---------|
-| `ha_eval_template` | Evaluate Jinja2 templates | `ha_eval_template("{{ states('sensor.temp') }}")` |
-| `ha_get_domain_docs` | Get Home Assistant domain documentation | `ha_get_domain_docs("light")` |
+<details>
+<summary><b>📜 Scripts (3 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_get_script` | Get script configuration |
+| `ha_config_set_script` | Create/update scripts |
+| `ha_config_remove_script` | Delete scripts |
+</details>
+
+<details>
+<summary><b>🔘 Helper Entities (3 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_list_helpers` | List all helper entities |
+| `ha_config_set_helper` | Create/update helper entities |
+| `ha_config_remove_helper` | Delete helper entities |
+</details>
+
+<details>
+<summary><b>📊 Dashboards (7 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_list_dashboards` | List all storage-mode dashboards |
+| `ha_config_get_dashboard` | Get dashboard configuration |
+| `ha_config_set_dashboard` | Create/update dashboard |
+| `ha_config_update_dashboard_metadata` | Update dashboard title/icon |
+| `ha_config_delete_dashboard` | Delete dashboard |
+| `ha_get_dashboard_guide` | Get dashboard creation guide |
+| `ha_get_card_types` | List available dashboard card types |
+| `ha_get_card_documentation` | Get documentation for specific card type |
+</details>
+
+<details>
+<summary><b>🏠 Areas & Floors (6 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_list_areas` | List all areas |
+| `ha_config_set_area` | Create/update area |
+| `ha_config_remove_area` | Delete area |
+| `ha_config_list_floors` | List all floors |
+| `ha_config_set_floor` | Create/update floor |
+| `ha_config_remove_floor` | Delete floor |
+</details>
+
+<details>
+<summary><b>🏷️ Labels (5 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_list_labels` | List all labels |
+| `ha_config_get_label` | Get label details |
+| `ha_config_set_label` | Create/update label |
+| `ha_config_remove_label` | Delete label |
+| `ha_assign_label` | Assign label to entity/area |
+</details>
+
+<details>
+<summary><b>📍 Zones (4 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_list_zones` | List all zones |
+| `ha_create_zone` | Create geographic zone |
+| `ha_update_zone` | Update zone properties |
+| `ha_delete_zone` | Delete zone |
+</details>
+
+<details>
+<summary><b>✅ Todo Lists (5 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_list_todo_lists` | List all todo lists |
+| `ha_get_todo_items` | Get items from a todo list |
+| `ha_add_todo_item` | Add item to todo list |
+| `ha_update_todo_item` | Update todo item |
+| `ha_remove_todo_item` | Remove todo item |
+</details>
+
+<details>
+<summary><b>📅 Calendar (3 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_get_calendar_events` | Get calendar events |
+| `ha_config_set_calendar_event` | Create/update calendar event |
+| `ha_config_remove_calendar_event` | Delete calendar event |
+</details>
+
+<details>
+<summary><b>📋 Blueprints (3 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_list_blueprints` | List available blueprints |
+| `ha_get_blueprint` | Get blueprint details |
+| `ha_import_blueprint` | Import blueprint from URL |
+</details>
+
+<details>
+<summary><b>📱 Device Registry (5 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_list_devices` | List all devices |
+| `ha_get_device` | Get device details |
+| `ha_update_device` | Update device properties |
+| `ha_remove_device` | Remove device from registry |
+| `ha_rename_entity` | Rename entity ID |
+</details>
+
+<details>
+<summary><b>🔄 System & Updates (6 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_check_config` | Validate configuration |
+| `ha_restart` | Restart Home Assistant |
+| `ha_reload_core` | Reload core configuration |
+| `ha_get_system_info` | Get system information |
+| `ha_get_system_health` | Get system health status |
+| `ha_list_updates` | List available updates |
+| `ha_get_release_notes` | Get release notes for update |
+| `ha_get_system_version` | Get Home Assistant version |
+</details>
+
+<details>
+<summary><b>💾 Backup & Restore (2 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_backup_create` | Create fast local backup |
+| `ha_backup_restore` | Restore from backup |
+</details>
+
+<details>
+<summary><b>🧰 Utility (4 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_get_logbook` | Access historical logbook entries |
+| `ha_eval_template` | Evaluate Jinja2 templates |
+| `ha_get_domain_docs` | Get domain documentation |
+| `ha_list_integrations` | List installed integrations |
+</details>
 
 ---
 
