@@ -3,6 +3,17 @@
   "extends": ["config:recommended"],
   "timezone": "UTC",
   "schedule": ["after 9am on monday"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["tests/.*\\.py$"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n.*[\"'](?<depName2>[^:]+):(?<currentValue>[^\"']+)[\"']"
+      ],
+      "depNameTemplate": "{{{depName}}}",
+      "datasourceTemplate": "{{{datasource}}}"
+    }
+  ],
   "packageRules": [
     {
       "description": "Python version upgrades - wait 6 months after release",
