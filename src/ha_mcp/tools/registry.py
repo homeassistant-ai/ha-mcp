@@ -8,6 +8,7 @@ from specialized modules.
 from typing import Any
 
 from .backup import register_backup_tools
+from .tools_addons import register_addon_tools
 from .tools_areas import register_area_tools
 from .tools_blueprints import register_blueprint_tools
 from .tools_calendar import register_calendar_tools
@@ -44,14 +45,10 @@ class ToolsRegistry:
     def register_all_tools(self) -> None:
         """Register all tools with the MCP server."""
         # Register search and discovery tools
-        register_search_tools(
-            self.mcp, self.client, self.smart_tools
-        )
+        register_search_tools(self.mcp, self.client, self.smart_tools)
 
         # Register service call and operation monitoring tools
-        register_service_tools(
-            self.mcp, self.client, self.device_tools
-        )
+        register_service_tools(self.mcp, self.client, self.device_tools)
 
         # Register service discovery tools
         register_services_tools(self.mcp, self.client)
@@ -106,3 +103,6 @@ class ToolsRegistry:
 
         # Register ZHA (Zigbee Home Automation) device detection tools
         register_zha_tools(self.mcp, self.client)
+
+        # Register add-on management tools (Supervisor only)
+        register_addon_tools(self.mcp, self.client)
