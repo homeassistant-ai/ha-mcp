@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 70+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 80+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -262,7 +262,7 @@ If the add-on is slow or unresponsive:
 
 ## Available Tools
 
-The add-on provides 70+ MCP tools for controlling Home Assistant:
+The add-on provides 80+ MCP tools for controlling Home Assistant:
 
 ### Core Tools
 - `ha_search_entities` - Fuzzy entity search
@@ -276,6 +276,7 @@ The add-on provides 70+ MCP tools for controlling Home Assistant:
 - **Helpers**: `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper`
 - **Scripts**: `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`
 - **Automations**: `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`
+- **Groups**: `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group`
 - **Dashboards**: `ha_config_list_dashboards`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`
 - **Areas & Floors**: `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor`
 - **Labels**: `ha_config_list_labels`, `ha_config_set_label`, `ha_config_remove_label`, `ha_assign_label`
@@ -290,6 +291,20 @@ The add-on provides 70+ MCP tools for controlling Home Assistant:
 - `ha_get_operation_status` - Check operation status
 - `ha_list_devices`, `ha_get_device`, `ha_update_device`, `ha_remove_device`
 - `ha_rename_entity` - Rename entity ID
+
+### History & Monitoring
+- `ha_get_history` - Query entity state history with time ranges
+- `ha_get_statistics` - Long-term statistics for sensors (energy, climate, etc.)
+- `ha_get_automation_traces` - Execution traces for automation debugging
+- `ha_get_camera_image` - Capture camera snapshots
+
+### ZHA & Integration Tools
+- `ha_get_zha_devices` - List ZHA (Zigbee) devices with endpoints and clusters
+- `ha_get_entity_integration_source` - Get integration source for any entity
+
+### Add-ons (Supervisor only)
+- `ha_list_addons` - List installed add-ons
+- `ha_list_available_addons` - List available add-ons from repositories
 
 ### System & Updates
 - `ha_check_config`, `ha_restart`, `ha_reload_core`
