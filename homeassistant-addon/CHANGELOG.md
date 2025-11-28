@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.2.0 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`bef1437`](https://github.com/homeassistant-ai/ha-mcp/commit/bef14377088853dd153a1d73d8e6e1488a6ce11b))
+
+### Features
+
+- Add ha_get_automation_traces tool for debugging automations (#170)
+  ([#170](https://github.com/homeassistant-ai/ha-mcp/pull/170),
+  [`3a3bd8a`](https://github.com/homeassistant-ai/ha-mcp/commit/3a3bd8a3db441233de2f0c2cd361479667b20892))
+
+
 ## v4.1.0 (2025-11-27)
 
 ### Chores
