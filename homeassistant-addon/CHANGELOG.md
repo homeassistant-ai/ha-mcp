@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.5.0 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`44f6adf`](https://github.com/homeassistant-ai/ha-mcp/commit/44f6adf4abc8db6509c96d2a5b43d027ed526f65))
+
+### Features
+
+- Add addon management tools (ha_list_addons, ha_list_available_addons) (#174)
+  ([#174](https://github.com/homeassistant-ai/ha-mcp/pull/174),
+  [`80feed9`](https://github.com/homeassistant-ai/ha-mcp/commit/80feed9adbd8d131e93b24d7d3c63f345b5b7726))
+
+
 ## v4.4.0 (2025-11-28)
 
 ### Chores
