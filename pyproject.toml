@@ -45,8 +45,8 @@ ha-mcp-web = "ha_mcp.__main__:main_web"
 ha-mcp-sse = "ha_mcp.__main__:main_sse"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-packages = { find = { where = ["src"], include = ["ha_mcp*"] } }
+package-dir = {"" = "src", "tests" = "tests"}
+packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
 ha_mcp = ["py.typed"]
