@@ -251,13 +251,14 @@ async def list_available_addons(
                 pass
 
 
-def register_addon_tools(mcp: Any, client: HomeAssistantClient) -> None:
+def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> None:
     """
     Register add-on management tools with the MCP server.
 
     Args:
         mcp: FastMCP server instance
         client: Home Assistant REST client
+        **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
 
     @mcp.tool(annotations={"readOnlyHint": True})
