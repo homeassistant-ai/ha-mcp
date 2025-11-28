@@ -349,13 +349,14 @@ async def restore_backup(
                 pass  # Ignore errors during cleanup
 
 
-def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient) -> None:
+def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs) -> None:
     """
     Register backup and restore tools with the MCP server.
 
     Args:
         mcp: FastMCP server instance
         client: Home Assistant REST client
+        **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
     # Generate dynamic backup description based on BACKUP_HINT config
     backup_hint_text = _get_backup_hint_text()

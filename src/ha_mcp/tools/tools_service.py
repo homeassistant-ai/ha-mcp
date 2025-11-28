@@ -4,15 +4,17 @@ Service call and device operation tools for Home Assistant MCP server.
 This module provides service execution and WebSocket-enabled operation monitoring tools.
 """
 
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
-from pydantic import Field
 
 from .util_helpers import parse_json_param
 
 
-def register_service_tools(mcp, client, device_tools, **kwargs):
+def register_service_tools(mcp, client, **kwargs):
     """Register service call and operation monitoring tools with the MCP server."""
+    device_tools = kwargs.get("device_tools")
+    if not device_tools:
+        raise ValueError("device_tools is required for service tools registration")
 
     @mcp.tool
     async def ha_call_service(

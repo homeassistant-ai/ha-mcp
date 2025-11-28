@@ -12,8 +12,11 @@ from .helpers import log_tool_usage
 from .util_helpers import add_timezone_metadata, parse_string_list_param
 
 
-def register_search_tools(mcp, client, smart_tools, **kwargs):
+def register_search_tools(mcp, client, **kwargs):
     """Register search and discovery tools with the MCP server."""
+    smart_tools = kwargs.get("smart_tools")
+    if not smart_tools:
+        raise ValueError("smart_tools is required for search tools registration")
 
     @mcp.tool(annotations={"readOnlyHint": True})
     @log_tool_usage
