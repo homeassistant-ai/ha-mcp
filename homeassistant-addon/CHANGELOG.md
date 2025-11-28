@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.7.1 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`698ed11`](https://github.com/homeassistant-ai/ha-mcp/commit/698ed1111dd7d9c36b2448e31bb3a48b7a03ae75))
+
+### Documentation
+
+- Update README and addon docs for new v4.x tools (#178)
+  ([#178](https://github.com/homeassistant-ai/ha-mcp/pull/178),
+  [`ad385b7`](https://github.com/homeassistant-ai/ha-mcp/commit/ad385b7e0d12a970bad51c7405fa6726f548d245))
+
+### Refactoring
+
+- Auto-discover tool modules to prevent merge conflicts (#183)
+  ([#183](https://github.com/homeassistant-ai/ha-mcp/pull/183),
+  [`4e78db1`](https://github.com/homeassistant-ai/ha-mcp/commit/4e78db1430930a273ce6f040c15b72d64c1105ef))
+
+
 ## v4.7.0 (2025-11-28)
 
 ### Bug Fixes
