@@ -47,6 +47,7 @@
 ### 🔧 Manage
 - **Automations and Scripts**: Create, modify, delete, enable/disable, and trigger automations
 - **Helper Entities**: Manage input_boolean, input_number, input_select, input_text, input_datetime, input_button
+- **Groups**: Create and manage entity groups for batch control
 - **Dashboards**: Create, update, delete Lovelace dashboards with strategy support
 - **Areas and Floors**: Organize your smart home with areas and floor hierarchy
 - **Labels**: Create and assign labels to entities and areas
@@ -56,6 +57,14 @@
 - **Blueprints**: Import and manage automation/script blueprints
 - **Device Registry**: View and manage device information
 - **Backup and Restore**: Create fast local backups and restore with safety mechanisms
+- **Add-ons**: List installed and available add-ons (Supervisor only)
+
+### 📊 Monitor & Debug
+- **State History**: Query entity state changes over time with flexible time ranges
+- **Long-term Statistics**: Access sensor statistics for energy, climate, and other data
+- **Camera Snapshots**: Capture and retrieve images from camera entities
+- **Automation Traces**: Debug automations by viewing execution traces
+- **Zigbee/ZHA Devices**: Inspect ZHA devices with endpoints and cluster details
 
 ---
 
@@ -283,7 +292,7 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 
 ---
 
-## 🛠️ Available Tools (71 tools)
+## 🛠️ Available Tools (82 tools)
 
 <details>
 <summary><b>🔍 Search & Discovery (4 tools)</b></summary>
@@ -390,6 +399,16 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 </details>
 
 <details>
+<summary><b>👥 Groups (3 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_list_groups` | List all entity groups |
+| `ha_config_set_group` | Create/update entity group |
+| `ha_config_remove_group` | Delete entity group |
+</details>
+
+<details>
 <summary><b>✅ Todo Lists (5 tools)</b></summary>
 
 | Tool | Description |
@@ -431,6 +450,49 @@ Use the public url provided and add your secret path like so `https://XYZ.tryclo
 | `ha_update_device` | Update device properties |
 | `ha_remove_device` | Remove device from registry |
 | `ha_rename_entity` | Rename entity ID |
+</details>
+
+<details>
+<summary><b>📡 ZHA & Integration Tools (2 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_get_zha_devices` | List ZHA (Zigbee) devices with endpoints and clusters |
+| `ha_get_entity_integration_source` | Get integration source for any entity |
+</details>
+
+<details>
+<summary><b>🔌 Add-ons (2 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_list_addons` | List installed add-ons (Supervisor only) |
+| `ha_list_available_addons` | List available add-ons from repositories |
+</details>
+
+<details>
+<summary><b>📷 Camera (1 tool)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_get_camera_image` | Capture and retrieve camera snapshot |
+</details>
+
+<details>
+<summary><b>📈 History & Statistics (2 tools)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_get_history` | Query entity state history with time range |
+| `ha_get_statistics` | Get long-term statistics for sensors |
+</details>
+
+<details>
+<summary><b>🐞 Automation Traces (1 tool)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `ha_get_automation_traces` | Get execution traces for automation debugging |
 </details>
 
 <details>
