@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.7.0 (2025-11-28)
+
+### Bug Fixes
+
+- **build**: Include tests package for hamcp-test-env script (#177)
+  ([#177](https://github.com/homeassistant-ai/ha-mcp/pull/177),
+  [`397d4e8`](https://github.com/homeassistant-ai/ha-mcp/commit/397d4e8f8bc628a0fcfd05698b277cd27d4e5924))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`a08b010`](https://github.com/homeassistant-ai/ha-mcp/commit/a08b01091e1444dae936d4e8cf754b888bfdb7fb))
+
+### Features
+
+- Add historical data access tools (history + statistics) (#176)
+  ([#176](https://github.com/homeassistant-ai/ha-mcp/pull/176),
+  [`b182db1`](https://github.com/homeassistant-ai/ha-mcp/commit/b182db1c90fdecb291bdaaa8742d49bc0ab53822))
+
+
 ## v4.6.0 (2025-11-28)
 
 ### Chores
