@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.6.0 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`ca6f6bf`](https://github.com/homeassistant-ai/ha-mcp/commit/ca6f6bf37871ae9c3b06fcb9da0b03f94612bb4b))
+
+### Features
+
+- Add ha_get_camera_image tool to retrieve camera snapshots (#175)
+  ([#175](https://github.com/homeassistant-ai/ha-mcp/pull/175),
+  [`5ea3fb3`](https://github.com/homeassistant-ai/ha-mcp/commit/5ea3fb3beab312bb3831e7039e36317f0ab2a076))
+
+
 ## v4.5.0 (2025-11-28)
 
 ### Chores
