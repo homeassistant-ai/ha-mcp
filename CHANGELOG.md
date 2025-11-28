@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.3.0 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`b5721f5`](https://github.com/homeassistant-ai/ha-mcp/commit/b5721f5bcef7435da677adead5d61113954e43ce))
+
+### Features
+
+- Add Group management tools (#171) ([#171](https://github.com/homeassistant-ai/ha-mcp/pull/171),
+  [`aa70234`](https://github.com/homeassistant-ai/ha-mcp/commit/aa702343473794981bd0db6a33c6d8c8f1ee5392))
+
+
 ## v4.2.0 (2025-11-28)
 
 ### Chores
