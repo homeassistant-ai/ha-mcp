@@ -262,7 +262,7 @@ If the add-on is slow or unresponsive:
 
 ## Available Tools
 
-The add-on provides 80+ MCP tools for controlling Home Assistant:
+The add-on provides 82 MCP tools for controlling Home Assistant:
 
 ### Core Tools
 - `ha_search_entities` - Fuzzy entity search
