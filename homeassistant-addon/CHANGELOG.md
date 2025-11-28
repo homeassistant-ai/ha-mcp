@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.4.0 (2025-11-28)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`91d98d6`](https://github.com/homeassistant-ai/ha-mcp/commit/91d98d6e2df6929ffaaeaef360617d36364cc2ef))
+
+### Features
+
+- **tools**: Add ZHA device detection and integration source tools (#172)
+  ([#172](https://github.com/homeassistant-ai/ha-mcp/pull/172),
+  [`6df952a`](https://github.com/homeassistant-ai/ha-mcp/commit/6df952a693cab3b4376680ed245d72a76f340304))
+
+
 ## v4.3.0 (2025-11-28)
 
 ### Chores
