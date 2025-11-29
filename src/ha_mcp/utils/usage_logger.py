@@ -29,14 +29,21 @@ class UsageLogger:
     """Async disk logger for MCP tool usage tracking."""
 
     def __init__(self, log_file_path: str = "logs/mcp_usage.jsonl"):
+        self._enabled = True
         self.log_file_path = Path(log_file_path)
-        self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Directory creation failed (e.g., read-only filesystem when running via uvx)
+            # Disable logging silently to avoid disrupting the MCP server
+            self._enabled = False
 
         # Thread-safe queue for log entries
         self._log_queue: Queue = Queue()
         self._logger_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._start_logger_thread()
+        if self._enabled:
+            self._start_logger_thread()
 
     def _start_logger_thread(self) -> None:
         """Start background thread for disk writes."""
@@ -81,6 +88,8 @@ class UsageLogger:
         user_context: str | None = None,
     ) -> None:
         """Log tool usage (non-blocking)."""
+        if not self._enabled:
+            return
         try:
             log_entry = ToolUsageLog(
                 timestamp=datetime.now(UTC).isoformat(),
