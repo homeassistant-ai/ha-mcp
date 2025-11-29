@@ -196,8 +196,13 @@ class HomeAssistantWebSocketClient:
             self._state.reset_connection()
 
             # Connect to WebSocket
+            # Include Authorization header for Supervisor proxy compatibility
+            # (required when connecting via http://supervisor/core/websocket)
             self.websocket = await websockets.connect(
-                self.ws_url, ping_interval=30, ping_timeout=10
+                self.ws_url,
+                ping_interval=30,
+                ping_timeout=10,
+                additional_headers={"Authorization": f"Bearer {self.token}"},
             )
             self._state.mark_connected()
 
