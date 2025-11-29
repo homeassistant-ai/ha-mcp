@@ -76,7 +76,7 @@ Choose the installation method that best fits your setup:
 
 **Best for:** Claude Desktop users on any platform
 
-> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
+> **Platform guides:** [macOS](docs/macOS-uv-guide.md) | [Windows](docs/Windows-uv-guide.md)
 
 **Prerequisites:**
 - [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
