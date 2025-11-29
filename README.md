@@ -159,8 +159,6 @@ cloudflared tunnel --url http://localhost:8086
 Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
 </details>
 
-**Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
-
 ---
 
 ### Method 2: Home Assistant Add-on
