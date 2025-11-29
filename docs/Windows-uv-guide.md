@@ -4,6 +4,11 @@ _Based on steps shared by @kingbear2._
 
 This guide walks through running the ha-mcp server locally on Windows with Claude using the [uv](https://docs.astral.sh/uv/) package manager. Expect the process to take about 10 minutes.
 
+## Prerequisites
+
+- [Claude Desktop](https://claude.ai/download) - Works with a free Claude account
+- A Home Assistant instance with a long-lived access token
+
 ## 1. Install uv
 
 Open **PowerShell** or **cmd** and run:
