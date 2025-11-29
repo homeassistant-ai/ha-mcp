@@ -244,7 +244,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_label(
         label_id: Annotated[

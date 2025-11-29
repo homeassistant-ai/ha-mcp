@@ -188,7 +188,7 @@ def register_service_tools(mcp, client, **kwargs):
                 },
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def ha_get_operation_status(
         operation_id: str, timeout_seconds: int = 10
     ) -> dict[str, Any]:
@@ -227,7 +227,7 @@ def register_service_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def ha_get_bulk_status(operation_ids: list[str]) -> dict[str, Any]:
         """Check status of multiple WebSocket-monitored operations."""
         result = await device_tools.get_bulk_operation_status(

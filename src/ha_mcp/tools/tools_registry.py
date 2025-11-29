@@ -495,7 +495,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "device_id": device_id,
             }
 
-    @mcp.tool()
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_remove_device(
         device_id: Annotated[

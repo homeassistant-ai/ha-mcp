@@ -455,7 +455,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_remove_todo_item(
         entity_id: Annotated[
