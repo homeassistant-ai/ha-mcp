@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Automation Config"})
     @log_tool_usage
     async def ha_config_get_automation(
         identifier: Annotated[
@@ -80,7 +80,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Automation"})
     @log_tool_usage
     async def ha_config_set_automation(
         config: Annotated[
@@ -221,7 +221,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Automation"})
     @log_tool_usage
     async def ha_config_remove_automation(
         identifier: Annotated[

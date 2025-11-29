@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant script configuration tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Script Config"})
     @log_tool_usage
     async def ha_config_get_script(
         script_id: Annotated[
@@ -59,7 +59,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Script"})
     @log_tool_usage
     async def ha_config_set_script(
         script_id: Annotated[
@@ -198,7 +198,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Script"})
     @log_tool_usage
     async def ha_config_remove_script(
         script_id: Annotated[

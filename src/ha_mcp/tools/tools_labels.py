@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant label management tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Labels"})
     @log_tool_usage
     async def ha_config_list_labels() -> dict[str, Any]:
         """
@@ -72,7 +72,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Label Details"})
     @log_tool_usage
     async def ha_config_get_label(
         label_id: Annotated[
@@ -141,7 +141,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Label"})
     @log_tool_usage
     async def ha_config_set_label(
         name: Annotated[str, Field(description="Display name for the label")],
@@ -244,7 +244,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Label"})
     @log_tool_usage
     async def ha_config_remove_label(
         label_id: Annotated[
@@ -299,7 +299,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Assign Label to Entity"})
     @log_tool_usage
     async def ha_assign_label(
         entity_id: Annotated[

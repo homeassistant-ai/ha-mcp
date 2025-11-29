@@ -18,7 +18,7 @@ def register_search_tools(mcp, client, **kwargs):
     if not smart_tools:
         raise ValueError("smart_tools is required for search tools registration")
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Search Entities"})
     @log_tool_usage
     async def ha_search_entities(
         query: str,
@@ -250,7 +250,7 @@ def register_search_tools(mcp, client, **kwargs):
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Overview"})
     @log_tool_usage
     async def ha_get_overview(
         detail_level: Annotated[
@@ -297,7 +297,7 @@ def register_search_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Deep Search"})
     @log_tool_usage
     async def ha_deep_search(
         query: str,
@@ -343,7 +343,7 @@ def register_search_tools(mcp, client, **kwargs):
         result = await smart_tools.deep_search(query, parsed_search_types, limit)
         return cast(dict[str, Any], result)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Entity State"})
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
         """Get detailed state information for a Home Assistant entity with timezone metadata."""

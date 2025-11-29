@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Integrations"})
     @log_tool_usage
     async def ha_list_integrations(
         query: str | None = None,

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Input Helpers"})
     @log_tool_usage
     async def ha_config_list_helpers(
         helper_type: Annotated[
@@ -98,7 +98,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Helper"})
     @log_tool_usage
     async def ha_config_set_helper(
         helper_type: Annotated[
@@ -467,7 +467,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Helper"})
     @log_tool_usage
     async def ha_config_remove_helper(
         helper_type: Annotated[

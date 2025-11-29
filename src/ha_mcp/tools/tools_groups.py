@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant entity group management tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Groups"})
     @log_tool_usage
     async def ha_config_list_groups() -> dict[str, Any]:
         """
@@ -84,7 +84,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Group"})
     @log_tool_usage
     async def ha_config_set_group(
         object_id: Annotated[
@@ -245,7 +245,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Group"})
     @log_tool_usage
     async def ha_config_remove_group(
         object_id: Annotated[

@@ -80,7 +80,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_HISTORY_LIMIT = 100
     MAX_HISTORY_LIMIT = 1000
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Entity History"})
     @log_tool_usage
     async def ha_get_history(
         entity_ids: Annotated[
@@ -347,7 +347,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Statistics"})
     @log_tool_usage
     async def ha_get_statistics(
         entity_ids: Annotated[
