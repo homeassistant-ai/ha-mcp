@@ -221,7 +221,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_automation(
         identifier: Annotated[

@@ -205,7 +205,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_response["name"] = name
             return error_response
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_area(
         area_id: Annotated[
@@ -428,7 +428,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_response["name"] = name
             return error_response
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_floor(
         floor_id: Annotated[

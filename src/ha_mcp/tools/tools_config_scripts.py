@@ -198,7 +198,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_script(
         script_id: Annotated[

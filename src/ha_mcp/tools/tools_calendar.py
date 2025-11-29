@@ -273,7 +273,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "suggestions": suggestions,
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True})
     @log_tool_usage
     async def ha_config_remove_calendar_event(
         entity_id: Annotated[
