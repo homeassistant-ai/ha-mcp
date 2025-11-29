@@ -174,7 +174,16 @@ class HomeAssistantWebSocketClient:
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
-        self.ws_url = f"{scheme}://{parsed.netloc}/api/websocket"
+
+        # Handle Supervisor proxy case: http://supervisor/core -> ws://supervisor/core/websocket
+        # For regular HA URLs: http://ha.local:8123 -> ws://ha.local:8123/api/websocket
+        if parsed.path and parsed.path != "/":
+            # Supervisor proxy or URL with path - use path + /websocket
+            base_path = parsed.path.rstrip("/")
+            self.ws_url = f"{scheme}://{parsed.netloc}{base_path}/websocket"
+        else:
+            # Standard Home Assistant URL - use /api/websocket
+            self.ws_url = f"{scheme}://{parsed.netloc}/api/websocket"
 
     async def connect(self) -> bool:
         """Connect to Home Assistant WebSocket API.
