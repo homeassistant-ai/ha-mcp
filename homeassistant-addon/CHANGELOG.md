@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v4.7.2 (2025-11-29)
+
+### Bug Fixes
+
+- Handle None values in update entity attributes (#192)
+  ([#192](https://github.com/homeassistant-ai/ha-mcp/pull/192),
+  [`a04c7f2`](https://github.com/homeassistant-ai/ha-mcp/commit/a04c7f2d02dfa0cdd65833ced68f010ff3ce30e6))
+
+### Chores
+
+- Add idempotentHint, title, and tags to all tools (#190)
+  ([#190](https://github.com/homeassistant-ai/ha-mcp/pull/190),
+  [`2f55072`](https://github.com/homeassistant-ai/ha-mcp/commit/2f55072f1ca61cff19fc3f96fe2f31121dcff6b2))
+
+- Add MCP tool annotations for readOnlyHint and destructiveHint (#184)
+  ([#184](https://github.com/homeassistant-ai/ha-mcp/pull/184),
+  [`4777d7e`](https://github.com/homeassistant-ai/ha-mcp/commit/4777d7e917209000d7c158c77d81d20fa73f0767))
+
+- Remove obsolete run scripts
+  ([`598e397`](https://github.com/homeassistant-ai/ha-mcp/commit/598e3970cc455bcbdc75ffa7ec0c80f9a503ce5f))
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`34b6d0b`](https://github.com/homeassistant-ai/ha-mcp/commit/34b6d0b2f460fb7dd64d982abf4c4d6577b07b79))
+
+### Documentation
+
+- Add macOS UV setup guide (#191) ([#191](https://github.com/homeassistant-ai/ha-mcp/pull/191),
+  [`3947ad7`](https://github.com/homeassistant-ai/ha-mcp/commit/3947ad772203a0209e18628c685390e3f8b207e7))
+
+- Remove duplicate CONTRIBUTING.md reference
+  ([`a57e315`](https://github.com/homeassistant-ai/ha-mcp/commit/a57e315c74fdaf8b8e87c38689f41390baaf8022))
+
+- Reorder installation methods in README (#188)
+  ([#188](https://github.com/homeassistant-ai/ha-mcp/pull/188),
+  [`bbb37d3`](https://github.com/homeassistant-ai/ha-mcp/commit/bbb37d32ace25f459124a4b9c22537167a159952))
+
+
 ## v4.7.1 (2025-11-28)
 
 ### Chores
