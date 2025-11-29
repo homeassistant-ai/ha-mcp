@@ -113,6 +113,21 @@ Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 </details>
 
 <details>
+<summary><b>🆚 VSCode (GitHub Copilot and others)</b></summary>
+
+**Prerequisite:** Install uvx first
+- Windows: `winget install astral-sh.uv -e`
+- macOS: `brew install uv`
+
+**One-click install:**
+
+[![Install in VSCode](https://img.shields.io/badge/VSCode-Install_Home_Assistant_MCP-0098FF?style=flat-square&logo=visualstudiocode&logoColor=ffffff)](vscode:mcp/install?%7B%22name%22%3A%22Home%20Assistant%22%2C%22inputs%22%3A%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-url%22%2C%22description%22%3A%22Your%20Home%20Assistant%20URL%20(ex%3A%20http%3A%2F%2Fhomeassistant.local%3A8123)%22%2C%22default%22%3A%22http%3A%2F%2Fhomeassistant.local%3A8123%22%2C%22password%22%3Afalse%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-token%22%2C%22description%22%3A%22Your%20long%20lived%20access%20token%20(generate%20in%20your%20profile%20page%2C%20Security%20tab)%22%2C%22password%22%3Atrue%7D%5D%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22ha-mcp%22%5D%2C%22env%22%3A%7B%22HOMEASSISTANT_URL%22%3A%22%24%7Binput%3Ahomeassistant-url%7D%22%2C%22HOMEASSISTANT_TOKEN%22%3A%22%24%7Binput%3Ahomeassistant-token%7D%22%7D%7D)
+
+Clicking the button will prompt you for your Home Assistant URL and token.
+
+</details>
+
+<details>
 <summary><b>💻 Claude Code</b></summary>
 
 ```bash
