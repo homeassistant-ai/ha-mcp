@@ -343,7 +343,8 @@ def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
 def _categorize_update(entity_id: str, attributes: dict[str, Any]) -> str:
     """Categorize an update entity based on its entity_id and attributes."""
     entity_lower = entity_id.lower()
-    title_lower = attributes.get("title", "").lower()
+    # Use 'or ""' to handle both missing keys AND explicit None values
+    title_lower = (attributes.get("title") or "").lower()
 
     # Core update
     if "home_assistant_core" in entity_lower or (
