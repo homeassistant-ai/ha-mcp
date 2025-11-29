@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.7.3 (2025-11-29)
+
+### Bug Fixes
+
+- Correct WebSocket URL construction for Supervisor proxy (#193)
+  ([#193](https://github.com/homeassistant-ai/ha-mcp/pull/193),
+  [`2084e22`](https://github.com/homeassistant-ai/ha-mcp/commit/2084e22ebf0f43e9b95d90d928984d53d83be04b))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`4b096b2`](https://github.com/homeassistant-ai/ha-mcp/commit/4b096b264daa6f7e4d09de5f39a44d8fb2cb602e))
+
+
 ## v4.7.2 (2025-11-29)
 
 ### Bug Fixes
