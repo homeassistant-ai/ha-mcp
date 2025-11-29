@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.7.4 (2025-11-29)
+
+### Bug Fixes
+
+- Handle read-only filesystem in usage logger (#196)
+  ([#196](https://github.com/homeassistant-ai/ha-mcp/pull/196),
+  [`1cf4be9`](https://github.com/homeassistant-ai/ha-mcp/commit/1cf4be9f72ea4b099e1b2e8bc93b09c5bf975840))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`3291b15`](https://github.com/homeassistant-ai/ha-mcp/commit/3291b15facd1bbbb26669c8c967e7f291480046a))
+
+### Documentation
+
+- Add VS Code one-click install button (#195)
+  ([#195](https://github.com/homeassistant-ai/ha-mcp/pull/195),
+  [`9511208`](https://github.com/homeassistant-ai/ha-mcp/commit/9511208c8ef5d692cc3c62fc9bad83810f8316cd))
+
+
 ## v4.7.3 (2025-11-29)
 
 ### Bug Fixes
