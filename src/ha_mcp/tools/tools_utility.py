@@ -26,7 +26,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_LOGBOOK_LIMIT = 50
     MAX_LOGBOOK_LIMIT = 500
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Logbook Entries"})
     @log_tool_usage
     async def ha_get_logbook(
         hours_back: int = 1,
@@ -154,7 +154,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["docs"], "title": "Evaluate Template"})
     @log_tool_usage
     async def ha_eval_template(
         template: str, timeout: int = 3, report_errors: bool = True

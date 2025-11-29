@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def register_zha_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register ZHA device detection and management tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["zha"], "title": "Get ZHA Devices"})
     @log_tool_usage
     async def ha_get_zha_devices(
         area_id: Annotated[
@@ -187,7 +187,7 @@ def register_zha_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get Device Integration"})
     @log_tool_usage
     async def ha_get_device_integration(
         device_id: Annotated[

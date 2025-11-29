@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant trace debugging tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["trace"], "title": "Get Automation Traces"})
     @log_tool_usage
     async def ha_get_automation_traces(
         automation_id: Annotated[

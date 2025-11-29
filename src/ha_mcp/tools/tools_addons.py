@@ -261,7 +261,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> Non
         **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "List Installed Add-ons"})
     @log_tool_usage
     async def ha_list_addons(
         include_stats: Annotated[
@@ -298,7 +298,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> Non
         """
         return await list_addons(client, include_stats)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "List Available Add-ons"})
     @log_tool_usage
     async def ha_list_available_addons(
         repository: Annotated[

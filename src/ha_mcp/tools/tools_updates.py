@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant update management tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["update"], "title": "List Available Updates"})
     @log_tool_usage
     async def ha_list_updates(
         include_skipped: bool = False,
@@ -138,7 +138,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system", "docs"], "title": "Get Release Notes"})
     @log_tool_usage
     async def ha_get_release_notes(
         entity_id: str,
@@ -248,7 +248,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to get release notes: {str(e)}",
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Version"})
     @log_tool_usage
     async def ha_get_system_version() -> dict[str, Any]:
         """

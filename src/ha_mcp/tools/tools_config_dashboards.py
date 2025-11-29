@@ -50,7 +50,7 @@ def _get_resources_dir() -> Path:
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["dashboard"], "title": "List Dashboards"})
     @log_tool_usage
     async def ha_config_list_dashboards() -> dict[str, Any]:
         """
@@ -84,7 +84,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             logger.error(f"Error listing dashboards: {e}")
             return {"success": False, "action": "list", "error": str(e)}
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["dashboard"], "title": "Get Dashboard Config"})
     @log_tool_usage
     async def ha_config_get_dashboard(
         url_path: Annotated[
@@ -157,7 +157,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "tags": ["dashboard"], "title": "Create or Update Dashboard"})
     @log_tool_usage
     async def ha_config_set_dashboard(
         url_path: Annotated[
@@ -411,7 +411,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "tags": ["dashboard"], "title": "Update Dashboard Metadata"})
     @log_tool_usage
     async def ha_config_update_dashboard_metadata(
         dashboard_id: Annotated[
@@ -523,7 +523,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["dashboard"], "title": "Delete Dashboard"})
     @log_tool_usage
     async def ha_config_delete_dashboard(
         dashboard_id: Annotated[
@@ -613,7 +613,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["dashboard", "docs"], "title": "Get Dashboard Guide"})
     @log_tool_usage
     async def ha_get_dashboard_guide() -> dict[str, Any]:
         """
@@ -655,7 +655,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["dashboard", "docs"], "title": "Get Card Types"})
     @log_tool_usage
     async def ha_get_card_types() -> dict[str, Any]:
         """
@@ -691,7 +691,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["dashboard", "docs"], "title": "Get Card Documentation"})
     @log_tool_usage
     async def ha_get_card_documentation(
         card_type: Annotated[

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant blueprint management tools."""
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "List Blueprints"})
     @log_tool_usage
     async def ha_list_blueprints(
         domain: Annotated[
@@ -108,7 +108,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "Get Blueprint Details"})
     @log_tool_usage
     async def ha_get_blueprint(
         path: Annotated[
@@ -228,7 +228,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool
+    @mcp.tool(annotations={"tags": ["blueprint"], "title": "Import Blueprint"})
     @log_tool_usage
     async def ha_import_blueprint(
         url: Annotated[

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register entity registry and device registry management tools."""
 
-    @mcp.tool()
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Rename Entity"})
     @log_tool_usage
     async def ha_rename_entity(
         entity_id: Annotated[
@@ -152,7 +152,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "List Devices"})
     @log_tool_usage
     async def ha_list_devices(
         area_id: Annotated[
@@ -254,7 +254,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to list devices: {str(e)}",
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get Device Details"})
     @log_tool_usage
     async def ha_get_device(
         device_id: Annotated[
@@ -350,7 +350,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "device_id": device_id,
             }
 
-    @mcp.tool()
+    @mcp.tool(annotations={"idempotentHint": True, "tags": ["system"], "title": "Update Device"})
     @log_tool_usage
     async def ha_update_device(
         device_id: Annotated[
@@ -495,7 +495,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "device_id": device_id,
             }
 
-    @mcp.tool(annotations={"destructiveHint": True})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["system"], "title": "Remove Device"})
     @log_tool_usage
     async def ha_remove_device(
         device_id: Annotated[
