@@ -40,7 +40,7 @@ RELOAD_TARGETS = {
 def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant system management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Check Configuration"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Check Configuration"})
     @log_tool_usage
     async def ha_check_config() -> dict[str, Any]:
         """
@@ -79,7 +79,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"title": "Restart Home Assistant"})
+    @mcp.tool(annotations={"tags": ["system"], "title": "Restart Home Assistant"})
     @log_tool_usage
     async def ha_restart(
         confirm: bool = False,
@@ -182,7 +182,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to restart Home Assistant: {str(e)}",
             }
 
-    @mcp.tool(annotations={"title": "Reload Core Components"})
+    @mcp.tool(annotations={"tags": ["system"], "title": "Reload Core Components"})
     @log_tool_usage
     async def ha_reload_core(
         target: str = "all",
@@ -300,7 +300,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Info"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Info"})
     @log_tool_usage
     async def ha_get_system_info() -> dict[str, Any]:
         """
@@ -344,7 +344,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to get system info: {str(e)}",
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Health"})
     @log_tool_usage
     async def ha_get_system_health() -> dict[str, Any]:
         """

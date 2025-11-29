@@ -23,7 +23,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # AREA TOOLS
     # ============================================================
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["area"], "title": "List Areas"})
     @log_tool_usage
     async def ha_config_list_areas() -> dict[str, Any]:
         """
@@ -63,7 +63,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Area"})
+    @mcp.tool(annotations={"idempotentHint": True, "tags": ["area"], "title": "Create or Update Area"})
     @log_tool_usage
     async def ha_config_set_area(
         name: Annotated[
@@ -205,7 +205,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_response["name"] = name
             return error_response
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area"})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["area"], "title": "Remove Area"})
     @log_tool_usage
     async def ha_config_remove_area(
         area_id: Annotated[
@@ -258,7 +258,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # FLOOR TOOLS
     # ============================================================
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["floor"], "title": "List Floors"})
     @log_tool_usage
     async def ha_config_list_floors() -> dict[str, Any]:
         """
@@ -298,7 +298,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "title": "Create or Update Floor"})
+    @mcp.tool(annotations={"idempotentHint": True, "tags": ["floor"], "title": "Create or Update Floor"})
     @log_tool_usage
     async def ha_config_set_floor(
         name: Annotated[
@@ -428,7 +428,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_response["name"] = name
             return error_response
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Floor"})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["floor"], "title": "Remove Floor"})
     @log_tool_usage
     async def ha_config_remove_floor(
         floor_id: Annotated[
