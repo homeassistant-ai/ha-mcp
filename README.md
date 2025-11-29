@@ -72,7 +72,98 @@
 
 Choose the installation method that best fits your setup:
 
-### Method 1: Home Assistant Add-on (Recommended)
+### Method 1: Running Python with UV (Recommended for Claude Desktop)
+
+**Best for:** Claude Desktop users on any platform
+
+> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
+
+**Prerequisites:**
+- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
+  - Windows: winget install astral-sh.uv -e
+  - MacOS: brew install uv
+- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
+- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
+
+**Client Configuration:**
+
+<details>
+<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+
+**Config file:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://localhost:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+      }
+    }
+  }
+}
+```
+Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
+
+</details>
+
+<details>
+<summary><b>💻 Claude Code</b></summary>
+
+```bash
+claude mcp add --transport stdio home-assistant \
+  --env HOMEASSISTANT_URL=http://localhost:8123 \
+  --env HOMEASSISTANT_TOKEN=your_long_lived_token \
+  -- uvx ha-mcp
+```
+
+</details>
+
+<details>
+<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
+
+Run the MCP server with uvx (replace the values of the environement variables):
+
+Windows:
+```bash
+set HOMEASSISTANT_URL=http://localhost:8123
+set HOMEASSISTANT_TOKEN=your_long_lived_token
+set MCP_PORT=8086
+set MCP_SECRET_PATH=/__my_secret__
+uvx --from ha-mcp ha-mcp-web
+```
+Others:
+```bash
+export HOMEASSISTANT_URL=http://localhost:8123
+export HOMEASSISTANT_TOKEN=your_long_lived_token
+export MCP_PORT=8086
+export MCP_SECRET_PATH=/__my_secret__
+uvx --from ha-mcp ha-mcp-web
+```
+
+Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
+
+Easiest option is to download [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release)
+
+**In another terminal, start Cloudflare Tunnel:**
+
+```bash
+cloudflared tunnel --url http://localhost:8086
+```
+
+Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
+</details>
+
+**Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
+
+---
+
+### Method 2: Home Assistant Add-on
 
 **Best for:** Users running Home Assistant OS
 
@@ -101,9 +192,9 @@ Choose the installation method that best fits your setup:
 
 ---
 
-### Method 2: Container
+### Method 3: Container
 
-**Best for:** Recommended for Home Assistant Container or when Docker is available
+**Best for:** Home Assistant Container users or when Docker is preferred
 
 **Advantages:**
 - ✅ No installation
@@ -198,97 +289,6 @@ claude mcp add-json home-assistant '{
 ```
 
 </details>
-
----
-
-### Method 3: Running Python with UV
-
-**Best for:** When Docker is not available
-
-> **Windows users:** Follow the [Windows UV setup guide](docs/Windows-uv-guide.md)
-
-**Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-  - Windows: winget install astral-sh.uv -e
-  - MacOS: brew install uv
-- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
-- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
-
-**Client Configuration:**
-
-<details>
-<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
-
-**Config file:**
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "Home Assistant": {
-      "command": "uvx",
-      "args": ["ha-mcp"],
-      "env": {
-        "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
-      }
-    }
-  }
-}
-```
-Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
-
-</details>
-
-<details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add --transport stdio home-assistant \
-  --env HOMEASSISTANT_URL=http://localhost:8123 \
-  --env HOMEASSISTANT_TOKEN=your_long_lived_token \
-  -- uvx ha-mcp
-```
-
-</details>
-
-<details>
-<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
-
-Run the MCP server with uvx (replace the values of the environement variables):
-
-Windows:
-```bash
-set HOMEASSISTANT_URL=http://localhost:8123
-set HOMEASSISTANT_TOKEN=your_long_lived_token
-set MCP_PORT=8086
-set MCP_SECRET_PATH=/__my_secret__
-uvx --from ha-mcp ha-mcp-web
-```
-Others:
-```bash
-export HOMEASSISTANT_URL=http://localhost:8123
-export HOMEASSISTANT_TOKEN=your_long_lived_token
-export MCP_PORT=8086
-export MCP_SECRET_PATH=/__my_secret__
-uvx --from ha-mcp ha-mcp-web
-```
-
-Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
-
-Easiest option is to download [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release)
-
-**In another terminal, start Cloudflare Tunnel:**
-
-```bash
-cloudflared tunnel --url http://localhost:8086
-```
-
-Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
-</details>
-
-**Development:** See [CONTRIBUTING.md](CONTRIBUTING.md) for testing and contribution guidelines.
 
 ---
 
