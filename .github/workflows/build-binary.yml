@@ -74,9 +74,13 @@ jobs:
           # Set dummy env vars so it doesn't fail on missing config
           export HOMEASSISTANT_URL=http://test:8123
           export HOMEASSISTANT_TOKEN=test
-          # Run with timeout and capture output
-          timeout 5 ./dist/ha-mcp 2>&1 | tee output.txt || true
+          # Run binary in background, wait, then kill it
+          ./dist/ha-mcp > output.txt 2>&1 &
+          PID=$!
+          sleep 5
+          kill $PID 2>/dev/null || true
           # Verify FastMCP banner appears (indicates successful startup)
+          cat output.txt
           grep -q "FastMCP" output.txt
           echo "Binary started successfully!"
 
