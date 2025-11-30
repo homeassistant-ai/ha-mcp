@@ -12,7 +12,7 @@ from pathlib import Path
 def extract_tools_from_file(file_path: Path) -> list[dict]:
     """Extract tool definitions from a Python file."""
     tools = []
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8")
     tree = ast.parse(content)
 
     for node in ast.walk(tree):
@@ -73,7 +73,7 @@ def generate_manifest(
     tools: list[dict]
 ):
     """Generate manifest.json from template with discovered tools."""
-    template = json.loads(template_path.read_text())
+    template = json.loads(template_path.read_text(encoding="utf-8"))
 
     # Update tools list
     template["tools"] = tools
@@ -92,7 +92,7 @@ def generate_manifest(
         f"{len(tools)} specialized tools"
     )
 
-    output_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    output_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Generated manifest with {len(tools)} tools -> {output_path}")
 
 
