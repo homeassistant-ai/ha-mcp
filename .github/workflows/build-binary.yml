@@ -1,0 +1,103 @@
+name: Build Standalone Binary
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'ha-mcp.spec'
+      - '.github/workflows/build-binary.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'ha-mcp.spec'
+      - '.github/workflows/build-binary.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ha-mcp-linux
+            binary_ext: ''
+          - os: windows-latest
+            artifact_name: ha-mcp-windows
+            binary_ext: '.exe'
+          - os: macos-latest
+            artifact_name: ha-mcp-macos-arm64
+            binary_ext: ''
+
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .
+          uv pip install --system pyinstaller
+
+      - name: Build binary
+        run: pyinstaller ha-mcp.spec
+
+      - name: Test binary starts correctly (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/ha-mcp
+          # Test that the binary starts and shows the FastMCP banner
+          # Set dummy env vars so it doesn't fail on missing config
+          export HOMEASSISTANT_URL=http://test:8123
+          export HOMEASSISTANT_TOKEN=test
+          # Run with timeout and capture output
+          timeout 5 ./dist/ha-mcp 2>&1 | tee output.txt || true
+          # Verify FastMCP banner appears (indicates successful startup)
+          grep -q "FastMCP" output.txt
+          echo "Binary started successfully!"
+
+      - name: Test binary starts correctly (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:HOMEASSISTANT_URL = "http://test:8123"
+          $env:HOMEASSISTANT_TOKEN = "test"
+          # Start process and capture output
+          $process = Start-Process -FilePath "dist\ha-mcp.exe" -NoNewWindow -PassThru -RedirectStandardOutput "output.txt" -RedirectStandardError "error.txt"
+          Start-Sleep -Seconds 5
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          # Check output
+          $output = Get-Content -Path "output.txt", "error.txt" -Raw -ErrorAction SilentlyContinue
+          Write-Host $output
+          if ($output -match "FastMCP") {
+            Write-Host "Binary started successfully!"
+          } else {
+            Write-Host "Binary failed to start properly"
+            exit 1
+          }
+
+      - name: Rename binary for artifact
+        shell: bash
+        run: |
+          mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+          if-no-files-found: error
