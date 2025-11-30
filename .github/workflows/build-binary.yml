@@ -17,6 +17,10 @@ on:
         required: true
         default: '0.0.0-dev'
 
+# Restrict permissions by default (security best practice)
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
