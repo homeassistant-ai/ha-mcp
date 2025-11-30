@@ -90,7 +90,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['mcp.cli', 'typer', 'click'],
+    excludes=['mcp.cli', 'typer'],  # Keep click - uvicorn needs it
     noarchive=False,
     optimize=0,
 )
