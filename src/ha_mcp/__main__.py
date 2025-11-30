@@ -1,19 +1,50 @@
 """Home Assistant MCP Server."""
 
 import os
-from ha_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
+import sys
 
-# Create server instance once
-_server = HomeAssistantSmartMCPServer()
 
-# FastMCP entry point (for fastmcp.json)
-mcp = _server.mcp
+def _create_server():
+    """Create server instance (deferred to avoid import during smoke test)."""
+    from ha_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
+    return HomeAssistantSmartMCPServer()
+
+
+# Lazy server creation - only create when needed
+_server = None
+
+
+def _get_mcp():
+    """Get the MCP instance, creating server if needed."""
+    global _server
+    if _server is None:
+        _server = _create_server()
+    return _server.mcp
+
+
+# For module-level access (e.g., fastmcp.json referencing ha_mcp.__main__:mcp)
+# This is accessed when the module is imported, so we need deferred creation
+class _DeferredMCP:
+    """Wrapper that defers MCP creation until actually accessed."""
+    def __getattr__(self, name):
+        return getattr(_get_mcp(), name)
+
+    def run(self, *args, **kwargs):
+        return _get_mcp().run(*args, **kwargs)
+
+
+mcp = _DeferredMCP()
 
 
 # CLI entry point (for pyproject.toml) - use FastMCP's built-in runner
 def main() -> None:
     """Run server via CLI using FastMCP's stdio transport."""
-    mcp.run()
+    # Check for smoke test flag
+    if "--smoke-test" in sys.argv:
+        from ha_mcp.smoke_test import main as smoke_test_main
+        sys.exit(smoke_test_main())
+
+    _get_mcp().run()
 
 
 # HTTP entry point for web clients
