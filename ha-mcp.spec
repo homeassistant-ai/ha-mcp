@@ -81,10 +81,29 @@ hiddenimports += [
     'mcp.shared',
 ]
 
-# Add idna codec modules (required for httpx URL parsing)
+# Add commonly missing modules for PyInstaller
 hiddenimports += [
+    # IDNA codec (required for httpx URL parsing)
     'idna.codec',
     'encodings.idna',
+    # Additional encodings that may be needed
+    'encodings.utf_8',
+    'encodings.ascii',
+    'encodings.latin_1',
+    'encodings.punycode',
+    # SSL/TLS support
+    'ssl',
+    '_ssl',
+    # Async backends
+    'asyncio',
+    'asyncio.base_events',
+    'asyncio.events',
+    # JSON support
+    'json',
+    '_json',
+    # Multiprocessing (sometimes needed)
+    'multiprocessing.resource_tracker',
+    'multiprocessing.sharedctypes',
 ]
 
 a = Analysis(
