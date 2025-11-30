@@ -155,12 +155,8 @@ jobs:
           # Copy binary to bundle
           cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
 
-          # Generate manifest.json from template
-          sed -e "s/\${VERSION}/$VERSION/g" \
-              -e "s/\${PLATFORM}/$PLATFORM/g" \
-              -e "s/\${BINARY_EXT}/$BINARY_EXT/g" \
-              -e 's/\${__dirname}/\${__dirname}/g' \
-              mcpb/manifest.template.json > mcpb-bundle/manifest.json
+          # Generate manifest.json with auto-discovered tools
+          python scripts/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
 
           # Create .mcpb file (zip archive)
           cd mcpb-bundle
