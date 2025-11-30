@@ -14,8 +14,9 @@ import sysconfig
 from PyInstaller.utils.hooks import collect_all
 
 # Get project root (spec file is in packaging/binary/)
-SPEC_DIR = os.path.dirname(os.path.abspath(SPECPATH))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(SPEC_DIR))
+# SPECPATH is the directory containing the spec file
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPECPATH)))
+SPEC_DIR = os.path.abspath(SPECPATH)
 
 # Find Python stdlib path dynamically
 stdlib_path = sysconfig.get_paths()['stdlib']
