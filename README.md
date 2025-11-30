@@ -36,11 +36,11 @@ Just talk to Claude naturally. Here are some real examples:
 
 | You Say | What Happens |
 |---------|--------------|
-| *"Pause the evening music automation for 3 days"* | Disables the automation and creates a helper automation to re-enable it later |
-| *"The automation when I work from home doesn't work anymore, check what's going on"* | Analyzes execution traces, finds the bug, and auto-fixes it with improved edge case handling |
-| *"Reduce backyard sprinkler time when humidity is high"* | Modifies that complex formula you wrote last spring in seconds |
-| *"What is on the camera feed right now?"* | Takes a snapshot and analyzes the image |
-| *"Add a camera feed to the right of my main dashboard"* | Finds the dashboard, locates the entity, and updates the configuration |
+| *"Turn off all the lights in the living room"* | Finds entities by room using fuzzy search, controls them in bulk |
+| *"Is everything healthy? Any devices offline?"* | Checks system health, finds unavailable entities, reports issues |
+| *"Create an automation that turns on the porch light at sunset"* | Creates the automation with proper triggers and actions |
+| *"The work-from-home automation doesn't work anymore, check what's going on"* | Analyzes execution traces, finds the bug, and auto-fixes it |
+| *"Add milk to my shopping list"* | Finds your shopping list and adds the item |
 
 No YAML editing. No entity ID lookups. Just describe what you want.
 

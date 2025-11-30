@@ -4,64 +4,60 @@
 
 ## Overview
 
-Home Assistant MCP Server ("ha-mcp") is designed with privacy as a core principle. The server runs entirely on your local machine and communicates only with your own Home Assistant instance.
+Home Assistant MCP Server ("ha-mcp") runs entirely on your local machine and communicates only with your own Home Assistant instance. We are committed to transparency about any data collection.
 
-## Data Collection
+## Anonymous Usage Statistics
 
-### What We Collect
+Ha-mcp might collect anonymous usage statistics to help improve the server. If enabled, this may include:
 
-**Currently, we collect no data.** Ha-mcp operates entirely locally:
+- **Tool usage counts** — which tools are used and how often
+- **Server version** — to understand adoption of updates
+- **Request/response sizes** — to optimize performance (not content)
 
-- No telemetry or analytics are sent to external servers
-- No usage data is collected or transmitted
-- No personal information is gathered
-- All communication occurs directly between Claude Desktop and your local Home Assistant instance
+**What we do NOT collect:**
+- Entity names or IDs
+- Home Assistant configuration
+- Personal information
+- Automation or script content
+- Any data from your smart home devices
 
-### Your Home Assistant Data
+If telemetry is enabled, this anonymous data is sent to our server and used solely to improve ha-mcp. You can control this in the configuration settings.
 
-When you use ha-mcp, Claude Desktop may access data from your Home Assistant instance, including:
+## Bug Reports
 
-- Entity states and attributes
-- Device information
-- Automation and script configurations
-- Historical data and statistics
-- Camera snapshots (when requested)
+Ha-mcp may include a bug reporting feature that allows you to send diagnostic information when you encounter issues. Bug reports are:
 
-This data is processed locally by Claude Desktop and is subject to [Anthropic's Privacy Policy](https://www.anthropic.com/privacy). Ha-mcp itself does not store, log, or transmit this data to any third party.
+- **Only sent with your explicit approval** — the AI assistant will ask before sending
+- **Reviewed with you first** — you'll see what information is included
+- **Anonymized** — personal data should be replaced with generic values before submission
 
-## Future Analytics
+You are always in control of whether to send a bug report.
 
-We may introduce **optional, anonymized usage analytics** in future versions to help improve the server. Any such data collection will:
+## Your Home Assistant Data
 
-- Be strictly **opt-in** with clear disclosure
-- Collect only anonymized, aggregated usage patterns (e.g., which tools are most used)
-- Never include personal information, entity names, or Home Assistant data
-- Be clearly documented before activation
+When you use ha-mcp, Claude Desktop accesses data from your Home Assistant instance, including entity states, automations, and device information. This data:
 
-You will always have the choice to use ha-mcp without any data collection.
+- Is processed locally by Claude Desktop
+- Is subject to [Anthropic's Privacy Policy](https://www.anthropic.com/privacy)
+- Is NOT collected, stored, or transmitted by ha-mcp (except as described above for anonymous statistics)
 
 ## Third-Party Services
 
-Ha-mcp does not integrate with or send data to any third-party services. The only external communication is:
+Ha-mcp communicates with:
 
-- **Your Home Assistant instance** - via the URL and token you provide
-- **Claude Desktop** - the MCP client that runs ha-mcp
+- **Your Home Assistant instance** — via the URL and token you provide
+- **Claude Desktop** — the MCP client that runs ha-mcp
+- **Our telemetry server** — for anonymous usage statistics (if enabled)
 
 ## Data Security
 
-Since ha-mcp runs locally and collects no data:
-
-- Your Home Assistant credentials (URL and token) are stored locally by Claude Desktop
-- No data is transmitted to ha-mcp developers or any external servers
-- All processing occurs on your machine
-
-## Children's Privacy
-
-Ha-mcp is a technical tool intended for smart home management. We do not knowingly collect any information from children.
+- Your Home Assistant credentials are stored locally by Claude Desktop
+- Anonymous telemetry contains no identifying information
+- Bug reports are only sent when you explicitly approve
 
 ## Changes to This Policy
 
-We may update this privacy policy to reflect changes in our practices or for legal reasons. Significant changes will be noted in release notes.
+We may update this privacy policy to reflect changes in our practices. Significant changes will be noted in release notes.
 
 ## Contact
 
@@ -74,8 +70,8 @@ For privacy-related questions or concerns:
 
 | Aspect | Status |
 |--------|--------|
-| Data collected | None |
-| External transmission | None |
-| Third-party sharing | None |
-| Local processing only | Yes |
-| Future analytics | Opt-in only |
+| Anonymous telemetry | Optional (configurable) |
+| Personal data collected | None |
+| Bug reports | User-approved only |
+| Local processing | Yes |
+| Third-party sharing | None (except anonymous stats if enabled) |
