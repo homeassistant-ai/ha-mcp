@@ -5,13 +5,17 @@ PyInstaller spec file for ha-mcp standalone binary.
 This creates a single-file executable that bundles the entire ha-mcp
 MCP server with all dependencies. No Python installation required.
 
-Build with: pyinstaller ha-mcp.spec
+Build with: pyinstaller packaging/binary/ha-mcp.spec
 """
 
 import os
 import sys
 import sysconfig
 from PyInstaller.utils.hooks import collect_all
+
+# Get project root (spec file is in packaging/binary/)
+SPEC_DIR = os.path.dirname(os.path.abspath(SPECPATH))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SPEC_DIR))
 
 # Find Python stdlib path dynamically
 stdlib_path = sysconfig.get_paths()['stdlib']
@@ -107,14 +111,14 @@ hiddenimports += [
 ]
 
 a = Analysis(
-    ['src/ha_mcp/__main__.py'],
-    pathex=[],
+    [os.path.join(PROJECT_ROOT, 'src/ha_mcp/__main__.py')],
+    pathex=[PROJECT_ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['pyinstaller_hooks/runtime_hook.py'],  # Register codecs early
+    runtime_hooks=[os.path.join(SPEC_DIR, 'pyinstaller_hooks/runtime_hook.py')],  # Register codecs early
     excludes=['mcp.cli', 'typer'],  # Keep click - uvicorn needs it
     noarchive=False,
     optimize=0,
