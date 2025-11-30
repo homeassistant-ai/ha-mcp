@@ -7,8 +7,8 @@ on:
     branches: [master]
     paths:
       - 'src/**'
-      - 'ha-mcp.spec'
-      - 'mcpb/**'
+      - 'packaging/binary/**'
+      - 'packaging/mcpb/**'
       - '.github/workflows/build-binary.yml'
   workflow_dispatch:
     inputs:
@@ -76,51 +76,24 @@ jobs:
         shell: pwsh
 
       - name: Build binary
-        run: pyinstaller ha-mcp.spec
+        run: pyinstaller packaging/binary/ha-mcp.spec
 
-      - name: Test binary starts correctly (Unix)
+      - name: Run smoke test (Unix)
         if: runner.os != 'Windows'
         run: |
           chmod +x dist/ha-mcp
-          # Test that the binary starts and shows the FastMCP banner
-          # Set dummy env vars so it doesn't fail on missing config
-          export HOMEASSISTANT_URL=http://test:8123
-          export HOMEASSISTANT_TOKEN=test
-          # Run binary in background, wait, then kill it
-          ./dist/ha-mcp > output.txt 2>&1 &
-          PID=$!
-          sleep 5
-          kill $PID 2>/dev/null || true
-          # Verify FastMCP banner appears (indicates successful startup)
-          cat output.txt
-          grep -q "FastMCP" output.txt
-          echo "Binary started successfully!"
+          # Run the built-in smoke test to verify all libraries are bundled
+          ./dist/ha-mcp --smoke-test
 
-      - name: Test binary starts correctly (Windows)
+      - name: Run smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:HOMEASSISTANT_URL = "http://test:8123"
-          $env:HOMEASSISTANT_TOKEN = "test"
-          # Start process and capture output
-          $process = Start-Process -FilePath "dist\ha-mcp.exe" -NoNewWindow -PassThru -RedirectStandardOutput "output.txt" -RedirectStandardError "error.txt"
-          Start-Sleep -Seconds 10
-          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 1
-          # Check output files
-          Write-Host "=== STDOUT ==="
-          if (Test-Path "output.txt") { Get-Content -Path "output.txt" -Raw } else { Write-Host "(no output.txt)" }
-          Write-Host "=== STDERR ==="
-          if (Test-Path "error.txt") { Get-Content -Path "error.txt" -Raw } else { Write-Host "(no error.txt)" }
-          Write-Host "=== END ==="
-          # Check for success
-          $stdout = if (Test-Path "output.txt") { Get-Content -Path "output.txt" -Raw } else { "" }
-          $stderr = if (Test-Path "error.txt") { Get-Content -Path "error.txt" -Raw } else { "" }
-          if ($stdout -match "FastMCP" -or $stderr -match "FastMCP") {
-            Write-Host "Binary started successfully!"
-          } else {
-            Write-Host "Binary failed to start properly"
-            exit 1
+          # Run the built-in smoke test to verify all libraries are bundled
+          & "dist\ha-mcp.exe" --smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Smoke test failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
           }
 
       - name: Set version
@@ -156,10 +129,10 @@ jobs:
           cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
 
           # Copy icon to bundle
-          cp mcpb/icon.png mcpb-bundle/icon.png
+          cp packaging/mcpb/icon.png mcpb-bundle/icon.png
 
           # Generate manifest.json with auto-discovered tools
-          python scripts/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
+          python packaging/mcpb/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
 
           # Create .mcpb file (zip archive)
           cd mcpb-bundle

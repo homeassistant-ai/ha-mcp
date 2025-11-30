@@ -106,11 +106,11 @@ def main():
     platform = sys.argv[2]
     binary_ext = sys.argv[3] if len(sys.argv) > 3 else ""
 
-    # Paths
+    # Paths - script is in dist/mcpb/, project root is 2 levels up
     script_dir = Path(__file__).parent
-    project_root = script_dir.parent
+    project_root = script_dir.parent.parent
     tools_dir = project_root / "src" / "ha_mcp" / "tools"
-    template_path = project_root / "mcpb" / "manifest.template.json"
+    template_path = script_dir / "manifest.template.json"
     output_path = project_root / "mcpb-bundle" / "manifest.json"
 
     # Ensure output directory exists
