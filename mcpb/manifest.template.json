@@ -1,0 +1,48 @@
+{
+  "manifest_version": "0.3",
+  "name": "ha-mcp",
+  "version": "${VERSION}",
+  "description": "Home Assistant MCP Server - Complete control of Home Assistant through MCP",
+  "display_name": "Home Assistant MCP",
+  "long_description": "A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems. Features include fuzzy entity search, real-time device monitoring, automation management, script execution, and comprehensive smart home control through 20+ specialized tools.",
+  "author": {
+    "name": "Julien",
+    "email": "github@qc-h.net",
+    "url": "https://github.com/homeassistant-ai/ha-mcp"
+  },
+  "license": "MIT",
+  "keywords": ["home-assistant", "smart-home", "automation", "iot", "ai"],
+  "server": {
+    "type": "binary",
+    "entry_point": "ha-mcp${BINARY_EXT}",
+    "mcp_config": {
+      "command": "${__dirname}/ha-mcp${BINARY_EXT}",
+      "args": [],
+      "env": {}
+    }
+  },
+  "compatibility": {
+    "platforms": ["${PLATFORM}"]
+  },
+  "tools": [
+    { "name": "ha_search_entities", "description": "Fuzzy search for Home Assistant entities by name, area, or domain" },
+    { "name": "ha_get_entity", "description": "Get detailed state and attributes of a specific entity" },
+    { "name": "ha_call_service", "description": "Call any Home Assistant service with parameters" },
+    { "name": "ha_control_device", "description": "High-level device control with state verification" },
+    { "name": "ha_config_get_automation", "description": "Get automation configuration by ID" },
+    { "name": "ha_config_set_automation", "description": "Create or update automation configuration" },
+    { "name": "ha_config_delete_automation", "description": "Delete an automation" },
+    { "name": "ha_config_get_script", "description": "Get script configuration by ID" },
+    { "name": "ha_config_set_script", "description": "Create or update script configuration" },
+    { "name": "ha_config_delete_script", "description": "Delete a script" },
+    { "name": "ha_config_get_helper", "description": "Get helper configuration" },
+    { "name": "ha_config_set_helper", "description": "Create or update helper" },
+    { "name": "ha_config_delete_helper", "description": "Delete a helper" },
+    { "name": "ha_get_history", "description": "Get entity state history" },
+    { "name": "ha_render_template", "description": "Render a Jinja2 template" },
+    { "name": "ha_get_logbook", "description": "Get logbook entries" },
+    { "name": "ha_find_related_entities", "description": "Find entities related to a given entity" },
+    { "name": "ha_get_system_overview", "description": "Get AI-optimized system overview" }
+  ],
+  "tools_generated": false
+}

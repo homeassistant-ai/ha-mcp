@@ -1,19 +1,21 @@
-name: Build Standalone Binary
+name: Build and Release Binaries
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'src/**'
-      - 'ha-mcp.spec'
-      - '.github/workflows/build-binary.yml'
+  release:
+    types: [published]
   pull_request:
     branches: [master]
     paths:
       - 'src/**'
       - 'ha-mcp.spec'
+      - 'mcpb/**'
       - '.github/workflows/build-binary.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 4.7.4)'
+        required: true
+        default: '0.0.0-dev'
 
 jobs:
   build:
@@ -24,12 +26,18 @@ jobs:
           - os: ubuntu-latest
             artifact_name: ha-mcp-linux
             binary_ext: ''
+            platform: linux
+            create_mcpb: false
           - os: windows-latest
             artifact_name: ha-mcp-windows
             binary_ext: '.exe'
+            platform: win32
+            create_mcpb: true
           - os: macos-latest
             artifact_name: ha-mcp-macos-arm64
             binary_ext: ''
+            platform: darwin
+            create_mcpb: true
 
     runs-on: ${{ matrix.os }}
     name: Build on ${{ matrix.os }}
@@ -104,14 +112,91 @@ jobs:
             exit 1
           }
 
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            # Remove 'v' prefix if present
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Rename binary for artifact
         shell: bash
         run: |
           mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
 
-      - name: Upload artifact
+      - name: Create mcpb bundle (Windows/macOS only)
+        if: matrix.create_mcpb
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
+          BINARY_EXT="${{ matrix.binary_ext }}"
+
+          # Create mcpb directory structure
+          mkdir -p mcpb-bundle
+
+          # Copy binary to bundle
+          cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
+
+          # Generate manifest.json from template
+          sed -e "s/\${VERSION}/$VERSION/g" \
+              -e "s/\${PLATFORM}/$PLATFORM/g" \
+              -e "s/\${BINARY_EXT}/$BINARY_EXT/g" \
+              -e 's/\${__dirname}/\${__dirname}/g' \
+              mcpb/manifest.template.json > mcpb-bundle/manifest.json
+
+          # Create .mcpb file (zip archive)
+          cd mcpb-bundle
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "../${{ matrix.artifact_name }}.mcpb" *
+          else
+            zip -r "../${{ matrix.artifact_name }}.mcpb" *
+          fi
+          cd ..
+
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
           if-no-files-found: error
+
+      - name: Upload mcpb artifact
+        if: matrix.create_mcpb
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-mcpb
+          path: ${{ matrix.artifact_name }}.mcpb
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ha-mcp-linux/ha-mcp-linux
+            artifacts/ha-mcp-windows/ha-mcp-windows.exe
+            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64
+            artifacts/ha-mcp-windows-mcpb/ha-mcp-windows.mcpb
+            artifacts/ha-mcp-macos-arm64-mcpb/ha-mcp-macos-arm64.mcpb
