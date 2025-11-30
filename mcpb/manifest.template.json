@@ -2,16 +2,38 @@
   "manifest_version": "0.3",
   "name": "ha-mcp",
   "version": "${VERSION}",
-  "description": "Home Assistant MCP Server - Complete control of Home Assistant through MCP",
-  "display_name": "Home Assistant MCP",
-  "long_description": "A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems. Features include fuzzy entity search, real-time device monitoring, automation management, script execution, and comprehensive smart home control through 80+ specialized tools.",
+  "display_name": "Home Assistant MCP Server",
+  "description": "Control and manage Home Assistant with natural language",
+  "long_description": "Transform your Home Assistant into an AI-powered smart home with natural language control.\n\n**What you can do:**\n- Search and discover entities using fuzzy matching\n- Control lights, switches, covers, and climate devices\n- Create and manage automations and scripts\n- Query history, statistics, and system health\n- Organize areas, zones, and device groups\n\n80+ specialized tools give Claude complete access to your smart home—no YAML editing required.",
+  "icon": "icon.png",
   "author": {
-    "name": "Julien",
+    "name": "Julien Larocque-Dupont",
     "email": "github@qc-h.net",
+    "url": "https://github.com/julienld"
+  },
+  "repository": {
+    "type": "git",
     "url": "https://github.com/homeassistant-ai/ha-mcp"
   },
+  "homepage": "https://github.com/homeassistant-ai/ha-mcp",
+  "documentation": "https://github.com/homeassistant-ai/ha-mcp#readme",
+  "support": "https://github.com/homeassistant-ai/ha-mcp/issues",
   "license": "MIT",
-  "keywords": ["home-assistant", "smart-home", "automation", "iot", "ai"],
+  "keywords": [
+    "home-assistant",
+    "smart-home",
+    "automation",
+    "iot",
+    "ai",
+    "mcp",
+    "claude",
+    "home-automation",
+    "voice-control",
+    "natural-language"
+  ],
+  "privacy_policies": [
+    "https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/PRIVACY.md"
+  ],
   "user_config": {
     "homeassistant_url": {
       "type": "string",
