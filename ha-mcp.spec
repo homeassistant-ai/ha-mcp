@@ -81,6 +81,12 @@ hiddenimports += [
     'mcp.shared',
 ]
 
+# Add idna codec modules (required for httpx URL parsing)
+hiddenimports += [
+    'idna.codec',
+    'encodings.idna',
+]
+
 a = Analysis(
     ['src/ha_mcp/__main__.py'],
     pathex=[],
