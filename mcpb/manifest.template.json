@@ -12,13 +12,31 @@
   },
   "license": "MIT",
   "keywords": ["home-assistant", "smart-home", "automation", "iot", "ai"],
+  "user_config": {
+    "homeassistant_url": {
+      "type": "string",
+      "title": "Home Assistant URL",
+      "description": "The URL of your Home Assistant instance (e.g., http://homeassistant.local:8123 or https://your-ha.duckdns.org)",
+      "required": true
+    },
+    "homeassistant_token": {
+      "type": "string",
+      "title": "Long-Lived Access Token",
+      "description": "Create a token in Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token",
+      "required": true,
+      "sensitive": true
+    }
+  },
   "server": {
     "type": "binary",
     "entry_point": "ha-mcp${BINARY_EXT}",
     "mcp_config": {
       "command": "${__dirname}/ha-mcp${BINARY_EXT}",
       "args": [],
-      "env": {}
+      "env": {
+        "HOMEASSISTANT_URL": "${user_config.homeassistant_url}",
+        "HOMEASSISTANT_TOKEN": "${user_config.homeassistant_token}"
+      }
     }
   },
   "compatibility": {
