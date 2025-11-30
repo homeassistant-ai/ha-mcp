@@ -104,12 +104,19 @@ jobs:
           $env:HOMEASSISTANT_TOKEN = "test"
           # Start process and capture output
           $process = Start-Process -FilePath "dist\ha-mcp.exe" -NoNewWindow -PassThru -RedirectStandardOutput "output.txt" -RedirectStandardError "error.txt"
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 10
           Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          # Check output
-          $output = Get-Content -Path "output.txt", "error.txt" -Raw -ErrorAction SilentlyContinue
-          Write-Host $output
-          if ($output -match "FastMCP") {
+          Start-Sleep -Seconds 1
+          # Check output files
+          Write-Host "=== STDOUT ==="
+          if (Test-Path "output.txt") { Get-Content -Path "output.txt" -Raw } else { Write-Host "(no output.txt)" }
+          Write-Host "=== STDERR ==="
+          if (Test-Path "error.txt") { Get-Content -Path "error.txt" -Raw } else { Write-Host "(no error.txt)" }
+          Write-Host "=== END ==="
+          # Check for success
+          $stdout = if (Test-Path "output.txt") { Get-Content -Path "output.txt" -Raw } else { "" }
+          $stderr = if (Test-Path "error.txt") { Get-Content -Path "error.txt" -Raw } else { "" }
+          if ($stdout -match "FastMCP" -or $stderr -match "FastMCP") {
             Write-Host "Binary started successfully!"
           } else {
             Write-Host "Binary failed to start properly"
