@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.7.6 (2025-12-01)
+
+### Bug Fixes
+
+- Add boolean coercion for string parameters from XML-style calls (#219)
+  ([#219](https://github.com/homeassistant-ai/ha-mcp/pull/219),
+  [`aa34589`](https://github.com/homeassistant-ai/ha-mcp/commit/aa3458978a8a8cb66f3af6d76d0de4450f5f282a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`f983929`](https://github.com/homeassistant-ai/ha-mcp/commit/f983929b722cbb655364aa9204a4f0eb727a1378))
+
+
 ## v4.7.5 (2025-12-01)
 
 ### Bug Fixes
