@@ -16,7 +16,7 @@ def register_service_tools(mcp, client, **kwargs):
     if not device_tools:
         raise ValueError("device_tools is required for service tools registration")
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Call Service"})
     async def ha_call_service(
         domain: str,
         service: str,
@@ -198,7 +198,7 @@ def register_service_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool
+    @mcp.tool(annotations={"idempotentHint": True, "title": "Bulk Control"})
     async def ha_bulk_control(
         operations: str | list[dict[str, Any]], parallel: bool = True
     ) -> dict[str, Any]:
