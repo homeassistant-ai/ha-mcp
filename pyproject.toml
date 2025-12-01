@@ -50,7 +50,7 @@ package-dir = {"" = "src", "tests" = "tests"}
 packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
-ha_mcp = ["py.typed"]
+ha_mcp = ["py.typed", "resources/*.md", "resources/*.json"]
 
 [tool.black]
 line-length = 88
