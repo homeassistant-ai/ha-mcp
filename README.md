@@ -608,7 +608,7 @@ For future enhancements and planned features, see the [Development Roadmap](http
 
 Ha-mcp runs **locally** on your machine. Your smart home data stays on your network.
 
-- **Optional telemetry** — anonymous usage stats, user-configurable
+- **No telemetry currently** — may add optional anonymous stats in future
 - **No personal data collection** — we never collect entity names, configs, or device data
 - **User-controlled bug reports** — only sent with your explicit approval
 

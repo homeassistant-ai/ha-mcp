@@ -8,10 +8,9 @@ template evaluation, and domain documentation retrieval.
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Any
 
 import httpx
-from pydantic import Field
 
 from .helpers import log_tool_usage
 from .util_helpers import add_timezone_metadata, coerce_int_param
@@ -129,12 +128,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 no_entries_data = {
                     "success": False,
                     "error": "No logbook entries found",
-                    "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                    "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                     "entity_filter": entity_id,
                     "total_entries": 0,
                     "returned_entries": 0,
                     "limit": effective_limit,
-                    "offset": offset,
+                    "offset": offset_int,
                     "has_more": False,
                 }
                 return await add_timezone_metadata(client, no_entries_data)
@@ -144,8 +143,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Apply pagination
             if isinstance(response, list):
-                paginated_entries = response[offset : offset + effective_limit]
-                has_more = (offset + effective_limit) < total_entries
+                paginated_entries = response[offset_int : offset_int + effective_limit]
+                has_more = (offset_int + effective_limit) < total_entries
             else:
                 paginated_entries = response
                 has_more = False
@@ -153,23 +152,23 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logbook_data = {
                 "success": True,
                 "entries": paginated_entries,
-                "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 "start_time": start_timestamp,
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
                 "total_entries": total_entries,
                 "returned_entries": len(paginated_entries) if isinstance(paginated_entries, list) else 1,
                 "limit": effective_limit,
-                "offset": offset,
+                "offset": offset_int,
                 "has_more": has_more,
             }
 
             # Add helpful message when results are truncated
             if has_more:
-                next_offset = offset + effective_limit
+                next_offset = offset_int + effective_limit
                 # Build complete parameter string for reproducible pagination
                 param_parts = [
-                    f"hours_back={hours_back}",
+                    f"hours_back={hours_back_int}",
                     f"limit={effective_limit}",
                     f"offset={next_offset}"
                 ]
@@ -180,7 +179,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
-                    f"Showing entries {offset + 1}-{offset + len(paginated_entries)} of {total_entries}. "
+                    f"Showing entries {offset_int + 1}-{offset_int + len(paginated_entries)} of {total_entries}. "
                     f"To get the next page, use: ha_get_logbook({param_str})"
                 )
 
@@ -190,7 +189,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             error_data = {
                 "success": False,
                 "error": f"Failed to retrieve logbook: {str(e)}",
-                "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
             }
             return await add_timezone_metadata(client, error_data)
 

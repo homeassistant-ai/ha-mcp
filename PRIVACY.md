@@ -12,20 +12,20 @@ Ha-mcp runs on your local machine and communicates with your own Home Assistant 
 
 ## Anonymous Usage Statistics
 
-Ha-mcp may collect anonymous usage statistics to help improve the server. If enabled, this may include:
+Ha-mcp does not currently collect any telemetry. In the future, we may add optional anonymous usage statistics to help improve the server. If implemented, this may include:
 
 - **Tool usage counts** — which tools are used and how often
 - **Server version** — to understand adoption of updates
 - **Request/response sizes** — to optimize performance (not content)
 
-**What we do NOT collect:**
+**What we will NOT collect:**
 - Entity names or IDs
 - Home Assistant configuration
 - Personal information
 - Automation or script content
 - Any data from your smart home devices
 
-If telemetry is enabled, this anonymous data is sent to our server and used solely to improve ha-mcp. You can control this in the configuration settings.
+If telemetry is added in the future, it will be configurable and this policy will be updated accordingly.
 
 ## Bug Reports
 
@@ -43,13 +43,14 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 
 - Is processed by your MCP client application
 - Is subject to your MCP client's privacy policy
-- Is NOT collected, stored, or transmitted by ha-mcp (except as described above for anonymous statistics)
+- Is NOT collected, stored, or transmitted by ha-mcp
 
 ## Services Ha-mcp Communicates With
 
 - **Your Home Assistant instance** — via the URL and token you provide
 - **Your MCP client** — the application that runs ha-mcp
-- **Our telemetry server** — for anonymous usage statistics (if enabled)
+
+Currently, ha-mcp does not communicate with any other external services.
 
 ## Data Security
 
@@ -72,7 +73,7 @@ For privacy-related questions or concerns:
 
 | Aspect | Status |
 |--------|--------|
-| Anonymous telemetry | Optional (configurable) |
+| Anonymous telemetry | Not implemented (may be added in future) |
 | Personal data collected | None |
 | Bug reports | User-approved only |
 | Local processing | Yes |
