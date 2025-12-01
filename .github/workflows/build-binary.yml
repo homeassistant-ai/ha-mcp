@@ -154,13 +154,20 @@ jobs:
           mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
           mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
 
-          # Copy icons to bundle
+          # Copy icons to bundle (light + dark variants + source SVG)
           cp packaging/mcpb/icon-16.png mcpb-bundle/
           cp packaging/mcpb/icon-32.png mcpb-bundle/
           cp packaging/mcpb/icon-64.png mcpb-bundle/
           cp packaging/mcpb/icon-128.png mcpb-bundle/
           cp packaging/mcpb/icon-256.png mcpb-bundle/
           cp packaging/mcpb/icon-512.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-32.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-512.png mcpb-bundle/
+          cp packaging/mcpb/icon.svg mcpb-bundle/
 
           # Generate manifest.json (multi-platform)
           python packaging/mcpb/generate_manifest.py "$VERSION"
