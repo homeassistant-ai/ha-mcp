@@ -240,8 +240,12 @@ def register_search_tools(mcp, client, **kwargs):
             return await add_timezone_metadata(client, result)
 
         except Exception as e:
+            import traceback
             error_data = {
+                "success": False,
                 "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
                 "query": query,
                 "domain_filter": domain_filter,
                 "area_filter": area_filter,
@@ -351,15 +355,19 @@ def register_search_tools(mcp, client, **kwargs):
             result = await smart_tools.deep_search(query, parsed_search_types, limit)
             return cast(dict[str, Any], result)
         except Exception as e:
+            import traceback
             return {
                 "success": False,
                 "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
                 "query": query,
                 "search_types": parsed_search_types,
+                "limit": limit,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify automation/script/helper configurations exist",
-                    "Try a simpler search query",
+                    "Try simpler search terms",
+                    "Check search_types are valid: 'automation', 'script', 'helper'",
                 ],
             }
 
@@ -371,9 +379,13 @@ def register_search_tools(mcp, client, **kwargs):
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
         except Exception as e:
+            import traceback
             error_data = {
+                "success": False,
                 "entity_id": entity_id,
                 "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
                 "suggestions": [
                     f"Verify entity {entity_id} exists",
                     "Check Home Assistant connection",
