@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.8.4 (2025-12-01)
+
+### Bug Fixes
+
+- Resolve entity_id to unique_id for trace lookup (#229)
+  ([#229](https://github.com/homeassistant-ai/ha-mcp/pull/229),
+  [`3a9faf1`](https://github.com/homeassistant-ai/ha-mcp/commit/3a9faf19d8f98308a0315115cc1876c9ec057213))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`c1be33b`](https://github.com/homeassistant-ai/ha-mcp/commit/c1be33b7bd3672f8682c16ebfae5ddbc21118da4))
+
+
 ## v4.8.3 (2025-12-01)
 
 ### Bug Fixes
