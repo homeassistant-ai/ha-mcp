@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v4.8.0 (2025-12-01)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7931b3f`](https://github.com/homeassistant-ai/ha-mcp/commit/7931b3fe9ebb447cd14e12dd5dd165278d910ec8))
+
+
 ## v4.7.7 (2025-12-01)
 
 ### Bug Fixes
