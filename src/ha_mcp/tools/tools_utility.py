@@ -8,13 +8,12 @@ template evaluation, and domain documentation retrieval.
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Any
 
 import httpx
-from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata
+from .util_helpers import add_timezone_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +28,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Logbook Entries"})
     @log_tool_usage
     async def ha_get_logbook(
-        hours_back: int = 1,
+        hours_back: int | str = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
-        limit: int | None = None,
-        offset: int = 0,
+        limit: int | str | None = None,
+        offset: int | str = 0,
     ) -> dict[str, Any]:
         """
         Get Home Assistant logbook entries for the specified time period.
@@ -64,12 +63,55 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
         """
 
-        # Apply limit constraints
-        effective_limit = limit if limit is not None else DEFAULT_LOGBOOK_LIMIT
-        effective_limit = max(1, min(effective_limit, MAX_LOGBOOK_LIMIT))
+        # Coerce parameters with string handling for AI tools
+        try:
+            hours_back_int = coerce_int_param(
+                hours_back,
+                param_name="hours_back",
+                default=1,
+                min_value=1,
+            )
+            if hours_back_int is None:
+                hours_back_int = 1
+        except ValueError as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide hours_back as an integer (e.g., 24)"],
+            }
 
-        # Ensure offset is non-negative
-        offset = max(0, offset)
+        try:
+            effective_limit = coerce_int_param(
+                limit,
+                param_name="limit",
+                default=DEFAULT_LOGBOOK_LIMIT,
+                min_value=1,
+                max_value=MAX_LOGBOOK_LIMIT,
+            )
+            if effective_limit is None:
+                effective_limit = DEFAULT_LOGBOOK_LIMIT
+        except ValueError as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide limit as an integer (e.g., 50)"],
+            }
+
+        try:
+            offset_int = coerce_int_param(
+                offset,
+                param_name="offset",
+                default=0,
+                min_value=0,
+            )
+            if offset_int is None:
+                offset_int = 0
+        except ValueError as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide offset as an integer (e.g., 0)"],
+            }
 
         # Calculate start time
         if end_time:
@@ -77,7 +119,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         else:
             end_dt = datetime.now(UTC)
 
-        start_dt = end_dt - timedelta(hours=hours_back)
+        start_dt = end_dt - timedelta(hours=hours_back_int)
         start_timestamp = start_dt.isoformat()
 
         try:
@@ -89,12 +131,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 no_entries_data = {
                     "success": False,
                     "error": "No logbook entries found",
-                    "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                    "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                     "entity_filter": entity_id,
                     "total_entries": 0,
                     "returned_entries": 0,
                     "limit": effective_limit,
-                    "offset": offset,
+                    "offset": offset_int,
                     "has_more": False,
                 }
                 return await add_timezone_metadata(client, no_entries_data)
@@ -104,8 +146,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Apply pagination
             if isinstance(response, list):
-                paginated_entries = response[offset : offset + effective_limit]
-                has_more = (offset + effective_limit) < total_entries
+                paginated_entries = response[offset_int : offset_int + effective_limit]
+                has_more = (offset_int + effective_limit) < total_entries
             else:
                 paginated_entries = response
                 has_more = False
@@ -113,23 +155,23 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logbook_data = {
                 "success": True,
                 "entries": paginated_entries,
-                "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 "start_time": start_timestamp,
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
                 "total_entries": total_entries,
                 "returned_entries": len(paginated_entries) if isinstance(paginated_entries, list) else 1,
                 "limit": effective_limit,
-                "offset": offset,
+                "offset": offset_int,
                 "has_more": has_more,
             }
 
             # Add helpful message when results are truncated
             if has_more:
-                next_offset = offset + effective_limit
+                next_offset = offset_int + effective_limit
                 # Build complete parameter string for reproducible pagination
                 param_parts = [
-                    f"hours_back={hours_back}",
+                    f"hours_back={hours_back_int}",
                     f"limit={effective_limit}",
                     f"offset={next_offset}"
                 ]
@@ -140,7 +182,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
-                    f"Showing entries {offset + 1}-{offset + len(paginated_entries)} of {total_entries}. "
+                    f"Showing entries {offset_int + 1}-{offset_int + len(paginated_entries)} of {total_entries}. "
                     f"To get the next page, use: ha_get_logbook({param_str})"
                 )
 
@@ -150,7 +192,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             error_data = {
                 "success": False,
                 "error": f"Failed to retrieve logbook: {str(e)}",
-                "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
             }
             return await add_timezone_metadata(client, error_data)
 

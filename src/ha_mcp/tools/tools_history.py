@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .helpers import get_connected_ws_client, log_tool_usage
-from .util_helpers import add_timezone_metadata, parse_string_list_param
+from .util_helpers import add_timezone_metadata, coerce_int_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
         limit: Annotated[
-            int | None,
+            int | str | None,
             Field(
                 description="Max state changes per entity. Default: 100, Max: 1000",
                 default=None,
@@ -231,9 +231,23 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 end_dt = datetime.now(UTC)
 
-            # Apply limit constraints
-            effective_limit = limit if limit is not None else DEFAULT_HISTORY_LIMIT
-            effective_limit = max(1, min(effective_limit, MAX_HISTORY_LIMIT))
+            # Apply limit constraints with string coercion for AI tools
+            try:
+                effective_limit = coerce_int_param(
+                    limit,
+                    param_name="limit",
+                    default=DEFAULT_HISTORY_LIMIT,
+                    min_value=1,
+                    max_value=MAX_HISTORY_LIMIT,
+                )
+                if effective_limit is None:
+                    effective_limit = DEFAULT_HISTORY_LIMIT
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "suggestions": ["Provide limit as an integer (e.g., 100)"],
+                }
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(

@@ -8,6 +8,62 @@ import json
 from typing import Any
 
 
+def coerce_int_param(
+    value: int | str | None,
+    param_name: str = "parameter",
+    default: int | None = None,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int | None:
+    """
+    Coerce a value to an integer, handling string inputs from AI tools.
+
+    AI assistants often pass numeric parameters as strings (e.g., "100" instead of 100).
+    This function safely converts such inputs to integers.
+
+    Args:
+        value: The value to coerce (int, str, or None)
+        param_name: Parameter name for error messages
+        default: Default value to return if value is None
+        min_value: Optional minimum value constraint
+        max_value: Optional maximum value constraint
+
+    Returns:
+        The coerced integer value, or default if value is None
+
+    Raises:
+        ValueError: If the value cannot be converted to an integer
+    """
+    if value is None:
+        return default
+
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return default
+        try:
+            # Handle float strings like "100.0" by converting via float first
+            result = int(float(value))
+        except ValueError:
+            raise ValueError(
+                f"{param_name} must be a valid integer, got '{value}'"
+            ) from None
+    else:
+        raise ValueError(
+            f"{param_name} must be int or string, got {type(value).__name__}"
+        )
+
+    # Apply constraints
+    if min_value is not None and result < min_value:
+        result = min_value
+    if max_value is not None and result > max_value:
+        result = max_value
+
+    return result
+
+
 def parse_json_param(
     param: str | dict | list | None, param_name: str = "parameter"
 ) -> dict | list | None:
