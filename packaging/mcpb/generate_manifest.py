@@ -12,8 +12,7 @@ def extract_tools_from_file(file_path: Path) -> list[dict]:
     """Extract tool definitions from a Python file.
 
     MCPB manifest only supports 'name' and 'description' for tools.
-    Tool annotations (readOnlyHint, destructiveHint) are part of the MCP protocol
-    and are declared in the tool decorators, not in the manifest.
+    We use the 'title' from annotations as the display name.
     """
     tools = []
     content = file_path.read_text(encoding="utf-8")
@@ -21,33 +20,36 @@ def extract_tools_from_file(file_path: Path) -> list[dict]:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("ha_"):
-            # Get the docstring
+            # Get the docstring for description
             docstring = ast.get_docstring(node) or ""
-            # Take first line as description
             description = docstring.split("\n")[0].strip() if docstring else ""
 
-            # If no docstring, try to get from decorator
-            if not description:
-                for decorator in node.decorator_list:
-                    if isinstance(decorator, ast.Call):
-                        for keyword in decorator.keywords:
-                            if keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
-                                description = keyword.value.value
-                                break
-                            if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
-                                for k, v in zip(keyword.value.keys, keyword.value.values):
-                                    if isinstance(k, ast.Constant) and k.value == "title":
-                                        if isinstance(v, ast.Constant):
-                                            description = v.value
-                                            break
+            # Try to get title from decorator annotations
+            title = None
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call):
+                    for keyword in decorator.keywords:
+                        if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
+                            for k, v in zip(keyword.value.keys, keyword.value.values):
+                                if isinstance(k, ast.Constant) and k.value == "title":
+                                    if isinstance(v, ast.Constant):
+                                        title = v.value
+                                        break
+                        # Also check for description in decorator if no docstring
+                        if not description and keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
+                            description = keyword.value.value
 
-            # Fallback to function name conversion
+            # Use title as the display name, fallback to formatted function name
+            display_name = title if title else node.name.replace("ha_", "").replace("_", " ").title()
+
+            # Use docstring first line as description, fallback to title or formatted name
             if not description:
-                description = node.name.replace("ha_", "").replace("_", " ").title()
+                description = display_name
 
             # MCPB only supports name and description
+            # Use title/display_name as the "name" shown in UI
             tools.append({
-                "name": node.name,
+                "name": display_name,
                 "description": description[:100]  # Truncate long descriptions
             })
 

@@ -130,8 +130,12 @@ jobs:
           # Copy binary to bundle
           cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
 
-          # Copy icon to bundle
-          cp packaging/mcpb/icon.png mcpb-bundle/icon.png
+          # Copy icons to bundle (all sizes)
+          cp packaging/mcpb/icon-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/
 
           # Generate manifest.json with auto-discovered tools
           python packaging/mcpb/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
