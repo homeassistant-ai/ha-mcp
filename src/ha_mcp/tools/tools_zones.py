@@ -68,7 +68,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["zone"], "title": "Create Zone"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Create Zone"})
     @log_tool_usage
     async def ha_create_zone(
         name: Annotated[str, Field(description="Display name for the zone")],
@@ -179,7 +179,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["zone"], "title": "Update Zone"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Update Zone"})
     @log_tool_usage
     async def ha_update_zone(
         zone_id: Annotated[

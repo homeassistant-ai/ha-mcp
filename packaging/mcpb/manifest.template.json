@@ -4,8 +4,16 @@
   "version": "${VERSION}",
   "display_name": "Home Assistant MCP",
   "description": "Control and manage Home Assistant with natural language",
-  "long_description": "Transform your Home Assistant into an AI-powered smart home with natural language control.\n**What you can do:**\n- Search and discover entities using fuzzy matching\n- Control lights, switches, covers, and climate devices\n- Create and manage automations and scripts\n- Query history, statistics, and system health\n- Organize areas, zones, and device groups\n\n80+ specialized tools give Claude complete access to your smart home—no YAML editing required.",
+  "long_description": "Control and manage your Home Assistant smart home with natural language.\n\nWhat you can do:\n✅ Search and discover entities using fuzzy matching\n✅ Control lights, switches, covers, and climate devices\n✅ Create and manage automations and scripts\n✅ Query history, statistics, and system health\n✅ Organize areas, zones, and device groups\n\n80+ specialized tools give your AI assistant complete access to your smart home.",
   "icon": "icon.png",
+  "icons": [
+    { "src": "icon-16.png", "size": "16x16" },
+    { "src": "icon-32.png", "size": "32x32" },
+    { "src": "icon-64.png", "size": "64x64" },
+    { "src": "icon-128.png", "size": "128x128" },
+    { "src": "icon-256.png", "size": "256x256" },
+    { "src": "icon-512.png", "size": "512x512" }
+  ],
   "author": {
     "name": "Julien Larocque-Dupont",
     "email": "github@qc-h.net",
@@ -26,7 +34,6 @@
     "iot",
     "ai",
     "mcp",
-    "claude",
     "home-automation",
     "voice-control",
     "natural-language"
@@ -51,18 +58,23 @@
   },
   "server": {
     "type": "binary",
-    "entry_point": "ha-mcp${BINARY_EXT}",
+    "entry_point": "ha-mcp",
     "mcp_config": {
-      "command": "${__dirname}/ha-mcp${BINARY_EXT}",
+      "command": "${__dirname}/ha-mcp",
       "args": [],
       "env": {
         "HOMEASSISTANT_URL": "${user_config.homeassistant_url}",
         "HOMEASSISTANT_TOKEN": "${user_config.homeassistant_token}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/ha-mcp.exe"
+        }
       }
     }
   },
   "compatibility": {
-    "platforms": ["${PLATFORM}"]
+    "platforms": ["darwin", "win32"]
   },
   "tools": [],
   "tools_generated": false

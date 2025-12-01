@@ -80,7 +80,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"tags": ["system"], "title": "Restart Home Assistant"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Restart Home Assistant"})
     @log_tool_usage
     async def ha_restart(
         confirm: bool | str = False,
@@ -186,7 +186,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to restart Home Assistant: {str(e)}",
             }
 
-    @mcp.tool(annotations={"tags": ["system"], "title": "Reload Core Components"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Reload Core Components"})
     @log_tool_usage
     async def ha_reload_core(
         target: str = "all",

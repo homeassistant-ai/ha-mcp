@@ -606,11 +606,11 @@ For future enhancements and planned features, see the [Development Roadmap](http
 
 ## 🔒 Privacy
 
-Ha-mcp runs **entirely locally** on your machine. We collect no data, send no telemetry, and have no external dependencies beyond your own Home Assistant instance.
+Ha-mcp runs **locally** on your machine. Your smart home data stays on your network.
 
-- **No analytics or tracking**
-- **No cloud services**
-- **Your data stays on your network**
+- **Configurable telemetry** — optional anonymous usage stats
+- **No personal data collection** — we never collect entity names, configs, or device data
+- **User-controlled bug reports** — only sent with your explicit approval
 
 For full details, see our [Privacy Policy](PRIVACY.md).
 

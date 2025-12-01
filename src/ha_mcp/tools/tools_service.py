@@ -16,7 +16,7 @@ def register_service_tools(mcp, client, **kwargs):
     if not device_tools:
         raise ValueError("device_tools is required for service tools registration")
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True, "title": "Call Service"})
     async def ha_call_service(
         domain: str,
         service: str,
@@ -188,7 +188,7 @@ def register_service_tools(mcp, client, **kwargs):
                 },
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     async def ha_get_operation_status(
         operation_id: str, timeout_seconds: int = 10
     ) -> dict[str, Any]:
@@ -198,7 +198,7 @@ def register_service_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool
+    @mcp.tool(annotations={"destructiveHint": True, "title": "Bulk Control"})
     async def ha_bulk_control(
         operations: str | list[dict[str, Any]], parallel: bool | str = True
     ) -> dict[str, Any]:
@@ -230,7 +230,7 @@ def register_service_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Bulk Status"})
     async def ha_get_bulk_status(operation_ids: list[str]) -> dict[str, Any]:
         """Check status of multiple WebSocket-monitored operations."""
         result = await device_tools.get_bulk_operation_status(

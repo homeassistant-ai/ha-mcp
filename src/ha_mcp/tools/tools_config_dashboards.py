@@ -157,7 +157,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["dashboard"], "title": "Create or Update Dashboard"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["dashboard"], "title": "Create or Update Dashboard"})
     @log_tool_usage
     async def ha_config_set_dashboard(
         url_path: Annotated[
@@ -411,7 +411,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["dashboard"], "title": "Update Dashboard Metadata"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["dashboard"], "title": "Update Dashboard Metadata"})
     @log_tool_usage
     async def ha_config_update_dashboard_metadata(
         dashboard_id: Annotated[

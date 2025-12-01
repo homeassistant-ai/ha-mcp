@@ -166,7 +166,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["automation"], "title": "Create or Update Automation"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["automation"], "title": "Create or Update Automation"})
     @log_tool_usage
     async def ha_config_set_automation(
         config: Annotated[

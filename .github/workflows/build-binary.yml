@@ -33,17 +33,14 @@ jobs:
             artifact_name: ha-mcp-linux
             binary_ext: ''
             platform: linux
-            create_mcpb: false
           - os: windows-latest
             artifact_name: ha-mcp-windows
             binary_ext: '.exe'
             platform: win32
-            create_mcpb: true
           - os: macos-latest
             artifact_name: ha-mcp-macos-arm64
             binary_ext: ''
             platform: darwin
-            create_mcpb: true
 
     runs-on: ${{ matrix.os }}
     name: Build on ${{ matrix.os }}
@@ -98,52 +95,10 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Set version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            # Remove 'v' prefix if present
-            VERSION="${VERSION#v}"
-          else
-            VERSION="${{ github.event.inputs.version }}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Rename binary for artifact
         shell: bash
         run: |
           mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
-
-      - name: Create mcpb bundle (Windows/macOS only)
-        if: matrix.create_mcpb
-        shell: bash
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PLATFORM="${{ matrix.platform }}"
-          BINARY_EXT="${{ matrix.binary_ext }}"
-
-          # Create mcpb directory structure
-          mkdir -p mcpb-bundle
-
-          # Copy binary to bundle
-          cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
-
-          # Copy icon to bundle
-          cp packaging/mcpb/icon.png mcpb-bundle/icon.png
-
-          # Generate manifest.json with auto-discovered tools
-          python packaging/mcpb/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
-
-          # Create .mcpb file (zip archive)
-          cd mcpb-bundle
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a -tzip "../${{ matrix.artifact_name }}.mcpb" *
-          else
-            zip -r "../${{ matrix.artifact_name }}.mcpb" *
-          fi
-          cd ..
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -152,16 +107,89 @@ jobs:
           path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
           if-no-files-found: error
 
+  create-mcpb:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ha-mcp-windows
+          path: mcpb-bundle
+
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ha-mcp-macos-arm64
+          path: mcpb-bundle
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION:-0.0.0-dev}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create combined mcpb bundle
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Rename binaries to standard names
+          mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
+          mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
+
+          # Copy icons to bundle (light + dark variants + main icon)
+          cp packaging/mcpb/icon-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-32.png mcpb-bundle/
+          cp packaging/mcpb/icon-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-32.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-512.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/icon.png
+
+          # Generate manifest.json (multi-platform)
+          python packaging/mcpb/generate_manifest.py "$VERSION"
+
+          # Create .mcpb file (zip archive)
+          cd mcpb-bundle
+          zip -r ../ha-mcp.mcpb *
+          cd ..
+
+          # List contents for verification
+          echo "=== MCPB Contents ==="
+          unzip -l ha-mcp.mcpb
+
       - name: Upload mcpb artifact
-        if: matrix.create_mcpb
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}-mcpb
-          path: ${{ matrix.artifact_name }}.mcpb
+          name: ha-mcp-mcpb
+          path: ha-mcp.mcpb
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, create-mcpb]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
@@ -183,5 +211,4 @@ jobs:
             artifacts/ha-mcp-linux/ha-mcp-linux
             artifacts/ha-mcp-windows/ha-mcp-windows.exe
             artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64
-            artifacts/ha-mcp-windows-mcpb/ha-mcp-windows.mcpb
-            artifacts/ha-mcp-macos-arm64-mcpb/ha-mcp-macos-arm64.mcpb
+            artifacts/ha-mcp-mcpb/ha-mcp.mcpb

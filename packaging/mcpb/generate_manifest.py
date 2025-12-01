@@ -4,45 +4,52 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 import sys
 from pathlib import Path
 
 
 def extract_tools_from_file(file_path: Path) -> list[dict]:
-    """Extract tool definitions from a Python file."""
+    """Extract tool definitions from a Python file.
+
+    MCPB manifest only supports 'name' and 'description' for tools.
+    We use the 'title' from annotations as the display name.
+    """
     tools = []
     content = file_path.read_text(encoding="utf-8")
     tree = ast.parse(content)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("ha_"):
-            # Get the docstring
+            # Get the docstring for description
             docstring = ast.get_docstring(node) or ""
-            # Take first line as description
             description = docstring.split("\n")[0].strip() if docstring else ""
 
-            # If no docstring, try to get from decorator
-            if not description:
-                for decorator in node.decorator_list:
-                    if isinstance(decorator, ast.Call):
-                        for keyword in decorator.keywords:
-                            if keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
-                                description = keyword.value.value
-                                break
-                            if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
-                                for k, v in zip(keyword.value.keys, keyword.value.values):
-                                    if isinstance(k, ast.Constant) and k.value == "title":
-                                        if isinstance(v, ast.Constant):
-                                            description = v.value
-                                            break
+            # Try to get title from decorator annotations
+            title = None
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call):
+                    for keyword in decorator.keywords:
+                        if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
+                            for k, v in zip(keyword.value.keys, keyword.value.values):
+                                if isinstance(k, ast.Constant) and k.value == "title":
+                                    if isinstance(v, ast.Constant):
+                                        title = v.value
+                                        break
+                        # Also check for description in decorator if no docstring
+                        if not description and keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
+                            description = keyword.value.value
 
-            # Fallback to function name conversion
-            if not description:
-                description = node.name.replace("ha_", "").replace("_", " ").title()
+            # Use title as the display name, fallback to formatted function name
+            display_name = title if title else node.name.replace("ha_", "").replace("_", " ").title()
 
+            # Use docstring first line as description, fallback to title or formatted name
+            if not description:
+                description = display_name
+
+            # MCPB only supports name and description
+            # Use title/display_name as the "name" shown in UI
             tools.append({
-                "name": node.name,
+                "name": display_name,
                 "description": description[:100]  # Truncate long descriptions
             })
 
@@ -68,22 +75,21 @@ def generate_manifest(
     template_path: Path,
     output_path: Path,
     version: str,
-    platform: str,
-    binary_ext: str,
     tools: list[dict]
 ):
-    """Generate manifest.json from template with discovered tools."""
+    """Generate manifest.json from template with discovered tools.
+
+    Creates a multi-platform bundle supporting both macOS and Windows.
+    """
     template = json.loads(template_path.read_text(encoding="utf-8"))
 
     # Update tools list
     template["tools"] = tools
     template["tools_generated"] = True
 
-    # Replace placeholders
+    # Replace version placeholder
     manifest_str = json.dumps(template, indent=2)
     manifest_str = manifest_str.replace("${VERSION}", version)
-    manifest_str = manifest_str.replace("${PLATFORM}", platform)
-    manifest_str = manifest_str.replace("${BINARY_EXT}", binary_ext)
 
     # Update description with actual tool count
     manifest = json.loads(manifest_str)
@@ -97,16 +103,14 @@ def generate_manifest(
 
 
 def main():
-    if len(sys.argv) < 4:
-        print("Usage: generate_manifest.py <version> <platform> <binary_ext>")
-        print("Example: generate_manifest.py 4.7.4 win32 .exe")
+    if len(sys.argv) < 2:
+        print("Usage: generate_manifest.py <version>")
+        print("Example: generate_manifest.py 4.7.4")
         sys.exit(1)
 
     version = sys.argv[1]
-    platform = sys.argv[2]
-    binary_ext = sys.argv[3] if len(sys.argv) > 3 else ""
 
-    # Paths - script is in dist/mcpb/, project root is 2 levels up
+    # Paths - script is in packaging/mcpb/, project root is 2 levels up
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
     tools_dir = project_root / "src" / "ha_mcp" / "tools"
@@ -120,7 +124,7 @@ def main():
     tools = discover_all_tools(tools_dir)
 
     # Generate manifest
-    generate_manifest(template_path, output_path, version, platform, binary_ext, tools)
+    generate_manifest(template_path, output_path, version, tools)
 
 
 if __name__ == "__main__":

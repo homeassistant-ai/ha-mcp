@@ -183,7 +183,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"tags": ["todo"], "title": "Add Todo Item"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Add Todo Item"})
     @log_tool_usage
     async def ha_add_todo_item(
         entity_id: Annotated[
@@ -294,7 +294,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["todo"], "title": "Update Todo Item"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Update Todo Item"})
     @log_tool_usage
     async def ha_update_todo_item(
         entity_id: Annotated[

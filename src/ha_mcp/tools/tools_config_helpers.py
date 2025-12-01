@@ -98,7 +98,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["helper"], "title": "Create or Update Helper"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["helper"], "title": "Create or Update Helper"})
     @log_tool_usage
     async def ha_config_set_helper(
         helper_type: Annotated[
