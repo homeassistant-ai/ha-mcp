@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.8.5 (2025-12-01)
+
+### Bug Fixes
+
+- Include resource files in PyPI package distribution (#230)
+  ([#230](https://github.com/homeassistant-ai/ha-mcp/pull/230),
+  [`6052b29`](https://github.com/homeassistant-ai/ha-mcp/commit/6052b29690b27fd2dd8f61fbdcfb40d67ce6490e))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9f93cf2`](https://github.com/homeassistant-ai/ha-mcp/commit/9f93cf2b046aec846a40423faa1e84ba6a347737))
+
+
 ## v4.8.4 (2025-12-01)
 
 ### Bug Fixes
