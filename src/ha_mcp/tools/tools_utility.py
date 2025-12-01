@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_int_param
+from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["docs"], "title": "Evaluate Template"})
     @log_tool_usage
     async def ha_eval_template(
-        template: str, timeout: int = 3, report_errors: bool = True
+        template: str, timeout: int = 3, report_errors: bool | str = True
     ) -> dict[str, Any]:
         """
         Evaluate Jinja2 templates using Home Assistant's template engine.
@@ -328,6 +328,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
         """
+        # Coerce boolean parameter that may come as string from XML-style calls
+        report_errors_bool = coerce_bool_param(report_errors, "report_errors", default=True) or True
+
         try:
             # Generate unique ID for the template evaluation request
             import time
@@ -339,7 +342,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "render_template",
                 "template": template,
                 "timeout": timeout,
-                "report_errors": report_errors,
+                "report_errors": report_errors_bool,
                 "id": request_id,
             }
 

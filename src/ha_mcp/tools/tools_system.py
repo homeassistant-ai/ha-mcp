@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from .helpers import get_connected_ws_client, log_tool_usage
+from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"tags": ["system"], "title": "Restart Home Assistant"})
     @log_tool_usage
     async def ha_restart(
-        confirm: bool = False,
+        confirm: bool | str = False,
     ) -> dict[str, Any]:
         """
         Restart Home Assistant.
@@ -112,7 +113,10 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Alternative:** For configuration changes, consider using ha_reload_core()
         instead, which reloads specific components without a full restart.
         """
-        if not confirm:
+        # Coerce boolean parameter that may come as string from XML-style calls
+        confirm_bool = coerce_bool_param(confirm, "confirm", default=False) or False
+
+        if not confirm_bool:
             return {
                 "success": False,
                 "error": "Restart not confirmed",

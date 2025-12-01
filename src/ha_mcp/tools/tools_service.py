@@ -7,7 +7,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 from typing import Any, cast
 
 
-from .util_helpers import parse_json_param
+from .util_helpers import coerce_bool_param, parse_json_param
 
 
 def register_service_tools(mcp, client, **kwargs):
@@ -200,9 +200,12 @@ def register_service_tools(mcp, client, **kwargs):
 
     @mcp.tool
     async def ha_bulk_control(
-        operations: str | list[dict[str, Any]], parallel: bool = True
+        operations: str | list[dict[str, Any]], parallel: bool | str = True
     ) -> dict[str, Any]:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
+        # Coerce boolean parameter that may come as string from XML-style calls
+        parallel_bool = coerce_bool_param(parallel, "parallel", default=True) or True
+
         # Parse JSON operations if provided as string
         try:
             parsed_operations = parse_json_param(operations, "operations")
@@ -223,7 +226,7 @@ def register_service_tools(mcp, client, **kwargs):
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
         result = await device_tools.bulk_device_control(
-            operations=operations_list, parallel=parallel
+            operations=operations_list, parallel=parallel_bool
         )
         return cast(dict[str, Any], result)
 
