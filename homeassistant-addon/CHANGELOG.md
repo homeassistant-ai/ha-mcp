@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v4.7.5 (2025-12-01)
+
+### Bug Fixes
+
+- Add string coercion for numeric parameters (fixes #205, #206) (#217)
+  ([#217](https://github.com/homeassistant-ai/ha-mcp/pull/217),
+  [`59fc978`](https://github.com/homeassistant-ai/ha-mcp/commit/59fc978afa817c8c5759427608d121cc01c66822))
+
+- Normalize automation config field names (trigger/triggers) (#215)
+  ([#215](https://github.com/homeassistant-ai/ha-mcp/pull/215),
+  [`c570bdf`](https://github.com/homeassistant-ai/ha-mcp/commit/c570bdf28f80f0240c5d1910560c01922cf49bfd))
+
+- Query area/entity registries for accurate area count in overview (#216)
+  ([#216](https://github.com/homeassistant-ai/ha-mcp/pull/216),
+  [`3808907`](https://github.com/homeassistant-ai/ha-mcp/commit/3808907c4e6d615f5a770da6f09c36077e377bc9))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`645ca39`](https://github.com/homeassistant-ai/ha-mcp/commit/645ca39f300a9799ad9f5ecc35780bde483f20e2))
+
+
 ## v4.7.4 (2025-11-29)
 
 ### Bug Fixes
