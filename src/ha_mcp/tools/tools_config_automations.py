@@ -50,6 +50,56 @@ def _normalize_automation_config(config: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Normalize trigger objects for round-trip compatibility.
+
+    Home Assistant GET API returns triggers with 'trigger' key for the platform type,
+    but the SET API expects 'platform' key. This function converts between formats.
+
+    Args:
+        triggers: List of trigger configuration dicts
+
+    Returns:
+        List of triggers with 'platform' key instead of 'trigger' key
+    """
+    normalized_triggers = []
+    for trigger in triggers:
+        normalized_trigger = trigger.copy()
+        # Convert 'trigger' key to 'platform' if present and 'platform' is not
+        if "trigger" in normalized_trigger and "platform" not in normalized_trigger:
+            normalized_trigger["platform"] = normalized_trigger.pop("trigger")
+        normalized_triggers.append(normalized_trigger)
+    return normalized_triggers
+
+
+def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize automation config from GET response for direct use in SET.
+
+    This ensures a config retrieved via ha_config_get_automation can be
+    directly passed to ha_config_set_automation without modification.
+
+    Transformations:
+    1. Field names: triggers -> trigger, actions -> action, conditions -> condition
+    2. Trigger keys: trigger -> platform (inside each trigger object)
+
+    Args:
+        config: Raw automation configuration from HA API
+
+    Returns:
+        Normalized configuration compatible with SET API
+    """
+    # First normalize field names (plural -> singular)
+    normalized = _normalize_automation_config(config)
+
+    # Then normalize trigger keys (trigger -> platform)
+    if "trigger" in normalized and isinstance(normalized["trigger"], list):
+        normalized["trigger"] = _normalize_trigger_keys(normalized["trigger"])
+
+    return normalized
+
+
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
@@ -76,11 +126,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             config_result = await client.get_automation_config(identifier)
+            # Normalize config for round-trip compatibility (GET → SET)
+            normalized_config = _normalize_config_for_roundtrip(config_result)
             return {
                 "success": True,
                 "action": "get",
                 "identifier": identifier,
-                "config": config_result,
+                "config": normalized_config,
             }
         except Exception as e:
             # Handle 404 errors gracefully (often used to verify deletion)
