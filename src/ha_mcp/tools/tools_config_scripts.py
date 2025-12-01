@@ -59,7 +59,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["script"], "title": "Create or Update Script"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["script"], "title": "Create or Update Script"})
     @log_tool_usage
     async def ha_config_set_script(
         script_id: Annotated[

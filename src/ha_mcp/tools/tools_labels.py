@@ -141,7 +141,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["label"], "title": "Create or Update Label"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["label"], "title": "Create or Update Label"})
     @log_tool_usage
     async def ha_config_set_label(
         name: Annotated[str, Field(description="Display name for the label")],
@@ -299,7 +299,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["label"], "title": "Assign Label to Entity"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["label"], "title": "Assign Label to Entity"})
     @log_tool_usage
     async def ha_assign_label(
         entity_id: Annotated[

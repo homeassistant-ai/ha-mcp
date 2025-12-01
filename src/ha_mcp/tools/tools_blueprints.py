@@ -228,7 +228,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"tags": ["blueprint"], "title": "Import Blueprint"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["blueprint"], "title": "Import Blueprint"})
     @log_tool_usage
     async def ha_import_blueprint(
         url: Annotated[

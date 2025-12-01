@@ -146,7 +146,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "suggestions": suggestions,
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["calendar"], "title": "Create or Update Calendar Event"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["calendar"], "title": "Create or Update Calendar Event"})
     @log_tool_usage
     async def ha_config_set_calendar_event(
         entity_id: Annotated[

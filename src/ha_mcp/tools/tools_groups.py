@@ -84,7 +84,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["group"], "title": "Create or Update Group"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["group"], "title": "Create or Update Group"})
     @log_tool_usage
     async def ha_config_set_group(
         object_id: Annotated[

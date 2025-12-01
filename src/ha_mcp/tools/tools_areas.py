@@ -63,7 +63,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["area"], "title": "Create or Update Area"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["area"], "title": "Create or Update Area"})
     @log_tool_usage
     async def ha_config_set_area(
         name: Annotated[
@@ -298,7 +298,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["floor"], "title": "Create or Update Floor"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["floor"], "title": "Create or Update Floor"})
     @log_tool_usage
     async def ha_config_set_floor(
         name: Annotated[

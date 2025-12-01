@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register entity registry and device registry management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "title": "Rename Entity"})
+    @mcp.tool(annotations={"destructiveHint": True, "title": "Rename Entity"})
     @log_tool_usage
     async def ha_rename_entity(
         entity_id: Annotated[
@@ -350,7 +350,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "device_id": device_id,
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "tags": ["system"], "title": "Update Device"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Update Device"})
     @log_tool_usage
     async def ha_update_device(
         device_id: Annotated[

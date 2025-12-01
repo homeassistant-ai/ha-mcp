@@ -396,7 +396,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"readOnlyHint": True})
+    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Domain Docs"})
     async def ha_get_domain_docs(domain: str) -> dict[str, Any]:
         """Get comprehensive documentation for Home Assistant entity domains."""
         domain = domain.lower().strip()
