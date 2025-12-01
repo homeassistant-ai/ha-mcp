@@ -1,0 +1,187 @@
+name: Build and Release Binaries
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'packaging/binary/**'
+      - 'packaging/mcpb/**'
+      - '.github/workflows/build-binary.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 4.7.4)'
+        required: true
+        default: '0.0.0-dev'
+
+# Restrict permissions by default (security best practice)
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ha-mcp-linux
+            binary_ext: ''
+            platform: linux
+            create_mcpb: false
+          - os: windows-latest
+            artifact_name: ha-mcp-windows
+            binary_ext: '.exe'
+            platform: win32
+            create_mcpb: true
+          - os: macos-latest
+            artifact_name: ha-mcp-macos-arm64
+            binary_ext: ''
+            platform: darwin
+            create_mcpb: true
+
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          uv venv .venv
+          uv pip install -e . pyinstaller
+        shell: bash
+
+      - name: Activate venv (Unix)
+        if: runner.os != 'Windows'
+        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Activate venv (Windows)
+        if: runner.os == 'Windows'
+        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Build binary
+        run: pyinstaller packaging/binary/ha-mcp.spec
+
+      - name: Run smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/ha-mcp
+          # Run the built-in smoke test to verify all libraries are bundled
+          ./dist/ha-mcp --smoke-test
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Run the built-in smoke test to verify all libraries are bundled
+          & "dist\ha-mcp.exe" --smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Smoke test failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            # Remove 'v' prefix if present
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Rename binary for artifact
+        shell: bash
+        run: |
+          mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+
+      - name: Create mcpb bundle (Windows/macOS only)
+        if: matrix.create_mcpb
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
+          BINARY_EXT="${{ matrix.binary_ext }}"
+
+          # Create mcpb directory structure
+          mkdir -p mcpb-bundle
+
+          # Copy binary to bundle
+          cp dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }} mcpb-bundle/ha-mcp${{ matrix.binary_ext }}
+
+          # Copy icon to bundle
+          cp packaging/mcpb/icon.png mcpb-bundle/icon.png
+
+          # Generate manifest.json with auto-discovered tools
+          python packaging/mcpb/generate_manifest.py "$VERSION" "$PLATFORM" "$BINARY_EXT"
+
+          # Create .mcpb file (zip archive)
+          cd mcpb-bundle
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "../${{ matrix.artifact_name }}.mcpb" *
+          else
+            zip -r "../${{ matrix.artifact_name }}.mcpb" *
+          fi
+          cd ..
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+          if-no-files-found: error
+
+      - name: Upload mcpb artifact
+        if: matrix.create_mcpb
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-mcpb
+          path: ${{ matrix.artifact_name }}.mcpb
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ha-mcp-linux/ha-mcp-linux
+            artifacts/ha-mcp-windows/ha-mcp-windows.exe
+            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64
+            artifacts/ha-mcp-windows-mcpb/ha-mcp-windows.mcpb
+            artifacts/ha-mcp-macos-arm64-mcpb/ha-mcp-macos-arm64.mcpb

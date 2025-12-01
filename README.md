@@ -30,6 +30,22 @@
 
 ---
 
+## 💬 What Can You Do With It?
+
+Just talk to Claude naturally. Here are some real examples:
+
+| You Say | What Happens |
+|---------|--------------|
+| *"Turn off all the lights in the living room"* | Finds entities by room using fuzzy search, controls them in bulk |
+| *"Is everything healthy? Any devices offline?"* | Checks system health, finds unavailable entities, reports issues |
+| *"Create an automation that turns on the porch light at sunset"* | Creates the automation with proper triggers and actions |
+| *"The work-from-home automation doesn't work anymore, check what's going on"* | Analyzes execution traces, finds the bug, and auto-fixes it |
+| *"Add milk to my shopping list"* | Finds your shopping list and adds the item |
+
+No YAML editing. No entity ID lookups. Just describe what you want.
+
+---
+
 ## ✨ Features
 
 ### 🔍 Discover, Search and Query
@@ -585,6 +601,18 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 - [x] Docker images with multi-mode support
 
 For future enhancements and planned features, see the [Development Roadmap](https://github.com/homeassistant-ai/ha-mcp/wiki) in our wiki.
+
+---
+
+## 🔒 Privacy
+
+Ha-mcp runs **entirely locally** on your machine. We collect no data, send no telemetry, and have no external dependencies beyond your own Home Assistant instance.
+
+- **No analytics or tracking**
+- **No cloud services**
+- **Your data stays on your network**
+
+For full details, see our [Privacy Policy](PRIVACY.md).
 
 ---
 

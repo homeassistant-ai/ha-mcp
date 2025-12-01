@@ -1,0 +1,69 @@
+{
+  "manifest_version": "0.3",
+  "name": "ha-mcp",
+  "version": "${VERSION}",
+  "display_name": "Home Assistant MCP",
+  "description": "Control and manage Home Assistant with natural language",
+  "long_description": "Transform your Home Assistant into an AI-powered smart home with natural language control.\n**What you can do:**\n- Search and discover entities using fuzzy matching\n- Control lights, switches, covers, and climate devices\n- Create and manage automations and scripts\n- Query history, statistics, and system health\n- Organize areas, zones, and device groups\n\n80+ specialized tools give Claude complete access to your smart home—no YAML editing required.",
+  "icon": "icon.png",
+  "author": {
+    "name": "Julien Larocque-Dupont",
+    "email": "github@qc-h.net",
+    "url": "https://github.com/julienld"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/homeassistant-ai/ha-mcp"
+  },
+  "homepage": "https://github.com/homeassistant-ai/ha-mcp",
+  "documentation": "https://github.com/homeassistant-ai/ha-mcp#readme",
+  "support": "https://github.com/homeassistant-ai/ha-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "home-assistant",
+    "smart-home",
+    "automation",
+    "iot",
+    "ai",
+    "mcp",
+    "claude",
+    "home-automation",
+    "voice-control",
+    "natural-language"
+  ],
+  "privacy_policies": [
+    "https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/PRIVACY.md"
+  ],
+  "user_config": {
+    "homeassistant_url": {
+      "type": "string",
+      "title": "Home Assistant URL",
+      "description": "The URL of your Home Assistant instance (e.g., http://homeassistant.local:8123 or https://your-ha.duckdns.org)",
+      "required": true
+    },
+    "homeassistant_token": {
+      "type": "string",
+      "title": "Long-Lived Access Token",
+      "description": "Create a token in Home Assistant: Profile -> Security -> Long-Lived Access Tokens -> Create Token",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "ha-mcp${BINARY_EXT}",
+    "mcp_config": {
+      "command": "${__dirname}/ha-mcp${BINARY_EXT}",
+      "args": [],
+      "env": {
+        "HOMEASSISTANT_URL": "${user_config.homeassistant_url}",
+        "HOMEASSISTANT_TOKEN": "${user_config.homeassistant_token}"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["${PLATFORM}"]
+  },
+  "tools": [],
+  "tools_generated": false
+}
