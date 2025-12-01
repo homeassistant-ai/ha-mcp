@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.8.1 (2025-12-01)
+
+### Bug Fixes
+
+- Add error handling to ha_deep_search (#226)
+  ([#226](https://github.com/homeassistant-ai/ha-mcp/pull/226),
+  [`f952fe4`](https://github.com/homeassistant-ai/ha-mcp/commit/f952fe4dacf3048346102f36d8e3b96fe81e668d))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`634d142`](https://github.com/homeassistant-ai/ha-mcp/commit/634d142adc8db6a0b0fa8d920a663d0bb6e61238))
+
+
 ## v4.8.0 (2025-12-01)
 
 ### Chores
