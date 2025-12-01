@@ -226,13 +226,32 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "title": attributes.get("title", entity_id),
                     }
 
-            # No release notes available
+            # Special handling for Home Assistant Core updates
+            # Core uses blog URLs for release_url, so we need to fetch from GitHub directly
+            if "core" in entity_id.lower():
+                core_result = await _fetch_core_release_notes(latest_version)
+                if core_result:
+                    return {
+                        "success": True,
+                        "entity_id": entity_id,
+                        "version": latest_version,
+                        "release_notes": core_result["notes"],
+                        "source": core_result["source"],
+                        "release_url": release_url,
+                        "title": attributes.get("title", entity_id),
+                    }
+
+            # No release notes available - include helpful message with release_url
+            message = "No release notes available for this update"
+            if release_url:
+                message = f"Release notes could not be fetched automatically. You can view them at: {release_url}"
+
             return {
                 "success": True,
                 "entity_id": entity_id,
                 "version": latest_version,
                 "release_notes": None,
-                "message": "No release notes available for this update",
+                "message": message,
                 "release_url": release_url,
                 "title": attributes.get("title", entity_id),
             }
@@ -481,4 +500,58 @@ async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None
 
     except Exception as e:
         logger.debug(f"Failed to fetch GitHub release notes: {e}")
+        return None
+
+
+async def _fetch_core_release_notes(version: str) -> dict[str, str] | None:
+    """
+    Fetch release notes for Home Assistant Core from GitHub releases API.
+
+    Home Assistant Core uses blog URLs for release_url which don't contain
+    the actual release notes. This function fetches directly from GitHub
+    releases using the version tag.
+
+    Args:
+        version: The version string (e.g., "2025.11.3")
+
+    Returns:
+        Dictionary with 'notes' and 'source' keys, or None if fetch fails
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            # GitHub API URL for Home Assistant Core releases
+            api_url = f"https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
+
+            response = await http_client.get(
+                api_url,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "HomeAssistant-MCP-Server",
+                },
+            )
+
+            if response.status_code == 200:
+                release_data = response.json()
+                body = release_data.get("body", "")
+                if body:
+                    logger.debug(
+                        f"Successfully fetched Core release notes from GitHub for version {version}"
+                    )
+                    return {"notes": str(body), "source": "github_api"}
+            elif response.status_code == 403:
+                # Check if rate limited
+                remaining = response.headers.get("X-RateLimit-Remaining", "0")
+                if remaining == "0":
+                    logger.warning(
+                        f"GitHub API rate limit exceeded for {api_url}"
+                    )
+            else:
+                logger.debug(
+                    f"GitHub API returned status {response.status_code} for Core release {version}"
+                )
+
+            return None
+
+    except Exception as e:
+        logger.debug(f"Failed to fetch Core release notes from GitHub: {e}")
         return None
