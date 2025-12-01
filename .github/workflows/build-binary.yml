@@ -156,6 +156,7 @@ jobs:
 
           # Copy icons to bundle
           cp packaging/mcpb/icon-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-32.png mcpb-bundle/
           cp packaging/mcpb/icon-64.png mcpb-bundle/
           cp packaging/mcpb/icon-128.png mcpb-bundle/
           cp packaging/mcpb/icon-256.png mcpb-bundle/

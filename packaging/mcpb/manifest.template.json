@@ -8,6 +8,7 @@
   "icon": "icon-128.png",
   "icons": [
     { "src": "icon-16.png", "size": "16x16" },
+    { "src": "icon-32.png", "size": "32x32" },
     { "src": "icon-64.png", "size": "64x64" },
     { "src": "icon-128.png", "size": "128x128" },
     { "src": "icon-256.png", "size": "256x256" },
