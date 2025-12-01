@@ -18,20 +18,14 @@ project_root = Path(__file__).parent.parent.parent
 env_file = os.getenv("HAMCP_ENV_FILE", ".env")
 env_path = project_root / env_file
 
-# Load the specified environment file
+# Load the specified environment file (silently, since env vars may come from other sources)
 if env_path.exists():
     load_dotenv(env_path)
-    print(f"[ENV] Loaded environment from: {env_path}")
 else:
     # Fallback to default .env
     default_env_path = project_root / ".env"
     if default_env_path.exists():
         load_dotenv(default_env_path)
-        print(f"[ENV] Fallback: Loaded environment from: {default_env_path}")
-    else:
-        print(
-            f"[ENV] WARNING: No environment file found. Tried: {env_path}, {default_env_path}"
-        )
 
 
 class Settings(BaseSettings):
