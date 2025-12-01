@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..client.websocket_client import HomeAssistantWebSocketClient
 from .helpers import get_connected_ws_client, log_tool_usage
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,16 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
 
                     traces_data = result.get("result", [])
+
+                    # If traces are empty, gather diagnostic information
+                    if not traces_data:
+                        diagnostics = await _gather_diagnostics(
+                            ws_client, client, automation_id, domain
+                        )
+                        return _format_trace_list(
+                            automation_id, traces_data, limit, diagnostics
+                        )
+
                     return _format_trace_list(automation_id, traces_data, limit)
 
             finally:
@@ -224,10 +235,128 @@ async def _resolve_trace_item_id(
         return fallback_object_id
 
 
-def _format_trace_list(
-    automation_id: str, traces: list[dict[str, Any]], limit: int
+async def _gather_diagnostics(
+    ws_client: HomeAssistantWebSocketClient,
+    client: Any,
+    automation_id: str,
+    domain: str,
 ) -> dict[str, Any]:
-    """Format trace list for AI consumption."""
+    """
+    Gather diagnostic information when traces are empty.
+
+    This helps users understand why there are no traces available for
+    an automation or script.
+
+    Args:
+        ws_client: Connected WebSocket client
+        client: REST API client
+        automation_id: Full entity_id (e.g., 'automation.motion_light')
+        domain: Either 'automation' or 'script'
+
+    Returns:
+        Dictionary containing diagnostic information:
+        - automation_exists: Whether the entity exists
+        - automation_enabled: Whether the automation is enabled (on/off state)
+        - trace_storage_enabled: Whether trace storage is enabled for this item
+        - last_triggered: Last trigger timestamp if available
+        - suggestion: Helpful hint based on the diagnostics
+    """
+    diagnostics: dict[str, Any] = {
+        "automation_exists": False,
+        "automation_enabled": False,
+        "trace_storage_enabled": True,  # Default assumption
+        "last_triggered": None,
+        "suggestion": "",
+    }
+
+    try:
+        # Get entity state to check existence and enabled status
+        entity_state = await client.get_entity_state(automation_id)
+
+        if entity_state:
+            diagnostics["automation_exists"] = True
+
+            # Check if enabled (state is 'on' for automations, 'off' is disabled)
+            state = entity_state.get("state", "unknown")
+            diagnostics["automation_enabled"] = state == "on"
+
+            # Get last_triggered from attributes
+            attributes = entity_state.get("attributes", {})
+            last_triggered = attributes.get("last_triggered")
+            if last_triggered:
+                diagnostics["last_triggered"] = last_triggered
+
+            # Check if tracing is stored - only for automations
+            # (scripts always store traces when enabled)
+            if domain == "automation":
+                # Try to get automation config to check stored_traces setting
+                try:
+                    unique_id = attributes.get("id")
+                    if unique_id:
+                        config_result = await ws_client.send_command(
+                            "automation/config",
+                            entity_id=automation_id,
+                        )
+                        if config_result.get("success"):
+                            config = config_result.get("result", {})
+                            # stored_traces defaults to True if not specified
+                            stored_traces = config.get("stored_traces")
+                            if stored_traces is not None and stored_traces <= 0:
+                                diagnostics["trace_storage_enabled"] = False
+                except Exception as e:
+                    logger.debug(f"Could not get automation config: {e}")
+
+            # Generate suggestion based on diagnostics
+            suggestions = []
+
+            if not diagnostics["automation_enabled"]:
+                suggestions.append(
+                    f"The {domain} is currently disabled (state: off). "
+                    "Enable it to start recording traces."
+                )
+            elif diagnostics["last_triggered"] is None:
+                suggestions.append(
+                    f"The {domain} has never been triggered. "
+                    "Wait for it to trigger or manually trigger it to generate traces."
+                )
+            elif not diagnostics["trace_storage_enabled"]:
+                suggestions.append(
+                    "Trace storage is disabled for this automation. "
+                    "Set 'stored_traces' to a positive number in the automation config."
+                )
+            else:
+                suggestions.append(
+                    "Traces may have been cleared or expired. "
+                    "Home Assistant only keeps a limited number of recent traces."
+                )
+
+            diagnostics["suggestion"] = " ".join(suggestions)
+
+    except Exception as e:
+        # Entity doesn't exist or error occurred
+        logger.debug(f"Error getting entity state for diagnostics: {e}")
+        diagnostics["suggestion"] = (
+            f"Could not find {automation_id}. "
+            "Verify the entity_id is correct using ha_search_entities()."
+        )
+
+    return diagnostics
+
+
+def _format_trace_list(
+    automation_id: str,
+    traces: list[dict[str, Any]],
+    limit: int,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Format trace list for AI consumption.
+
+    Args:
+        automation_id: The automation or script entity_id
+        traces: List of trace data from Home Assistant
+        limit: Maximum number of traces to include
+        diagnostics: Optional diagnostic information when traces are empty
+    """
     formatted_traces = []
 
     for trace in traces[:limit]:
@@ -254,7 +383,7 @@ def _format_trace_list(
 
         formatted_traces.append(trace_info)
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "automation_id": automation_id,
         "trace_count": len(formatted_traces),
@@ -262,6 +391,12 @@ def _format_trace_list(
         "traces": formatted_traces,
         "hint": "Use run_id with this tool to get detailed trace information",
     }
+
+    # Include diagnostics when traces are empty
+    if diagnostics is not None and len(traces) == 0:
+        result["diagnostics"] = diagnostics
+
+    return result
 
 
 def _format_detailed_trace(
