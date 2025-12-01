@@ -45,9 +45,7 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 - Is subject to your MCP client's privacy policy
 - Is NOT collected, stored, or transmitted by ha-mcp (except as described above for anonymous statistics)
 
-## Third-Party Services
-
-Ha-mcp communicates with:
+## Services Ha-mcp Communicates With
 
 - **Your Home Assistant instance** — via the URL and token you provide
 - **Your MCP client** — the application that runs ha-mcp
@@ -78,4 +76,4 @@ For privacy-related questions or concerns:
 | Personal data collected | None |
 | Bug reports | User-approved only |
 | Local processing | Yes |
-| Third-party sharing | None (except anonymous stats if enabled) |
+| Third-party data sharing | None |
