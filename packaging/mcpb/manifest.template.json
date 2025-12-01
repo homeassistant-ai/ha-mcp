@@ -5,7 +5,7 @@
   "display_name": "Home Assistant MCP",
   "description": "Control and manage Home Assistant with natural language",
   "long_description": "Control and manage your Home Assistant smart home with natural language.\n\nWhat you can do:\n✅ Search and discover entities using fuzzy matching\n✅ Control lights, switches, covers, and climate devices\n✅ Create and manage automations and scripts\n✅ Query history, statistics, and system health\n✅ Organize areas, zones, and device groups\n\n80+ specialized tools give your AI assistant complete access to your smart home.",
-  "icon": "icon-128.png",
+  "icon": "icon.png",
   "icons": [
     { "src": "icon-16.png", "size": "16x16" },
     { "src": "icon-32.png", "size": "32x32" },
