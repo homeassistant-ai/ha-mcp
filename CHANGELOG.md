@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.8.2 (2025-12-01)
+
+### Bug Fixes
+
+- Fetch Core release notes from GitHub releases API (#228)
+  ([#228](https://github.com/homeassistant-ai/ha-mcp/pull/228),
+  [`b118883`](https://github.com/homeassistant-ai/ha-mcp/commit/b118883b809957552b4e6207654e43d139c7ba33))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9eabf46`](https://github.com/homeassistant-ai/ha-mcp/commit/9eabf4668883101c454ef742e91d7156bf8bd933))
+
+
 ## v4.8.1 (2025-12-01)
 
 ### Bug Fixes
