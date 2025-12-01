@@ -102,7 +102,7 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "hint": "Entity ID must start with 'automation.' or 'script.'",
                 }
 
-            # Extract the object_id (part after the domain)
+            # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
 
             # Connect to WebSocket
@@ -116,12 +116,18 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             try:
+                # Home Assistant stores traces by unique_id, not entity_id.
+                # We need to resolve entity_id -> unique_id via entity registry.
+                item_id = await _resolve_trace_item_id(
+                    ws_client, automation_id, object_id
+                )
+
                 if run_id:
                     # Get specific trace details
                     result = await ws_client.send_command(
                         "trace/get",
                         domain=domain,
-                        item_id=object_id,
+                        item_id=item_id,
                         run_id=run_id,
                     )
 
@@ -140,7 +146,7 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result = await ws_client.send_command(
                         "trace/list",
                         domain=domain,
-                        item_id=object_id,
+                        item_id=item_id,
                     )
 
                     if not result.get("success"):
@@ -168,6 +174,54 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure Home Assistant connection is working",
                 ],
             }
+
+
+async def _resolve_trace_item_id(
+    ws_client: Any, entity_id: str, fallback_object_id: str
+) -> str:
+    """
+    Resolve entity_id to the unique_id used for trace storage.
+
+    Home Assistant stores traces using the automation/script's unique_id,
+    not the entity_id. This function looks up the unique_id from the
+    entity registry and falls back to object_id if not found.
+
+    Args:
+        ws_client: Connected WebSocket client
+        entity_id: Full entity_id (e.g., 'automation.morning_routine')
+        fallback_object_id: Object ID to use if unique_id lookup fails
+
+    Returns:
+        The unique_id for trace lookup, or fallback_object_id
+    """
+    try:
+        # Query entity registry to get unique_id
+        result = await ws_client.send_command(
+            "config/entity_registry/get",
+            entity_id=entity_id,
+        )
+
+        if result.get("success") and result.get("result"):
+            unique_id = result["result"].get("unique_id")
+            if unique_id:
+                logger.debug(
+                    f"Resolved {entity_id} to unique_id: {unique_id}"
+                )
+                return unique_id
+
+        # Fallback to object_id if no unique_id found
+        logger.debug(
+            f"No unique_id found for {entity_id}, using object_id: {fallback_object_id}"
+        )
+        return fallback_object_id
+
+    except Exception as e:
+        # On any error, fall back to object_id
+        logger.warning(
+            f"Failed to resolve unique_id for {entity_id}: {e}, "
+            f"using object_id: {fallback_object_id}"
+        )
+        return fallback_object_id
 
 
 def _format_trace_list(
