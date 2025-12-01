@@ -75,22 +75,21 @@ def generate_manifest(
     template_path: Path,
     output_path: Path,
     version: str,
-    platform: str,
-    binary_ext: str,
     tools: list[dict]
 ):
-    """Generate manifest.json from template with discovered tools."""
+    """Generate manifest.json from template with discovered tools.
+
+    Creates a multi-platform bundle supporting both macOS and Windows.
+    """
     template = json.loads(template_path.read_text(encoding="utf-8"))
 
     # Update tools list
     template["tools"] = tools
     template["tools_generated"] = True
 
-    # Replace placeholders
+    # Replace version placeholder
     manifest_str = json.dumps(template, indent=2)
     manifest_str = manifest_str.replace("${VERSION}", version)
-    manifest_str = manifest_str.replace("${PLATFORM}", platform)
-    manifest_str = manifest_str.replace("${BINARY_EXT}", binary_ext)
 
     # Update description with actual tool count
     manifest = json.loads(manifest_str)
@@ -104,14 +103,12 @@ def generate_manifest(
 
 
 def main():
-    if len(sys.argv) < 4:
-        print("Usage: generate_manifest.py <version> <platform> <binary_ext>")
-        print("Example: generate_manifest.py 4.7.4 win32 .exe")
+    if len(sys.argv) < 2:
+        print("Usage: generate_manifest.py <version>")
+        print("Example: generate_manifest.py 4.7.4")
         sys.exit(1)
 
     version = sys.argv[1]
-    platform = sys.argv[2]
-    binary_ext = sys.argv[3] if len(sys.argv) > 3 else ""
 
     # Paths - script is in packaging/mcpb/, project root is 2 levels up
     script_dir = Path(__file__).parent
@@ -127,7 +124,7 @@ def main():
     tools = discover_all_tools(tools_dir)
 
     # Generate manifest
-    generate_manifest(template_path, output_path, version, platform, binary_ext, tools)
+    generate_manifest(template_path, output_path, version, tools)
 
 
 if __name__ == "__main__":

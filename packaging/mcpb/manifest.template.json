@@ -57,7 +57,6 @@
   },
   "server": {
     "type": "binary",
-    "entry_point": "ha-mcp${BINARY_EXT}",
     "mcp_config": {
       "command": "${__dirname}/ha-mcp${BINARY_EXT}",
       "args": [],
@@ -65,10 +64,18 @@
         "HOMEASSISTANT_URL": "${user_config.homeassistant_url}",
         "HOMEASSISTANT_TOKEN": "${user_config.homeassistant_token}"
       }
+    },
+    "platforms": {
+      "darwin": {
+        "entry_point": "ha-mcp"
+      },
+      "win32": {
+        "entry_point": "ha-mcp.exe"
+      }
     }
   },
   "compatibility": {
-    "platforms": ["${PLATFORM}"]
+    "platforms": ["darwin", "win32"]
   },
   "tools": [],
   "tools_generated": false
