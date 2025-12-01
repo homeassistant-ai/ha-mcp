@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.7.7 (2025-12-01)
+
+### Bug Fixes
+
+- Normalize automation GET config for round-trip compatibility (#221)
+  ([#221](https://github.com/homeassistant-ai/ha-mcp/pull/221),
+  [`278b7a5`](https://github.com/homeassistant-ai/ha-mcp/commit/278b7a5310275389993333b9f63451f86c7385e5))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`f9c512b`](https://github.com/homeassistant-ai/ha-mcp/commit/f9c512bcb63fc9fb9ed98c6e22795c90ff7bf323))
+
+
 ## v4.7.6 (2025-12-01)
 
 ### Bug Fixes
