@@ -4,7 +4,7 @@
   "version": "${VERSION}",
   "display_name": "Home Assistant MCP",
   "description": "Control and manage Home Assistant with natural language",
-  "long_description": "Transform your Home Assistant into an AI-powered smart home with natural language control.\n**What you can do:**\n- Search and discover entities using fuzzy matching\n- Control lights, switches, covers, and climate devices\n- Create and manage automations and scripts\n- Query history, statistics, and system health\n- Organize areas, zones, and device groups\n\n80+ specialized tools give Claude complete access to your smart home—no YAML editing required.",
+  "long_description": "Transform your Home Assistant into an AI-powered smart home with natural language control.\n\n**What you can do:**\n- Search and discover entities using fuzzy matching\n- Control lights, switches, covers, and climate devices\n- Create and manage automations and scripts\n- Query history, statistics, and system health\n- Organize areas, zones, and device groups\n\n80+ specialized tools give your AI assistant complete access to your smart home—no YAML editing required.",
   "icon": "icon.png",
   "author": {
     "name": "Julien Larocque-Dupont",
@@ -26,7 +26,6 @@
     "iot",
     "ai",
     "mcp",
-    "claude",
     "home-automation",
     "voice-control",
     "natural-language"
