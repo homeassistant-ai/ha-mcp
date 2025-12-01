@@ -347,8 +347,21 @@ def register_search_tools(mcp, client, **kwargs):
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
-        result = await smart_tools.deep_search(query, parsed_search_types, limit)
-        return cast(dict[str, Any], result)
+        try:
+            result = await smart_tools.deep_search(query, parsed_search_types, limit)
+            return cast(dict[str, Any], result)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "search_types": parsed_search_types,
+                "suggestions": [
+                    "Check Home Assistant connection",
+                    "Verify automation/script/helper configurations exist",
+                    "Try a simpler search query",
+                ],
+            }
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get Entity State"})
     @log_tool_usage
