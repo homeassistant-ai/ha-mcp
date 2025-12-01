@@ -14,7 +14,7 @@ import httpx
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata
+from .util_helpers import add_timezone_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Logbook Entries"})
     @log_tool_usage
     async def ha_get_logbook(
-        hours_back: int = 1,
+        hours_back: int | str = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
-        limit: int | None = None,
-        offset: int = 0,
+        limit: int | str | None = None,
+        offset: int | str = 0,
     ) -> dict[str, Any]:
         """
         Get Home Assistant logbook entries for the specified time period.
@@ -64,12 +64,52 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
         """
 
-        # Apply limit constraints
-        effective_limit = limit if limit is not None else DEFAULT_LOGBOOK_LIMIT
-        effective_limit = max(1, min(effective_limit, MAX_LOGBOOK_LIMIT))
+        # Coerce parameters - handle string inputs from AI tools
+        try:
+            hours_back_int = coerce_int_param(
+                hours_back, param_name="hours_back", default=1, min_value=1
+            )
+            if hours_back_int is None:
+                hours_back_int = 1
+        except ValueError as e:
+            error_data = {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide hours_back as an integer (e.g., 24)"],
+            }
+            return await add_timezone_metadata(client, error_data)
 
-        # Ensure offset is non-negative
-        offset = max(0, offset)
+        try:
+            effective_limit = coerce_int_param(
+                limit,
+                param_name="limit",
+                default=DEFAULT_LOGBOOK_LIMIT,
+                min_value=1,
+                max_value=MAX_LOGBOOK_LIMIT,
+            )
+            if effective_limit is None:
+                effective_limit = DEFAULT_LOGBOOK_LIMIT
+        except ValueError as e:
+            error_data = {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide limit as an integer (e.g., 50)"],
+            }
+            return await add_timezone_metadata(client, error_data)
+
+        try:
+            offset_int = coerce_int_param(
+                offset, param_name="offset", default=0, min_value=0
+            )
+            if offset_int is None:
+                offset_int = 0
+        except ValueError as e:
+            error_data = {
+                "success": False,
+                "error": str(e),
+                "suggestions": ["Provide offset as a non-negative integer (e.g., 0)"],
+            }
+            return await add_timezone_metadata(client, error_data)
 
         # Calculate start time
         if end_time:
@@ -77,7 +117,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         else:
             end_dt = datetime.now(UTC)
 
-        start_dt = end_dt - timedelta(hours=hours_back)
+        start_dt = end_dt - timedelta(hours=hours_back_int)
         start_timestamp = start_dt.isoformat()
 
         try:

@@ -231,9 +231,23 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 end_dt = datetime.now(UTC)
 
-            # Apply limit constraints
-            effective_limit = limit if limit is not None else DEFAULT_HISTORY_LIMIT
-            effective_limit = max(1, min(effective_limit, MAX_HISTORY_LIMIT))
+            # Apply limit constraints with string coercion for AI tools
+            try:
+                effective_limit = coerce_int_param(
+                    limit,
+                    param_name="limit",
+                    default=DEFAULT_HISTORY_LIMIT,
+                    min_value=1,
+                    max_value=MAX_HISTORY_LIMIT,
+                )
+                if effective_limit is None:
+                    effective_limit = DEFAULT_HISTORY_LIMIT
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "suggestions": ["Provide limit as an integer (e.g., 100)"],
+                }
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
