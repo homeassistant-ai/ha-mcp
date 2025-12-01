@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from .helpers import log_tool_usage
+from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["update"], "title": "List Available Updates"})
     @log_tool_usage
     async def ha_list_updates(
-        include_skipped: bool = False,
+        include_skipped: bool | str = False,
     ) -> dict[str, Any]:
         """
         List all available updates across the system.
@@ -47,6 +48,9 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - updates: List of update entities with version info
             - categories: Updates grouped by category (core, addons, devices, hacs, os)
         """
+        # Coerce boolean parameter that may come as string from XML-style calls
+        include_skipped_bool = coerce_bool_param(include_skipped, "include_skipped", default=False) or False
+
         try:
             # Get all entity states
             states = await client.get_states()
@@ -94,7 +98,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Include skipped updates if requested
             all_updates = available_updates.copy()
-            if include_skipped:
+            if include_skipped_bool:
                 all_updates.extend(skipped_updates)
 
             # Group by category
@@ -124,7 +128,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "skipped_count": len(skipped_updates),
                 "updates": all_updates,
                 "categories": categories,
-                "include_skipped": include_skipped,
+                "include_skipped": include_skipped_bool,
             }
 
         except Exception as e:
