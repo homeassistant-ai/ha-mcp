@@ -12,20 +12,20 @@ Ha-mcp runs on your local machine and communicates with your own Home Assistant 
 
 ## Anonymous Usage Statistics
 
-Ha-mcp does not currently collect any telemetry. In the future, we may add optional anonymous usage statistics to help improve the server. If implemented, this may include:
+Ha-mcp may collect anonymous usage statistics to help improve the server. If enabled, this includes:
 
 - **Tool usage counts** — which tools are used and how often
 - **Server version** — to understand adoption of updates
 - **Request/response sizes** — to optimize performance (not content)
 
-**What we will NOT collect:**
+**What we do NOT collect:**
 - Entity names or IDs
 - Home Assistant configuration
 - Personal information
 - Automation or script content
 - Any data from your smart home devices
 
-If telemetry is added in the future, it will be configurable and this policy will be updated accordingly.
+Telemetry is configurable in the settings.
 
 ## Bug Reports
 
@@ -49,8 +49,7 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 
 - **Your Home Assistant instance** — via the URL and token you provide
 - **Your MCP client** — the application that runs ha-mcp
-
-Currently, ha-mcp does not communicate with any other external services.
+- **Our telemetry server** — for anonymous usage statistics (if enabled)
 
 ## Data Security
 
@@ -73,7 +72,7 @@ For privacy-related questions or concerns:
 
 | Aspect | Status |
 |--------|--------|
-| Anonymous telemetry | Not implemented (may be added in future) |
+| Anonymous telemetry | Configurable |
 | Personal data collected | None |
 | Bug reports | User-approved only |
 | Local processing | Yes |
