@@ -8,6 +8,51 @@ import json
 from typing import Any
 
 
+def coerce_bool_param(
+    value: bool | str | None,
+    param_name: str = "parameter",
+    default: bool | None = None,
+) -> bool | None:
+    """
+    Coerce a value to a boolean, handling string inputs from AI tools.
+
+    AI assistants using XML-style function calls pass boolean parameters as strings
+    (e.g., "true" instead of true). This function safely converts such inputs.
+
+    Args:
+        value: The value to coerce (bool, str, or None)
+        param_name: Parameter name for error messages
+        default: Default value to return if value is None
+
+    Returns:
+        The coerced boolean value, or default if value is None
+
+    Raises:
+        ValueError: If the value cannot be converted to a boolean
+    """
+    if value is None:
+        return default
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if not value:
+            return default
+        if value in ("true", "1", "yes", "on"):
+            return True
+        if value in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(
+            f"{param_name} must be a boolean value, got '{value}'"
+        )
+
+    raise ValueError(
+        f"{param_name} must be bool or string, got {type(value).__name__}"
+    )
+
+
 def coerce_int_param(
     value: int | str | None,
     param_name: str = "parameter",

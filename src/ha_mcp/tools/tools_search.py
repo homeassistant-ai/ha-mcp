@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata, parse_string_list_param
+from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
 
 
 def register_search_tools(mcp, client, **kwargs):
@@ -25,7 +25,7 @@ def register_search_tools(mcp, client, **kwargs):
         domain_filter: str | None = None,
         area_filter: str | None = None,
         limit: int = 10,
-        group_by_domain: bool = False,
+        group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
         """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
 
@@ -45,6 +45,9 @@ def register_search_tools(mcp, client, **kwargs):
         - 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches
         - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
         - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
+        # Coerce boolean parameter that may come as string from XML-style calls
+        group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
+
         try:
             # If area_filter is provided, use area-based search
             if area_filter:
@@ -105,7 +108,7 @@ def register_search_tools(mcp, client, **kwargs):
                         )
 
                     # Group by domain if requested
-                    if group_by_domain:
+                    if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
                         for result in results:
                             domain = result["domain"]
@@ -204,7 +207,7 @@ def register_search_tools(mcp, client, **kwargs):
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
-                if group_by_domain:
+                if group_by_domain_bool:
                     domain_list_data["by_domain"] = {domain_filter: results}
                 return await add_timezone_metadata(client, domain_list_data)
 
@@ -224,7 +227,7 @@ def register_search_tools(mcp, client, **kwargs):
                 result["domain_filter"] = domain_filter
 
             # Group by domain if requested
-            if group_by_domain and "results" in result:
+            if group_by_domain_bool and "results" in result:
                 by_domain = {}
                 for entity in result["results"]:
                     domain = entity.get("domain", entity["entity_id"].split(".")[0])
@@ -273,14 +276,14 @@ def register_search_tools(mcp, client, **kwargs):
             ),
         ] = None,
         include_state: Annotated[
-            bool | None,
+            bool | str | None,
             Field(
                 default=None,
                 description="Include state field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
         include_entity_id: Annotated[
-            bool | None,
+            bool | str | None,
             Field(
                 default=None,
                 description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
@@ -292,8 +295,12 @@ def register_search_tools(mcp, client, **kwargs):
         Returns comprehensive system information at the requested detail level.
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
+        # Coerce boolean parameters that may come as strings from XML-style calls
+        include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
+        include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
+
         result = await smart_tools.get_system_overview(
-            detail_level, max_entities_per_domain, include_state, include_entity_id
+            detail_level, max_entities_per_domain, include_state_bool, include_entity_id_bool
         )
         return cast(dict[str, Any], result)
 

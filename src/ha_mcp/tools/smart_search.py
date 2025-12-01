@@ -240,6 +240,36 @@ class SmartSearchTools:
             entities = await self.client.get_states()
             services = await self.client.get_services()
 
+            # Get area registry and entity registry for proper area mapping
+            # Areas exist in the registry, not in entity state attributes
+            area_registry: list[dict[str, Any]] = []
+            entity_registry: list[dict[str, Any]] = []
+            try:
+                area_result = await self.client.send_websocket_message(
+                    {"type": "config/area_registry/list"}
+                )
+                if area_result.get("success"):
+                    area_registry = area_result.get("result", [])
+            except Exception as e:
+                logger.debug(f"Could not fetch area registry: {e}")
+
+            try:
+                entity_result = await self.client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                )
+                if entity_result.get("success"):
+                    entity_registry = entity_result.get("result", [])
+            except Exception as e:
+                logger.debug(f"Could not fetch entity registry: {e}")
+
+            # Build entity_id -> area_id mapping from entity registry
+            entity_area_map: dict[str, str | None] = {}
+            for entry in entity_registry:
+                entity_id = entry.get("entity_id")
+                area_id = entry.get("area_id")
+                if entity_id:
+                    entity_area_map[entity_id] = area_id
+
             # Determine defaults based on detail_level
             if max_entities_per_domain is None:
                 max_entities_per_domain = 10 if detail_level == "minimal" else None
@@ -285,8 +315,8 @@ class SmartSearchTools:
 
                 domain_stats[domain]["all_entities"].append(entity_data)
 
-                # Area analysis
-                area_id = attributes.get("area_id")
+                # Area analysis - use entity registry mapping, not state attributes
+                area_id = entity_area_map.get(entity_id)
                 if area_id:
                     if area_id not in area_stats:
                         area_stats[area_id] = {"count": 0, "domains": {}}
@@ -374,7 +404,7 @@ class SmartSearchTools:
                     "total_entities": len(entities),
                     "total_domains": len(domain_stats),
                     "total_services": total_services,
-                    "total_areas": len(area_stats),
+                    "total_areas": len(area_registry),
                 },
                 "domain_stats": formatted_domain_stats,
                 "area_analysis": area_stats,  # Now included in all detail levels

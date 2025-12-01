@@ -16,6 +16,90 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
+def _normalize_automation_config(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize automation config field names to HA API format.
+
+    Home Assistant accepts both singular ('trigger', 'action', 'condition')
+    and plural ('triggers', 'actions', 'conditions') field names in YAML,
+    but the API expects singular forms. This function normalizes plural
+    to singular for consistency.
+
+    Args:
+        config: Automation configuration dict
+
+    Returns:
+        Normalized configuration with singular field names
+    """
+    normalized = config.copy()
+
+    # Map plural field names to singular (HA API format)
+    field_mappings = {
+        "triggers": "trigger",
+        "actions": "action",
+        "conditions": "condition",
+    }
+
+    for plural, singular in field_mappings.items():
+        if plural in normalized and singular not in normalized:
+            normalized[singular] = normalized.pop(plural)
+        elif plural in normalized and singular in normalized:
+            # Both exist - prefer singular, remove plural
+            del normalized[plural]
+
+    return normalized
+
+
+def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Normalize trigger objects for round-trip compatibility.
+
+    Home Assistant GET API returns triggers with 'trigger' key for the platform type,
+    but the SET API expects 'platform' key. This function converts between formats.
+
+    Args:
+        triggers: List of trigger configuration dicts
+
+    Returns:
+        List of triggers with 'platform' key instead of 'trigger' key
+    """
+    normalized_triggers = []
+    for trigger in triggers:
+        normalized_trigger = trigger.copy()
+        # Convert 'trigger' key to 'platform' if present and 'platform' is not
+        if "trigger" in normalized_trigger and "platform" not in normalized_trigger:
+            normalized_trigger["platform"] = normalized_trigger.pop("trigger")
+        normalized_triggers.append(normalized_trigger)
+    return normalized_triggers
+
+
+def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize automation config from GET response for direct use in SET.
+
+    This ensures a config retrieved via ha_config_get_automation can be
+    directly passed to ha_config_set_automation without modification.
+
+    Transformations:
+    1. Field names: triggers -> trigger, actions -> action, conditions -> condition
+    2. Trigger keys: trigger -> platform (inside each trigger object)
+
+    Args:
+        config: Raw automation configuration from HA API
+
+    Returns:
+        Normalized configuration compatible with SET API
+    """
+    # First normalize field names (plural -> singular)
+    normalized = _normalize_automation_config(config)
+
+    # Then normalize trigger keys (trigger -> platform)
+    if "trigger" in normalized and isinstance(normalized["trigger"], list):
+        normalized["trigger"] = _normalize_trigger_keys(normalized["trigger"])
+
+    return normalized
+
+
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
@@ -42,11 +126,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             config_result = await client.get_automation_config(identifier)
+            # Normalize config for round-trip compatibility (GET → SET)
+            normalized_config = _normalize_config_for_roundtrip(config_result)
             return {
                 "success": True,
                 "action": "get",
                 "identifier": identifier,
-                "config": config_result,
+                "config": normalized_config,
             }
         except Exception as e:
             # Handle 404 errors gracefully (often used to verify deletion)
@@ -185,6 +271,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 }
 
             config_dict = cast(dict[str, Any], parsed_config)
+
+            # Normalize field names (triggers -> trigger, actions -> action, etc.)
+            config_dict = _normalize_automation_config(config_dict)
 
             # Validate required fields
             required_fields = ["alias", "trigger", "action"]

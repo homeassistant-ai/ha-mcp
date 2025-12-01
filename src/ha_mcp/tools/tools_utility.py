@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from .helpers import log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_int_param
+from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +63,22 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
         """
 
-        # Coerce parameters - handle string inputs from AI tools
+        # Coerce parameters with string handling for AI tools
         try:
             hours_back_int = coerce_int_param(
-                hours_back, param_name="hours_back", default=1, min_value=1
+                hours_back,
+                param_name="hours_back",
+                default=1,
+                min_value=1,
             )
             if hours_back_int is None:
                 hours_back_int = 1
         except ValueError as e:
-            error_data = {
+            return {
                 "success": False,
                 "error": str(e),
                 "suggestions": ["Provide hours_back as an integer (e.g., 24)"],
             }
-            return await add_timezone_metadata(client, error_data)
 
         try:
             effective_limit = coerce_int_param(
@@ -89,26 +91,27 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if effective_limit is None:
                 effective_limit = DEFAULT_LOGBOOK_LIMIT
         except ValueError as e:
-            error_data = {
+            return {
                 "success": False,
                 "error": str(e),
                 "suggestions": ["Provide limit as an integer (e.g., 50)"],
             }
-            return await add_timezone_metadata(client, error_data)
 
         try:
             offset_int = coerce_int_param(
-                offset, param_name="offset", default=0, min_value=0
+                offset,
+                param_name="offset",
+                default=0,
+                min_value=0,
             )
             if offset_int is None:
                 offset_int = 0
         except ValueError as e:
-            error_data = {
+            return {
                 "success": False,
                 "error": str(e),
-                "suggestions": ["Provide offset as a non-negative integer (e.g., 0)"],
+                "suggestions": ["Provide offset as an integer (e.g., 0)"],
             }
-            return await add_timezone_metadata(client, error_data)
 
         # Calculate start time
         if end_time:
@@ -196,7 +199,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["docs"], "title": "Evaluate Template"})
     @log_tool_usage
     async def ha_eval_template(
-        template: str, timeout: int = 3, report_errors: bool = True
+        template: str, timeout: int = 3, report_errors: bool | str = True
     ) -> dict[str, Any]:
         """
         Evaluate Jinja2 templates using Home Assistant's template engine.
@@ -325,6 +328,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
         """
+        # Coerce boolean parameter that may come as string from XML-style calls
+        report_errors_bool = coerce_bool_param(report_errors, "report_errors", default=True) or True
+
         try:
             # Generate unique ID for the template evaluation request
             import time
@@ -336,7 +342,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "render_template",
                 "template": template,
                 "timeout": timeout,
-                "report_errors": report_errors,
+                "report_errors": report_errors_bool,
                 "id": request_id,
             }
 
