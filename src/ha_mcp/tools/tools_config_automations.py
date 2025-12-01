@@ -16,6 +16,40 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
+def _normalize_automation_config(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize automation config field names to HA API format.
+
+    Home Assistant accepts both singular ('trigger', 'action', 'condition')
+    and plural ('triggers', 'actions', 'conditions') field names in YAML,
+    but the API expects singular forms. This function normalizes plural
+    to singular for consistency.
+
+    Args:
+        config: Automation configuration dict
+
+    Returns:
+        Normalized configuration with singular field names
+    """
+    normalized = config.copy()
+
+    # Map plural field names to singular (HA API format)
+    field_mappings = {
+        "triggers": "trigger",
+        "actions": "action",
+        "conditions": "condition",
+    }
+
+    for plural, singular in field_mappings.items():
+        if plural in normalized and singular not in normalized:
+            normalized[singular] = normalized.pop(plural)
+        elif plural in normalized and singular in normalized:
+            # Both exist - prefer singular, remove plural
+            del normalized[plural]
+
+    return normalized
+
+
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
@@ -185,6 +219,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 }
 
             config_dict = cast(dict[str, Any], parsed_config)
+
+            # Normalize field names (triggers -> trigger, actions -> action, etc.)
+            config_dict = _normalize_automation_config(config_dict)
 
             # Validate required fields
             required_fields = ["alias", "trigger", "action"]
