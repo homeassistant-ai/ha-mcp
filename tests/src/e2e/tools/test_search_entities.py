@@ -225,3 +225,94 @@ async def test_search_entities_multiple_domains(mcp_client):
     # At least one domain should have results
     assert any(count > 0 for count in results_summary.values()), \
         "Expected at least one domain to have entities"
+
+
+# ============================================================================
+# Tests for graceful degradation (issue #214)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
+    """Test that successful fuzzy search returns no warning or partial flag.
+
+    Issue #214: Normal fuzzy search should work without fallback indicators.
+    """
+    logger.info("Testing successful fuzzy search has no fallback indicators")
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "limit": 5},
+    )
+    raw_data = assert_mcp_success(result, "Fuzzy search success")
+    data = raw_data.get("data", raw_data)
+
+    assert data.get("success") is True
+    assert data.get("search_type") == "fuzzy_search"
+    # Normal search should NOT have warning or partial flag
+    assert "warning" not in data or data.get("warning") is None
+    assert "partial" not in data or data.get("partial") is not True
+
+    logger.info("Fuzzy search succeeded without fallback indicators")
+
+
+@pytest.mark.asyncio
+async def test_search_entities_response_structure_issue_214(mcp_client):
+    """Test that search response has the expected structure from issue #214.
+
+    The response should include:
+    - success: boolean
+    - results: array
+    - search_type: string indicating which method was used
+    """
+    logger.info("Testing response structure for issue #214")
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "limit": 5},
+    )
+    raw_data = assert_mcp_success(result, "Response structure check")
+    data = raw_data.get("data", raw_data)
+
+    # Verify required fields
+    assert "success" in data, "Response must include 'success' field"
+    assert "results" in data, "Response must include 'results' field"
+    assert "search_type" in data, "Response must include 'search_type' field"
+    assert isinstance(data["results"], list), "Results must be a list"
+
+    # search_type should be one of the expected values
+    valid_search_types = ["fuzzy_search", "exact_match", "partial_listing", "domain_listing"]
+    assert data["search_type"] in valid_search_types, \
+        f"search_type '{data['search_type']}' not in {valid_search_types}"
+
+    logger.info(f"Response structure valid with search_type: {data['search_type']}")
+
+
+@pytest.mark.asyncio
+async def test_search_entities_fallback_fields_when_present(mcp_client):
+    """Test that fallback fields have correct types when present.
+
+    Issue #214: When fallback is used, response should include:
+    - partial: true
+    - warning: string explaining what happened
+    """
+    logger.info("Testing fallback field types")
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "limit": 5},
+    )
+    raw_data = assert_mcp_success(result, "Fallback field types")
+    data = raw_data.get("data", raw_data)
+
+    # If warning is present, it should be a string
+    if "warning" in data and data["warning"] is not None:
+        assert isinstance(data["warning"], str), "warning must be a string"
+        logger.info(f"Warning present: {data['warning']}")
+
+    # If partial is present, it should be a boolean
+    if "partial" in data and data["partial"] is not None:
+        assert isinstance(data["partial"], bool), "partial must be a boolean"
+        logger.info(f"Partial flag: {data['partial']}")
+
+    logger.info("Fallback field types are correct")
