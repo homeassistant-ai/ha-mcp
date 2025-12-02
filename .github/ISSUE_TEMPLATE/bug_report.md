@@ -24,9 +24,22 @@ A clear and concise description of what you expected to happen.
 A clear and concise description of what actually happened.
 
 ## 📊 Environment
+
+> **Tip:** Run the `ha_bug_report` tool in your AI assistant to automatically collect this information!
+> Just ask your AI to call `ha_bug_report()` and paste the output below.
+
+<details>
+<summary>Diagnostic info from ha_bug_report (paste here)</summary>
+
+```
+Paste the output from ha_bug_report() here
+```
+
+</details>
+
 - **Python version**: (e.g., 3.13)
-- **Home Assistant version**: (e.g., 2025.9.1)
-- **MCP Server version**: (commit hash or version)
+- **Home Assistant version**: (from ha_bug_report or manually: e.g., 2025.9.1)
+- **MCP Server version**: (from ha_bug_report or manually: e.g., 4.7.7)
 - **Operating System**: (e.g., Ubuntu 22.04, Windows 11, macOS)
 
 ## 📝 Error Logs
