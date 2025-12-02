@@ -3,10 +3,16 @@ Simple Testcontainers integration for E2E testing.
 
 This provides testcontainers integration but falls back to the existing
 Docker environment if testcontainers has issues.
+
+Environment Variables:
+    HA_TEST_PORT: Optional fixed port for Home Assistant container (default: dynamic)
+                  Set this to bind to a specific host port instead of random assignment.
+                  Example: HA_TEST_PORT=8123
 """
 
 import asyncio
 import logging
+import os
 import shutil
 import sys
 import tempfile
@@ -103,12 +109,22 @@ def ha_container_with_fresh_config():
         f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
     )
 
-    # Create testcontainer with automatic port assignment
+    # Create testcontainer with port configuration
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
     container = DockerContainer("ghcr.io/home-assistant/home-assistant:2025.11.3")
-    container = container.with_exposed_ports(
-        8123
-    )  # Expose port, let testcontainers assign host port
+
+    # Check for custom port via environment variable
+    custom_port = os.environ.get("HA_TEST_PORT")
+    if custom_port:
+        try:
+            port = int(custom_port)
+            container = container.with_bind_ports(8123, port)
+            logger.info(f"🔌 Using fixed port {port} (from HA_TEST_PORT)")
+        except ValueError:
+            logger.warning(f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using dynamic port")
+            container = container.with_exposed_ports(8123)
+    else:
+        container = container.with_exposed_ports(8123)  # Dynamic port assignment
     container = container.with_volume_mapping(
         str(config_path), "/config", "rw"
     )  # Ensure read-write mount

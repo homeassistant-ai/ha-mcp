@@ -4,11 +4,20 @@ Usage logging for MCP tool calls to track usage patterns and performance metrics
 
 import json
 import threading
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from queue import Queue
 from typing import Any
+
+
+# Default ring buffer size - keeps last N entries in memory
+DEFAULT_RING_BUFFER_SIZE = 200
+
+# Average log entries per tool call (empirically observed)
+# This includes the tool itself plus any associated operations
+AVG_LOG_ENTRIES_PER_TOOL = 3
 
 
 @dataclass
@@ -26,9 +35,13 @@ class ToolUsageLog:
 
 
 class UsageLogger:
-    """Async disk logger for MCP tool usage tracking."""
+    """Async disk logger for MCP tool usage tracking with in-memory ring buffer."""
 
-    def __init__(self, log_file_path: str = "logs/mcp_usage.jsonl"):
+    def __init__(
+        self,
+        log_file_path: str = "logs/mcp_usage.jsonl",
+        ring_buffer_size: int = DEFAULT_RING_BUFFER_SIZE,
+    ):
         self._enabled = True
         self.log_file_path = Path(log_file_path)
         try:
@@ -38,8 +51,13 @@ class UsageLogger:
             # Disable logging silently to avoid disrupting the MCP server
             self._enabled = False
 
-        # Thread-safe queue for log entries
-        self._log_queue: Queue = Queue()
+        # In-memory ring buffer for fast access to recent logs
+        # Thread-safe: deque is thread-safe for append/pop operations
+        self._ring_buffer: deque[dict[str, Any]] = deque(maxlen=ring_buffer_size)
+        self._buffer_lock = threading.Lock()
+
+        # Thread-safe queue for disk writes
+        self._log_queue: Queue[ToolUsageLog] = Queue()
         self._logger_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         if self._enabled:
@@ -101,10 +119,32 @@ class UsageLogger:
                 response_size_bytes=response_size_bytes,
                 user_context=user_context,
             )
+
+            # Add to ring buffer (thread-safe)
+            entry_dict = asdict(log_entry)
+            with self._buffer_lock:
+                self._ring_buffer.append(entry_dict)
+
+            # Queue for disk write
             self._log_queue.put(log_entry)
         except Exception:
             # Silent error handling to never break MCP server
             pass
+
+    def get_recent_entries(self, count: int) -> list[dict[str, Any]]:
+        """
+        Get recent log entries from the in-memory ring buffer.
+
+        Args:
+            count: Maximum number of entries to return
+
+        Returns:
+            List of log entries as dictionaries, ordered newest to oldest
+        """
+        with self._buffer_lock:
+            # Get the last N entries, reversed to newest-first order
+            buffer_list = list(self._ring_buffer)
+            return list(reversed(buffer_list[-count:]))
 
     def shutdown(self) -> None:
         """Gracefully shutdown logger."""
@@ -153,3 +193,22 @@ def shutdown_usage_logger() -> None:
     if _usage_logger:
         _usage_logger.shutdown()
         _usage_logger = None
+
+
+def get_recent_logs(max_entries: int = 20) -> list[dict[str, Any]]:
+    """
+    Get recent log entries from the in-memory ring buffer.
+
+    This is O(1) access - no file I/O required.
+
+    Args:
+        max_entries: Maximum number of log entries to return (most recent first)
+
+    Returns:
+        List of log entries as dictionaries, ordered newest to oldest
+    """
+    logger = get_usage_logger()
+    if not logger._enabled:
+        return []
+
+    return logger.get_recent_entries(max_entries)

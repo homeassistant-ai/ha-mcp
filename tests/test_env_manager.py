@@ -4,6 +4,10 @@ Home Assistant MCP Test Environment Manager
 
 Interactive test environment for Home Assistant MCP Server development.
 Uses testcontainers to manage a Home Assistant instance for testing.
+
+Environment Variables:
+    HA_TEST_PORT: Optional fixed port for Home Assistant container (default: random)
+                  Example: HA_TEST_PORT=8123
 """
 
 import logging
@@ -97,11 +101,25 @@ class HomeAssistantTestEnvironment:
         # Set up config directory
         config_dir = self._setup_config_directory()
 
-        # Create and start container
+        # Create container with port configuration
+        # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+        container = DockerContainer("ghcr.io/home-assistant/home-assistant:2025.11.3")
+
+        # Check for custom port via environment variable
+        custom_port = os.environ.get("HA_TEST_PORT")
+        if custom_port:
+            try:
+                port = int(custom_port)
+                container = container.with_bind_ports(8123, port)
+                logger.info(f"🔌 Using fixed port {port} (from HA_TEST_PORT)")
+            except ValueError:
+                logger.warning(f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using random port")
+                container = container.with_bind_ports(8123, None)
+        else:
+            container = container.with_bind_ports(8123, None)  # Random host port
+
         self.container = (
-            # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-            DockerContainer("ghcr.io/home-assistant/home-assistant:2025.11.3")
-            .with_bind_ports(8123, None)  # Random host port
+            container
             .with_volume_mapping(str(config_dir), "/config", "rw")
             .with_env("TZ", "UTC")
             .with_kwargs(privileged=True)
