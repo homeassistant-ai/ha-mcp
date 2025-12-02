@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.1 (2025-12-02)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`af1e238`](https://github.com/homeassistant-ai/ha-mcp/commit/af1e238eae459c3dccd64ca05e24dbe960c927bf))
+
+### Performance Improvements
+
+- Improve startup time with lazy initialization (#237)
+  ([#237](https://github.com/homeassistant-ai/ha-mcp/pull/237),
+  [`2d24c48`](https://github.com/homeassistant-ai/ha-mcp/commit/2d24c4800cadccdc994c041ea2193210cb74df45))
+
+
 ## v4.11.0 (2025-12-02)
 
 ### Chores
