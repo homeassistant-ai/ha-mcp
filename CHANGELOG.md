@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.11.2 (2025-12-02)
+
+### Bug Fixes
+
+- Use correct WebSocket command type for Supervisor API (#246)
+  ([#246](https://github.com/homeassistant-ai/ha-mcp/pull/246),
+  [`51e457c`](https://github.com/homeassistant-ai/ha-mcp/commit/51e457ca8b09af5cdb7255aa37d049c619f4867f))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`74856a2`](https://github.com/homeassistant-ai/ha-mcp/commit/74856a2440eebe52a4d755e143016bc8c60196c6))
+
+### Documentation
+
+- Update uvx instructions to use @latest (#241)
+  ([#241](https://github.com/homeassistant-ai/ha-mcp/pull/241),
+  [`d3f16e6`](https://github.com/homeassistant-ai/ha-mcp/commit/d3f16e6b578088e9e794e76362b232f817e03720))
+
+
 ## v4.11.1 (2025-12-02)
 
 ### Chores
