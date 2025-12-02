@@ -75,7 +75,7 @@ class TestAutomationTraces:
         )
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_automation", create_config
+            "ha_config_set_automation", {"config": create_config}
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
@@ -177,7 +177,7 @@ class TestAutomationTraces:
         )
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_automation", create_config
+            "ha_config_set_automation", {"config": create_config}
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
@@ -232,6 +232,7 @@ class TestAutomationTraces:
 
         # 2. Create a simple script
         script_name = "Trace Test Script E2E"
+        script_id_base = "trace_test_script_e2e"
         script_config = test_data_factory.script_config(
             script_name,
             sequence=[
@@ -240,15 +241,16 @@ class TestAutomationTraces:
         )
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_script", script_config
+            "ha_config_set_script",
+            {"script_id": script_id_base, "config": script_config},
         )
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
 
-        script_id = create_data.get("entity_id") or create_data.get("script_id")
-        if script_id:
-            cleanup_tracker.track_script(script_id)
-        logger.info(f"Created script: {script_id}")
+        # Get the entity_id form (script.trace_test_script_e2e)
+        script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
+        cleanup_tracker.track_script(script_entity_id)
+        logger.info(f"Created script: {script_entity_id}")
 
         # Wait for script registration
         await asyncio.sleep(1)
@@ -259,7 +261,7 @@ class TestAutomationTraces:
             {
                 "domain": "script",
                 "service": "turn_on",
-                "target": {"entity_id": script_id},
+                "target": {"entity_id": script_entity_id},
             },
         )
         assert_mcp_success(run_result)
@@ -271,7 +273,7 @@ class TestAutomationTraces:
         # 4. Get traces for the script
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": script_id},
+            {"automation_id": script_entity_id},
         )
         assert_mcp_success(traces_result)
         traces_data = parse_mcp_result(traces_result)
