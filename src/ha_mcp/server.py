@@ -1,20 +1,27 @@
 """
 Core Smart MCP Server implementation.
+
+Implements lazy initialization pattern for improved startup time:
+- Settings and FastMCP server are created immediately (fast)
+- Smart tools and device tools are created lazily on first access
+- Tool modules are discovered at startup but imported on first use
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
 from mcp.types import Icon
 
-from .client.rest_client import HomeAssistantClient
 from .config import get_global_settings
 from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
-from .tools.device_control import create_device_control_tools
-from .tools.smart_search import create_smart_search_tools
-from .tools.registry import ToolsRegistry
+
+if TYPE_CHECKING:
+    from .client.rest_client import HomeAssistantClient
+    from .tools.registry import ToolsRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +41,12 @@ SERVER_ICONS = [
 
 
 class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
-    """Home Assistant MCP Server with smart tools and fuzzy search."""
+    """Home Assistant MCP Server with smart tools and fuzzy search.
+
+    Uses lazy initialization to improve startup time:
+    - Client, smart_tools, device_tools are created on first access
+    - Tool modules are discovered at startup but imported when first called
+    """
 
     def __init__(
         self,
@@ -42,29 +54,65 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         server_name: str = "ha-mcp",
         server_version: str = "0.1.0",
     ):
-        """Initialize the smart MCP server."""
-        # Only load settings if client not provided (need settings for HomeAssistantClient)
-        if client is None:
-            self.settings = get_global_settings()
-            self.client = HomeAssistantClient()
+        """Initialize the smart MCP server with lazy loading support."""
+        # Load settings first (fast operation)
+        self.settings = get_global_settings()
+
+        # Store provided client or mark for lazy creation
+        self._client: HomeAssistantClient | None = client
+        self._client_provided = client is not None
+
+        # Lazy initialization placeholders
+        self._smart_tools: Any = None
+        self._device_tools: Any = None
+        self._tools_registry: ToolsRegistry | None = None
+
+        # Get server name/version from settings if no client provided
+        if not self._client_provided:
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
-        else:
-            self.settings = None  # type: ignore[assignment]
-            self.client = client
 
         # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(name=server_name, version=server_version, icons=SERVER_ICONS)
 
-        # Initialize smart tools
-        self.smart_tools = create_smart_search_tools(self.client)
-        self.device_tools = create_device_control_tools(self.client)
-
-        # Initialize tools registry
-        self.tools_registry = ToolsRegistry(self)
-
         # Register all tools and expert prompts
         self._initialize_server()
+
+    @property
+    def client(self) -> HomeAssistantClient:
+        """Lazily create and return the Home Assistant client."""
+        if self._client is None:
+            from .client.rest_client import HomeAssistantClient
+            self._client = HomeAssistantClient()
+            logger.debug("Lazily created HomeAssistantClient")
+        return self._client
+
+    @property
+    def smart_tools(self) -> Any:
+        """Lazily create and return the smart search tools."""
+        if self._smart_tools is None:
+            from .tools.smart_search import create_smart_search_tools
+            self._smart_tools = create_smart_search_tools(self.client)
+            logger.debug("Lazily created SmartSearchTools")
+        return self._smart_tools
+
+    @property
+    def device_tools(self) -> Any:
+        """Lazily create and return the device control tools."""
+        if self._device_tools is None:
+            from .tools.device_control import create_device_control_tools
+            self._device_tools = create_device_control_tools(self.client)
+            logger.debug("Lazily created DeviceControlTools")
+        return self._device_tools
+
+    @property
+    def tools_registry(self) -> ToolsRegistry:
+        """Lazily create and return the tools registry."""
+        if self._tools_registry is None:
+            from .tools.registry import ToolsRegistry
+            self._tools_registry = ToolsRegistry(self)
+            logger.debug("Lazily created ToolsRegistry")
+        return self._tools_registry
 
     def _initialize_server(self) -> None:
         """Initialize all server components."""
@@ -135,6 +183,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
 
     async def close(self) -> None:
         """Close the MCP server and cleanup resources."""
-        if hasattr(self.client, "close"):
-            await self.client.close()
+        # Only close client if it was actually created
+        if self._client is not None and hasattr(self._client, "close"):
+            await self._client.close()
         logger.info("🔧 Home Assistant Smart MCP Server closed")

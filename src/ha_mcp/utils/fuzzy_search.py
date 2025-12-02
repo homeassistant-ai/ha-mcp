@@ -1,16 +1,33 @@
 """
 Fuzzy entity search utilities for Home Assistant MCP server.
+
+This module implements lazy loading of the textdistance library to improve
+startup time. The library is only imported when fuzzy search is first used.
 """
 
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
-import textdistance
-
-
-_LEVENSHTEIN = textdistance.Levenshtein()
+# Lazy loading of textdistance - only import when needed
+_textdistance = None
+_LEVENSHTEIN = None
 
 logger = logging.getLogger(__name__)
+
+
+def _get_levenshtein() -> Any:
+    """Lazily load and return the Levenshtein distance calculator.
+
+    This defers the import of textdistance until first use, which significantly
+    improves startup time for the binary distribution.
+    """
+    global _textdistance, _LEVENSHTEIN
+    if _LEVENSHTEIN is None:
+        import textdistance
+        _textdistance = textdistance
+        _LEVENSHTEIN = textdistance.Levenshtein()
+    return _LEVENSHTEIN
 
 
 class FuzzyEntitySearcher:
@@ -304,7 +321,8 @@ def calculate_ratio(query: str, value: str) -> int:
     if max_len == 0:
         return 0
 
-    distance = _LEVENSHTEIN.distance(query, value)
+    levenshtein = _get_levenshtein()
+    distance = levenshtein.distance(query, value)
     similarity = 1 - (distance / max_len)
     return int(max(similarity, 0) * 100)
 
