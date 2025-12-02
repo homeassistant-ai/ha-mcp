@@ -13,6 +13,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
+from mcp.types import Icon
 
 from .config import get_global_settings
 from .prompts.enhanced import EnhancedPromptsMixin
@@ -23,6 +24,20 @@ if TYPE_CHECKING:
     from .tools.registry import ToolsRegistry
 
 logger = logging.getLogger(__name__)
+
+# Server icon configuration using GitHub-hosted images
+# These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
+SERVER_ICONS = [
+    Icon(
+        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
+        mimeType="image/svg+xml",
+    ),
+    Icon(
+        src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon-128.png",
+        mimeType="image/png",
+        sizes=["128x128"],
+    ),
+]
 
 
 class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
@@ -57,8 +72,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
-        # Create FastMCP server immediately (it's fast and needed for tool registration)
-        self.mcp = FastMCP(name=server_name, version=server_version)
+        # Create FastMCP server with Home Assistant icons for client UI display
+        self.mcp = FastMCP(name=server_name, version=server_version, icons=SERVER_ICONS)
 
         # Register all tools and expert prompts
         self._initialize_server()

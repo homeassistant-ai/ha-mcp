@@ -4,12 +4,100 @@ Search and discovery tools for Home Assistant MCP server.
 This module provides entity search, system overview, deep search, and state retrieval tools.
 """
 
+import logging
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import create_entity_not_found_error
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
+
+logger = logging.getLogger(__name__)
+
+
+async def _exact_match_search(
+    client, query: str, domain_filter: str | None, limit: int
+) -> dict[str, Any]:
+    """
+    Fallback exact match search when fuzzy search fails.
+
+    Performs simple substring matching on entity_id and friendly_name.
+    """
+    all_entities = await client.get_states()
+    query_lower = query.lower().strip()
+
+    results = []
+    for entity in all_entities:
+        entity_id = entity.get("entity_id", "")
+        attributes = entity.get("attributes", {})
+        friendly_name = attributes.get("friendly_name", entity_id)
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+        # Apply domain filter if provided
+        if domain_filter and domain != domain_filter:
+            continue
+
+        # Check for exact substring match in entity_id or friendly_name
+        if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
+            results.append({
+                "entity_id": entity_id,
+                "friendly_name": friendly_name,
+                "domain": domain,
+                "state": entity.get("state", "unknown"),
+                "score": 100 if query_lower == entity_id.lower() or query_lower == friendly_name.lower() else 80,
+                "match_type": "exact_match",
+            })
+
+    # Sort by score descending
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return {
+        "success": True,
+        "query": query,
+        "total_matches": len(results),
+        "results": results[:limit],
+        "search_type": "exact_match",
+    }
+
+
+async def _partial_results_search(
+    client, query: str, domain_filter: str | None, limit: int
+) -> dict[str, Any]:
+    """
+    Last resort fallback - return any entities that might be relevant.
+
+    Returns entities from the specified domain (if any) or a sample of all entities.
+    """
+    all_entities = await client.get_states()
+
+    results = []
+    for entity in all_entities:
+        entity_id = entity.get("entity_id", "")
+        attributes = entity.get("attributes", {})
+        friendly_name = attributes.get("friendly_name", entity_id)
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+        # Apply domain filter if provided
+        if domain_filter and domain != domain_filter:
+            continue
+
+        results.append({
+            "entity_id": entity_id,
+            "friendly_name": friendly_name,
+            "domain": domain,
+            "state": entity.get("state", "unknown"),
+            "score": 0,  # No match score for partial results
+            "match_type": "partial_listing",
+        })
+
+    return {
+        "success": True,
+        "partial": True,
+        "query": query,
+        "total_matches": len(results),
+        "results": results[:limit],
+        "search_type": "partial_listing",
+    }
 
 
 def register_search_tools(mcp, client, **kwargs):
@@ -211,14 +299,50 @@ def register_search_tools(mcp, client, **kwargs):
                     domain_list_data["by_domain"] = {domain_filter: results}
                 return await add_timezone_metadata(client, domain_list_data)
 
-            result = await smart_tools.smart_entity_search(query, limit)
+            # Graceful degradation with fallback search methods
+            # 1. Try fuzzy search (primary method)
+            # 2. If that fails, try exact match
+            # 3. If that fails, return partial results with warning
+            # 4. Only error if all methods fail
+
+            result = None
+            warning = None
+            search_type = "fuzzy_search"
+
+            # Step 1: Try fuzzy search
+            try:
+                result = await smart_tools.smart_entity_search(query, limit)
+                search_type = "fuzzy_search"
+            except Exception as fuzzy_error:
+                logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
+
+                # Step 2: Try exact match fallback
+                try:
+                    result = await _exact_match_search(client, query, domain_filter, limit)
+                    warning = "Fuzzy search unavailable, using exact match"
+                    search_type = "exact_match"
+                except Exception as exact_error:
+                    logger.warning(f"Exact match failed, trying partial results: {exact_error}")
+
+                    # Step 3: Try partial results fallback
+                    try:
+                        result = await _partial_results_search(client, query, domain_filter, limit)
+                        warning = "Search degraded, returning partial results"
+                        search_type = "partial_listing"
+                    except Exception as partial_error:
+                        # Step 4: All methods failed - raise to outer exception handler
+                        logger.error(f"All search methods failed: {partial_error}")
+                        raise Exception(
+                            f"All search methods failed. Fuzzy: {fuzzy_error}, "
+                            f"Exact: {exact_error}, Partial: {partial_error}"
+                        ) from partial_error
 
             # Convert 'matches' to 'results' for backward compatibility
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
-            # Apply domain filter if provided
-            if domain_filter and "results" in result:
+            # Apply domain filter if provided (for fuzzy search results)
+            if domain_filter and "results" in result and search_type == "fuzzy_search":
                 filtered_results = [
                     r for r in result["results"] if r.get("domain") == domain_filter
                 ]
@@ -236,22 +360,32 @@ def register_search_tools(mcp, client, **kwargs):
                     by_domain[domain].append(entity)
                 result["by_domain"] = by_domain
 
-            result["search_type"] = "fuzzy_search"
+            result["search_type"] = search_type
+
+            # Add warning and partial flag if fallback was used
+            if warning:
+                result["warning"] = warning
+                result["partial"] = True
+
             return await add_timezone_metadata(client, result)
 
         except Exception as e:
-            error_data = {
-                "error": str(e),
-                "query": query,
-                "domain_filter": domain_filter,
-                "area_filter": area_filter,
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "query": query,
+                    "domain_filter": domain_filter,
+                    "area_filter": area_filter,
+                },
+            )
+            # Add search-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
-                ],
-            }
-            return await add_timezone_metadata(client, error_data)
+                ]
+            return await add_timezone_metadata(client, error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
     @log_tool_usage
@@ -347,8 +481,25 @@ def register_search_tools(mcp, client, **kwargs):
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
-        result = await smart_tools.deep_search(query, parsed_search_types, limit)
-        return cast(dict[str, Any], result)
+        try:
+            result = await smart_tools.deep_search(query, parsed_search_types, limit)
+            return cast(dict[str, Any], result)
+        except Exception as e:
+            import traceback
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
+                "query": query,
+                "search_types": parsed_search_types,
+                "limit": limit,
+                "suggestions": [
+                    "Check Home Assistant connection",
+                    "Try simpler search terms",
+                    "Check search_types are valid: 'automation', 'script', 'helper'",
+                ],
+            }
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get Entity State"})
     @log_tool_usage
@@ -358,13 +509,23 @@ def register_search_tools(mcp, client, **kwargs):
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
         except Exception as e:
-            error_data = {
-                "entity_id": entity_id,
-                "error": str(e),
-                "suggestions": [
-                    f"Verify entity {entity_id} exists",
+            error_str = str(e).lower()
+            # Check if entity not found
+            if "404" in error_str or "not found" in error_str:
+                error_response = create_entity_not_found_error(
+                    entity_id,
+                    details=str(e),
+                )
+            else:
+                error_response = exception_to_structured_error(
+                    e,
+                    context={"entity_id": entity_id},
+                )
+            # Add entity-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
+                    f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
-                    "Try ha_search_entities() to find correct entity",
-                ],
-            }
-            return await add_timezone_metadata(client, error_data)
+                    "Use ha_search_entities() to find correct entity IDs",
+                ]
+            return await add_timezone_metadata(client, error_response)

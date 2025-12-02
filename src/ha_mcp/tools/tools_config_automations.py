@@ -10,7 +10,12 @@ from typing import Annotated, Any, cast
 
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import (
+    create_config_error,
+    create_resource_not_found_error,
+    create_validation_error,
+)
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -145,26 +150,28 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 logger.debug(
                     f"Automation {identifier} not found (expected for deletion verification)"
                 )
-                return {
-                    "success": False,
-                    "action": "get",
-                    "identifier": identifier,
-                    "error": f"Automation {identifier} does not exist",
-                    "reason": "not_found",
-                }
+                error_response = create_resource_not_found_error(
+                    "Automation",
+                    identifier,
+                    details=f"Automation '{identifier}' does not exist in Home Assistant",
+                )
+                error_response["action"] = "get"
+                error_response["reason"] = "not_found"
+                return error_response
 
             logger.error(f"Error getting automation: {e}")
-            return {
-                "success": False,
-                "action": "get",
-                "identifier": identifier,
-                "error": str(e),
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={"identifier": identifier, "action": "get"},
+            )
+            # Add automation-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Check Home Assistant connection",
                     "Use ha_get_domain_docs('automation') for configuration help",
-                ],
-            }
+                ]
+            return error_response
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["automation"], "title": "Create or Update Automation"})
     @log_tool_usage
@@ -256,19 +263,19 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             try:
                 parsed_config = parse_json_param(config, "config")
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": f"Invalid config parameter: {e}",
-                    "provided_config_type": type(config).__name__,
-                }
+                return create_validation_error(
+                    f"Invalid config parameter: {e}",
+                    parameter="config",
+                    invalid_json=True,
+                )
 
             # Ensure config is a dict
             if parsed_config is None or not isinstance(parsed_config, dict):
-                return {
-                    "success": False,
-                    "error": "Config parameter must be a JSON object",
-                    "provided_type": type(parsed_config).__name__,
-                }
+                return create_validation_error(
+                    "Config parameter must be a JSON object",
+                    parameter="config",
+                    details=f"Received type: {type(parsed_config).__name__}",
+                )
 
             config_dict = cast(dict[str, Any], parsed_config)
 
@@ -279,12 +286,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             required_fields = ["alias", "trigger", "action"]
             missing_fields = [f for f in required_fields if f not in config_dict]
             if missing_fields:
-                return {
-                    "success": False,
-                    "error": f"Missing required fields: {', '.join(missing_fields)}",
-                    "required_fields": required_fields,
-                    "missing_fields": missing_fields,
-                }
+                return create_config_error(
+                    f"Missing required fields: {', '.join(missing_fields)}",
+                    identifier=identifier,
+                    missing_fields=missing_fields,
+                )
 
             result = await client.upsert_automation_config(
                 config_dict, identifier
@@ -297,18 +303,20 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         except Exception as e:
             logger.error(f"Error upserting automation: {e}")
-            return {
-                "success": False,
-                "identifier": identifier,
-                "error": str(e),
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={"identifier": identifier},
+            )
+            # Add automation-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check automation configuration format",
                     "Ensure required fields: alias, trigger, action",
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Use ha_search_entities(domain_filter='automation') to find automations",
                     "Use ha_get_domain_docs('automation') for comprehensive configuration help",
-                ],
-            }
+                ]
+            return error_response
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["automation"], "title": "Remove Automation"})
     @log_tool_usage
@@ -334,14 +342,24 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             return {"success": True, "action": "delete", **result}
         except Exception as e:
             logger.error(f"Error deleting automation: {e}")
-            return {
-                "success": False,
-                "action": "delete",
-                "identifier": identifier,
-                "error": str(e),
-                "suggestions": [
+            error_str = str(e).lower()
+            if "404" in error_str or "not found" in error_str:
+                error_response = create_resource_not_found_error(
+                    "Automation",
+                    identifier,
+                    details=f"Automation '{identifier}' does not exist",
+                )
+            else:
+                error_response = exception_to_structured_error(
+                    e,
+                    context={"identifier": identifier},
+                )
+            error_response["action"] = "delete"
+            # Add automation-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
-                ],
-            }
+                ]
+            return error_response

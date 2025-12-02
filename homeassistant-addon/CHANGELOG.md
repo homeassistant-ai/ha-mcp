@@ -2,6 +2,97 @@
 
 <!-- version list -->
 
+## v4.9.0 (2025-12-02)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`aed5fa1`](https://github.com/homeassistant-ai/ha-mcp/commit/aed5fa13208f3cecde8f091a03eeafd4fc757c31))
+
+### Features
+
+- Add HA_TEST_PORT env var for custom test container port
+  ([`4743ee8`](https://github.com/homeassistant-ai/ha-mcp/commit/4743ee82491f8df82308f80d03565bd6de6909b5))
+
+
+## v4.8.5 (2025-12-01)
+
+### Bug Fixes
+
+- Include resource files in PyPI package distribution (#230)
+  ([#230](https://github.com/homeassistant-ai/ha-mcp/pull/230),
+  [`6052b29`](https://github.com/homeassistant-ai/ha-mcp/commit/6052b29690b27fd2dd8f61fbdcfb40d67ce6490e))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9f93cf2`](https://github.com/homeassistant-ai/ha-mcp/commit/9f93cf2b046aec846a40423faa1e84ba6a347737))
+
+
+## v4.8.4 (2025-12-01)
+
+### Bug Fixes
+
+- Resolve entity_id to unique_id for trace lookup (#229)
+  ([#229](https://github.com/homeassistant-ai/ha-mcp/pull/229),
+  [`3a9faf1`](https://github.com/homeassistant-ai/ha-mcp/commit/3a9faf19d8f98308a0315115cc1876c9ec057213))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`c1be33b`](https://github.com/homeassistant-ai/ha-mcp/commit/c1be33b7bd3672f8682c16ebfae5ddbc21118da4))
+
+
+## v4.8.3 (2025-12-01)
+
+### Bug Fixes
+
+- Add error handling to search tools for better diagnostics (#227)
+  ([#227](https://github.com/homeassistant-ai/ha-mcp/pull/227),
+  [`aaeac64`](https://github.com/homeassistant-ai/ha-mcp/commit/aaeac6498eec8cb1c5dfa230772e9d2dc5f56229))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`3dcfefa`](https://github.com/homeassistant-ai/ha-mcp/commit/3dcfefaffdb3fb360a6ee51548cab7714123e134))
+
+
+## v4.8.2 (2025-12-01)
+
+### Bug Fixes
+
+- Fetch Core release notes from GitHub releases API (#228)
+  ([#228](https://github.com/homeassistant-ai/ha-mcp/pull/228),
+  [`b118883`](https://github.com/homeassistant-ai/ha-mcp/commit/b118883b809957552b4e6207654e43d139c7ba33))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9eabf46`](https://github.com/homeassistant-ai/ha-mcp/commit/9eabf4668883101c454ef742e91d7156bf8bd933))
+
+
+## v4.8.1 (2025-12-01)
+
+### Bug Fixes
+
+- Add error handling to ha_deep_search (#226)
+  ([#226](https://github.com/homeassistant-ai/ha-mcp/pull/226),
+  [`f952fe4`](https://github.com/homeassistant-ai/ha-mcp/commit/f952fe4dacf3048346102f36d8e3b96fe81e668d))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`634d142`](https://github.com/homeassistant-ai/ha-mcp/commit/634d142adc8db6a0b0fa8d920a663d0bb6e61238))
+
+
+## v4.8.0 (2025-12-01)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7931b3f`](https://github.com/homeassistant-ai/ha-mcp/commit/7931b3fe9ebb447cd14e12dd5dd165278d910ec8))
+
+
 ## v4.7.7 (2025-12-01)
 
 ### Bug Fixes
