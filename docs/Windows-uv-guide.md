@@ -27,7 +27,7 @@ winget install astral-sh.uv -e
       "mcpServers": {
         "Home Assistant": {
           "command": "uvx",
-          "args": ["ha-mcp"],
+          "args": ["ha-mcp@latest"],
           "env": {
             "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
             "HOMEASSISTANT_TOKEN": "your_long_lived_token"
