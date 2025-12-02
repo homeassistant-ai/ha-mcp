@@ -97,7 +97,7 @@ class TestAutomationTraces:
             {
                 "domain": "automation",
                 "service": "trigger",
-                "target": {"entity_id": automation_id},
+                "entity_id": automation_id,
             },
         )
         assert_mcp_success(trigger_result)
@@ -261,7 +261,7 @@ class TestAutomationTraces:
             {
                 "domain": "script",
                 "service": "turn_on",
-                "target": {"entity_id": script_entity_id},
+                "entity_id": script_entity_id,
             },
         )
         assert_mcp_success(run_result)
