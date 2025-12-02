@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.0 (2025-12-02)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`c68b5bf`](https://github.com/homeassistant-ai/ha-mcp/commit/c68b5bff214251b12193c5cfb46eeaaf3d389b2a))
+
+### Features
+
+- Add diagnostic mode for empty automation traces (#235)
+  ([#235](https://github.com/homeassistant-ai/ha-mcp/pull/235),
+  [`7ceba5b`](https://github.com/homeassistant-ai/ha-mcp/commit/7ceba5b539d3600335c95c4eef0d87abe53a86c0))
+
+
 ## v4.10.0 (2025-12-02)
 
 ### Bug Fixes
