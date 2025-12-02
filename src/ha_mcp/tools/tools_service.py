@@ -6,7 +6,10 @@ This module provides service execution and WebSocket-enabled operation monitorin
 
 from typing import Any, cast
 
-
+from ..errors import (
+    create_validation_error,
+)
+from .helpers import exception_to_structured_error
 from .util_helpers import coerce_bool_param, parse_json_param
 
 
@@ -136,11 +139,11 @@ def register_service_tools(mcp, client, **kwargs):
             try:
                 parsed_data = parse_json_param(data, "data")
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": f"Invalid data parameter: {e}",
-                    "provided_data_type": type(data).__name__,
-                }
+                return create_validation_error(
+                    f"Invalid data parameter: {e}",
+                    parameter="data",
+                    invalid_json=True,
+                )
 
             # Ensure service_data is a dict
             service_data: dict[str, Any] = {}
@@ -148,11 +151,11 @@ def register_service_tools(mcp, client, **kwargs):
                 if isinstance(parsed_data, dict):
                     service_data = parsed_data
                 else:
-                    return {
-                        "success": False,
-                        "error": "Data parameter must be a JSON object",
-                        "provided_type": type(parsed_data).__name__,
-                    }
+                    return create_validation_error(
+                        "Data parameter must be a JSON object",
+                        parameter="data",
+                        details=f"Received type: {type(parsed_data).__name__}",
+                    )
 
             if entity_id:
                 service_data["entity_id"] = entity_id
@@ -168,25 +171,30 @@ def register_service_tools(mcp, client, **kwargs):
                 "message": f"Successfully executed {domain}.{service}",
             }
         except Exception as error:
-            return {
-                "success": False,
-                "error": str(error),
-                "domain": domain,
-                "service": service,
-                "entity_id": entity_id,
-                "suggestions": [
-                    f"Verify {entity_id} exists using ha_get_state()",
-                    f"Check available services for {domain} domain using ha_get_domain_docs()",
+            # Use structured error response
+            error_response = exception_to_structured_error(
+                error,
+                context={
+                    "domain": domain,
+                    "service": service,
+                    "entity_id": entity_id,
+                },
+            )
+            # Add service-specific suggestions
+            suggestions = [
+                f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
+                f"Check available services for {domain} domain using ha_get_domain_docs()",
+                "Use ha_search_entities() to find correct entity IDs",
+            ]
+            if entity_id:
+                suggestions.extend([
                     f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
                     f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                    "Use ha_search_entities() to find correct entity IDs",
-                ],
-                "examples": {
-                    "automation_trigger": f"ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
-                    "universal_toggle": f"ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                    "light_control": "ha_call_service('light', 'turn_on', entity_id='light.bedroom', data={'brightness_pct': 75})",
-                },
-            }
+                ])
+            # Merge suggestions into error response
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = suggestions
+            return error_response
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     async def ha_get_operation_status(
@@ -210,19 +218,19 @@ def register_service_tools(mcp, client, **kwargs):
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
-            return {
-                "success": False,
-                "error": f"Invalid operations parameter: {e}",
-                "provided_operations_type": type(operations).__name__,
-            }
+            return create_validation_error(
+                f"Invalid operations parameter: {e}",
+                parameter="operations",
+                invalid_json=True,
+            )
 
         # Ensure operations is a list of dicts
         if parsed_operations is None or not isinstance(parsed_operations, list):
-            return {
-                "success": False,
-                "error": "Operations parameter must be a list",
-                "provided_type": type(parsed_operations).__name__,
-            }
+            return create_validation_error(
+                "Operations parameter must be a list",
+                parameter="operations",
+                details=f"Received type: {type(parsed_operations).__name__}",
+            )
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
         result = await device_tools.bulk_device_control(

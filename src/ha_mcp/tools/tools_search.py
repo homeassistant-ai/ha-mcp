@@ -9,7 +9,8 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import create_entity_not_found_error
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -369,22 +370,22 @@ def register_search_tools(mcp, client, **kwargs):
             return await add_timezone_metadata(client, result)
 
         except Exception as e:
-            import traceback
-            error_data = {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "query": query,
-                "domain_filter": domain_filter,
-                "area_filter": area_filter,
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "query": query,
+                    "domain_filter": domain_filter,
+                    "area_filter": area_filter,
+                },
+            )
+            # Add search-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
-                ],
-            }
-            return await add_timezone_metadata(client, error_data)
+                ]
+            return await add_timezone_metadata(client, error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
     @log_tool_usage
@@ -508,17 +509,23 @@ def register_search_tools(mcp, client, **kwargs):
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
         except Exception as e:
-            import traceback
-            error_data = {
-                "success": False,
-                "entity_id": entity_id,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "suggestions": [
-                    f"Verify entity {entity_id} exists",
+            error_str = str(e).lower()
+            # Check if entity not found
+            if "404" in error_str or "not found" in error_str:
+                error_response = create_entity_not_found_error(
+                    entity_id,
+                    details=str(e),
+                )
+            else:
+                error_response = exception_to_structured_error(
+                    e,
+                    context={"entity_id": entity_id},
+                )
+            # Add entity-specific suggestions
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
+                    f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
-                    "Try ha_search_entities() to find correct entity",
-                ],
-            }
-            return await add_timezone_metadata(client, error_data)
+                    "Use ha_search_entities() to find correct entity IDs",
+                ]
+            return await add_timezone_metadata(client, error_response)
