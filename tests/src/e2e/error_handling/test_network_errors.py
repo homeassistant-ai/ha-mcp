@@ -20,6 +20,15 @@ from ..utilities.assertions import (
 logger = logging.getLogger(__name__)
 
 
+def _get_error_str(data: dict, max_len: int = 50) -> str:
+    """Extract error string from response data, handling both string and dict errors."""
+    error = data.get("error", "")
+    if isinstance(error, dict):
+        # Structured error - extract message
+        return str(error.get("message", error.get("code", str(error))))[:max_len]
+    return str(error)[:max_len] if error else ""
+
+
 @pytest.mark.error_handling
 class TestErrorHandling:
     """Test error handling and edge cases across MCP tools."""
@@ -72,7 +81,7 @@ class TestErrorHandling:
             # Should either fail gracefully or return not found
             if not state_data.get("success"):
                 logger.info(
-                    f"  ✅ Correctly failed for '{entity_id}': {state_data.get('error', 'No error message')[:50]}"
+                    f"  ✅ Correctly failed for '{entity_id}': {_get_error_str(state_data)}"
                 )
             else:
                 # If it "succeeds", should indicate entity not found
@@ -109,7 +118,7 @@ class TestErrorHandling:
         invalid_service_data = parse_mcp_result(invalid_service_result)
         if not invalid_service_data.get("success"):
             logger.info(
-                f"  ✅ Correctly failed for nonexistent service: {invalid_service_data.get('error', '')[:50]}"
+                f"  ✅ Correctly failed for nonexistent service: {_get_error_str(invalid_service_data)}"
             )
         else:
             logger.warning("  ⚠️ Nonexistent service call unexpectedly succeeded")
@@ -125,7 +134,7 @@ class TestErrorHandling:
         invalid_domain_data = parse_mcp_result(invalid_domain_result)
         if not invalid_domain_data.get("success"):
             logger.info(
-                f"  ✅ Correctly failed for invalid domain: {invalid_domain_data.get('error', '')[:50]}"
+                f"  ✅ Correctly failed for invalid domain: {_get_error_str(invalid_domain_data)}"
             )
 
         # 3. MISSING REQUIRED PARAMETERS: Try to call service without required params
@@ -183,7 +192,7 @@ class TestErrorHandling:
             logger.info(f"  ✅ Empty query returned {len(results)} results")
         else:
             logger.info(
-                f"  ✅ Empty query correctly failed: {empty_data.get('error', '')[:50]}"
+                f"  ✅ Empty query correctly failed: {_get_error_str(empty_data)}"
             )
 
         # 2. VERY LONG QUERY: Test with extremely long search string
@@ -201,7 +210,7 @@ class TestErrorHandling:
             )
         else:
             logger.info(
-                f"  ✅ Long query correctly failed: {long_data.get('error', '')[:50]}"
+                f"  ✅ Long query correctly failed: {_get_error_str(long_data)}"
             )
 
         # 3. SPECIAL CHARACTERS: Test with various special characters
@@ -310,7 +319,7 @@ class TestErrorHandling:
         empty_bulk_data = parse_mcp_result(empty_bulk_result)
         if not empty_bulk_data.get("success"):
             logger.info(
-                f"  ✅ Empty entity list correctly failed: {empty_bulk_data.get('error', '')[:50]}"
+                f"  ✅ Empty entity list correctly failed: {_get_error_str(empty_bulk_data)}"
             )
         else:
             logger.warning("  ⚠️ Empty entity list unexpectedly succeeded")
@@ -377,7 +386,7 @@ class TestErrorHandling:
                         )
             else:
                 logger.info(
-                    f"  ✅ Mixed entities correctly failed: {mixed_bulk_data.get('error', '')[:50]}"
+                    f"  ✅ Mixed entities correctly failed: {_get_error_str(mixed_bulk_data)}"
                 )
 
         # 3. INVALID ACTION: Bulk operation with invalid action
@@ -397,7 +406,7 @@ class TestErrorHandling:
             invalid_action_data = parse_mcp_result(invalid_action_result)
             if not invalid_action_data.get("success"):
                 logger.info(
-                    f"  ✅ Invalid action correctly failed: {invalid_action_data.get('error', '')[:50]}"
+                    f"  ✅ Invalid action correctly failed: {_get_error_str(invalid_action_data)}"
                 )
             else:
                 logger.warning("  ⚠️ Invalid action unexpectedly succeeded")
@@ -428,7 +437,7 @@ class TestErrorHandling:
             missing_name_data = parse_mcp_result(missing_name_result)
             if not missing_name_data.get("success"):
                 logger.info(
-                    f"  ✅ Missing name correctly failed: {missing_name_data.get('error', '')[:50]}"
+                    f"  ✅ Missing name correctly failed: {_get_error_str(missing_name_data)}"
                 )
             else:
                 logger.warning("  ⚠️ Missing name unexpectedly succeeded")
@@ -465,7 +474,7 @@ class TestErrorHandling:
         invalid_type_data = parse_mcp_result(invalid_type_result)
         if not invalid_type_data.get("success"):
             logger.info(
-                f"  ✅ Invalid type correctly failed: {invalid_type_data.get('error', '')[:50]}"
+                f"  ✅ Invalid type correctly failed: {_get_error_str(invalid_type_data)}"
             )
         else:
             logger.warning("  ⚠️ Invalid helper type unexpectedly succeeded")
@@ -489,7 +498,7 @@ class TestErrorHandling:
         invalid_range_data = parse_mcp_result(invalid_range_result)
         if not invalid_range_data.get("success"):
             logger.info(
-                f"  ✅ Invalid range correctly failed: {invalid_range_data.get('error', '')[:50]}"
+                f"  ✅ Invalid range correctly failed: {_get_error_str(invalid_range_data)}"
             )
         else:
             logger.warning("  ⚠️ Invalid range unexpectedly succeeded")
@@ -508,7 +517,7 @@ class TestErrorHandling:
         empty_options_data = parse_mcp_result(empty_options_result)
         if not empty_options_data.get("success"):
             logger.info(
-                f"  ✅ Empty options correctly failed: {empty_options_data.get('error', '')[:50]}"
+                f"  ✅ Empty options correctly failed: {_get_error_str(empty_options_data)}"
             )
         else:
             logger.warning("  ⚠️ Empty options unexpectedly succeeded")
@@ -528,7 +537,7 @@ class TestErrorHandling:
         no_date_time_data = parse_mcp_result(no_date_time_result)
         if not no_date_time_data.get("success"):
             logger.info(
-                f"  ✅ No date/time correctly failed: {no_date_time_data.get('error', '')[:50]}"
+                f"  ✅ No date/time correctly failed: {_get_error_str(no_date_time_data)}"
             )
         else:
             logger.warning("  ⚠️ No date/time unexpectedly succeeded")
