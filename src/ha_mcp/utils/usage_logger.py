@@ -153,3 +153,46 @@ def shutdown_usage_logger() -> None:
     if _usage_logger:
         _usage_logger.shutdown()
         _usage_logger = None
+
+
+def get_recent_logs(max_entries: int = 20) -> list[dict[str, Any]]:
+    """
+    Read recent log entries from the usage log file.
+
+    Args:
+        max_entries: Maximum number of log entries to return (most recent first)
+
+    Returns:
+        List of log entries as dictionaries, ordered newest to oldest
+    """
+    logger = get_usage_logger()
+    if not logger._enabled:
+        return []
+
+    log_path = logger.log_file_path
+    if not log_path.exists():
+        return []
+
+    try:
+        # Read all lines and get the most recent ones
+        with open(log_path, encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Parse the most recent entries (last N lines)
+        entries = []
+        for line in reversed(lines[-max_entries:]):
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue  # Skip malformed lines
+
+        return entries
+    except Exception:
+        return []
+
+
+# Average log entries per tool call (empirically observed)
+# This includes the tool itself plus any associated operations
+AVG_LOG_ENTRIES_PER_TOOL = 3
