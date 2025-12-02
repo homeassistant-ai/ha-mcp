@@ -85,7 +85,7 @@ class TestAutomationTraces:
             "automation_id"
         )
         if automation_id:
-            cleanup_tracker.track_automation(automation_id)
+            cleanup_tracker.track("automation", automation_id)
         logger.info(f"Created automation: {automation_id}")
 
         # Wait for automation to be fully registered
@@ -186,7 +186,7 @@ class TestAutomationTraces:
             "automation_id"
         )
         if automation_id:
-            cleanup_tracker.track_automation(automation_id)
+            cleanup_tracker.track("automation", automation_id)
 
         # Wait for automation registration
         await asyncio.sleep(1)
@@ -249,7 +249,7 @@ class TestAutomationTraces:
 
         # Get the entity_id form (script.trace_test_script_e2e)
         script_entity_id = create_data.get("entity_id") or f"script.{script_id_base}"
-        cleanup_tracker.track_script(script_entity_id)
+        cleanup_tracker.track("script", script_entity_id)
         logger.info(f"Created script: {script_entity_id}")
 
         # Wait for script registration
