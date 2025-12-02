@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.9.0 (2025-12-02)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`aed5fa1`](https://github.com/homeassistant-ai/ha-mcp/commit/aed5fa13208f3cecde8f091a03eeafd4fc757c31))
+
+### Features
+
+- Add HA_TEST_PORT env var for custom test container port
+  ([`4743ee8`](https://github.com/homeassistant-ai/ha-mcp/commit/4743ee82491f8df82308f80d03565bd6de6909b5))
+
+
 ## v4.8.5 (2025-12-01)
 
 ### Bug Fixes
