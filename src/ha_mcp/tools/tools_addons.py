@@ -43,7 +43,7 @@ async def list_addons(
 
         # Call Supervisor API to get installed add-ons
         result = await ws_client.send_command(
-            "hassio/api",
+            "supervisor/api",
             endpoint="/addons",
             method="GET",
         )
@@ -64,7 +64,8 @@ async def list_addons(
                 "details": result,
             }
 
-        data = result.get("result", {}).get("data", {})
+        # Response structure: result.addons (not result.data.addons)
+        data = result.get("result", {})
         addons = data.get("addons", [])
 
         # Format add-on information
@@ -151,7 +152,7 @@ async def list_available_addons(
 
         # Call Supervisor API to get store information
         result = await ws_client.send_command(
-            "hassio/api",
+            "supervisor/api",
             endpoint="/store",
             method="GET",
         )
@@ -172,7 +173,8 @@ async def list_available_addons(
                 "details": result,
             }
 
-        data = result.get("result", {}).get("data", {})
+        # Response structure: result.addons/repositories (not result.data.*)
+        data = result.get("result", {})
         repositories = data.get("repositories", [])
         addons = data.get("addons", [])
 
