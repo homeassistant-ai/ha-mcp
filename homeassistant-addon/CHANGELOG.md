@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v4.10.0 (2025-12-02)
+
+### Bug Fixes
+
+- Improve error handling for missing env variables (#234)
+  ([#234](https://github.com/homeassistant-ai/ha-mcp/pull/234),
+  [`af3a169`](https://github.com/homeassistant-ai/ha-mcp/commit/af3a1698e1caf3924dfaccb7e7f1183503fac904))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`ae9f3bc`](https://github.com/homeassistant-ai/ha-mcp/commit/ae9f3bc2ba921323d392b36d2a578593a2252ee8))
+
+### Features
+
+- Add graceful shutdown on SIGTERM/SIGINT signals (#232)
+  ([#232](https://github.com/homeassistant-ai/ha-mcp/pull/232),
+  [`92bece9`](https://github.com/homeassistant-ai/ha-mcp/commit/92bece9df9d69bdbc663bee8369827c392e4ead6))
+
+- Add ha_bug_report tool for collecting diagnostic info (#233)
+  ([#233](https://github.com/homeassistant-ai/ha-mcp/pull/233),
+  [`87fc533`](https://github.com/homeassistant-ai/ha-mcp/commit/87fc5333fdd1ef3115d08d75691484cd593a68b0))
+
+- Add server icon to FastMCP configuration (#236)
+  ([#236](https://github.com/homeassistant-ai/ha-mcp/pull/236),
+  [`cfce352`](https://github.com/homeassistant-ai/ha-mcp/commit/cfce35238c971e5333695d83b491588a08e4fc0f))
+
+- Add structured error handling with error codes and suggestions (#238)
+  ([#238](https://github.com/homeassistant-ai/ha-mcp/pull/238),
+  [`0dfc10c`](https://github.com/homeassistant-ai/ha-mcp/commit/0dfc10c5a3195b435c7dea535492684a4c09325f))
+
+- **search**: Add graceful degradation with fallback for ha_search_entities (#231)
+  ([#231](https://github.com/homeassistant-ai/ha-mcp/pull/231),
+  [`36bc147`](https://github.com/homeassistant-ai/ha-mcp/commit/36bc14778b39b558f15c371eced99c5f8f1caff5))
+
+
 ## v4.9.0 (2025-12-02)
 
 ### Chores
