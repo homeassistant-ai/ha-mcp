@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.11.3 (2025-12-03)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`a848d2d`](https://github.com/homeassistant-ai/ha-mcp/commit/a848d2ddc627c01378a8804de493e94a7bba4637))
+
+### Refactoring
+
+- Remove MCP prompts feature (#248) ([#248](https://github.com/homeassistant-ai/ha-mcp/pull/248),
+  [`32896a6`](https://github.com/homeassistant-ai/ha-mcp/commit/32896a6cf10fd61f8712ca4e16202b05251394d7))
+
+
 ## v4.11.2 (2025-12-02)
 
 ### Bug Fixes
