@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.5 (2025-12-03)
+
+### Bug Fixes
+
+- Use gh release upload to avoid target_commitish conflict (#252)
+  ([#252](https://github.com/homeassistant-ai/ha-mcp/pull/252),
+  [`e62e05b`](https://github.com/homeassistant-ai/ha-mcp/commit/e62e05ba3911f99a1dfbff7ef6783d86fc30e18b))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9e4ad12`](https://github.com/homeassistant-ai/ha-mcp/commit/9e4ad128a0feffdd8cbbaf6cf7562abdc5cb6237))
+
+
 ## v4.11.4 (2025-12-03)
 
 ### Bug Fixes
