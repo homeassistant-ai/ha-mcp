@@ -31,6 +31,8 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         verbosity: "2"
+        # Don't create GitHub release here - build-binary.yml will create it with binaries
+        vcs_release: "false"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
