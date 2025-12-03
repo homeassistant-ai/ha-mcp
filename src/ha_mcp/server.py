@@ -16,7 +16,6 @@ from fastmcp import FastMCP
 from mcp.types import Icon
 
 from .config import get_global_settings
-from .prompts.enhanced import EnhancedPromptsMixin
 from .tools.enhanced import EnhancedToolsMixin
 
 if TYPE_CHECKING:
@@ -40,7 +39,7 @@ SERVER_ICONS = [
 ]
 
 
-class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
+class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     """Home Assistant MCP Server with smart tools and fuzzy search.
 
     Uses lazy initialization to improve startup time:
@@ -119,9 +118,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin, EnhancedPromptsMixin):
         # Register tools
         self.tools_registry.register_all_tools()
 
-        # Register enhanced tools and prompts for first/second interaction success
+        # Register enhanced tools for first/second interaction success
         self.register_enhanced_tools()
-        self.register_enhanced_prompts()
 
     # Helper methods required by EnhancedToolsMixin
 
