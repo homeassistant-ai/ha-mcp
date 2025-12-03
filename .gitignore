@@ -80,3 +80,6 @@ docs/review/
 docs/development/
 .local/
 fastmcp/
+
+# HACS frontend - large (~51MB) JavaScript assets, downloaded during test setup
+tests/initial_test_state/custom_components/hacs/hacs_frontend/
