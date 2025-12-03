@@ -7,56 +7,57 @@ assignees: julienld
 
 ---
 
-## 🐛 Bug Description
-A clear and concise description of what the bug is.
+## Before You Start
 
-## 🔄 Steps to Reproduce
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+> **Use the `ha_bug_report` tool!**
+>
+> Ask your AI assistant: *"I want to file a bug report"* or call `ha_bug_report()` directly.
+> The tool auto-collects environment info, logs, and generates a ready-to-paste template.
+>
+> **Skip the tool only if:** You have a startup error, installation problem, or can't connect to the server.
 
-## ✅ Expected Behavior
-A clear and concise description of what you expected to happen.
+---
 
-## ❌ Actual Behavior
-A clear and concise description of what actually happened.
+## Bug Type
 
-## 📊 Environment
+- [ ] **Runtime bug** - Error occurred while using ha-mcp (use `ha_bug_report` tool)
+- [ ] **Startup/Installation error** - Can't start the server or install (fill manually below)
 
-> **Tip:** Run the `ha_bug_report` tool in your AI assistant to automatically collect this information!
-> Just ask your AI to call `ha_bug_report()` and paste the output below.
+---
 
+## Bug Description
+<!-- What went wrong? -->
+
+
+## Steps to Reproduce
+1.
+2.
+3.
+
+## Expected vs Actual Behavior
+<!-- What should have happened? What happened instead? -->
+
+
+## Environment
+
+<!-- IF YOU USED ha_bug_report: Paste the generated template below and delete this section -->
+
+<!-- IF STARTUP/INSTALL ERROR: Fill this manually -->
 <details>
-<summary>Diagnostic info from ha_bug_report (paste here)</summary>
+<summary>Manual environment info (for startup/install errors only)</summary>
 
-```
-Paste the output from ha_bug_report() here
-```
+- **Installation method**: (pypi/docker/addon/git clone/binary)
+- **OS**: (e.g., Ubuntu 24.04, Windows 11, macOS 15)
+- **Python version**: (e.g., 3.13)
+- **ha-mcp version**: (e.g., 4.11.0)
+- **Home Assistant version**: (e.g., 2025.1.0)
 
 </details>
 
-- **Python version**: (e.g., 3.13)
-- **Home Assistant version**: (from ha_bug_report or manually: e.g., 2025.9.1)
-- **MCP Server version**: (from ha_bug_report or manually: e.g., 4.7.7)
-- **Operating System**: (e.g., Ubuntu 22.04, Windows 11, macOS)
-
-## 📝 Error Logs
-If applicable, add error logs to help explain your problem:
-
+## Error Messages
 ```
-Paste error logs here
+Paste error messages here
 ```
 
-## 🧪 Test Results
-If E2E tests are affected:
-- [ ] Integration tests pass
-- [ ] E2E tests fail
-- [ ] Performance impact observed
-
-## 📸 Screenshots
-If applicable, add screenshots to help explain your problem.
-
-## 🔍 Additional Context
-Add any other context about the problem here.
+## Additional Context
+<!-- Any other relevant information -->
