@@ -203,6 +203,9 @@ class HomeAssistantWebSocketClient:
                 ping_interval=30,
                 ping_timeout=10,
                 additional_headers={"Authorization": f"Bearer {self.token}"},
+                # Increase max message size to 20MB for large responses
+                # (e.g., HACS repository list can be 2MB+)
+                max_size=20 * 1024 * 1024,
             )
             self._state.mark_connected()
 
