@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v4.12.0 (2025-12-03)
+
+### Bug Fixes
+
+- Add missing py.typed marker file for type hint distribution (#251)
+  ([#251](https://github.com/homeassistant-ai/ha-mcp/pull/251),
+  [`187672b`](https://github.com/homeassistant-ai/ha-mcp/commit/187672b16329f41397512f89bb52c93e44282f10))
+
+### Chores
+
+- Add fastmcp to gitignore
+  ([`7db3a66`](https://github.com/homeassistant-ai/ha-mcp/commit/7db3a668235d67213338b6bccb49fdf9116daa2a))
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`727ae2a`](https://github.com/homeassistant-ai/ha-mcp/commit/727ae2a818efc6bf7e61504aa89ccb79be64e2b8))
+
+### Documentation
+
+- Clarify bug description prompt in template
+  ([`96b9bc7`](https://github.com/homeassistant-ai/ha-mcp/commit/96b9bc7cc379f568f9b90ea2b46e708aabd276ab))
+
+- Update bug report template to emphasize ha_bug_report tool
+  ([`2e72f16`](https://github.com/homeassistant-ai/ha-mcp/commit/2e72f166d5d9b1dcd6693c2258093743585e2b6b))
+
+### Features
+
+- Add HACS integration tools for custom component discovery (#250)
+  ([#250](https://github.com/homeassistant-ai/ha-mcp/pull/250),
+  [`c3e9895`](https://github.com/homeassistant-ai/ha-mcp/commit/c3e9895a320b58ad8df21d96959ae6df8a8a623c))
+
+
 ## v4.11.9 (2025-12-03)
 
 ### Bug Fixes
