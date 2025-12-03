@@ -601,10 +601,13 @@ def register_hacs_tools(mcp, client, **kwargs):
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
 
+            # Map user-friendly category to HACS internal name
+            hacs_category = CATEGORY_MAP.get(category, category)
+
             response = await ws_client.send_command(
                 "hacs/repositories/add",
                 repository=repository,
-                category=category,
+                category=hacs_category,
             )
 
             if not response.get("success"):
