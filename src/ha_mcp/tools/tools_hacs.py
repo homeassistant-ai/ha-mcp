@@ -426,7 +426,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
 
-            response = await ws_client.send_command("hacs/repository/info", repository=repository_id)
+            response = await ws_client.send_command("hacs/repository/info", repository_id=repository_id)
 
             if not response.get("success"):
                 error_response = exception_to_structured_error(
