@@ -1,8 +1,11 @@
 name: Build and Release Binaries
 
 on:
-  release:
-    types: [published]
+  # Trigger after SemVer Release completes (creates GitHub releases)
+  workflow_run:
+    workflows: ["SemVer Release"]
+    types: [completed]
+    branches: [master]
   pull_request:
     branches: [master]
     paths:
@@ -23,6 +26,11 @@ permissions:
 
 jobs:
   build:
+    # Only run if: PR, manual dispatch, or workflow_run succeeded
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     permissions:
       contents: read
     strategy:
@@ -48,6 +56,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # For workflow_run, checkout master to get the latest released code
+          ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -116,6 +127,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # For workflow_run, checkout master to get the latest released code
+          ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -137,14 +151,18 @@ jobs:
       - name: Set version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
-          else
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # Get version from pyproject.toml (just released by SemVer Release)
+            VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
             VERSION="${VERSION:-0.0.0-dev}"
+          else
+            # For pull_request, use dev version
+            VERSION="0.0.0-dev"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
 
       - name: Create combined mcpb bundle
         run: |
@@ -191,11 +209,24 @@ jobs:
   release:
     needs: [build, create-mcpb]
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    # Only upload to release when triggered by workflow_run (after SemVer Release)
+    if: github.event_name == 'workflow_run'
     permissions:
       contents: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Get release version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Uploading binaries to release v$VERSION"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -207,6 +238,7 @@ jobs:
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
           files: |
             artifacts/ha-mcp-linux/ha-mcp-linux
             artifacts/ha-mcp-windows/ha-mcp-windows.exe
