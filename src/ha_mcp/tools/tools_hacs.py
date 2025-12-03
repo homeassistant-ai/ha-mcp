@@ -650,3 +650,138 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
                 ]
             return await add_timezone_metadata(client, error_response)
+
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Download/Install HACS Repository"})
+    @log_tool_usage
+    async def ha_hacs_download(
+        repository_id: str,
+        version: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Specific version to install (e.g., 'v1.2.3'). If not specified, installs the latest version.",
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Download and install a HACS repository.
+
+        This installs a repository from HACS to your Home Assistant instance.
+        For integrations, a restart of Home Assistant may be required after installation.
+
+        **Prerequisites:**
+        - The repository must already be in HACS (either from the default store or added via `ha_hacs_add_repository`)
+        - Use `ha_hacs_search()` or `ha_hacs_list_installed()` to find the repository ID
+
+        **Examples:**
+        ```python
+        # Install latest version of a repository
+        ha_hacs_download("441028036")
+
+        # Install specific version
+        ha_hacs_download("441028036", version="v2.0.0")
+
+        # Install by GitHub path (will look up the numeric ID)
+        ha_hacs_download("piitaya/lovelace-mushroom", version="v4.0.0")
+        ```
+
+        **Note:** For integrations, you may need to restart Home Assistant after installation.
+        For Lovelace cards, clear your browser cache to see the new card.
+
+        Args:
+            repository_id: Repository numeric ID or GitHub path (e.g., "441028036" or "owner/repo")
+            version: Specific version to install (optional, defaults to latest)
+
+        Returns:
+            Success status and installation details.
+        """
+        try:
+            # Check if HACS is available
+            is_available, error_msg = await _check_hacs_available(client)
+            if not is_available:
+                return await add_timezone_metadata(client, {
+                    "success": False,
+                    "error": error_msg,
+                    "error_code": "HACS_NOT_AVAILABLE",
+                    "suggestions": [
+                        "Install HACS from https://hacs.xyz/",
+                        "Ensure Home Assistant has been restarted after HACS installation",
+                        "Check Home Assistant logs for HACS errors",
+                    ],
+                })
+
+            from ..client.websocket_client import get_websocket_client
+            ws_client = await get_websocket_client()
+
+            # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
+            actual_id = repository_id
+            repo_name = repository_id
+            if "/" in repository_id:
+                # Look up the numeric ID from the repository list
+                list_response = await ws_client.send_command("hacs/repositories/list")
+                if list_response.get("success"):
+                    repos = list_response.get("result", [])
+                    for repo in repos:
+                        if repo.get("full_name", "").lower() == repository_id.lower():
+                            actual_id = str(repo.get("id"))
+                            repo_name = repo.get("name") or repository_id
+                            break
+                    else:
+                        return await add_timezone_metadata(client, {
+                            "success": False,
+                            "error": f"Repository '{repository_id}' not found in HACS",
+                            "error_code": "REPOSITORY_NOT_FOUND",
+                            "suggestions": [
+                                "Use ha_hacs_add_repository() to add the repository first",
+                                "Use ha_hacs_search() to find available repositories",
+                                "Check the repository name is correct (case-insensitive)",
+                            ],
+                        })
+
+            # Build download command parameters
+            download_kwargs: dict[str, Any] = {"repository": actual_id}
+            if version:
+                download_kwargs["version"] = version
+
+            # Download/install the repository
+            response = await ws_client.send_command("hacs/repository/download", **download_kwargs)
+
+            if not response.get("success"):
+                error_response = exception_to_structured_error(
+                    Exception(f"HACS download request failed: {response}"),
+                    context={
+                        "command": "hacs/repository/download",
+                        "repository_id": repository_id,
+                        "version": version,
+                    },
+                )
+                return await add_timezone_metadata(client, error_response)
+
+            result = response.get("result", {})
+
+            return await add_timezone_metadata(client, {
+                "success": True,
+                "repository_id": actual_id,
+                "repository": repo_name,
+                "version": version or "latest",
+                "message": f"Successfully installed {repo_name}" + (f" version {version}" if version else ""),
+                "note": "For integrations, restart Home Assistant to activate. For Lovelace cards, clear browser cache.",
+                "data": result,
+            })
+
+        except Exception as e:
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_hacs_download",
+                    "repository_id": repository_id,
+                    "version": version,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
+                    "Verify HACS is installed: https://hacs.xyz/",
+                    "Check repository ID is valid (use ha_hacs_search() to find it)",
+                    "Ensure the repository is in HACS (use ha_hacs_add_repository() if needed)",
+                    "Check version format (e.g., 'v1.2.3' or '1.2.3')",
+                ]
+            return await add_timezone_metadata(client, error_response)
