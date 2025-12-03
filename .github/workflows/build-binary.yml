@@ -236,11 +236,12 @@ jobs:
         run: find artifacts -type f
 
       - name: Upload binaries to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          files: |
-            artifacts/ha-mcp-linux/ha-mcp-linux
-            artifacts/ha-mcp-windows/ha-mcp-windows.exe
-            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64
-            artifacts/ha-mcp-mcpb/ha-mcp.mcpb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v${{ steps.version.outputs.version }}" \
+            artifacts/ha-mcp-linux/ha-mcp-linux \
+            artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+            artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
+            --clobber
