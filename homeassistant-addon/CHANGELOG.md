@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.9 (2025-12-03)
+
+### Bug Fixes
+
+- Improve bug report tool with better diagnostics (#256)
+  ([#256](https://github.com/homeassistant-ai/ha-mcp/pull/256),
+  [`5f60f74`](https://github.com/homeassistant-ai/ha-mcp/commit/5f60f74128370b7ca70730b21b2a901b6f1ce13a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`5674a13`](https://github.com/homeassistant-ai/ha-mcp/commit/5674a13f45385bb5892fd16075a3187eebf0f45d))
+
+
 ## v4.11.8 (2025-12-03)
 
 ### Bug Fixes
