@@ -6,16 +6,70 @@ on how to create effective bug reports.
 """
 
 import logging
+import os
+import platform
+import sys
+from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import Field
 
 from ha_mcp import __version__
 
-from ..utils.usage_logger import AVG_LOG_ENTRIES_PER_TOOL, get_recent_logs
+from ..utils.usage_logger import AVG_LOG_ENTRIES_PER_TOOL, get_recent_logs, get_startup_logs
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_installation_method() -> str:
+    """
+    Detect how ha-mcp was installed.
+
+    Returns one of: pyinstaller, addon, docker, git, pypi, unknown
+    """
+    # 1. PyInstaller binary
+    if getattr(sys, "frozen", False):
+        return "pyinstaller"
+
+    # 2. Home Assistant Add-on (has supervisor token)
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return "addon"
+
+    # 3. Docker container (non-addon)
+    if Path("/.dockerenv").exists():
+        return "docker"
+
+    # 4. Git clone - check for .git directory relative to package
+    try:
+        # Go up from tools_bug_report.py -> tools -> ha_mcp -> src -> project_root
+        project_root = Path(__file__).parent.parent.parent.parent
+        if (project_root / ".git").exists():
+            return "git"
+    except Exception:
+        pass
+
+    # 5. PyPI install - marker file exists in package
+    try:
+        marker_path = Path(__file__).parent.parent / "_pypi_marker"
+        if marker_path.exists():
+            return "pypi"
+    except Exception:
+        pass
+
+    # 6. Default - unknown
+    return "unknown"
+
+
+def _detect_platform() -> dict[str, str]:
+    """Detect platform information."""
+    return {
+        "os": platform.system(),  # Windows, Darwin, Linux
+        "os_release": platform.release(),
+        "os_version": platform.version(),
+        "architecture": platform.machine(),
+        "python_version": platform.python_version(),
+    }
 
 
 def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -49,31 +103,33 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Collect diagnostic information for filing bug reports against ha-mcp.
 
+        **IMPORTANT FOR AI AGENTS:**
+        When creating a bug report, you MUST only report FACTS that you directly
+        observed during the conversation. Do NOT make assumptions or guesses.
+        - Report exact error messages you received
+        - Report exact tool names and parameters you used
+        - Report exact responses from tools
+        - Do NOT speculate about causes or solutions
+        - Do NOT fill in template sections you cannot answer from the conversation
+
         **WHEN TO USE THIS TOOL:**
         Use this tool when the user says something like:
         - "I want to file a bug for: <reason>"
         - "This isn't working, I need to report this"
         - "How do I report this issue?"
 
-        **BEFORE CALLING THIS TOOL:**
-        If the bug details are unclear, guide the user to provide:
-        1. What they were trying to do (the goal)
-        2. What actually happened (the result)
-        3. What they expected to happen instead
-        4. Any error messages they saw
-        5. Steps to reproduce the issue
-
-        **PARAMETERS:**
-        - tool_call_count: Count how many ha_* tools you called since the bug started.
-          This helps include the right amount of logs. Default is 3.
-
         **OUTPUT:**
-        Returns diagnostic info, recent logs, and a bug report template.
-        The template guides privacy-conscious reporting while preserving
-        enough detail to diagnose the issue.
+        Returns diagnostic info (auto-populated), recent logs, startup logs,
+        and a bug report template. All environment info is automatically filled.
         """
+        # Detect installation method and platform
+        install_method = _detect_installation_method()
+        platform_info = _detect_platform()
+
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
+            "installation_method": install_method,
+            "platform": platform_info,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
             "entity_count": 0,
@@ -101,19 +157,26 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.warning(f"Failed to get entity count: {e}")
 
         # Calculate how many log entries to retrieve
-        # Formula: AVG_LOG_ENTRIES_PER_TOOL * 2 * tool_call_count
-        max_log_entries = AVG_LOG_ENTRIES_PER_TOOL * 2 * tool_call_count
+        # Formula: AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count (doubled from 2x to 4x)
+        max_log_entries = AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count
         recent_logs = get_recent_logs(max_entries=max_log_entries)
+
+        # Get startup logs (first minute of server operation)
+        startup_logs = get_startup_logs()
 
         # Format logs for inclusion (sanitized summary)
         log_summary = _format_logs_for_report(recent_logs)
+        startup_log_summary = _format_startup_logs(startup_logs)
 
         # Build the formatted report
         report_lines = [
             "=== ha-mcp Bug Report Info ===",
             "",
-            f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
             f"ha-mcp Version: {diagnostic_info['ha_mcp_version']}",
+            f"Installation Method: {diagnostic_info['installation_method']}",
+            f"Platform: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
+            f"Python Version: {platform_info['python_version']}",
+            f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
             f"Connection Status: {diagnostic_info['connection_status']}",
             f"Entity Count: {diagnostic_info['entity_count']}",
         ]
@@ -123,6 +186,13 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
         if "time_zone" in diagnostic_info:
             report_lines.append(f"Time Zone: {diagnostic_info['time_zone']}")
+
+        if startup_logs:
+            report_lines.extend([
+                "",
+                f"=== Startup Logs ({len(startup_logs)} entries) ===",
+                startup_log_summary,
+            ])
 
         if recent_logs:
             report_lines.extend([
@@ -135,7 +205,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Bug report template for the AI to present to the user
         bug_report_template = _generate_bug_report_template(
-            diagnostic_info, log_summary
+            diagnostic_info, log_summary, startup_log_summary
         )
 
         # Anonymization instructions
@@ -145,14 +215,17 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "success": True,
             "diagnostic_info": diagnostic_info,
             "recent_logs": recent_logs,
+            "startup_logs": startup_logs,
             "log_count": len(recent_logs),
+            "startup_log_count": len(startup_logs),
             "formatted_report": formatted_report,
             "bug_report_template": bug_report_template,
             "anonymization_guide": anonymization_guide,
             "issue_url": "https://github.com/homeassistant-ai/ha-mcp/issues/new",
             "instructions": (
                 "Present the bug_report_template to the user. "
-                "Ask them to review and fill in the [DESCRIBE...] sections. "
+                "The Environment section is already filled with accurate data. "
+                "Ask the user to describe the bug, what happened, and what they expected. "
                 "Remind them to follow the anonymization_guide to protect their privacy. "
                 "The user should copy the completed template and submit it at the issue_url."
             ),
@@ -182,56 +255,96 @@ def _format_logs_for_report(logs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_startup_logs(logs: list[dict[str, Any]]) -> str:
+    """Format startup log entries for inclusion in a bug report."""
+    if not logs:
+        return "(No startup logs available)"
+
+    lines = []
+    for log in logs:
+        elapsed = log.get("elapsed_seconds", 0)
+        level = log.get("level", "INFO")
+        logger_name = log.get("logger", "")
+        message = log.get("message", "")
+
+        # Truncate long messages
+        if len(message) > 200:
+            message = message[:200] + "..."
+
+        line = f"  +{elapsed:05.2f}s | {level:5} | {logger_name}: {message}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 def _generate_bug_report_template(
-    diagnostic_info: dict[str, Any], log_summary: str
+    diagnostic_info: dict[str, Any],
+    log_summary: str,
+    startup_log_summary: str,
 ) -> str:
-    """Generate a bug report template for users to fill out."""
+    """Generate a bug report template with auto-populated environment info."""
+    platform_info = diagnostic_info.get("platform", {})
+
     return f"""## Bug Report Template
 
-**Copy this template, fill in the sections, and submit at:**
+**Copy this template, fill in the bug description sections, and submit at:**
 https://github.com/homeassistant-ai/ha-mcp/issues/new
 
 ---
 
-### I want to file a bug for: [DESCRIBE THE BUG IN ONE SENTENCE]
+### Bug Summary
+<!-- Describe the bug in one sentence -->
 
-### What I was trying to do
-[DESCRIBE YOUR GOAL - What were you asking the AI to do?]
 
 ### What happened
-[DESCRIBE THE RESULT - What did the AI do or say?]
+<!-- Describe what the AI did or what error occurred -->
 
-### What I expected
-[DESCRIBE EXPECTED BEHAVIOR - What should have happened instead?]
+
+### What you expected
+<!-- Describe what should have happened instead -->
+
 
 ### Steps to reproduce
-1. [First step]
-2. [Second step]
-3. [...]
+<!-- If you can reproduce the issue, list the steps -->
+1.
+2.
+3.
 
 ### Error messages (if any)
 ```
-[PASTE ANY ERROR MESSAGES HERE]
+<!-- Paste any error messages here -->
 ```
 
-### Environment
-- Home Assistant Version: {diagnostic_info.get('home_assistant_version', 'Unknown')}
-- ha-mcp Version: {diagnostic_info.get('ha_mcp_version', 'Unknown')}
-- Connection Status: {diagnostic_info.get('connection_status', 'Unknown')}
-- Entity Count: {diagnostic_info.get('entity_count', 0)}
-- Time Zone: {diagnostic_info.get('time_zone', 'Unknown')}
+### Environment (auto-populated)
+- **ha-mcp Version:** {diagnostic_info.get('ha_mcp_version', 'Unknown')}
+- **Installation Method:** {diagnostic_info.get('installation_method', 'Unknown')}
+- **Platform:** {platform_info.get('os', 'Unknown')} {platform_info.get('os_release', '')} ({platform_info.get('architecture', 'Unknown')})
+- **Python Version:** {platform_info.get('python_version', 'Unknown')}
+- **Home Assistant Version:** {diagnostic_info.get('home_assistant_version', 'Unknown')}
+- **Connection Status:** {diagnostic_info.get('connection_status', 'Unknown')}
+- **Entity Count:** {diagnostic_info.get('entity_count', 0)}
+- **Time Zone:** {diagnostic_info.get('time_zone', 'Unknown')}
+
+### Startup logs
+<details>
+<summary>Click to expand startup logs</summary>
+
+```
+{startup_log_summary}
+```
+</details>
 
 ### Recent tool calls
+<details>
+<summary>Click to expand recent tool calls</summary>
+
 ```
 {log_summary}
 ```
-
-### Additional context
-[ADD ANY OTHER RELEVANT INFORMATION]
+</details>
 
 ---
 **Privacy note:** Please review and anonymize any sensitive information before submitting.
-See the anonymization guide in the tool output for details.
 """
 
 
