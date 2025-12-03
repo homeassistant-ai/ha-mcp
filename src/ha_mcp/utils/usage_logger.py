@@ -3,7 +3,9 @@ Usage logging for MCP tool calls to track usage patterns and performance metrics
 """
 
 import json
+import logging
 import threading
+import time
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -18,6 +20,73 @@ DEFAULT_RING_BUFFER_SIZE = 200
 # Average log entries per tool call (empirically observed)
 # This includes the tool itself plus any associated operations
 AVG_LOG_ENTRIES_PER_TOOL = 3
+
+# Startup log collection duration in seconds
+STARTUP_LOG_DURATION_SECONDS = 60
+
+
+class StartupLogCollector(logging.Handler):
+    """Collects log messages during the first minute of server startup."""
+
+    def __init__(self, duration_seconds: int = STARTUP_LOG_DURATION_SECONDS):
+        super().__init__()
+        self._start_time = time.time()
+        self._duration = duration_seconds
+        self._logs: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._active = True
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Capture log record if within startup window."""
+        if not self._active:
+            return
+
+        elapsed = time.time() - self._start_time
+        if elapsed > self._duration:
+            self._active = False
+            return
+
+        with self._lock:
+            self._logs.append({
+                "timestamp": datetime.now(UTC).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+                "elapsed_seconds": round(elapsed, 2),
+            })
+
+    def get_logs(self) -> list[dict[str, Any]]:
+        """Get collected startup logs."""
+        with self._lock:
+            return list(self._logs)
+
+    def is_active(self) -> bool:
+        """Check if still collecting startup logs."""
+        return self._active and (time.time() - self._start_time) <= self._duration
+
+
+# Global startup log collector - initialized at module import
+_startup_collector: StartupLogCollector | None = None
+
+
+def _init_startup_collector() -> None:
+    """Initialize startup log collector and attach to root logger."""
+    global _startup_collector
+    if _startup_collector is None:
+        _startup_collector = StartupLogCollector()
+        _startup_collector.setLevel(logging.DEBUG)
+        logging.getLogger().addHandler(_startup_collector)
+
+
+# Initialize on module load
+_init_startup_collector()
+
+
+def get_startup_logs() -> list[dict[str, Any]]:
+    """Get startup logs collected during the first minute."""
+    if _startup_collector is None:
+        return []
+    return _startup_collector.get_logs()
 
 
 @dataclass
