@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.4 (2025-12-03)
+
+### Bug Fixes
+
+- Trigger binary builds after SemVer Release via workflow_run (#249)
+  ([#249](https://github.com/homeassistant-ai/ha-mcp/pull/249),
+  [`a06ec57`](https://github.com/homeassistant-ai/ha-mcp/commit/a06ec57f3c11e4e740ba427945fd20244df74a61))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`217afba`](https://github.com/homeassistant-ai/ha-mcp/commit/217afbaaeea041c5ff5ef8cb1563836e21e8d734))
+
+
 ## v4.11.3 (2025-12-03)
 
 ### Chores
