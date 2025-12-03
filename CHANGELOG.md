@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.8 (2025-12-03)
+
+### Bug Fixes
+
+- Disable VCS release via GitHub Action input (#257)
+  ([#257](https://github.com/homeassistant-ai/ha-mcp/pull/257),
+  [`53e984b`](https://github.com/homeassistant-ai/ha-mcp/commit/53e984b4d253f12021c13d86cfe3e5e1f2dfa3b3))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`c09a3f9`](https://github.com/homeassistant-ai/ha-mcp/commit/c09a3f92ba7cff0a3962866e80b9bbd8110e8374))
+
+
 ## v4.11.7 (2025-12-03)
 
 ### Bug Fixes
