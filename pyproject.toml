@@ -204,4 +204,5 @@ allow_zero_version = false
 
 # Branch and tag configuration
 branch = "master"
-upload_to_vcs_release = true
+# GitHub release is created by build-binary.yml workflow to include binaries
+upload_to_vcs_release = false
