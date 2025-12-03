@@ -249,13 +249,23 @@ jobs:
           echo "=== Release Notes ==="
           cat release_notes.md
 
-      - name: Create GitHub release with binaries
+      - name: Create or update GitHub release with binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
+          TAG="v${VERSION}"
+
+          # Check if release already exists (may be immutable from semantic-release)
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG already exists, deleting to recreate with binaries..."
+            # Delete the release but keep the tag
+            gh release delete "$TAG" --yes
+          fi
+
+          echo "Creating release $TAG with binaries..."
+          gh release create "$TAG" \
+            --title "$TAG" \
             --notes-file release_notes.md \
             artifacts/ha-mcp-linux/ha-mcp-linux \
             artifacts/ha-mcp-windows/ha-mcp-windows.exe \
