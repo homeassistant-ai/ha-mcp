@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.7 (2025-12-03)
+
+### Bug Fixes
+
+- Correct semantic-release v10 config and add release fallback (#255)
+  ([#255](https://github.com/homeassistant-ai/ha-mcp/pull/255),
+  [`f8cca22`](https://github.com/homeassistant-ai/ha-mcp/commit/f8cca22221d041142be9f34065a354d2cfca84b8))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7b21732`](https://github.com/homeassistant-ai/ha-mcp/commit/7b217326cac323b9351301a22f7df77c3c8ac8b8))
+
+
 ## v4.11.6 (2025-12-03)
 
 ### Bug Fixes
