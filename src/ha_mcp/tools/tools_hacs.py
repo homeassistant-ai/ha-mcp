@@ -15,6 +15,21 @@ from .util_helpers import add_timezone_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
+# HACS uses different category names internally vs what users expect
+# User-friendly name -> HACS internal name
+CATEGORY_MAP = {
+    "lovelace": "plugin",  # HACS calls Lovelace cards "plugin"
+    "integration": "integration",
+    "theme": "theme",
+    "appdaemon": "appdaemon",
+    "python_script": "python_script",
+    "template": "template",
+}
+
+# Reverse mapping for display
+CATEGORY_DISPLAY = {v: k for k, v in CATEGORY_MAP.items()}
+CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
+
 
 async def _check_hacs_available(client) -> tuple[bool, str | None]:
     """
@@ -177,10 +192,11 @@ def register_hacs_tools(mcp, client, **kwargs):
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
 
-            # Build command parameters
+            # Build command parameters - map user-friendly category to HACS internal name
             kwargs_cmd: dict[str, Any] = {}
             if category:
-                kwargs_cmd["categories"] = [category]
+                hacs_category = CATEGORY_MAP.get(category, category)
+                kwargs_cmd["categories"] = [hacs_category]
 
             response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
 
@@ -197,10 +213,14 @@ def register_hacs_tools(mcp, client, **kwargs):
             installed = []
             for repo in repositories:
                 if repo.get("installed", False):
+                    # Map HACS internal category back to user-friendly name
+                    repo_category = repo.get("category", "")
+                    display_category = CATEGORY_DISPLAY.get(repo_category, repo_category)
                     installed.append({
                         "name": repo.get("name"),
                         "full_name": repo.get("full_name"),
-                        "category": repo.get("category"),
+                        "category": display_category,
+                        "id": repo.get("id"),  # Include numeric ID for repository_info
                         "installed_version": repo.get("installed_version"),
                         "available_version": repo.get("available_version"),
                         "pending_update": repo.get("pending_upgrade", False),
@@ -305,10 +325,11 @@ def register_hacs_tools(mcp, client, **kwargs):
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
 
-            # Build command parameters
+            # Build command parameters - map user-friendly category to HACS internal name
             kwargs_cmd: dict[str, Any] = {}
             if category:
-                kwargs_cmd["categories"] = [category]
+                hacs_category = CATEGORY_MAP.get(category, category)
+                kwargs_cmd["categories"] = [hacs_category]
 
             response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
 
@@ -326,10 +347,12 @@ def register_hacs_tools(mcp, client, **kwargs):
             matches = []
 
             for repo in all_repositories:
-                name = repo.get("name", "").lower()
-                description = repo.get("description", "").lower()
-                full_name = repo.get("full_name", "").lower()
-                authors = " ".join(repo.get("authors", [])).lower()
+                # Handle None values safely
+                name = (repo.get("name") or "").lower()
+                description = (repo.get("description") or "").lower()
+                full_name = (repo.get("full_name") or "").lower()
+                authors_list = repo.get("authors") or []
+                authors = " ".join(authors_list).lower()
 
                 # Calculate relevance score
                 score = 0
@@ -343,14 +366,18 @@ def register_hacs_tools(mcp, client, **kwargs):
                     score += 20
 
                 if score > 0:
+                    # Map HACS internal category back to user-friendly name
+                    repo_category = repo.get("category", "")
+                    display_category = CATEGORY_DISPLAY.get(repo_category, repo_category)
                     matches.append({
                         "name": repo.get("name"),
                         "full_name": repo.get("full_name"),
                         "description": repo.get("description"),
-                        "category": repo.get("category"),
+                        "category": display_category,
+                        "id": repo.get("id"),  # Include numeric ID for repository_info
                         "stars": repo.get("stars", 0),
                         "downloads": repo.get("downloads", 0),
-                        "authors": repo.get("authors", []),
+                        "authors": authors_list,
                         "installed": repo.get("installed", False),
                         "installed_version": repo.get("installed_version") if repo.get("installed") else None,
                         "available_version": repo.get("available_version"),
@@ -397,12 +424,15 @@ def register_hacs_tools(mcp, client, **kwargs):
         - Configuration examples (if available)
 
         **Use Cases:**
-        - Get card configuration examples: `ha_hacs_repository_info("hacs/integration")`
+        - Get card configuration examples: `ha_hacs_repository_info("441028036")`
         - Check integration setup instructions
         - Find theme customization options
 
+        **Note:** The repository_id is the numeric ID from HACS, not the GitHub path.
+        Use `ha_hacs_list_installed()` or `ha_hacs_search()` to find the numeric ID.
+
         Args:
-            repository_id: Repository identifier (e.g., "hacs/integration" or full GitHub path)
+            repository_id: Repository numeric ID (e.g., "441028036") or GitHub path (e.g., "dvd-dev/hilo")
 
         Returns:
             Detailed repository information or error if not found.
@@ -422,11 +452,34 @@ def register_hacs_tools(mcp, client, **kwargs):
                     ],
                 })
 
-            # Get repository info via WebSocket
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
 
-            response = await ws_client.send_command("hacs/repository/info", repository_id=repository_id)
+            # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
+            actual_id = repository_id
+            if "/" in repository_id:
+                # Look up the numeric ID from the repository list
+                list_response = await ws_client.send_command("hacs/repositories/list")
+                if list_response.get("success"):
+                    repos = list_response.get("result", [])
+                    for repo in repos:
+                        if repo.get("full_name", "").lower() == repository_id.lower():
+                            actual_id = str(repo.get("id"))
+                            break
+                    else:
+                        return await add_timezone_metadata(client, {
+                            "success": False,
+                            "error": f"Repository '{repository_id}' not found in HACS",
+                            "error_code": "REPOSITORY_NOT_FOUND",
+                            "suggestions": [
+                                "Use ha_hacs_search() to find the repository",
+                                "Check the repository name is correct (case-insensitive)",
+                                "The repository may need to be added to HACS first",
+                            ],
+                        })
+
+            # Get repository info via WebSocket using numeric ID
+            response = await ws_client.send_command("hacs/repository/info", repository_id=actual_id)
 
             if not response.get("success"):
                 error_response = exception_to_structured_error(
