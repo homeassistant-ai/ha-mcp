@@ -235,13 +235,29 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
-      - name: Upload binaries to release
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract changelog section for this version
+          # Look for ## v{version} and extract until next ## v or end
+          awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 > release_notes.md
+          # If no specific section found, use a default message
+          if [ ! -s release_notes.md ]; then
+            echo "Release v${VERSION}" > release_notes.md
+          fi
+          echo "=== Release Notes ==="
+          cat release_notes.md
+
+      - name: Create GitHub release with binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "v${{ steps.version.outputs.version }}" \
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release_notes.md \
             artifacts/ha-mcp-linux/ha-mcp-linux \
             artifacts/ha-mcp-windows/ha-mcp-windows.exe \
             artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
-            artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
-            --clobber
+            artifacts/ha-mcp-mcpb/ha-mcp.mcpb
