@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.11.6 (2025-12-03)
+
+### Bug Fixes
+
+- Create GitHub release from build-binary workflow (#254)
+  ([#254](https://github.com/homeassistant-ai/ha-mcp/pull/254),
+  [`8939c80`](https://github.com/homeassistant-ai/ha-mcp/commit/8939c807af84978d10d9665bdb6c5382b4bbcf67))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`a502d87`](https://github.com/homeassistant-ai/ha-mcp/commit/a502d87fc232938ed67a3a5f003be17c23272ffa))
+
+
 ## v4.11.5 (2025-12-03)
 
 ### Bug Fixes
