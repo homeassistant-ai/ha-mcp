@@ -26,7 +26,8 @@ assignees: julienld
 ---
 
 ## Bug Description
-<!-- What went wrong? -->
+<!-- Complete this sentence: "I want to file a bug for: ___" -->
+<!-- Be specific about what went wrong -->
 
 
 ## Steps to Reproduce
