@@ -204,8 +204,9 @@ class HomeAssistantClient:
         return await self._request("POST", f"/states/{entity_id}", json=payload)
 
     async def call_service(
-        self, domain: str, service: str, data: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
+        self, domain: str, service: str, data: dict[str, Any] | None = None,
+        return_response: bool = False
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """
         Call Home Assistant service.
 
@@ -213,16 +214,33 @@ class HomeAssistantClient:
             domain: Service domain (e.g., 'light', 'climate')
             service: Service name (e.g., 'turn_on', 'set_temperature')
             data: Optional service data
+            return_response: If True, returns the service response data (for services
+                           that support SupportsResponse.ONLY or SupportsResponse.OPTIONAL)
 
         Returns:
-            Service response data
+            Service response data - list of affected states normally, or dict with
+            service response if return_response=True
         """
-        logger.debug(f"Calling service {domain}.{service}")
+        logger.debug(f"Calling service {domain}.{service} (return_response={return_response})")
 
         payload = data or {}
+
+        # Build query params for return_response
+        params = {}
+        if return_response:
+            params["return_response"] = "true"
+
         result = await self._request(
-            "POST", f"/services/{domain}/{service}", json=payload
+            "POST", f"/services/{domain}/{service}", json=payload, params=params if params else None
         )
+
+        # When return_response is True, HA returns a dict with service_response key
+        if return_response:
+            if isinstance(result, dict):
+                return result
+            return {"service_response": result}
+
+        # Normal behavior: return list of affected states
         if isinstance(result, list):
             return result
         else:

@@ -68,6 +68,58 @@ def _setup_config_permissions(config_path: Path) -> None:
             )
 
 
+def _ensure_hacs_frontend(initial_state_path: Path) -> None:
+    """Download HACS frontend if not present.
+
+    HACS requires the frontend (~51MB) to be present to fully initialize.
+    This is not committed to git to keep the repo size manageable.
+    """
+    import subprocess
+    import tarfile
+    import urllib.request
+
+    hacs_dir = initial_state_path / "custom_components" / "hacs"
+    frontend_dir = hacs_dir / "hacs_frontend"
+
+    # Check if HACS is installed and frontend is missing
+    if hacs_dir.exists() and not frontend_dir.exists():
+        logger.info("HACS frontend not found, downloading...")
+
+        try:
+            # Get the latest frontend version from GitHub API
+            import json
+
+            api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
+            with urllib.request.urlopen(api_url, timeout=30) as response:
+                release_data = json.loads(response.read())
+                tag_name = release_data["tag_name"]
+
+            # Download and extract the frontend
+            tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
+            logger.info(f"Downloading HACS frontend {tag_name}...")
+
+            with urllib.request.urlopen(tarball_url, timeout=120) as response:
+                with tarfile.open(fileobj=response, mode="r:gz") as tar:
+                    # Extract to temp location first
+                    temp_extract = Path(tempfile.mkdtemp())
+                    tar.extractall(temp_extract)
+
+                    # Move the hacs_frontend subdirectory
+                    extracted_frontend = temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
+                    if extracted_frontend.exists():
+                        shutil.move(str(extracted_frontend), str(frontend_dir))
+                        logger.info(f"HACS frontend installed at {frontend_dir}")
+                    else:
+                        logger.warning("Could not find hacs_frontend in downloaded archive")
+
+                    # Cleanup temp
+                    shutil.rmtree(temp_extract, ignore_errors=True)
+
+        except Exception as e:
+            logger.warning(f"Failed to download HACS frontend: {e}")
+            logger.warning("HACS tests may be skipped without the frontend")
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for the test session."""
@@ -98,6 +150,9 @@ def ha_container_with_fresh_config():
 
     if not initial_state_path.exists():
         pytest.fail(f"Initial test state not found at {initial_state_path}")
+
+    # Ensure HACS frontend is downloaded (if HACS is present)
+    _ensure_hacs_frontend(initial_state_path)
 
     # Copy all files from initial_test_state
     shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
@@ -142,6 +197,19 @@ def ha_container_with_fresh_config():
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
         base_url = f"http://localhost:{host_port}"
+
+        # Set environment variables for the dynamic URL so WebSocket client uses correct port
+        os.environ["HOMEASSISTANT_URL"] = base_url
+        os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
+
+        # Reset cached settings so WebSocket client picks up the dynamic URL
+        import ha_mcp.config
+        ha_mcp.config._settings = None
+
+        # Reset the WebSocket manager to ensure fresh connection with new URL
+        from ha_mcp.client.websocket_client import websocket_manager
+        websocket_manager._client = None
+        websocket_manager._current_loop = None
 
         logger.info(f"🚀 Home Assistant container started on {base_url}")
         logger.info(f"🐳 Container ID: {container.get_container_host_ip()}:{host_port}")

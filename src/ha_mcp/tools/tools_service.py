@@ -25,6 +25,7 @@ def register_service_tools(mcp, client, **kwargs):
         service: str,
         entity_id: str | None = None,
         data: str | dict[str, Any] | None = None,
+        return_response: bool | str = False,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services with comprehensive validation and examples.
@@ -128,9 +129,18 @@ def register_service_tools(mcp, client, **kwargs):
                       entity_id="cover.bedroom_curtains", data={"position": 50})
         ```
 
+        **Services with Response Data:**
+        ```python
+        # Some services return response data (e.g., custom components)
+        ha_call_service("ha_mcp_tools", "list_files",
+                      data={"path": "www/"}, return_response=True)
+        # Returns: {"service_response": {"success": true, "files": [...]}}
+        ```
+
         **Parameter Guidelines:**
         - **entity_id**: Optional for services that affect all entities of a domain
         - **data**: Service-specific parameters (brightness, temperature, volume, etc.)
+        - **return_response**: Set to True for services that return data (SupportsResponse.ONLY/OPTIONAL)
         - Use ha_get_state() first to check current values and supported features
         - Use ha_get_domain_docs() for detailed service documentation
         """
@@ -159,9 +169,13 @@ def register_service_tools(mcp, client, **kwargs):
 
             if entity_id:
                 service_data["entity_id"] = entity_id
-            result = await client.call_service(domain, service, service_data)
 
-            return {
+            # Coerce return_response boolean parameter
+            return_response_bool = coerce_bool_param(return_response, "return_response", default=False) or False
+
+            result = await client.call_service(domain, service, service_data, return_response=return_response_bool)
+
+            response = {
                 "success": True,
                 "domain": domain,
                 "service": service,
@@ -170,6 +184,12 @@ def register_service_tools(mcp, client, **kwargs):
                 "result": result,
                 "message": f"Successfully executed {domain}.{service}",
             }
+
+            # If return_response was requested, include the service_response key prominently
+            if return_response_bool and isinstance(result, dict):
+                response["service_response"] = result.get("service_response", result)
+
+            return response
         except Exception as error:
             # Use structured error response
             error_response = exception_to_structured_error(
