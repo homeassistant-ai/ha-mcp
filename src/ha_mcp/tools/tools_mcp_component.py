@@ -20,11 +20,11 @@ from .util_helpers import add_timezone_metadata
 logger = logging.getLogger(__name__)
 
 # Feature flag - disabled by default for silent launch
-FEATURE_FLAG = "HAMCP_ENABLE_MCP_TOOLS_INSTALLER"
+FEATURE_FLAG = "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"
 
 
-def is_mcp_tools_installer_enabled() -> bool:
-    """Check if the MCP tools installer feature is enabled."""
+def is_custom_component_integration_enabled() -> bool:
+    """Check if the custom component integration feature is enabled."""
     value = os.getenv(FEATURE_FLAG, "").lower()
     return value in ("true", "1", "yes", "on")
 
@@ -39,9 +39,9 @@ def register_mcp_component_tools(mcp, client, **kwargs):
     """Register MCP component installation tools.
 
     This function only registers tools if the feature flag is enabled.
-    Set HAMCP_ENABLE_MCP_TOOLS_INSTALLER=true to enable.
+    Set HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true to enable.
     """
-    if not is_mcp_tools_installer_enabled():
+    if not is_custom_component_integration_enabled():
         logger.debug(
             f"MCP tools installer disabled (set {FEATURE_FLAG}=true to enable)"
         )
