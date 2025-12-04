@@ -644,8 +644,12 @@ class TestMcpToolsInstallation:
         mcp_tools_repo = None
 
         for repo in repos:
-            if "ha-mcp-test-custom-component" in repo.get("full_name", "").lower() or \
-               "ha_mcp_tools" in repo.get("name", "").lower():
+            full_name = repo.get("full_name", "").lower()
+            name = repo.get("name", "").lower()
+            # Match either the main repo or test fork
+            if "homeassistant-ai/ha-mcp" in full_name or \
+               "ha-mcp-test-custom-component" in full_name or \
+               "ha_mcp_tools" in name:
                 mcp_tools_repo = repo
                 break
 

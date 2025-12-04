@@ -787,6 +787,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             return await add_timezone_metadata(client, error_response)
 
     # Constants for ha_mcp_tools custom component
+    # TODO: Switch to "homeassistant-ai/ha-mcp" after hacs.json is on default branch
     MCP_TOOLS_REPO = "julienld/ha-mcp-test-custom-component"
     MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 
