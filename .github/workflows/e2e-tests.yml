@@ -54,5 +54,4 @@ jobs:
           -v
         echo "✅ Full E2E test suite passed"
       env:
-        HOMEASSISTANT_URL: "http://localhost:8123"
-        HOMEASSISTANT_TOKEN: "test-token"
+        HAMCP_ENV_FILE: "tests/.env.test"
