@@ -13,16 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
+from .const import ALLOWED_READ_DIRS, DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
-
-DOMAIN = "ha_mcp_tools"
-
-# Allowed directories for file operations (relative to config dir)
-ALLOWED_READ_DIRS = ["www", "themes", "custom_templates"]
-ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates"]
 
 # Service schemas
 SERVICE_LIST_FILES = "list_files"
@@ -58,11 +55,11 @@ def _is_path_allowed(config_dir: Path, rel_path: str, allowed_dirs: list[str]) -
         return False
 
 
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """Set up the HA MCP Tools component."""
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up HA MCP Tools from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
-    async def handle_list_files(call: ServiceCall) -> dict[str, Any]:
+    async def handle_list_files(call: ServiceCall) -> ServiceResponse:
         """Handle the list_files service call."""
         rel_path = call.data["path"]
         pattern = call.data.get("pattern")
@@ -96,18 +93,18 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
         try:
             files = []
-            for entry in target_dir.iterdir():
+            for item in target_dir.iterdir():
                 # Apply pattern filter if provided
-                if pattern and not fnmatch.fnmatch(entry.name, pattern):
+                if pattern and not fnmatch.fnmatch(item.name, pattern):
                     continue
 
-                stat = entry.stat()
+                stat = item.stat()
                 files.append(
                     {
-                        "name": entry.name,
-                        "path": str(entry.relative_to(config_dir)),
-                        "is_dir": entry.is_dir(),
-                        "size": stat.st_size if entry.is_file() else 0,
+                        "name": item.name,
+                        "path": str(item.relative_to(config_dir)),
+                        "is_dir": item.is_dir(),
+                        "size": stat.st_size if item.is_file() else 0,
                         "modified": stat.st_mtime,
                     }
                 )
@@ -138,13 +135,21 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 "files": [],
             }
 
-    # Register the service
+    # Register the service with response support
     hass.services.async_register(
         DOMAIN,
         SERVICE_LIST_FILES,
         handle_list_files,
         schema=SERVICE_LIST_FILES_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
 
     _LOGGER.info("HA MCP Tools initialized successfully")
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    # Remove the service
+    hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)
     return True
