@@ -1,0 +1,18 @@
+list_files:
+  name: List Files
+  description: List files in a directory within the Home Assistant config directory.
+  fields:
+    path:
+      name: Path
+      description: Relative path from config directory (e.g., "www/", "themes/")
+      required: true
+      example: "www/"
+      selector:
+        text:
+    pattern:
+      name: Pattern
+      description: Optional glob pattern to filter files (e.g., "*.css", "*.js")
+      required: false
+      example: "*.css"
+      selector:
+        text:

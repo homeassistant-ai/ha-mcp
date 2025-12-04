@@ -48,6 +48,7 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
 
     unavailable_indicators = [
         (error_code == "HACS_NOT_AVAILABLE", "HACS not available"),
+        (error_code == "HACS_DISABLED", f"HACS disabled: {data.get('disabled_reason', 'unknown')}"),
         ("not found" in str(error).lower(), "Command not found"),
         ("unknown command" in str(error).lower(), "Unknown command"),
         ("disabled" in str(error).lower(), "HACS disabled"),
@@ -519,3 +520,139 @@ async def test_hacs_discovery(mcp_client):
         logger.warning(f"HACS discovery returned error: {data.get('error')}")
 
     logger.info("HACS discovery test completed")
+
+
+@pytest.mark.hacs
+@pytest.mark.slow
+class TestMcpToolsInstallation:
+    """Test ha_mcp_tools custom component installation via HACS.
+
+    These tests install the ha_mcp_tools custom component using HACS,
+    which provides advanced services not available through standard HA APIs.
+
+    Note: These tests require:
+    - HACS to be installed and functional
+    - A valid GitHub token configured in HACS
+    - Network access to GitHub
+    """
+
+    async def test_install_mcp_tools_basic(self, mcp_client):
+        """
+        Test: Install ha_mcp_tools via HACS (without restart)
+
+        This test validates that the install tool can add the repository
+        and download the custom component. Does not restart HA.
+        """
+        logger.info("Testing ha_install_mcp_tools (without restart)...")
+
+        result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
+        data = extract_hacs_data(result)
+
+        logger.info(f"Install result: success={data.get('success')}, message={data.get('message')}")
+
+        if not data.get("success"):
+            unavailable, reason = is_hacs_unavailable(data)
+            if unavailable:
+                pytest.skip(f"HACS not available for installation: {reason}")
+
+            # Check for GitHub token issues
+            error = str(data.get("error", ""))
+            if "401" in error or "token" in error.lower() or "rate limit" in error.lower():
+                pytest.skip(f"GitHub access issue: {error}")
+
+            pytest.fail(f"Installation failed: {data.get('error')}")
+
+        # Verify successful installation response
+        assert data.get("installed") or data.get("already_installed"), \
+            "Response should indicate installation status"
+
+        if data.get("already_installed"):
+            logger.info(f"ha_mcp_tools already installed: {data.get('version')}")
+        else:
+            logger.info(f"ha_mcp_tools installed successfully")
+            assert "note" in data, "Should include note about restart"
+
+        # Verify services list is provided
+        services = data.get("services", [])
+        assert len(services) > 0, "Should list available services"
+        assert any("list_files" in s for s in services), "Should mention list_files service"
+
+        logger.info("Install MCP tools (no restart) test passed")
+
+    async def test_install_mcp_tools_idempotent(self, mcp_client):
+        """
+        Test: Installing ha_mcp_tools is idempotent
+
+        Calling install twice should succeed and return already_installed status.
+        """
+        logger.info("Testing ha_install_mcp_tools idempotency...")
+
+        # First install
+        result1 = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
+        data1 = extract_hacs_data(result1)
+
+        if not data1.get("success"):
+            unavailable, reason = is_hacs_unavailable(data1)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            error = str(data1.get("error", ""))
+            if "401" in error or "token" in error.lower():
+                pytest.skip(f"GitHub access issue: {error}")
+            pytest.fail(f"First install failed: {data1.get('error')}")
+
+        # Second install should also succeed
+        result2 = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
+        data2 = extract_hacs_data(result2)
+
+        assert data2.get("success"), f"Second install should succeed: {data2.get('error')}"
+        assert data2.get("already_installed"), "Second install should report already_installed"
+
+        logger.info("Install MCP tools idempotency test passed")
+
+    async def test_check_mcp_tools_in_hacs(self, mcp_client):
+        """
+        Test: Verify ha_mcp_tools appears in HACS installed list after installation
+
+        After installing, the component should appear in the HACS repository list.
+        """
+        logger.info("Testing ha_mcp_tools appears in HACS list...")
+
+        # First ensure it's installed
+        install_result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
+        install_data = extract_hacs_data(install_result)
+
+        if not install_data.get("success"):
+            unavailable, reason = is_hacs_unavailable(install_data)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            error = str(install_data.get("error", ""))
+            if "401" in error or "token" in error.lower():
+                pytest.skip(f"GitHub access issue: {error}")
+            pytest.fail(f"Install failed: {install_data.get('error')}")
+
+        # Now check HACS list for the integration
+        list_result = await mcp_client.call_tool(
+            "ha_hacs_list_installed",
+            {"category": "integration"}
+        )
+        list_data = extract_hacs_data(list_result)
+
+        if not list_data.get("success"):
+            pytest.fail(f"Failed to list installed: {list_data.get('error')}")
+
+        repos = list_data.get("repositories", [])
+        mcp_tools_repo = None
+
+        for repo in repos:
+            if "ha-mcp-test-custom-component" in repo.get("full_name", "").lower() or \
+               "ha_mcp_tools" in repo.get("name", "").lower():
+                mcp_tools_repo = repo
+                break
+
+        assert mcp_tools_repo is not None, \
+            "ha_mcp_tools should appear in HACS installed list after installation"
+
+        logger.info(f"Found ha_mcp_tools in HACS: {mcp_tools_repo.get('full_name')}")
+        logger.info(f"Version: {mcp_tools_repo.get('installed_version')}")
+
+        logger.info("Check MCP tools in HACS test passed")
