@@ -40,14 +40,14 @@ Just talk to Claude naturally. Here are some real examples:
 | *"Show me all automations that control the living room lights"* | Deep searches through automation configs to find matches |
 | *"Create a script that sets movie mode: dim lights, close blinds, turn on TV"* | Creates a reusable script with the sequence of actions |
 
-No YAML. No need to know `light.living_room_lamp_2`. Just natural language.
+Spend less time configuring, more time enjoying your smart home.
 
 ---
 
 ## ✨ Features
 
-| | |
-|---|---|
+| Category | Capabilities |
+|----------|--------------|
 | **🔍 Search** | Fuzzy entity search, deep config search, system overview |
 | **🏠 Control** | Any service, bulk device control, real-time states |
 | **🔧 Manage** | Automations, scripts, helpers, dashboards, areas, zones, groups, calendars, blueprints |
