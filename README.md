@@ -92,13 +92,11 @@ Spend less time configuring, more time enjoying your smart home.
 
 <p align="center">
   <a href="docs/macOS-uv-guide.md">
-    <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white&scale=4" alt="macOS" height="80">
-    <br><b>Setup Guide for Mac</b>
+    <img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120">
   </a>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="docs/Windows-uv-guide.md">
-    <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white&scale=4" alt="Windows" height="80">
-    <br><b>Setup Guide for Windows</b>
+    <img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120">
   </a>
 </p>
 
