@@ -9,6 +9,7 @@ __version__ = "5.0.5"
 __author__ = "Julien"
 __license__ = "MIT"
 
+from .auth import HomeAssistantOAuthProvider
 from .client.rest_client import HomeAssistantClient
 from .config import Settings
 from .errors import (
@@ -32,6 +33,7 @@ __all__ = [
     "Settings",
     "HomeAssistantClient",
     "HomeAssistantSmartMCPServer",
+    "HomeAssistantOAuthProvider",
     # Error handling exports
     "ErrorCode",
     "create_error_response",
