@@ -76,6 +76,10 @@ tail -f /tmp/hamcp.log
 
 You can run multiple lab servers behind DNS round-robin or a network load balancer for redundancy. Run the setup script on each node with the same domain.
 
+**Prerequisites:**
+- Domain must resolve to all server IPs (A/AAAA records for each node)
+- Ports 80 and 443 open on all nodes (for Let's Encrypt HTTP-01 challenge and HTTPS)
+
 **How it works:** Caddy uses HTTP-01 challenge for Let's Encrypt certificates. Each node will retry until challenge traffic reaches it.
 
 | Nodes | Success chance per attempt | Notes |
