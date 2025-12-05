@@ -1,6 +1,6 @@
 #!/bin/sh
 # ha-mcp installer for macOS
-# Usage: curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | sh
+# Usage: curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh
 set -e
 
 # Colors for output

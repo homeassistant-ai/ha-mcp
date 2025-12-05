@@ -28,6 +28,52 @@
 
 ---
 
+## 🚀 Get Started
+
+### Full guide to get you started with Claude Desktop (~10 min)
+
+*No paid subscription required.* Click on your operating system:
+
+<p>
+<a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
+</p>
+
+### Quick install (~5 min)
+
+<details>
+<summary><b>🍎 macOS</b></summary>
+
+1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
+2. Open **Terminal** and run:
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh
+   ```
+3. [Download Claude Desktop](https://claude.ai/download) (or restart: Claude menu → Quit)
+4. Ask Claude: **"Can you see my Home Assistant?"**
+
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-6-connect-your-home-assistant)
+
+</details>
+
+<details>
+<summary><b>🪟 Windows</b></summary>
+
+1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
+2. Open **Windows PowerShell** (from Start menu) and run:
+   ```powershell
+   irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-windows.ps1 | iex
+   ```
+3. [Download Claude Desktop](https://claude.ai/download) (or restart: File → Exit)
+4. Ask Claude: **"Can you see my Home Assistant?"**
+
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-6-connect-your-home-assistant)
+
+</details>
+
+Having issues? Check the **[FAQ & Troubleshooting](docs/FAQ.md)**
+
+---
+
 ## 💬 What Can You Do With It?
 
 Just talk to Claude naturally. Here are some real examples:
@@ -83,52 +129,6 @@ Spend less time configuring, more time enjoying your smart home.
 | **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_list_integrations` |
 
 </details>
-
----
-
-## 🚀 Get Started
-
-### Full guide to get you started with Claude Desktop (~10 min)
-
-*No paid subscription required.* Click on your operating system:
-
-<p>
-<a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
-</p>
-
-### Quick install (~5 min)
-
-<details>
-<summary><b>🍎 macOS</b></summary>
-
-1. Create a free account at [claude.ai](https://claude.ai)
-2. Open **Terminal** and run:
-   ```sh
-   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | sh
-   ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart: Claude menu → Quit)
-4. Ask Claude: **"Can you see my Home Assistant?"**
-
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-6-connect-your-home-assistant)
-
-</details>
-
-<details>
-<summary><b>🪟 Windows</b></summary>
-
-1. Create a free account at [claude.ai](https://claude.ai)
-2. Open **PowerShell** and run:
-   ```powershell
-   irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
-   ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart: File → Exit)
-4. Ask Claude: **"Can you see my Home Assistant?"**
-
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-6-connect-your-home-assistant)
-
-</details>
-
-Having issues? Check the **[FAQ & Troubleshooting](docs/FAQ.md)**
 
 ---
 

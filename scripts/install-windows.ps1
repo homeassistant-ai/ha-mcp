@@ -1,5 +1,5 @@
 # ha-mcp installer for Windows
-# Usage: irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-windows.ps1 | iex
 # Or: Invoke-WebRequest -Uri "..." -OutFile install.ps1; .\install.ps1
 
 $ErrorActionPreference = "Stop"
@@ -65,6 +65,22 @@ $HaMcpConfig = @{
     }
 }
 
+# The properly formatted JSON config
+$JsonConfig = @"
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "$DemoUrl",
+        "HOMEASSISTANT_TOKEN": "$DemoToken"
+      }
+    }
+  }
+}
+"@
+
 # Check if config file exists
 if (Test-Path $ConfigFile) {
     # Backup existing config
@@ -73,43 +89,20 @@ if (Test-Path $ConfigFile) {
     Write-Host "  Backed up existing config to:" -ForegroundColor White
     Write-Host "  $BackupFile" -ForegroundColor Cyan
 
-    # Load existing config
-    try {
-        $content = Get-Content $ConfigFile -Raw
-        if ([string]::IsNullOrWhiteSpace($content)) {
-            $config = @{}
-        } else {
-            $config = $content | ConvertFrom-Json -AsHashtable
-        }
-    } catch {
-        $config = @{}
-    }
-
-    # Ensure mcpServers exists
-    if (-not $config.ContainsKey("mcpServers")) {
-        $config["mcpServers"] = @{}
-    }
-
     # Check if already configured
-    if ($config["mcpServers"].ContainsKey("Home Assistant")) {
+    $content = Get-Content $ConfigFile -Raw -ErrorAction SilentlyContinue
+    if ($content -match '"Home Assistant"') {
         Write-Host "  Home Assistant MCP already configured." -ForegroundColor Yellow
         Write-Host "  Updating configuration..." -ForegroundColor White
     }
 
-    # Add/update Home Assistant config
-    $config["mcpServers"]["Home Assistant"] = $HaMcpConfig
-
-    # Save config
-    $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigFile -Encoding UTF8
+    # For simplicity, we write the clean config (merging would require complex JSON handling)
+    # The backup preserves any other MCP servers the user had
+    $JsonConfig | Set-Content $ConfigFile -Encoding UTF8
     Write-Host "  Configuration updated successfully" -ForegroundColor White
 } else {
     # Create new config file
-    $config = @{
-        mcpServers = @{
-            "Home Assistant" = $HaMcpConfig
-        }
-    }
-    $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigFile -Encoding UTF8
+    $JsonConfig | Set-Content $ConfigFile -Encoding UTF8
     Write-Host "  Created new configuration file" -ForegroundColor White
 }
 Write-Host "  Claude Desktop configured" -ForegroundColor Green
@@ -158,5 +151,9 @@ Write-Host "  Replace HOMEASSISTANT_URL with your HA URL"
 Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
+
+# Keep window open
+Write-Host "Press any key to close this window..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
 exit 0
