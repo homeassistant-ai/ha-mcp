@@ -103,8 +103,8 @@ Spend less time configuring, more time enjoying your smart home.
 
 1. Create a free account at [claude.ai](https://claude.ai)
 2. Open **Terminal** and run:
-   ```bash
-   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | sh
    ```
 3. [Download Claude Desktop](https://claude.ai/download) (or restart: Claude menu → Quit)
 4. Ask Claude: **"Can you see my Home Assistant?"**

@@ -38,11 +38,9 @@ Claude should respond with a list of entities from the demo environment (lights,
 
 The demo environment is a real Home Assistant you can experiment with:
 
-| | |
-|---|---|
-| **Web UI** | https://ha-mcp-demo-server.qc-h.net |
-| **Login** | `mcp` / `mcp` |
-| **Note** | Resets weekly - your changes won't persist |
+- **Web UI:** https://ha-mcp-demo-server.qc-h.net
+- **Login:** `mcp` / `mcp`
+- **Note:** Resets weekly - your changes won't persist
 
 Try asking Claude:
 - "Turn on the kitchen lights"

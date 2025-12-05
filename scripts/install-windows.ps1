@@ -115,6 +115,17 @@ if (Test-Path $ConfigFile) {
 Write-Host "  Claude Desktop configured" -ForegroundColor Green
 Write-Host ""
 
+# Step 3: Pre-download dependencies
+Write-Host "Step 3: Pre-downloading ha-mcp..." -ForegroundColor Yellow
+Write-Host "  This speeds up Claude Desktop startup..."
+try {
+    & uvx ha-mcp@latest --help 2>&1 | Out-Null
+    Write-Host "  Dependencies cached" -ForegroundColor Green
+} catch {
+    Write-Host "  Pre-download skipped (will download on first use)" -ForegroundColor Yellow
+}
+Write-Host ""
+
 # Success message
 Write-Host "============================================" -ForegroundColor Green
 Write-Host "   Installation Complete!" -ForegroundColor Green
@@ -147,3 +158,5 @@ Write-Host "  Replace HOMEASSISTANT_URL with your HA URL"
 Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
+
+exit 0
