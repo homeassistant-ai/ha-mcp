@@ -86,34 +86,60 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
-## 🚀 Quick Start (Claude Desktop)
+## 🚀 Get Started
 
-**2 minutes. Free. No subscription needed.**
+**Free. No subscription needed.**
 
-### macOS
+### Step-by-step guides (~5 min)
 
-```bash
-curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
-```
+<p align="center">
+  <a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Guide"></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Guide"></a>
+</p>
 
-### Windows
+### Quick install (~2 min)
 
-```powershell
-irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
-```
+<details>
+<summary><b>🍎 macOS</b></summary>
 
-Then restart Claude Desktop (Cmd+Q or Alt+F4) and ask: **"Can you see my Home Assistant?"**
+1. Create a free account at [claude.ai](https://claude.ai)
+2. Download and install [Claude Desktop](https://claude.ai/download)
+3. Open **Terminal** and run:
+   ```bash
+   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
+   ```
+4. Restart Claude Desktop (**Cmd+Q**, then reopen)
+5. Ask Claude: **"Can you see my Home Assistant?"**
 
-**[macOS Guide](docs/macOS-uv-guide.md)** | **[Windows Guide](docs/Windows-uv-guide.md)** | **[FAQ](docs/FAQ.md)**
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-5-connect-your-home-assistant)
+
+</details>
+
+<details>
+<summary><b>🪟 Windows</b></summary>
+
+1. Create a free account at [claude.ai](https://claude.ai)
+2. Download and install [Claude Desktop](https://claude.ai/download)
+3. Open **PowerShell** and run:
+   ```powershell
+   irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
+   ```
+4. Restart Claude Desktop (**Alt+F4** or system tray → Exit, then reopen)
+5. Ask Claude: **"Can you see my Home Assistant?"**
+
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-5-connect-your-home-assistant)
+
+</details>
 
 ### Demo Environment
 
-The installers configure Claude for our public demo environment:
+The installers configure Claude for our public demo — a real Home Assistant you can experiment with:
 
 - **Web UI**: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`)
-- **Resets weekly** - experiment freely, your changes won't persist
+- **Resets weekly** — your changes won't persist
 
-After testing, update the config with your own Home Assistant URL and token.
+**[FAQ & Troubleshooting](docs/FAQ.md)**
 
 ---
 
