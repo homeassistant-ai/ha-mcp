@@ -88,16 +88,12 @@ Spend less time configuring, more time enjoying your smart home.
 
 ## 🚀 Get Started
 
-**Free. No subscription needed.**
+### Full guide to get you started with Claude Desktop
 
-<p align="center">
-  <a href="docs/macOS-uv-guide.md">
-    <img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120">
-  </a>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="docs/Windows-uv-guide.md">
-    <img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120">
-  </a>
+*No paid subscription required.*
+
+<p>
+<a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
 </p>
 
 ### Quick install (~2 min)
