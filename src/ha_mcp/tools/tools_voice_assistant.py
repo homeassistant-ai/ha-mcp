@@ -84,22 +84,42 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         including sensitive domains like alarm_control_panel, lock, etc.
         """
         try:
-            # Parse entity_ids
-            parsed_entity_ids = parse_string_list_param(entity_ids, "entity_ids")
-            if isinstance(entity_ids, str) and not parsed_entity_ids:
-                # Single entity ID as string (not JSON array)
-                parsed_entity_ids = [entity_ids]
+            # Parse entity_ids - handle single string or list/JSON array
+            if isinstance(entity_ids, str):
+                # Try to parse as JSON first, otherwise treat as single entity_id
+                try:
+                    parsed_entity_ids = parse_string_list_param(
+                        entity_ids, "entity_ids"
+                    )
+                except ValueError:
+                    # Not valid JSON, treat as single entity_id
+                    parsed_entity_ids = [entity_ids]
+            elif isinstance(entity_ids, list):
+                parsed_entity_ids = entity_ids
+            else:
+                parsed_entity_ids = None
+
             if not parsed_entity_ids:
                 return {
                     "success": False,
                     "error": "entity_ids is required and cannot be empty",
                 }
 
-            # Parse assistants
-            parsed_assistants = parse_string_list_param(assistants, "assistants")
-            if isinstance(assistants, str) and not parsed_assistants:
-                # Single assistant as string (not JSON array)
-                parsed_assistants = [assistants]
+            # Parse assistants - handle single string or list/JSON array
+            if isinstance(assistants, str):
+                # Try to parse as JSON first, otherwise treat as single assistant
+                try:
+                    parsed_assistants = parse_string_list_param(
+                        assistants, "assistants"
+                    )
+                except ValueError:
+                    # Not valid JSON, treat as single assistant
+                    parsed_assistants = [assistants]
+            elif isinstance(assistants, list):
+                parsed_assistants = assistants
+            else:
+                parsed_assistants = None
+
             if not parsed_assistants:
                 return {
                     "success": False,
