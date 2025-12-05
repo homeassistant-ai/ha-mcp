@@ -6,7 +6,7 @@ Control Home Assistant with Claude Desktop in about 10 minutes.
 
 ## Step 1: Create a Claude Account
 
-Go to [claude.ai](https://claude.ai) and create a free account (or sign in if you have one).
+Go to [claude.ai](https://claude.ai) and create a free account.
 
 ## Step 2: Run the Installer
 
@@ -17,6 +17,42 @@ irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/ins
 ```
 
 This installs the required tools and configures Claude Desktop for the demo environment.
+
+<details>
+<summary><strong>Manual Installation</strong> (if the installer doesn't work)</summary>
+
+### Install uv
+
+Open **PowerShell** or **cmd**:
+
+```powershell
+winget install astral-sh.uv -e
+```
+
+### Configure Claude Desktop
+
+1. Open Claude Desktop
+2. **Settings** → **Developer** → **Edit Config**
+3. Paste:
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
+        "HOMEASSISTANT_TOKEN": "demo"
+      }
+    }
+  }
+}
+```
+
+4. Save and restart Claude: **File → Exit**, then reopen.
+
+</details>
 
 ## Step 3: Install or Restart Claude Desktop
 
@@ -90,39 +126,3 @@ We'd love to hear how you're using ha-mcp!
 ---
 
 Having issues? See the **[FAQ & Troubleshooting Guide](FAQ.md)**.
-
-<details>
-<summary><strong>Manual Installation</strong> (if the installer doesn't work)</summary>
-
-### Install uv
-
-Open **PowerShell** or **cmd**:
-
-```powershell
-winget install astral-sh.uv -e
-```
-
-### Configure Claude Desktop
-
-1. Open Claude Desktop
-2. **Settings** → **Developer** → **Edit Config**
-3. Paste:
-
-```json
-{
-  "mcpServers": {
-    "Home Assistant": {
-      "command": "uvx",
-      "args": ["ha-mcp@latest"],
-      "env": {
-        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
-        "HOMEASSISTANT_TOKEN": "demo"
-      }
-    }
-  }
-}
-```
-
-4. Save and restart Claude: **File → Exit**, then reopen.
-
-</details>
