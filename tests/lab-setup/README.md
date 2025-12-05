@@ -72,34 +72,6 @@ docker logs -f $(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assist
 tail -f /tmp/hamcp.log
 ```
 
-## Multi-Server Setup
-
-You can run multiple lab servers for redundancy, but **sticky sessions are required**. Home Assistant sessions and WebSocket connections must consistently hit the same backend.
-
-**DNS round-robin alone won't work** - clients would lose their session when bounced between nodes.
-
-### Recommended: Load Balancer with Sticky Sessions
-
-Use an NLB or application load balancer with source IP affinity:
-- Each client IP consistently routes to the same backend
-- Ports 80 and 443 open on all nodes
-- Domain points to the load balancer
-
-### Let's Encrypt Certificate Challenge
-
-Caddy uses HTTP-01 challenge for certificates. With sticky sessions, each node will eventually receive challenge traffic and obtain its cert.
-
-| Nodes | Success chance per attempt | Notes |
-|-------|---------------------------|-------|
-| 2 | 50% | Works well |
-| 3-4 | 25-33% | Still practical |
-| 5+ | <20% | Consider alternatives below |
-
-**For 5+ nodes**, consider:
-- **DNS-01 challenge** - Any node can prove ownership via DNS TXT record
-- **TLS termination at LB** - Single cert on load balancer, HTTP to backends
-- **Shared certificate** - One node obtains cert, distribute to others
-
 ## Troubleshooting
 
 ### Container not starting
