@@ -3,9 +3,13 @@ E2E tests for ha_bulk_control tool - bulk device operations.
 
 Tests the bulk control functionality for controlling multiple entities
 in a single operation.
+
+Note: ha_bulk_control expects 'operations' parameter as a list of dicts,
+each containing 'entity_id' and 'action' keys.
 """
 
 import asyncio
+import json
 import logging
 
 import pytest
@@ -13,6 +17,17 @@ import pytest
 from ...utilities.assertions import assert_mcp_success, parse_mcp_result
 
 logger = logging.getLogger(__name__)
+
+
+def create_operations(entities: list[str], action: str, parameters: dict | None = None) -> list[dict]:
+    """Create operations list for bulk_control."""
+    ops = []
+    for entity_id in entities:
+        op = {"entity_id": entity_id, "action": action}
+        if parameters:
+            op["parameters"] = parameters
+        ops.append(op)
+    return ops
 
 
 @pytest.mark.asyncio
@@ -35,24 +50,19 @@ class TestBulkControl:
         )
         await asyncio.sleep(0.5)
 
+        operations = create_operations([test_light_entity], "on")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [test_light_entity],
-                "action": "turn_on",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk turn_on single light")
 
         # Verify response structure
-        assert "controlled_entities" in data or "successful" in data, (
-            f"Missing entities info: {data}"
-        )
-        assert "action" in data, f"Missing action: {data}"
-        assert data["action"] == "turn_on", f"Action mismatch: {data}"
+        assert "total_operations" in data, f"Missing total_operations: {data}"
+        assert data["total_operations"] == 1, f"Should have 1 operation: {data}"
 
-        logger.info(f"Bulk turn_on executed: {data.get('message', 'Success')}")
+        logger.info(f"Bulk turn_on executed: successful={data.get('successful_commands')}")
 
         # Verify state changed
         await asyncio.sleep(1)
@@ -81,16 +91,14 @@ class TestBulkControl:
         )
         await asyncio.sleep(0.5)
 
+        operations = create_operations([test_light_entity], "off")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [test_light_entity],
-                "action": "turn_off",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk turn_off single light")
-        logger.info(f"Bulk turn_off executed: {data.get('message', 'Success')}")
+        logger.info(f"Bulk turn_off executed: successful={data.get('successful_commands')}")
 
         # Verify state changed
         await asyncio.sleep(1)
@@ -117,16 +125,14 @@ class TestBulkControl:
         initial_state = initial_data.get("data", {}).get("state", "unknown")
         logger.info(f"Initial state: {initial_state}")
 
+        operations = create_operations([test_light_entity], "toggle")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [test_light_entity],
-                "action": "toggle",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk toggle")
-        logger.info(f"Bulk toggle executed: {data.get('message', 'Success')}")
+        logger.info(f"Bulk toggle executed: successful={data.get('successful_commands')}")
 
         # Verify state toggled
         await asyncio.sleep(1)
@@ -166,51 +172,48 @@ class TestBulkControl:
         logger.info(f"Testing with lights: {light_entities}")
 
         # Bulk turn on
+        operations = create_operations(light_entities, "on")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": light_entities,
-                "action": "turn_on",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk turn_on multiple lights")
 
         # Check response indicates multiple entities
-        count = data.get("count") or data.get("total") or len(
-            data.get("controlled_entities", data.get("successful", []))
-        )
-        logger.info(f"Bulk controlled {count} entities")
-        assert count >= 2, f"Should control multiple entities: {count}"
+        total = data.get("total_operations", 0)
+        logger.info(f"Bulk controlled {total} entities")
+        assert total >= 2, f"Should control multiple entities: {total}"
 
         # Bulk turn off
         await asyncio.sleep(1)
+        operations = create_operations(light_entities, "off")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": light_entities,
-                "action": "turn_off",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk turn_off multiple lights")
         logger.info("Multiple lights bulk turn_off executed")
 
-    async def test_bulk_control_with_additional_data(self, mcp_client, test_light_entity):
-        """Test bulk_control with additional service data (brightness)."""
-        logger.info(f"Testing ha_bulk_control with data on {test_light_entity}")
+    async def test_bulk_control_with_parameters(self, mcp_client, test_light_entity):
+        """Test bulk_control with additional parameters (brightness)."""
+        logger.info(f"Testing ha_bulk_control with parameters on {test_light_entity}")
 
+        operations = [
+            {
+                "entity_id": test_light_entity,
+                "action": "on",
+                "parameters": {"brightness_pct": 30},
+            }
+        ]
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [test_light_entity],
-                "action": "turn_on",
-                "data": {"brightness_pct": 30},
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk turn_on with brightness")
-        logger.info(f"Bulk with brightness executed: {data.get('message', 'Success')}")
+        logger.info(f"Bulk with brightness executed: successful={data.get('successful_commands')}")
 
         # Verify brightness was applied
         await asyncio.sleep(1)
@@ -229,11 +232,9 @@ class TestBulkControl:
                     f"Brightness should be around 77: {brightness}"
                 )
 
-    async def test_bulk_control_comma_separated_entities(
-        self, mcp_client, test_light_entity
-    ):
-        """Test bulk_control accepts comma-separated entity string."""
-        logger.info("Testing ha_bulk_control with comma-separated string")
+    async def test_bulk_control_json_string_operations(self, mcp_client, test_light_entity):
+        """Test bulk_control accepts operations as JSON string."""
+        logger.info("Testing ha_bulk_control with JSON string operations")
 
         # First turn off the light
         await mcp_client.call_tool(
@@ -242,38 +243,33 @@ class TestBulkControl:
         )
         await asyncio.sleep(0.5)
 
-        # Some implementations may accept comma-separated string
+        # Operations as JSON string
+        operations_json = json.dumps([{"entity_id": test_light_entity, "action": "on"}])
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": test_light_entity,  # Single entity as string
-                "action": "turn_on",
-            },
+            {"operations": operations_json},
         )
 
-        data = assert_mcp_success(result, "Bulk with single entity string")
-        logger.info(f"Single entity string accepted: {data.get('message', 'Success')}")
+        data = assert_mcp_success(result, "Bulk with JSON string operations")
+        logger.info(f"JSON string operations accepted: successful={data.get('successful_commands')}")
 
-    async def test_bulk_control_empty_entity_list(self, mcp_client):
-        """Test bulk_control with empty entity list."""
-        logger.info("Testing ha_bulk_control with empty entity list")
+    async def test_bulk_control_empty_operations(self, mcp_client):
+        """Test bulk_control with empty operations list."""
+        logger.info("Testing ha_bulk_control with empty operations list")
 
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [],
-                "action": "turn_on",
-            },
+            {"operations": []},
         )
 
         data = parse_mcp_result(result)
 
-        # Should return error or indicate no entities
+        # Should return error or indicate no operations
         if data.get("success"):
-            count = data.get("count") or data.get("total") or 0
-            assert count == 0, f"Should have 0 controlled entities: {data}"
+            total = data.get("total_operations", 0)
+            assert total == 0, f"Should have 0 operations: {data}"
         else:
-            logger.info("Empty entity list properly returned error")
+            logger.info("Empty operations list properly returned error")
 
     async def test_bulk_control_mixed_domains(self, mcp_client):
         """Test bulk_control with entities from different domains."""
@@ -311,42 +307,106 @@ class TestBulkControl:
 
         logger.info(f"Testing with mixed entities: {entities}")
 
+        operations = create_operations(entities, "toggle")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": entities,
-                "action": "toggle",
-            },
+            {"operations": operations},
         )
 
         data = assert_mcp_success(result, "Bulk toggle mixed domains")
-        logger.info(f"Mixed domain bulk toggle executed: {data.get('message', 'Success')}")
+        logger.info(f"Mixed domain bulk toggle executed: total={data.get('total_operations')}")
 
     async def test_bulk_control_nonexistent_entity(self, mcp_client, test_light_entity):
         """Test bulk_control gracefully handles non-existent entities."""
         logger.info("Testing ha_bulk_control with non-existent entity")
 
+        operations = [
+            {"entity_id": test_light_entity, "action": "on"},
+            {"entity_id": "light.nonexistent_test_xyz_12345", "action": "on"},
+        ]
         result = await mcp_client.call_tool(
             "ha_bulk_control",
-            {
-                "entity_ids": [test_light_entity, "light.nonexistent_test_xyz_12345"],
-                "action": "turn_on",
-            },
+            {"operations": operations},
         )
 
         data = parse_mcp_result(result)
 
         # Response should handle this gracefully - either succeed partially
         # or fail with appropriate error
-        if data.get("success"):
-            # Check if failed entities are reported
-            failed = data.get("failed", data.get("errors", []))
-            if failed:
-                logger.info(f"Properly reported failed entities: {failed}")
+        if "total_operations" in data:
+            failed = data.get("failed_commands", 0)
+            if failed > 0:
+                logger.info(f"Properly reported failed commands: {failed}")
             else:
-                logger.info("Bulk operation succeeded (non-existent entity ignored)")
+                logger.info("Bulk operation completed (non-existent entity may be ignored)")
         else:
-            logger.info("Bulk operation failed as expected with non-existent entity")
+            logger.info("Bulk operation returned error as expected")
+
+    async def test_bulk_control_parallel_execution(self, mcp_client):
+        """Test bulk_control with parallel execution (default)."""
+        logger.info("Testing ha_bulk_control parallel execution")
+
+        # Search for lights
+        search_result = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"query": "", "domain_filter": "light", "limit": 3},
+        )
+        search_data = parse_mcp_result(search_result)
+
+        if "data" in search_data:
+            results = search_data.get("data", {}).get("results", [])
+        else:
+            results = search_data.get("results", [])
+
+        if len(results) < 2:
+            pytest.skip("Need at least 2 lights for parallel test")
+
+        light_entities = [r.get("entity_id") for r in results[:3]]
+
+        operations = create_operations(light_entities, "on")
+        result = await mcp_client.call_tool(
+            "ha_bulk_control",
+            {"operations": operations, "parallel": True},
+        )
+
+        data = assert_mcp_success(result, "Bulk parallel execution")
+        assert data.get("execution_mode") == "parallel", (
+            f"Should be parallel mode: {data.get('execution_mode')}"
+        )
+        logger.info(f"Parallel execution completed: {data.get('execution_mode')}")
+
+    async def test_bulk_control_sequential_execution(self, mcp_client):
+        """Test bulk_control with sequential execution."""
+        logger.info("Testing ha_bulk_control sequential execution")
+
+        # Search for lights
+        search_result = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"query": "", "domain_filter": "light", "limit": 3},
+        )
+        search_data = parse_mcp_result(search_result)
+
+        if "data" in search_data:
+            results = search_data.get("data", {}).get("results", [])
+        else:
+            results = search_data.get("results", [])
+
+        if len(results) < 2:
+            pytest.skip("Need at least 2 lights for sequential test")
+
+        light_entities = [r.get("entity_id") for r in results[:3]]
+
+        operations = create_operations(light_entities, "off")
+        result = await mcp_client.call_tool(
+            "ha_bulk_control",
+            {"operations": operations, "parallel": False},
+        )
+
+        data = assert_mcp_success(result, "Bulk sequential execution")
+        assert data.get("execution_mode") == "sequential", (
+            f"Should be sequential mode: {data.get('execution_mode')}"
+        )
+        logger.info(f"Sequential execution completed: {data.get('execution_mode')}")
 
 
 @pytest.mark.asyncio
@@ -354,6 +414,15 @@ class TestBulkControl:
 async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     """Test bulk_control with input_boolean helpers."""
     logger.info("Testing ha_bulk_control with input_boolean helpers")
+
+    # Helper function to extract entity_id
+    def get_entity_id(data: dict) -> str | None:
+        entity_id = data.get("entity_id")
+        if not entity_id:
+            helper_id = data.get("helper_data", {}).get("id")
+            if helper_id:
+                entity_id = f"input_boolean.{helper_id}"
+        return entity_id
 
     # Create two test input_booleans
     entity_ids = []
@@ -368,10 +437,11 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
         )
         create_data = parse_mcp_result(create_result)
         if create_data.get("success"):
-            entity_id = create_data.get("entity_id")
-            entity_ids.append(entity_id)
-            cleanup_tracker.track("input_boolean", entity_id)
-            logger.info(f"Created: {entity_id}")
+            entity_id = get_entity_id(create_data)
+            if entity_id:
+                entity_ids.append(entity_id)
+                cleanup_tracker.track("input_boolean", entity_id)
+                logger.info(f"Created: {entity_id}")
 
     if len(entity_ids) < 2:
         pytest.skip("Could not create test input_booleans")
@@ -379,16 +449,14 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     await asyncio.sleep(1)  # Wait for registration
 
     # Bulk turn on
+    operations = create_operations(entity_ids, "on")
     result = await mcp_client.call_tool(
         "ha_bulk_control",
-        {
-            "entity_ids": entity_ids,
-            "action": "turn_on",
-        },
+        {"operations": operations},
     )
 
     data = assert_mcp_success(result, "Bulk turn_on input_booleans")
-    logger.info(f"Bulk turn_on input_booleans executed: {data.get('message', 'Success')}")
+    logger.info(f"Bulk turn_on input_booleans executed: total={data.get('total_operations')}")
 
     # Verify states changed
     await asyncio.sleep(1)
