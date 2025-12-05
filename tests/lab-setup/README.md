@@ -72,6 +72,23 @@ docker logs -f $(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assist
 tail -f /tmp/hamcp.log
 ```
 
+## Multi-Server Setup (DNS Round-Robin)
+
+You can run multiple lab servers behind DNS round-robin or a network load balancer for redundancy. Run the setup script on each node with the same domain.
+
+**How it works:** Caddy uses HTTP-01 challenge for Let's Encrypt certificates. Each node will retry until challenge traffic reaches it.
+
+| Nodes | Success chance per attempt | Notes |
+|-------|---------------------------|-------|
+| 2 | 50% | Works well |
+| 3-4 | 25-33% | Still practical |
+| 5+ | <20% | Consider alternatives below |
+
+**For 5+ nodes**, consider:
+- **DNS-01 challenge** - Any node can prove ownership via DNS TXT record
+- **TLS termination at LB** - Single cert on load balancer, HTTP to backends
+- **Shared certificate** - One node obtains cert, distribute to others
+
 ## Troubleshooting
 
 ### Container not starting
