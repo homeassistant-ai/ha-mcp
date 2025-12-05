@@ -1,65 +1,131 @@
-# macOS UV Setup Guide for ha-mcp
+# macOS Setup Guide
 
-This guide walks through running the ha-mcp server locally on macOS with Claude using the [uv](https://docs.astral.sh/uv/) package manager. Expect the process to take about 10 minutes.
+Control Home Assistant with Claude Desktop in about 10 minutes.
 
-## Prerequisites
+**Works with free Claude account** - no subscription needed.
 
-- [Claude Desktop](https://claude.ai/download) - Works with a free Claude account
-- A Home Assistant instance with a long-lived access token
+## Step 1: Create a Claude Account
 
-## 1. Install uv
+Go to [claude.ai](https://claude.ai) and create a free account (or sign in if you have one).
 
-Open **Terminal** and run one of the following:
+## Step 2: Run the Installer
 
-**Using Homebrew (recommended if you have Homebrew):**
+Open **Terminal** and paste:
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | sh
+```
+
+This installs the required tools and configures Claude Desktop for the demo environment.
+
+## Step 3: Install or Restart Claude Desktop
+
+Download and install **Claude Desktop** from [claude.ai/download](https://claude.ai/download).
+
+Already have it? Restart it: **Claude menu → Quit Claude**, then reopen.
+
+## Step 4: Test It
+
+Open Claude Desktop and ask:
+
+```
+Can you see my Home Assistant?
+```
+
+Claude should respond with a list of entities from the demo environment (lights, sensors, switches, etc.).
+
+## Step 5: Explore the Demo
+
+The demo environment is a real Home Assistant you can experiment with:
+
+- **Web UI:** https://ha-mcp-demo-server.qc-h.net
+- **Login:** `mcp` / `mcp`
+- **Note:** Resets weekly - your changes won't persist
+
+Try asking Claude:
+- "Turn on the kitchen lights"
+- "What's the temperature in the living room?"
+- "Create an automation that turns off all lights at midnight"
+
+## Step 6: Connect Your Home Assistant
+
+Ready to use your own Home Assistant? Edit the config file:
+
+```bash
+open "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+```
+
+Replace the demo values:
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+      }
+    }
+  }
+}
+```
+
+**To get your token:**
+1. Open Home Assistant in your browser
+2. Click your username (bottom left)
+3. **Security** tab → **Long-lived access tokens**
+4. Create token → Copy immediately (shown only once)
+
+Then restart Claude: **Claude menu → Quit Claude**, then reopen.
+
+## Step 7: Share Your Feedback
+
+We'd love to hear how you're using ha-mcp!
+
+- **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Share your automations, ask questions
+- **[GitHub Issues](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs or request features
+
+---
+
+Having issues? See the **[FAQ & Troubleshooting Guide](FAQ.md)**.
+
+<details>
+<summary><strong>Manual Installation</strong> (if the installer doesn't work)</summary>
+
+### Install uv
 
 ```bash
 brew install uv
 ```
 
-**Using the standalone installer:**
-
+Or without Homebrew:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-After installation, verify it works:
+### Configure Claude Desktop
 
-```bash
-uvx --version
-```
+1. Open Claude Desktop
+2. Menu bar → **Claude** → **Settings...** → **Developer** → **Edit Config**
+3. Paste:
 
-## 2. Configure Claude Desktop
-
-1. Open **Claude Desktop**.
-2. Click **Claude** in the menu bar → **Settings...** → **Developer** → **Edit Config**.
-3. Replace the contents of `claude_desktop_config.json` with:
-
-    ```json
-    {
-      "mcpServers": {
-        "Home Assistant": {
-          "command": "uvx",
-          "args": ["ha-mcp@latest"],
-          "env": {
-            "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
-            "HOMEASSISTANT_TOKEN": "your_long_lived_token"
-          }
-        }
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
+        "HOMEASSISTANT_TOKEN": "demo"
       }
     }
-    ```
+  }
+}
+```
 
-- **HOMEASSISTANT_URL**: Use the same URL (https or http) that you use for accessing Home Assistant
-- **HOMEASSISTANT_TOKEN**: Click your username on the bottom left of HA, click Security at the top, and scroll all the way down and create a new token. Note: this token will be displayed only once
+4. Save and restart Claude: **Claude menu → Quit Claude**, then reopen.
 
-4. Quit Claude completely (**Cmd+Q**), then relaunch it. Under **Settings → Developer** you should see the MCP server running.
-
-Ask Claude to verify access (e.g., "Can you see my Home Assistant interface?"). If it enumerates integrations or entities, the setup succeeded.
-
-## Troubleshooting
-
-- **`uvx` not found:** If you used the curl installer, you may need to restart Terminal or run `source ~/.zshrc` (or `~/.bashrc`) to update your PATH.
-- **Authentication failures:** Regenerate the long-lived token and update Claude's config.
-- **Server closes immediately:** Check the console log for missing dependencies or incorrect configuration.
-- **Homebrew not installed:** Install it from [brew.sh](https://brew.sh) or use the curl installer method above.
+</details>

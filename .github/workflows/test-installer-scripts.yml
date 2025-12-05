@@ -1,0 +1,104 @@
+name: Test Installer Scripts
+
+on:
+  push:
+    paths:
+      - 'scripts/install-macos.sh'
+      - 'scripts/install-windows.ps1'
+      - '.github/workflows/test-installer-scripts.yml'
+  pull_request:
+    paths:
+      - 'scripts/install-macos.sh'
+      - 'scripts/install-windows.ps1'
+      - '.github/workflows/test-installer-scripts.yml'
+  schedule:
+    - cron: '0 21 * * *'  # Daily at 4pm Eastern
+  workflow_dispatch:
+
+jobs:
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run macOS installer script (first run)
+        run: sh scripts/install-macos.sh
+
+      - name: Run macOS installer script (second run - idempotency test)
+        run: |
+          # Should skip uv install and show "uv is already installed"
+          sh scripts/install-macos.sh
+
+      - name: Verify uv is installed
+        run: |
+          command -v uvx || (echo "uvx not found" && exit 1)
+          uvx --version
+
+      - name: Verify Claude Desktop config was created
+        run: |
+          CONFIG_FILE="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Config file not created"
+            exit 1
+          fi
+          cat "$CONFIG_FILE"
+          # Verify it contains Home Assistant config
+          grep -q '"Home Assistant"' "$CONFIG_FILE" || (echo "Home Assistant config not found" && exit 1)
+          grep -q 'ha-mcp@latest' "$CONFIG_FILE" || (echo "ha-mcp not configured" && exit 1)
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Windows installer script (first run)
+        shell: pwsh
+        run: |
+          & ./scripts/install-windows.ps1
+
+      - name: Run Windows installer script (second run - idempotency test)
+        shell: pwsh
+        run: |
+          # Should skip uv install and show "uv is already installed"
+          & ./scripts/install-windows.ps1
+
+      - name: Verify uv is installed
+        shell: pwsh
+        run: |
+          # Refresh PATH (winget installs to user PATH which doesn't persist between steps)
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          $uvx = Get-Command uvx -ErrorAction SilentlyContinue
+          if (-not $uvx) {
+            Write-Error "uvx not found"
+            exit 1
+          }
+          uvx --version
+
+      - name: Verify Claude Desktop config was created
+        shell: pwsh
+        run: |
+          $ConfigFile = "$env:APPDATA\Claude\claude_desktop_config.json"
+          if (-not (Test-Path $ConfigFile)) {
+            Write-Error "Config file not created"
+            exit 1
+          }
+          Get-Content $ConfigFile
+          # Verify it contains Home Assistant config
+          $content = Get-Content $ConfigFile -Raw
+          if ($content -notmatch '"Home Assistant"') {
+            Write-Error "Home Assistant config not found"
+            exit 1
+          }
+          if ($content -notmatch 'ha-mcp@latest') {
+            Write-Error "ha-mcp not configured"
+            exit 1
+          }
+
+  check-demo-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check demo environment is up
+        run: |
+          # Verify the demo Home Assistant server is responding
+          curl -sf "https://ha-mcp-demo-server.qc-h.net/" -o /dev/null
+          echo "Demo server is up and responding"
