@@ -41,6 +41,22 @@ else
         exit 1
     fi
 fi
+
+# Get full path to uvx (Claude Desktop doesn't inherit shell PATH)
+UVX_PATH=""
+if command -v uvx > /dev/null 2>&1; then
+    UVX_PATH=$(command -v uvx)
+elif [ -x "$HOME/.local/bin/uvx" ]; then
+    UVX_PATH="$HOME/.local/bin/uvx"
+elif [ -x "/usr/local/bin/uvx" ]; then
+    UVX_PATH="/usr/local/bin/uvx"
+elif [ -x "/opt/homebrew/bin/uvx" ]; then
+    UVX_PATH="/opt/homebrew/bin/uvx"
+else
+    printf "${RED}  Could not find uvx. Please check your installation.${NC}\n"
+    exit 1
+fi
+printf "  Using uvx at: ${BLUE}%s${NC}\n" "$UVX_PATH"
 printf "\n"
 
 # Step 2: Configure Claude Desktop
@@ -54,9 +70,9 @@ fi
 # Create config directory if needed
 mkdir -p "$CONFIG_DIR"
 
-# The MCP server config to add
+# The MCP server config to add (using full path for Claude Desktop compatibility)
 HA_MCP_CONFIG='{
-  "command": "uvx",
+  "command": "'"$UVX_PATH"'",
   "args": ["ha-mcp@latest"],
   "env": {
     "HOMEASSISTANT_URL": "'"$DEMO_URL"'",
@@ -86,6 +102,7 @@ import sys
 config_file = "$CONFIG_FILE"
 demo_url = "$DEMO_URL"
 demo_token = "$DEMO_TOKEN"
+uvx_path = "$UVX_PATH"
 
 try:
     with open(config_file, 'r') as f:
@@ -101,9 +118,9 @@ except (json.JSONDecodeError, FileNotFoundError):
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
-# Add/update Home Assistant config
+# Add/update Home Assistant config (using full path for Claude Desktop compatibility)
 config['mcpServers']['Home Assistant'] = {
-    "command": "uvx",
+    "command": uvx_path,
     "args": ["ha-mcp@latest"],
     "env": {
         "HOMEASSISTANT_URL": demo_url,
@@ -117,12 +134,12 @@ with open(config_file, 'w') as f:
 print("  Configuration updated successfully")
 EOF
 else
-    # Create new config file
+    # Create new config file (using full path for Claude Desktop compatibility)
     cat > "$CONFIG_FILE" << EOF
 {
   "mcpServers": {
     "Home Assistant": {
-      "command": "uvx",
+      "command": "$UVX_PATH",
       "args": ["ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "$DEMO_URL",
@@ -140,7 +157,7 @@ printf "\n"
 # Step 3: Pre-download dependencies
 printf "${YELLOW}Step 3: Pre-downloading ha-mcp...${NC}\n"
 printf "  This speeds up Claude Desktop startup...\n"
-uvx ha-mcp@latest --help > /dev/null 2>&1 || true
+"$UVX_PATH" ha-mcp@latest --help > /dev/null 2>&1 || true
 printf "${GREEN}  Dependencies cached${NC}\n"
 printf "\n"
 
