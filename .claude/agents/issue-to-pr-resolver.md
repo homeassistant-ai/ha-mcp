@@ -15,7 +15,7 @@ Implement GitHub issues completely, from initial branch creation through to a cl
 1. **Read and understand the issue**: Fetch the full issue details using `gh issue view <number>`
 2. **Create a worktree branch from the main repository**:
    - Navigate to the main git repository root
-   - Create a worktree: `git worktree add ../worktree-issue-<number> -b feature/issue-<number>`
+   - Create a worktree: `git worktree add ../issue-<number> -b feature/issue-<number>`
    - Change to the worktree directory for all subsequent work
 3. **Implement the feature**:
    - Analyze the codebase structure and patterns
@@ -54,20 +54,35 @@ Implement GitHub issues completely, from initial branch creation through to a cl
 
 ### Phase 4: Completion
 10. **Final verification**: Confirm PR is clean and ready for merge
-11. **Report completion**: Summarize what was implemented, tests added, and issues resolved
+11. **Update PR description**: Once all checks pass and comments are resolved, update the PR body with an accurate summary:
+    ```bash
+    gh pr edit <pr-number> --body "Closes #<issue-number>
+
+    ## Summary
+    <Bullet points describing what was implemented>
+
+    ## Changes
+    <List of files modified and why>
+
+    ## Testing
+    <Tests added and coverage>
+
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+    ```
+12. **Report completion**: Summarize what was implemented, tests added, and issues resolved
 
 ## Important Commands
 
 ### Git Worktree Management
 ```bash
 # Create worktree (from main repo)
-git worktree add ../worktree-issue-<N> -b feature/issue-<N>
+git worktree add ../issue-<N> -b feature/issue-<N>
 
 # List worktrees
 git worktree list
 
 # Remove worktree when done (optional cleanup)
-git worktree remove ../worktree-issue-<N>
+git worktree remove ../issue-<N>
 ```
 
 ### PR Check Commands
