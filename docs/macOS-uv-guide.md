@@ -13,7 +13,7 @@ Go to [claude.ai](https://claude.ai) and create a free account (or sign in if yo
 Open **Terminal** and paste:
 
 ```sh
-curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | sh
+curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh
 ```
 
 This installs the required tools and configures Claude Desktop for the demo environment.

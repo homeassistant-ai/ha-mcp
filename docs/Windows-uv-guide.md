@@ -10,10 +10,10 @@ Go to [claude.ai](https://claude.ai) and create a free account (or sign in if yo
 
 ## Step 2: Run the Installer
 
-Open **PowerShell** and paste:
+Open **Windows PowerShell** (from Start menu) and paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
+irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-windows.ps1 | iex
 ```
 
 This installs the required tools and configures Claude Desktop for the demo environment.
