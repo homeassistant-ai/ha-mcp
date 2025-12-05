@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v4.15.0 (2025-12-05)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`5c7c76b`](https://github.com/homeassistant-ai/ha-mcp/commit/5c7c76b18d805974994f5739d5dfeb486e45e2bd))
+
+### Documentation
+
+- Simplify signin and move manual install to step 2 (#282)
+  ([#282](https://github.com/homeassistant-ai/ha-mcp/pull/282),
+  [`066e67a`](https://github.com/homeassistant-ai/ha-mcp/commit/066e67a0ab0645e6c3a31d4c27786dc8c851d9d9))
+
+### Features
+
+- Include system info in ha_get_overview response (#283)
+  ([#283](https://github.com/homeassistant-ai/ha-mcp/pull/283),
+  [`f44d8d1`](https://github.com/homeassistant-ai/ha-mcp/commit/f44d8d1c6284f5dab9817d1733137ca2d8a3e0a0))
+
+
 ## v4.14.2 (2025-12-05)
 
 ### Bug Fixes
