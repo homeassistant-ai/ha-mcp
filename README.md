@@ -187,7 +187,7 @@ Use the URL: `https://XYZ.trycloudflare.com/__my_secret__`
 </details>
 
 <details>
-<summary><b>🏠 Home Assistant Add-on (Optional)</b></summary>
+<summary><b>🏠 Home Assistant Add-on</b></summary>
 
 **Note:** The add-on is just an alternative installation method. You do NOT need it for ha-mcp to work. Most users run ha-mcp directly on their computer.
 
