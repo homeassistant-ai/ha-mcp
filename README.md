@@ -40,7 +40,7 @@ Just talk to Claude naturally. Here are some real examples:
 | *"Show me all automations that control the living room lights"* | Deep searches through automation configs to find matches |
 | *"Create a script that sets movie mode: dim lights, close blinds, turn on TV"* | Creates a reusable script with the sequence of actions |
 
-No YAML editing. No entity ID lookups. Just describe what you want.
+No YAML. No need to know `light.living_room_lamp_2`. Just natural language.
 
 ---
 
