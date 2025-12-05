@@ -256,18 +256,23 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           TAG="v${VERSION}"
 
-          # Check if release already exists (may be immutable from semantic-release)
+          # Check if release already exists
           if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, deleting to recreate with binaries..."
-            # Delete the release but keep the tag
-            gh release delete "$TAG" --yes
+            echo "Release $TAG already exists, uploading binaries to existing release..."
+            # Upload assets to existing release (handles immutable releases)
+            gh release upload "$TAG" \
+              artifacts/ha-mcp-linux/ha-mcp-linux \
+              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+              artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
+              --clobber
+          else
+            echo "Creating release $TAG with binaries..."
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file release_notes.md \
+              artifacts/ha-mcp-linux/ha-mcp-linux \
+              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+              artifacts/ha-mcp-mcpb/ha-mcp.mcpb
           fi
-
-          echo "Creating release $TAG with binaries..."
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file release_notes.md \
-            artifacts/ha-mcp-linux/ha-mcp-linux \
-            artifacts/ha-mcp-windows/ha-mcp-windows.exe \
-            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
-            artifacts/ha-mcp-mcpb/ha-mcp.mcpb
