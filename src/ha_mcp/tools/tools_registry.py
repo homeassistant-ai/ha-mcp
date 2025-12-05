@@ -449,10 +449,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 device_info["connections"] = device.get("connections", [])
                 device_info["identifiers"] = device.get("identifiers", [])
 
+                entities = device_info.get("entities", [])
                 return {
                     "success": True,
                     "device": device_info,
-                    "entity_count": len(device_info.get("entities", [])),
+                    "entities": entities,  # Also at top level for backward compatibility
+                    "entity_count": len(entities),
                     "queried_by": "entity_id" if entity_id else "device_id",
                     "queried_entity_id": entity_id,
                 }
