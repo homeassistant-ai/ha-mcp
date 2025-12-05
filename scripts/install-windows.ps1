@@ -98,11 +98,13 @@ if (Test-Path $ConfigFile) {
 
     # For simplicity, we write the clean config (merging would require complex JSON handling)
     # The backup preserves any other MCP servers the user had
-    $JsonConfig | Set-Content $ConfigFile -Encoding UTF8
+    # Use .NET to write UTF-8 without BOM (PowerShell's -Encoding UTF8 adds BOM which breaks JSON parsers)
+    [System.IO.File]::WriteAllText($ConfigFile, $JsonConfig)
     Write-Host "  Configuration updated successfully" -ForegroundColor White
 } else {
     # Create new config file
-    $JsonConfig | Set-Content $ConfigFile -Encoding UTF8
+    # Use .NET to write UTF-8 without BOM (PowerShell's -Encoding UTF8 adds BOM which breaks JSON parsers)
+    [System.IO.File]::WriteAllText($ConfigFile, $JsonConfig)
     Write-Host "  Created new configuration file" -ForegroundColor White
 }
 Write-Host "  Claude Desktop configured" -ForegroundColor Green
