@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     # Environment configuration
     environment: str = Field("development", alias="ENVIRONMENT")
 
+    # Tool discovery and filtering configuration
+    # Profile determines which tools are exposed to AI clients
+    # Options: minimal, standard, extended, full, developer, monitoring
+    tool_profile: str = Field("full", alias="TOOL_PROFILE")
+
+    # Comma-separated list of categories to enable (overrides profile if set)
+    # Example: "search,service,automation,script"
+    enabled_categories: str = Field("", alias="ENABLED_CATEGORIES")
+
+    # Comma-separated list of categories to disable (applied after profile/enabled)
+    # Example: "backup,hacs" to disable backup and HACS tools
+    disabled_categories: str = Field("", alias="DISABLED_CATEGORIES")
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""
@@ -105,6 +118,15 @@ class Settings(BaseSettings):
         valid_hints = ["strong", "normal", "weak", "auto"]
         if v.lower() not in valid_hints:
             raise ValueError(f"Backup hint must be one of {valid_hints}")
+        return v.lower()
+
+    @field_validator("tool_profile")
+    @classmethod
+    def validate_tool_profile(cls, v: str) -> str:
+        """Ensure tool profile is valid."""
+        valid_profiles = ["minimal", "standard", "extended", "full", "developer", "monitoring"]
+        if v.lower() not in valid_profiles:
+            raise ValueError(f"Tool profile must be one of {valid_profiles}")
         return v.lower()
 
     model_config = SettingsConfigDict(
