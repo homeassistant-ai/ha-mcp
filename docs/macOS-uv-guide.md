@@ -1,27 +1,69 @@
-# macOS Setup Guide
+# macOS Quick Start
 
-Get ha-mcp running with Claude Desktop in about 5 minutes.
+Control Home Assistant with Claude Desktop in 2 minutes.
 
 **Works with free Claude account** - no subscription needed.
 
-## 1. Install uv
+---
 
-Open **Terminal** and run:
+## Step 1: Get Claude Desktop
+
+1. Download **Claude Desktop** from [claude.ai/download](https://claude.ai/download)
+2. Install and open it
+3. Create a free account (or sign in)
+
+---
+
+## Step 2: Run the Installer
+
+Open **Terminal** and paste:
 
 ```bash
-brew install uv
+curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
 ```
 
-Don't have Homebrew? Use the standalone installer instead:
+This installs `uv` (if needed) and configures Claude Desktop for the demo environment.
+
+---
+
+## Step 3: Restart & Test
+
+1. **Quit Claude completely** - Press **Cmd+Q** (not just close the window)
+2. **Reopen Claude Desktop**
+3. **Test it** - Ask Claude:
+
+```
+Can you see my Home Assistant?
+```
+
+Claude should list entities from the demo environment.
+
+---
+
+## Step 4: Explore the Demo
+
+The demo environment is a real Home Assistant you can experiment with:
+
+- **Web UI**: https://ha-mcp-demo-server.qc-h.net
+- **Login**: `mcp` / `mcp`
+- **Resets weekly** - your changes won't persist
+
+Try asking Claude:
+- "Turn on the kitchen lights"
+- "What's the temperature in the living room?"
+- "Create an automation that turns off all lights at midnight"
+
+---
+
+## Step 5: Connect Your Home Assistant
+
+Ready to use your own Home Assistant? Edit the config file:
+
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+open "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 ```
 
-## 2. Configure Claude Desktop
-
-1. Open **Claude Desktop**
-2. Menu bar → **Claude** → **Settings...** → **Developer** → **Edit Config**
-3. Paste this configuration:
+Replace the demo values:
 
 ```json
 {
@@ -38,23 +80,35 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 }
 ```
 
-**Replace:**
-- `HOMEASSISTANT_URL` - Your Home Assistant URL (same one you use in browser)
-- `HOMEASSISTANT_TOKEN` - Generate in HA: Your Profile → Security → Long-lived access tokens
+**To get your token:**
+1. Open Home Assistant in browser
+2. Click your username (bottom left)
+3. **Security** tab → **Long-lived access tokens**
+4. Create token → Copy immediately (shown only once)
 
-## 3. Restart & Test
-
-1. Quit Claude completely (**Cmd+Q**)
-2. Reopen Claude Desktop
-3. Ask: **"Can you see my Home Assistant?"**
-
-If Claude lists your entities, you're done!
+Then restart Claude (Cmd+Q, reopen).
 
 ---
 
-## Try the Demo First
+<details>
+<summary><strong>Manual Installation</strong> (if the installer doesn't work)</summary>
 
-Don't have Home Assistant yet? Use our public demo environment:
+### Install uv
+
+```bash
+brew install uv
+```
+
+Or without Homebrew:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Configure Claude Desktop
+
+1. Open Claude Desktop
+2. Menu bar → **Claude** → **Settings...** → **Developer** → **Edit Config**
+3. Paste:
 
 ```json
 {
@@ -71,9 +125,9 @@ Don't have Home Assistant yet? Use our public demo environment:
 }
 ```
 
-Web UI: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`)
+4. Save and restart Claude (Cmd+Q, reopen)
 
-The demo resets weekly - your changes won't persist.
+</details>
 
 ---
 

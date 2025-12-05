@@ -86,33 +86,32 @@ No YAML editing. No entity ID lookups. Just describe what you want.
 
 ## 🚀 Quick Start (Claude Desktop)
 
-**5 minutes. Free. No subscription needed.**
+**2 minutes. Free. No subscription needed.**
 
-### Step-by-step guides: **[macOS](docs/macOS-uv-guide.md)** | **[Windows](docs/Windows-uv-guide.md)** | **[FAQ](docs/FAQ.md)**
+### macOS
 
-### Try it now with our demo environment:
-
-```json
-{
-  "mcpServers": {
-    "Home Assistant": {
-      "command": "uvx",
-      "args": ["ha-mcp@latest"],
-      "env": {
-        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
-        "HOMEASSISTANT_TOKEN": "demo"
-      }
-    }
-  }
-}
+```bash
+curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
 ```
 
-1. Install [Claude Desktop](https://claude.ai/download) (free) and [uv](https://docs.astral.sh/uv/)
-2. Settings → Developer → Edit Config → Paste the above
-3. Restart Claude Desktop
-4. Ask: **"Give me an overview of this Home Assistant"**
+### Windows
 
-Web UI: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`) - resets weekly
+```powershell
+irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
+```
+
+Then restart Claude Desktop (Cmd+Q or Alt+F4) and ask: **"Can you see my Home Assistant?"**
+
+**[macOS Guide](docs/macOS-uv-guide.md)** | **[Windows Guide](docs/Windows-uv-guide.md)** | **[FAQ](docs/FAQ.md)**
+
+### Demo Environment
+
+The installers configure Claude for our public demo environment:
+
+- **Web UI**: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`)
+- **Resets weekly** - experiment freely, your changes won't persist
+
+After testing, update the config with your own Home Assistant URL and token.
 
 ---
 
