@@ -24,9 +24,11 @@ This installs `uv` (if needed) and configures Claude Desktop for the demo enviro
 
 ---
 
-## Step 3: Install Claude Desktop
+## Step 3: Install or Restart Claude Desktop
 
 Download and install **Claude Desktop** from [claude.ai/download](https://claude.ai/download).
+
+Already have it? Restart it: **Claude menu → Quit Claude** (or Cmd+Q), then reopen.
 
 ---
 

@@ -149,9 +149,12 @@ if [ "$CLAUDE_NOT_INSTALLED" = true ]; then
     echo "  2. Create a free account at claude.ai (if you haven't)"
     echo "  3. Open Claude Desktop and ask: \"Can you see my Home Assistant?\""
 else
-    echo "  1. Quit Claude Desktop completely (Cmd+Q)"
+    echo "  1. Quit Claude Desktop: Claude menu > Quit Claude (or Cmd+Q)"
     echo "  2. Reopen and ask: \"Can you see my Home Assistant?\""
 fi
+echo ""
+echo -e "${YELLOW}Note:${NC} If Claude Desktop was already running, you must restart it"
+echo "      to load the new configuration."
 echo ""
 echo -e "${BLUE}Demo environment:${NC}"
 echo "  Web UI: $DEMO_URL"

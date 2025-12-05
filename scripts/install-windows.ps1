@@ -128,9 +128,13 @@ if ($ClaudeNotInstalled) {
     Write-Host "  2. Create a free account at claude.ai (if you haven't)"
     Write-Host '  3. Open Claude Desktop and ask: "Can you see my Home Assistant?"'
 } else {
-    Write-Host "  1. Exit Claude Desktop completely (Alt+F4 or system tray > Exit)"
+    Write-Host "  1. Exit Claude Desktop: File > Exit (or Alt+F4)"
     Write-Host '  2. Reopen and ask: "Can you see my Home Assistant?"'
 }
+Write-Host ""
+Write-Host "Note: " -ForegroundColor Yellow -NoNewline
+Write-Host "If Claude Desktop was already running, you must restart it"
+Write-Host "      to load the new configuration."
 Write-Host ""
 Write-Host "Demo environment:" -ForegroundColor Cyan
 Write-Host "  Web UI: $DemoUrl"
