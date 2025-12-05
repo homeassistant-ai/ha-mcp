@@ -82,10 +82,15 @@ else
 fi
 
 #=============================================================================
-# 6. CRONTAB
+# 6. CRONTAB (startup + weekly reset)
 info "Setting up crontab..."
-CRON_CMD="@reboot sleep 10 && cd $SETUP_HOME/ha-mcp && HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive >> /tmp/hamcp.log 2>&1"
-( sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -v "hamcp-test-env" || true; echo "$CRON_CMD" ) | sudo -u "$SETUP_USER" crontab -
+CRON_REBOOT="@reboot sleep 10 && cd $SETUP_HOME/ha-mcp && HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive >> /tmp/hamcp.log 2>&1"
+CRON_WEEKLY="0 3 * * 1 cd $SETUP_HOME/ha-mcp && git pull --ff-only && docker stop \$(docker ps -q --filter ancestor=ghcr.io/home-assistant/home-assistant) 2>/dev/null; docker rm \$(docker ps -aq --filter ancestor=ghcr.io/home-assistant/home-assistant) 2>/dev/null; docker image prune -af 2>/dev/null; HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive >> /tmp/hamcp.log 2>&1"
+(
+    sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -v "hamcp-test-env" || true
+    echo "$CRON_REBOOT"
+    echo "$CRON_WEEKLY"
+) | sudo -u "$SETUP_USER" crontab -
 
 #=============================================================================
 # 7. CADDY
@@ -117,17 +122,41 @@ CADDYEOF
 fi
 
 #=============================================================================
-# 8. STOP OLD CONTAINERS
+# 8. UNATTENDED UPGRADES (auto-updates)
+info "Configuring unattended upgrades..."
+apt-get install -y -qq unattended-upgrades
+cat > /etc/apt/apt.conf.d/50unattended-upgrades << 'UPGRADEEOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}:${distro_codename}-updates";
+};
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+UPGRADEEOF
+
+cat > /etc/apt/apt.conf.d/20auto-upgrades << 'AUTOEOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+AUTOEOF
+
+#=============================================================================
+# 9. STOP OLD CONTAINERS
 info "Cleaning up old containers..."
 docker ps -aq --filter "ancestor=ghcr.io/home-assistant/home-assistant" | xargs -r docker rm -f 2>/dev/null || true
 
 #=============================================================================
-# 9. START HA-MCP
+# 10. START HA-MCP
 info "Starting hamcp-test-env..."
 sudo -u "$SETUP_USER" sg docker -c "cd $SETUP_HOME/ha-mcp && HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive > /tmp/hamcp.log 2>&1 &"
 
 #=============================================================================
-# 10. WAIT FOR HA
+# 11. WAIT FOR HA
 info "Waiting for Home Assistant to start..."
 for i in {1..60}; do
     if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$HA_PORT" 2>/dev/null | grep -qE "200|401"; then

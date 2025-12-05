@@ -20,10 +20,19 @@ The setup script is **idempotent** (safe to re-run) and performs:
 3. **Docker Installation** - Via official get.docker.com script
 4. **uv Installation** - Python package manager for running ha-mcp
 5. **ha-mcp Clone** - Clones the repository to `~/ha-mcp`
-6. **Crontab Setup** - Auto-starts hamcp-test-env on reboot
+6. **Crontab Setup** - Auto-starts on reboot + weekly reset (Mondays 3am)
 7. **Caddy Reverse Proxy** - HTTPS with automatic Let's Encrypt certificates
-8. **Container Cleanup** - Removes old HA containers
-9. **Start Test Environment** - Launches hamcp-test-env in background
+8. **Unattended Upgrades** - Auto-updates system packages with auto-reboot at 4am
+9. **Container Cleanup** - Removes old HA containers
+10. **Start Test Environment** - Launches hamcp-test-env in background
+
+## Weekly Reset (Monday 3am)
+
+The lab environment automatically resets every Monday at 3am:
+- Pulls latest ha-mcp changes from git
+- Stops and removes Home Assistant containers
+- Prunes unused Docker images (prevents disk fill)
+- Restarts hamcp-test-env with fresh container
 
 ## Requirements
 
