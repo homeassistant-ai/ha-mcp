@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v4.14.1 (2025-12-05)
+
+### Bug Fixes
+
+- Installer UX improvements (#280) ([#280](https://github.com/homeassistant-ai/ha-mcp/pull/280),
+  [`7f2c78e`](https://github.com/homeassistant-ai/ha-mcp/commit/7f2c78e1e74b0e01f7e547b2c082df338f9616fb))
+
+### Chores
+
+- Update issue-to-pr-resolver agent workflow
+  ([`1562ed9`](https://github.com/homeassistant-ai/ha-mcp/commit/1562ed931d1addff051f5b2f7d3314a39b6d1ad7))
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`9db7b40`](https://github.com/homeassistant-ai/ha-mcp/commit/9db7b402c78be7c241507713017485cc6add1e09))
+
+### Documentation
+
+- Improve onboarding UX with demo environment (#265)
+  ([#265](https://github.com/homeassistant-ai/ha-mcp/pull/265),
+  [`0e9115d`](https://github.com/homeassistant-ai/ha-mcp/commit/0e9115d87f8b755eb466c5254e8ba51a9bb83cbb))
+
+
 ## v4.14.0 (2025-12-05)
 
 ### Chores
