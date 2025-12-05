@@ -77,68 +77,18 @@ jobs:
         path: performance_output.txt
         retention-days: 30
 
-    - name: Comment on PR with performance results
-      if: github.event_name == 'pull_request' && always()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          let output = '';
-          try {
-            output = fs.readFileSync('performance_output.txt', 'utf8');
-          } catch (e) {
-            output = 'Performance test output not available';
-          }
-
-          // Extract timing information from output
-          const timingLines = output.split('\n')
-            .filter(line => line.includes('avg=') || line.includes('p95=') || line.includes('SLOW') || line.includes('OK'))
-            .slice(0, 20);
-
-          const status = '${{ steps.perf_tests.outputs.exit_code }}' === '0' ? 'passed' : 'failed';
-          const emoji = status === 'passed' ? ':white_check_mark:' : ':x:';
-
-          const body = `## Performance Test Results ${emoji}
-
-          **Status:** ${status}
-
-          ### Timing Summary
-          \`\`\`
-          ${timingLines.join('\n') || 'No timing data available'}
-          \`\`\`
-
-          <details>
-          <summary>Full Output</summary>
-
-          \`\`\`
-          ${output.slice(-5000)}
-          \`\`\`
-          </details>
-          `;
-
-          // Find existing comment or create new
-          const { data: comments } = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-
-          const botComment = comments.find(c =>
-            c.user.type === 'Bot' && c.body.includes('Performance Test Results')
-          );
-
-          if (botComment) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: botComment.id,
-              body: body
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
-            });
-          }
+    - name: Performance summary
+      if: always()
+      run: |
+        echo "## Performance Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.perf_tests.outputs.exit_code }}" = "0" ]; then
+          echo ":white_check_mark: **All performance tests passed**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo ":x: **Some performance tests failed**" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Timing Results" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        grep -E "(avg=|p95=|SLOW|target)" performance_output.txt | head -30 >> $GITHUB_STEP_SUMMARY || echo "No timing data found" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

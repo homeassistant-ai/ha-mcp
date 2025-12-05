@@ -54,7 +54,7 @@ async def test_get_overview_performance(mcp_client, perf_metrics):
     results = await run_performance_iterations(
         mcp_client,
         tool_name="ha_get_overview",
-        params={"include_entity_details": True},
+        params={"detail_level": "full"},
         iterations=3,
         warmup=1,
     )
@@ -92,7 +92,7 @@ async def test_get_overview_minimal_performance(mcp_client, perf_metrics):
     results = await run_performance_iterations(
         mcp_client,
         tool_name="ha_get_overview",
-        params={"include_entity_details": False},
+        params={"detail_level": "minimal"},
         iterations=3,
         warmup=1,
     )
@@ -353,8 +353,8 @@ async def test_performance_report_generation(mcp_client):
 
     # Run key operations
     operations = [
-        ("ha_get_overview", {"include_entity_details": True}),
-        ("ha_get_overview", {"include_entity_details": False}),
+        ("ha_get_overview", {"detail_level": "full"}),
+        ("ha_get_overview", {"detail_level": "minimal"}),
         ("ha_search_entities", {"query": "light", "limit": 10}),
         ("ha_search_entities", {"query": "", "domain_filter": "sensor", "limit": 20}),
         ("ha_deep_search", {"query": "light", "limit": 5}),
