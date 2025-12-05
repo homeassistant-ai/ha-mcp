@@ -90,6 +90,15 @@ Then restart Claude (Cmd+Q, reopen).
 
 ---
 
+## Step 6: Share Your Feedback
+
+We'd love to hear how you're using ha-mcp!
+
+- **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Share your automations, ask questions
+- **[GitHub Issues](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs or request features
+
+---
+
 <details>
 <summary><strong>Manual Installation</strong> (if the installer doesn't work)</summary>
 

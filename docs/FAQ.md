@@ -107,7 +107,31 @@ source ~/.zshrc
 
 ---
 
-## Getting Help
+## Configuration Options
 
-- **GitHub Issues:** [Report bugs or request features](https://github.com/homeassistant-ai/ha-mcp/issues)
-- **Home Assistant Forum:** [Community discussion thread](https://community.home-assistant.io/t/brand-new-claude-ai-chatgpt-integration-ha-mcp/937847)
+### Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
+| `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
+| `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+
+### Backup Hint Modes
+
+| Mode | Behavior |
+|------|----------|
+| `strong` | Suggests backup before first modification each day/session |
+| `normal` | Suggests backup only before irreversible operations (recommended) |
+| `weak` | Rarely suggests backups |
+| `auto` | Same as normal (future: auto-detection) |
+
+---
+
+## Feedback & Help
+
+We'd love to hear how you're using ha-mcp!
+
+- **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Share how you use it, ask questions, show off your automations
+- **[GitHub Issues](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs or request features
+- **[Home Assistant Forum](https://community.home-assistant.io/t/brand-new-claude-ai-chatgpt-integration-ha-mcp/937847)** — Community discussion thread
