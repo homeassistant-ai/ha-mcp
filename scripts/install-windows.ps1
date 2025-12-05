@@ -152,8 +152,10 @@ Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
 
-# Keep window open
-Write-Host "Press any key to close this window..." -ForegroundColor Gray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+# Keep window open if running interactively (not piped)
+if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host "Press any key to close this window..." -ForegroundColor Gray
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
 
 exit 0
