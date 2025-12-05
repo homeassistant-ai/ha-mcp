@@ -108,7 +108,7 @@ Spend less time configuring, more time enjoying your smart home.
    ```bash
    curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
    ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart if already installed: Cmd+Q)
+3. [Download Claude Desktop](https://claude.ai/download) (or restart: Claude menu → Quit)
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
 You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-6-connect-your-home-assistant)
