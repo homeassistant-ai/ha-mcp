@@ -426,7 +426,8 @@ def register_search_tools(mcp, client, **kwargs):
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
-        Returns comprehensive system information at the requested detail level.
+        Returns comprehensive system information at the requested detail level,
+        including Home Assistant version, location, timezone, and entity overview.
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
@@ -436,7 +437,27 @@ def register_search_tools(mcp, client, **kwargs):
         result = await smart_tools.get_system_overview(
             detail_level, max_entities_per_domain, include_state_bool, include_entity_id_bool
         )
-        return cast(dict[str, Any], result)
+        result = cast(dict[str, Any], result)
+
+        # Include system info in the overview
+        try:
+            config = await client.get_config()
+            result["system_info"] = {
+                "version": config.get("version"),
+                "location_name": config.get("location_name"),
+                "time_zone": config.get("time_zone"),
+                "language": config.get("language"),
+                "country": config.get("country"),
+                "currency": config.get("currency"),
+                "unit_system": config.get("unit_system", {}),
+                "latitude": config.get("latitude"),
+                "longitude": config.get("longitude"),
+                "elevation": config.get("elevation"),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to fetch system info for overview: {e}")
+
+        return result
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Deep Search"})
     @log_tool_usage
