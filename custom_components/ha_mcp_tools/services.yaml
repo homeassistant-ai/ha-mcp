@@ -16,3 +16,79 @@ list_files:
       example: "*.css"
       selector:
         text:
+
+read_file:
+  name: Read File
+  description: Read a file from the Home Assistant config directory.
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Allowed paths include
+        configuration.yaml, automations.yaml, scripts.yaml, scenes.yaml,
+        secrets.yaml (values masked), home-assistant.log, www/**, themes/**,
+        custom_templates/**, packages/*.yaml, custom_components/**/*.py
+      required: true
+      example: "configuration.yaml"
+      selector:
+        text:
+    tail_lines:
+      name: Tail Lines
+      description: For log files, return only the last N lines. Default is 1000 for logs.
+      required: false
+      example: 100
+      selector:
+        number:
+          min: 1
+          max: 10000
+          mode: box
+
+write_file:
+  name: Write File
+  description: Write a file to allowed directories (www/, themes/, custom_templates/).
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Must be in www/, themes/, or
+        custom_templates/.
+      required: true
+      example: "www/custom.css"
+      selector:
+        text:
+    content:
+      name: Content
+      description: The content to write to the file.
+      required: true
+      example: ".card { background: #333; }"
+      selector:
+        text:
+          multiline: true
+    overwrite:
+      name: Overwrite
+      description: Whether to overwrite if the file already exists. Default is false.
+      required: false
+      default: false
+      selector:
+        boolean:
+    create_dirs:
+      name: Create Directories
+      description: Whether to create parent directories if they don't exist. Default is true.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+delete_file:
+  name: Delete File
+  description: Delete a file from allowed directories (www/, themes/, custom_templates/).
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Must be in www/, themes/, or
+        custom_templates/.
+      required: true
+      example: "www/old-file.css"
+      selector:
+        text:
