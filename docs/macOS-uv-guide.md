@@ -6,11 +6,9 @@ Control Home Assistant with Claude Desktop in 2 minutes.
 
 ---
 
-## Step 1: Get Claude Desktop
+## Step 1: Create a Claude Account
 
-1. Download **Claude Desktop** from [claude.ai/download](https://claude.ai/download)
-2. Install and open it
-3. Create a free account (or sign in)
+Go to [claude.ai](https://claude.ai) and create a free account (or sign in if you have one).
 
 ---
 
@@ -26,11 +24,15 @@ This installs `uv` (if needed) and configures Claude Desktop for the demo enviro
 
 ---
 
-## Step 3: Restart & Test
+## Step 3: Install Claude Desktop
 
-1. **Quit Claude completely** - Press **Cmd+Q** (not just close the window)
-2. **Reopen Claude Desktop**
-3. **Test it** - Ask Claude:
+Download and install **Claude Desktop** from [claude.ai/download](https://claude.ai/download).
+
+---
+
+## Step 4: Test It
+
+Open Claude Desktop and ask:
 
 ```
 Can you see my Home Assistant?
@@ -40,7 +42,7 @@ Claude should list entities from the demo environment.
 
 ---
 
-## Step 4: Explore the Demo
+## Step 5: Explore the Demo
 
 The demo environment is a real Home Assistant you can experiment with:
 
@@ -55,7 +57,7 @@ Try asking Claude:
 
 ---
 
-## Step 5: Connect Your Home Assistant
+## Step 6: Connect Your Home Assistant
 
 Ready to use your own Home Assistant? Edit the config file:
 
@@ -90,7 +92,7 @@ Then restart Claude (Cmd+Q, reopen).
 
 ---
 
-## Step 6: Share Your Feedback
+## Step 7: Share Your Feedback
 
 We'd love to hear how you're using ha-mcp!
 

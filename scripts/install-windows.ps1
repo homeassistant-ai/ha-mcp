@@ -42,16 +42,12 @@ if ($uvInstalled) {
 }
 Write-Host ""
 
-# Step 2: Check Claude Desktop
+# Step 2: Configure Claude Desktop
 Write-Host "Step 2: Configuring Claude Desktop..." -ForegroundColor Yellow
+$ClaudeNotInstalled = $false
 if (-not (Test-Path $ConfigDir)) {
-    Write-Host "  Claude Desktop config directory not found." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Please install Claude Desktop first:" -ForegroundColor White
-    Write-Host "  https://claude.ai/download" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  After installing, run this script again." -ForegroundColor White
-    exit 1
+    $ClaudeNotInstalled = $true
+    Write-Host "  Claude Desktop not yet installed - creating config for later" -ForegroundColor White
 }
 
 # Create config directory if needed
@@ -126,9 +122,15 @@ Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  1. Exit Claude Desktop completely (Alt+F4 or system tray > Exit)"
-Write-Host "  2. Reopen Claude Desktop"
-Write-Host '  3. Ask Claude: "Can you see my Home Assistant?"'
+if ($ClaudeNotInstalled) {
+    Write-Host "  1. Download Claude Desktop: " -NoNewline
+    Write-Host "https://claude.ai/download" -ForegroundColor Cyan
+    Write-Host "  2. Create a free account at claude.ai (if you haven't)"
+    Write-Host '  3. Open Claude Desktop and ask: "Can you see my Home Assistant?"'
+} else {
+    Write-Host "  1. Exit Claude Desktop completely (Alt+F4 or system tray > Exit)"
+    Write-Host '  2. Reopen and ask: "Can you see my Home Assistant?"'
+}
 Write-Host ""
 Write-Host "Demo environment:" -ForegroundColor Cyan
 Write-Host "  Web UI: $DemoUrl"

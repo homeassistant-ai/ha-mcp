@@ -43,16 +43,12 @@ else
 fi
 echo ""
 
-# Step 2: Check Claude Desktop
+# Step 2: Configure Claude Desktop
 echo -e "${YELLOW}Step 2: Configuring Claude Desktop...${NC}"
+CLAUDE_NOT_INSTALLED=false
 if [ ! -d "$CONFIG_DIR" ]; then
-    echo -e "${RED}  Claude Desktop config directory not found.${NC}"
-    echo ""
-    echo "  Please install Claude Desktop first:"
-    echo -e "  ${BLUE}https://claude.ai/download${NC}"
-    echo ""
-    echo "  After installing, run this script again."
-    exit 1
+    CLAUDE_NOT_INSTALLED=true
+    echo -e "  Claude Desktop not yet installed - creating config for later"
 fi
 
 # Create config directory if needed
@@ -148,9 +144,14 @@ echo -e "${GREEN}============================================${NC}"
 echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo ""
-echo "  1. Quit Claude Desktop completely (Cmd+Q)"
-echo "  2. Reopen Claude Desktop"
-echo "  3. Ask Claude: \"Can you see my Home Assistant?\""
+if [ "$CLAUDE_NOT_INSTALLED" = true ]; then
+    echo -e "  1. Download Claude Desktop: ${BLUE}https://claude.ai/download${NC}"
+    echo "  2. Create a free account at claude.ai (if you haven't)"
+    echo "  3. Open Claude Desktop and ask: \"Can you see my Home Assistant?\""
+else
+    echo "  1. Quit Claude Desktop completely (Cmd+Q)"
+    echo "  2. Reopen and ask: \"Can you see my Home Assistant?\""
+fi
 echo ""
 echo -e "${BLUE}Demo environment:${NC}"
 echo "  Web UI: $DEMO_URL"

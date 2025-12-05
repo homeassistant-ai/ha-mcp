@@ -104,15 +104,14 @@ Spend less time configuring, more time enjoying your smart home.
 <summary><b>🍎 macOS</b></summary>
 
 1. Create a free account at [claude.ai](https://claude.ai)
-2. Download and install [Claude Desktop](https://claude.ai/download)
-3. Open **Terminal** and run:
+2. Open **Terminal** and run:
    ```bash
    curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-macos.sh | bash
    ```
-4. Restart Claude Desktop (**Cmd+Q**, then reopen)
-5. Ask Claude: **"Can you see my Home Assistant?"**
+3. Download and install [Claude Desktop](https://claude.ai/download)
+4. Ask Claude: **"Can you see my Home Assistant?"**
 
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-5-connect-your-home-assistant)
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-6-connect-your-home-assistant)
 
 </details>
 
@@ -120,15 +119,14 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 <summary><b>🪟 Windows</b></summary>
 
 1. Create a free account at [claude.ai](https://claude.ai)
-2. Download and install [Claude Desktop](https://claude.ai/download)
-3. Open **PowerShell** and run:
+2. Open **PowerShell** and run:
    ```powershell
    irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
    ```
-4. Restart Claude Desktop (**Alt+F4** or system tray → Exit, then reopen)
-5. Ask Claude: **"Can you see my Home Assistant?"**
+3. Download and install [Claude Desktop](https://claude.ai/download)
+4. Ask Claude: **"Can you see my Home Assistant?"**
 
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-5-connect-your-home-assistant)
+You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-6-connect-your-home-assistant)
 
 </details>
 
