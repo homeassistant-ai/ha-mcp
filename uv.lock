@@ -373,7 +373,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "4.12.0"
+version = "4.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
