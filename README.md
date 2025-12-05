@@ -88,15 +88,15 @@ Spend less time configuring, more time enjoying your smart home.
 
 ## 🚀 Get Started
 
-### Full guide to get you started with Claude Desktop
+### Full guide to get you started with Claude Desktop (~10 min)
 
-*No paid subscription required.*
+*No paid subscription required.* Click on your operating system:
 
 <p>
 <a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
 </p>
 
-### Quick install (~2 min)
+### Quick install (~5 min)
 
 <details>
 <summary><b>🍎 macOS</b></summary>
@@ -128,18 +128,11 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 
 </details>
 
-### Demo Environment
-
-The installers configure Claude for our public demo — a real Home Assistant you can experiment with:
-
-- **Web UI**: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`)
-- **Resets weekly** — your changes won't persist
-
 **[FAQ & Troubleshooting](docs/FAQ.md)**
 
 ---
 
-## 📱 Other Clients
+## 📦 Other Installation Methods
 
 <details>
 <summary><b>🆚 VSCode (GitHub Copilot)</b></summary>
