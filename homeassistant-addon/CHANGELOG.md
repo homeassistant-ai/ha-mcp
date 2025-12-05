@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v4.13.0 (2025-12-05)
+
+### Chores
+
+- Add github-issue-analyzer agent with standard comment title
+  ([`5211d45`](https://github.com/homeassistant-ai/ha-mcp/commit/5211d4559bdb2a3b242ac69c87bac8a53d4d9421))
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`1ef09a4`](https://github.com/homeassistant-ai/ha-mcp/commit/1ef09a4051294c8825110c0d2ba054aace0e8466))
+
+### Features
+
+- Add lab setup script with auto-updates and weekly reset (#263)
+  ([#263](https://github.com/homeassistant-ai/ha-mcp/pull/263),
+  [`6ae3659`](https://github.com/homeassistant-ai/ha-mcp/commit/6ae3659b423b65d221d39379a7c810a65a8e3746))
+
+### Testing
+
+- Add HACS integration to E2E test environment (#259)
+  ([#259](https://github.com/homeassistant-ai/ha-mcp/pull/259),
+  [`e07ba9c`](https://github.com/homeassistant-ai/ha-mcp/commit/e07ba9c30bbd29ddc25b2c9298e1bb4df1f103f5))
+
+
 ## v4.12.0 (2025-12-03)
 
 ### Bug Fixes
