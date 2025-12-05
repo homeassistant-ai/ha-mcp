@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.14.2 (2025-12-05)
+
+### Bug Fixes
+
+- Write JSON config without UTF-8 BOM on Windows (#281)
+  ([#281](https://github.com/homeassistant-ai/ha-mcp/pull/281),
+  [`c9ac201`](https://github.com/homeassistant-ai/ha-mcp/commit/c9ac20121bbe58795edb25c4c726c140197492a1))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`a405f61`](https://github.com/homeassistant-ai/ha-mcp/commit/a405f61b21ade8c5174d56f5be5215b296e3d480))
+
+
 ## v4.14.1 (2025-12-05)
 
 ### Bug Fixes
