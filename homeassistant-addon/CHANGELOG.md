@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.15.1 (2025-12-05)
+
+### Bug Fixes
+
+- **macos**: Use full path to uvx in Claude Desktop config (#284)
+  ([#284](https://github.com/homeassistant-ai/ha-mcp/pull/284),
+  [`0066857`](https://github.com/homeassistant-ai/ha-mcp/commit/00668575559dbdeca7d40acddafd5fdcc847d9b0))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`8a09fe5`](https://github.com/homeassistant-ai/ha-mcp/commit/8a09fe57a047ebfcafafa119a09fa7ceae225aff))
+
+
 ## v4.15.0 (2025-12-05)
 
 ### Chores
