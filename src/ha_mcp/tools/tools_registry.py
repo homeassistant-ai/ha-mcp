@@ -2,8 +2,9 @@
 Entity Registry and Device Registry management tools for Home Assistant.
 
 This module provides tools for:
-- Renaming entities (changing entity_id)
+- Renaming entities (changing entity_id) with optional voice assistant exposure migration
 - Managing devices (list, get details, update, remove)
+- Convenience wrapper for renaming both entity and device together
 
 Important: Device renaming does NOT cascade to entities - they are independent registries.
 """
@@ -15,7 +16,10 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import parse_string_list_param
+from .util_helpers import coerce_bool_param, parse_string_list_param
+
+# Known voice assistant identifiers
+KNOWN_ASSISTANTS = ["conversation", "cloud.alexa", "cloud.google_assistant"]
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +32,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_rename_entity(
         entity_id: Annotated[
             str,
-            Field(
-                description="Current entity ID to rename (e.g., 'light.old_name')"
-            ),
+            Field(description="Current entity ID to rename (e.g., 'light.old_name')"),
         ],
         new_entity_id: Annotated[
             str,
@@ -52,12 +54,28 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        preserve_voice_exposure: Annotated[
+            bool | str | None,
+            Field(
+                description=(
+                    "Migrate voice assistant exposure settings to the new entity_id. "
+                    "Defaults to True. Set to False to skip exposure migration."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Rename a Home Assistant entity by changing its entity_id.
 
         Changes the entity_id (e.g., light.old_name -> light.new_name).
         The domain must remain the same - you cannot change a light to a switch.
+
+        VOICE ASSISTANT EXPOSURE:
+        By default, this function preserves voice assistant exposure settings
+        (Alexa, Google Assistant, Assist) when renaming. The exposure settings
+        are stored separately from the entity registry and must be migrated
+        manually. Set preserve_voice_exposure=False to skip this migration.
 
         IMPORTANT LIMITATIONS:
         - References in automations/scripts/dashboards are NOT automatically updated
@@ -69,11 +87,18 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         EXAMPLES:
         - Rename light: ha_rename_entity("light.bedroom_1", "light.master_bedroom")
         - Rename with friendly name: ha_rename_entity("sensor.temp", "sensor.living_room_temp", name="Living Room Temperature")
+        - Rename without exposure migration: ha_rename_entity("light.old", "light.new", preserve_voice_exposure=False)
 
         NOTE: This is different from renaming a device. Device and entity renaming are independent.
         Renaming a device does NOT rename its entities. See ha_update_device() for device renaming.
+        For renaming both entity and device together, use ha_rename_entity_and_device().
         """
         try:
+            # Parse preserve_voice_exposure (default True)
+            should_preserve_exposure = coerce_bool_param(
+                preserve_voice_exposure, "preserve_voice_exposure", default=True
+            )
+
             # Validate entity_id format
             entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
             if not re.match(entity_pattern, entity_id):
@@ -101,7 +126,34 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "suggestion": f"New entity_id must start with '{current_domain}.'",
                 }
 
-            # Build update message
+            # Step 1: Get current voice exposure settings BEFORE rename
+            old_exposure: dict[str, bool] = {}
+            exposure_migrated = False
+            if should_preserve_exposure:
+                try:
+                    exposure_list_msg: dict[str, Any] = {
+                        "type": "homeassistant/expose_entity/list"
+                    }
+                    exposure_result = await client.send_websocket_message(
+                        exposure_list_msg
+                    )
+                    if exposure_result.get("success"):
+                        exposed_entities = exposure_result.get("result", {}).get(
+                            "exposed_entities", {}
+                        )
+                        old_exposure = exposed_entities.get(entity_id, {})
+                        if old_exposure:
+                            logger.info(
+                                f"Found voice exposure settings for {entity_id}: {old_exposure}"
+                            )
+                except Exception as exp_err:
+                    logger.warning(
+                        f"Could not fetch exposure settings: {exp_err}. "
+                        "Continuing with rename without exposure migration."
+                    )
+                    old_exposure = {}
+
+            # Step 2: Perform the entity rename
             message: dict[str, Any] = {
                 "type": "config/entity_registry/update",
                 "entity_id": entity_id,
@@ -116,17 +168,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.info(f"Renaming entity {entity_id} to {new_entity_id}")
             result = await client.send_websocket_message(message)
 
-            if result.get("success"):
-                entity_entry = result.get("result", {}).get("entity_entry", {})
-                return {
-                    "success": True,
-                    "old_entity_id": entity_id,
-                    "new_entity_id": new_entity_id,
-                    "entity_entry": entity_entry,
-                    "message": f"Successfully renamed entity from {entity_id} to {new_entity_id}",
-                    "warning": "Remember to update any automations, scripts, or dashboards that reference the old entity_id",
-                }
-            else:
+            if not result.get("success"):
                 error = result.get("error", {})
                 error_msg = (
                     error.get("message", str(error))
@@ -144,6 +186,89 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ],
                 }
 
+            entity_entry = result.get("result", {}).get("entity_entry", {})
+
+            # Step 3: Migrate voice exposure settings to the new entity_id
+            exposure_migration_result: dict[str, Any] = {}
+            if should_preserve_exposure and old_exposure:
+                try:
+                    # Find which assistants the entity was exposed to
+                    exposed_assistants = [
+                        asst for asst in KNOWN_ASSISTANTS if old_exposure.get(asst)
+                    ]
+                    hidden_assistants = [
+                        asst
+                        for asst in KNOWN_ASSISTANTS
+                        if old_exposure.get(asst) is False
+                    ]
+
+                    # Apply exposure to new entity
+                    if exposed_assistants:
+                        expose_msg: dict[str, Any] = {
+                            "type": "homeassistant/expose_entity",
+                            "assistants": exposed_assistants,
+                            "entity_ids": [new_entity_id],
+                            "should_expose": True,
+                        }
+                        expose_result = await client.send_websocket_message(expose_msg)
+                        if expose_result.get("success"):
+                            exposure_migrated = True
+                            logger.info(
+                                f"Migrated exposure to {exposed_assistants} for {new_entity_id}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to migrate exposure settings: {expose_result.get('error')}"
+                            )
+
+                    # Apply hidden settings to new entity
+                    if hidden_assistants:
+                        hide_msg: dict[str, Any] = {
+                            "type": "homeassistant/expose_entity",
+                            "assistants": hidden_assistants,
+                            "entity_ids": [new_entity_id],
+                            "should_expose": False,
+                        }
+                        hide_result = await client.send_websocket_message(hide_msg)
+                        if hide_result.get("success"):
+                            exposure_migrated = True
+                            logger.info(
+                                f"Migrated hidden settings to {hidden_assistants} for {new_entity_id}"
+                            )
+
+                    exposure_migration_result = {
+                        "migrated": exposure_migrated,
+                        "exposed_to": exposed_assistants,
+                        "hidden_from": hidden_assistants,
+                    }
+                except Exception as migrate_err:
+                    logger.warning(f"Error migrating exposure settings: {migrate_err}")
+                    exposure_migration_result = {
+                        "migrated": False,
+                        "error": str(migrate_err),
+                    }
+
+            # Build response
+            response: dict[str, Any] = {
+                "success": True,
+                "old_entity_id": entity_id,
+                "new_entity_id": new_entity_id,
+                "entity_entry": entity_entry,
+                "message": f"Successfully renamed entity from {entity_id} to {new_entity_id}",
+                "warning": "Remember to update any automations, scripts, or dashboards that reference the old entity_id",
+            }
+
+            if should_preserve_exposure:
+                if exposure_migration_result:
+                    response["voice_exposure_migration"] = exposure_migration_result
+                elif not old_exposure:
+                    response["voice_exposure_migration"] = {
+                        "migrated": False,
+                        "note": "No custom voice exposure settings found for original entity",
+                    }
+
+            return response
+
         except Exception as e:
             logger.error(f"Error renaming entity: {e}")
             return {
@@ -152,7 +277,14 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "List Devices"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["system"],
+            "title": "List Devices",
+        }
+    )
     @log_tool_usage
     async def ha_list_devices(
         area_id: Annotated[
@@ -201,13 +333,13 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 filtered_devices = devices
                 if area_id:
                     filtered_devices = [
-                        d for d in filtered_devices
-                        if d.get("area_id") == area_id
+                        d for d in filtered_devices if d.get("area_id") == area_id
                     ]
                 if manufacturer:
                     manufacturer_lower = manufacturer.lower()
                     filtered_devices = [
-                        d for d in filtered_devices
+                        d
+                        for d in filtered_devices
                         if manufacturer_lower in (d.get("manufacturer") or "").lower()
                     ]
 
@@ -239,7 +371,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "devices": device_list,
                     "filters": filters_applied if filters_applied else None,
                     "message": f"Found {len(device_list)} device(s)"
-                    + (f" (filtered from {len(devices)} total)" if filters_applied else ""),
+                    + (
+                        f" (filtered from {len(devices)} total)"
+                        if filters_applied
+                        else ""
+                    ),
                 }
             else:
                 return {
@@ -254,7 +390,14 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to list devices: {str(e)}",
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system", "zigbee"], "title": "Get Device Details"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["system", "zigbee"],
+            "title": "Get Device Details",
+        }
+    )
     @log_tool_usage
     async def ha_get_device(
         device_id: Annotated[
@@ -325,7 +468,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Get entity registry
             entity_message: dict[str, Any] = {"type": "config/entity_registry/list"}
             entity_result = await client.send_websocket_message(entity_message)
-            all_entities = entity_result.get("result", []) if entity_result.get("success") else []
+            all_entities = (
+                entity_result.get("result", []) if entity_result.get("success") else []
+            )
 
             # Build entity -> device_id map
             entity_to_device: dict[str, str] = {}
@@ -337,11 +482,13 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     entity_to_device[eid] = did
                     if did not in device_to_entities:
                         device_to_entities[did] = []
-                    device_to_entities[did].append({
-                        "entity_id": eid,
-                        "name": e.get("name") or e.get("original_name"),
-                        "platform": e.get("platform"),
-                    })
+                    device_to_entities[did].append(
+                        {
+                            "entity_id": eid,
+                            "name": e.get("name") or e.get("original_name"),
+                            "platform": e.get("platform"),
+                        }
+                    )
 
             # If entity_id provided, find the device_id
             if entity_id and not device_id:
@@ -421,13 +568,17 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_info["mqtt_topic_hint"] = f"zigbee2mqtt/{friendly_name}/..."
 
                 if integration_type == "zha" and ieee_address:
-                    device_info["zha_trigger_hint"] = f"Use ieee '{ieee_address}' for zha_event triggers"
+                    device_info["zha_trigger_hint"] = (
+                        f"Use ieee '{ieee_address}' for zha_event triggers"
+                    )
 
                 return device_info
 
             # Single device lookup mode
             if device_id:
-                device = next((d for d in all_devices if d.get("id") == device_id), None)
+                device = next(
+                    (d for d in all_devices if d.get("id") == device_id), None
+                )
                 if not device:
                     return {
                         "success": False,
@@ -479,21 +630,36 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 device_info = get_device_info(device)
 
                 # Match integration
-                if integration_lower == "zigbee2mqtt" and device_info["integration_type"] == "zigbee2mqtt":
-                    device_info["entities"] = device_to_entities.get(device.get("id"), [])
+                if (
+                    integration_lower == "zigbee2mqtt"
+                    and device_info["integration_type"] == "zigbee2mqtt"
+                ):
+                    device_info["entities"] = device_to_entities.get(
+                        device.get("id"), []
+                    )
                     matched_devices.append(device_info)
-                elif integration_lower == "zha" and device_info["integration_type"] == "zha":
-                    device_info["entities"] = device_to_entities.get(device.get("id"), [])
+                elif (
+                    integration_lower == "zha"
+                    and device_info["integration_type"] == "zha"
+                ):
+                    device_info["entities"] = device_to_entities.get(
+                        device.get("id"), []
+                    )
                     matched_devices.append(device_info)
                 elif integration_lower in device_info.get("integration_sources", []):
-                    device_info["entities"] = device_to_entities.get(device.get("id"), [])
+                    device_info["entities"] = device_to_entities.get(
+                        device.get("id"), []
+                    )
                     matched_devices.append(device_info)
 
             # Find bridge device for Z2M
             bridge_info = None
             if integration_lower == "zigbee2mqtt":
                 for d in matched_devices:
-                    if d.get("via_device_id") is None and "bridge" in (d.get("name") or "").lower():
+                    if (
+                        d.get("via_device_id") is None
+                        and "bridge" in (d.get("name") or "").lower()
+                    ):
                         bridge_info = {
                             "device_id": d.get("device_id"),
                             "name": d.get("name"),
@@ -513,9 +679,13 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result["bridge"] = bridge_info
 
             if integration_lower == "zigbee2mqtt":
-                result["usage_hint"] = "Use 'friendly_name' for MQTT topics: zigbee2mqtt/{friendly_name}/action"
+                result["usage_hint"] = (
+                    "Use 'friendly_name' for MQTT topics: zigbee2mqtt/{friendly_name}/action"
+                )
             elif integration_lower == "zha":
-                result["usage_hint"] = "Use 'ieee_address' for zha_event triggers in automations"
+                result["usage_hint"] = (
+                    "Use 'ieee_address' for zha_event triggers in automations"
+                )
 
             return result
 
@@ -526,7 +696,13 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to get device: {str(e)}",
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Update Device"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["system"],
+            "title": "Update Device",
+        }
+    )
     @log_tool_usage
     async def ha_update_device(
         device_id: Annotated[
@@ -607,7 +783,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if area_id is not None:
                 message["area_id"] = area_id if area_id else None
-                updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
+                updates_made.append(
+                    f"area_id='{area_id}'" if area_id else "area cleared"
+                )
 
             if disabled_by is not None:
                 message["disabled_by"] = disabled_by if disabled_by else None
@@ -637,7 +815,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "device_id": device_id,
                     "updates": updates_made,
                     "device_entry": {
-                        "name": device_entry.get("name_by_user") or device_entry.get("name"),
+                        "name": device_entry.get("name_by_user")
+                        or device_entry.get("name"),
                         "name_by_user": device_entry.get("name_by_user"),
                         "area_id": device_entry.get("area_id"),
                         "disabled_by": device_entry.get("disabled_by"),
@@ -671,7 +850,14 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "device_id": device_id,
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["system"], "title": "Remove Device"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "tags": ["system"],
+            "title": "Remove Device",
+        }
+    )
     @log_tool_usage
     async def ha_remove_device(
         device_id: Annotated[
@@ -738,11 +924,17 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
                 remove_result = await client.send_websocket_message(remove_message)
-                removal_results.append({
-                    "config_entry_id": config_entry_id,
-                    "success": remove_result.get("success", False),
-                    "error": remove_result.get("error") if not remove_result.get("success") else None,
-                })
+                removal_results.append(
+                    {
+                        "config_entry_id": config_entry_id,
+                        "success": remove_result.get("success", False),
+                        "error": (
+                            remove_result.get("error")
+                            if not remove_result.get("success")
+                            else None
+                        ),
+                    }
+                )
 
             # Check if all removals succeeded
             all_succeeded = all(r["success"] for r in removal_results)
@@ -780,4 +972,198 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "success": False,
                 "error": f"Device removal failed: {str(e)}",
                 "device_id": device_id,
+            }
+
+    @mcp.tool(
+        annotations={"destructiveHint": True, "title": "Rename Entity and Device"}
+    )
+    @log_tool_usage
+    async def ha_rename_entity_and_device(
+        entity_id: Annotated[
+            str,
+            Field(
+                description="Entity ID to rename (e.g., 'light.bedroom_lamp'). Used to find associated device."
+            ),
+        ],
+        new_entity_id: Annotated[
+            str,
+            Field(
+                description="New entity ID (e.g., 'light.master_bedroom_lamp'). Domain must match."
+            ),
+        ],
+        new_device_name: Annotated[
+            str | None,
+            Field(
+                description="New display name for the device. If not provided, device name is not changed.",
+                default=None,
+            ),
+        ] = None,
+        new_entity_name: Annotated[
+            str | None,
+            Field(
+                description="New friendly name for the entity. If not provided, entity name is not changed.",
+                default=None,
+            ),
+        ] = None,
+        preserve_voice_exposure: Annotated[
+            bool | str | None,
+            Field(
+                description=(
+                    "Migrate voice assistant exposure settings to the new entity_id. "
+                    "Defaults to True."
+                ),
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """
+        Convenience tool to rename both an entity and its associated device in one operation.
+
+        This tool:
+        1. Finds the device associated with the entity
+        2. Renames the entity (changing entity_id)
+        3. Renames the device (changing display name)
+        4. Preserves voice assistant exposure settings (by default)
+
+        WHEN TO USE:
+        - When you want to rename a device and its primary entity together
+        - For smart home devices where device and entity should have matching names
+
+        IMPORTANT:
+        - If the entity has multiple associated entities (e.g., a smart bulb with brightness, color, etc.),
+          only the specified entity is renamed. Other entities retain their original IDs.
+        - If the entity has no associated device, only the entity is renamed.
+
+        EXAMPLES:
+        - Rename lamp: ha_rename_entity_and_device("light.bedroom_1", "light.master_bedroom", "Master Bedroom Lamp")
+        - Rename only entity_id: ha_rename_entity_and_device("sensor.temp", "sensor.living_room_temp")
+
+        See also:
+        - ha_rename_entity() - Rename only the entity
+        - ha_update_device() - Update only the device
+        """
+        try:
+            # Parse preserve_voice_exposure (default True)
+            should_preserve_exposure = coerce_bool_param(
+                preserve_voice_exposure, "preserve_voice_exposure", default=True
+            )
+
+            results: dict[str, Any] = {
+                "entity_rename": None,
+                "device_rename": None,
+            }
+
+            # Step 1: Find the device associated with this entity
+            entity_registry_msg: dict[str, Any] = {
+                "type": "config/entity_registry/list"
+            }
+            entity_registry_result = await client.send_websocket_message(
+                entity_registry_msg
+            )
+
+            device_id = None
+            if entity_registry_result.get("success"):
+                entities = entity_registry_result.get("result", [])
+                for ent in entities:
+                    if ent.get("entity_id") == entity_id:
+                        device_id = ent.get("device_id")
+                        break
+
+            # Step 2: Rename the entity (this now handles voice exposure migration)
+            entity_rename_result = await ha_rename_entity(
+                entity_id=entity_id,
+                new_entity_id=new_entity_id,
+                name=new_entity_name,
+                preserve_voice_exposure=should_preserve_exposure,
+            )
+
+            results["entity_rename"] = entity_rename_result
+
+            if not entity_rename_result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Entity rename failed: {entity_rename_result.get('error')}",
+                    "results": results,
+                }
+
+            # Step 3: Rename the device if we found one and a new name was provided
+            if device_id and new_device_name:
+                device_rename_result = await ha_update_device(
+                    device_id=device_id,
+                    name=new_device_name,
+                )
+                results["device_rename"] = device_rename_result
+
+                if not device_rename_result.get("success"):
+                    # Entity was renamed but device rename failed - report partial success
+                    return {
+                        "success": True,
+                        "partial": True,
+                        "message": "Entity renamed successfully but device rename failed",
+                        "old_entity_id": entity_id,
+                        "new_entity_id": new_entity_id,
+                        "device_id": device_id,
+                        "results": results,
+                        "warning": f"Device rename failed: {device_rename_result.get('error')}",
+                    }
+            elif device_id and not new_device_name:
+                results["device_rename"] = {
+                    "skipped": True,
+                    "reason": "No new_device_name provided",
+                    "device_id": device_id,
+                }
+            elif not device_id:
+                results["device_rename"] = {
+                    "skipped": True,
+                    "reason": "Entity has no associated device",
+                }
+
+            # Build success response
+            response: dict[str, Any] = {
+                "success": True,
+                "old_entity_id": entity_id,
+                "new_entity_id": new_entity_id,
+                "device_id": device_id,
+                "results": results,
+            }
+
+            if (
+                device_id
+                and new_device_name
+                and results["device_rename"].get("success")
+            ):
+                response["message"] = (
+                    f"Successfully renamed entity ({entity_id} -> {new_entity_id}) "
+                    f"and device ({new_device_name})"
+                )
+            elif device_id:
+                response["message"] = (
+                    f"Successfully renamed entity ({entity_id} -> {new_entity_id}). "
+                    f"Device name was not changed."
+                )
+            else:
+                response["message"] = (
+                    f"Successfully renamed entity ({entity_id} -> {new_entity_id}). "
+                    f"No associated device found."
+                )
+
+            # Include voice exposure migration info if available
+            if entity_rename_result.get("voice_exposure_migration"):
+                response["voice_exposure_migration"] = entity_rename_result[
+                    "voice_exposure_migration"
+                ]
+
+            response["warning"] = (
+                "Remember to update any automations, scripts, or dashboards "
+                "that reference the old entity_id"
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in rename entity and device: {e}")
+            return {
+                "success": False,
+                "error": f"Rename failed: {str(e)}",
+                "entity_id": entity_id,
             }
