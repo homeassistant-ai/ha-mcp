@@ -90,13 +90,23 @@ Spend less time configuring, more time enjoying your smart home.
 
 **Free. No subscription needed.**
 
-### Step-by-step guides (~5 min)
-
-<p align="center">
-  <a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Guide"></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Guide"></a>
-</p>
+<table align="center">
+  <tr>
+    <td align="center">
+      <a href="docs/macOS-uv-guide.md">
+        <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" height="60">
+        <br><b>Setup Guide for Mac</b>
+      </a>
+    </td>
+    <td width="60"></td>
+    <td align="center">
+      <a href="docs/Windows-uv-guide.md">
+        <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" height="60">
+        <br><b>Setup Guide for Windows</b>
+      </a>
+    </td>
+  </tr>
+</table>
 
 ### Quick install (~2 min)
 
