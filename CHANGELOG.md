@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.14.0 (2025-12-05)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`357e1bc`](https://github.com/homeassistant-ai/ha-mcp/commit/357e1bc48211c299ed9d56da7679d36ed4139323))
+
+### Features
+
+- Enhance ha_get_device with Zigbee integration support (Z2M & ZHA) (#262)
+  ([#262](https://github.com/homeassistant-ai/ha-mcp/pull/262),
+  [`fab0100`](https://github.com/homeassistant-ai/ha-mcp/commit/fab0100d2bfa25bc32a5acf965a44331869bfcdd))
+
+
 ## v4.13.0 (2025-12-05)
 
 ### Chores
