@@ -151,5 +151,3 @@ Write-Host "  Replace HOMEASSISTANT_URL with your HA URL"
 Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
-
-exit 0
