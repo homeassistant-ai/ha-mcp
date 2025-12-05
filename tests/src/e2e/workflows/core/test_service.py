@@ -354,6 +354,17 @@ class TestCallService:
         logger.info(f"Service without entity_id result: {data}")
 
 
+def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
+    """Extract entity_id from helper create response."""
+    entity_id = data.get("entity_id")
+    if not entity_id:
+        # Try to get from helper_data.id
+        helper_id = data.get("helper_data", {}).get("id")
+        if helper_id:
+            entity_id = f"{helper_type}.{helper_id}"
+    return entity_id
+
+
 @pytest.mark.asyncio
 @pytest.mark.core
 async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
@@ -374,7 +385,10 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
     if not create_data.get("success"):
         pytest.skip(f"Could not create test input_boolean: {create_data}")
 
-    entity_id = create_data.get("entity_id")
+    entity_id = get_entity_id_from_response(create_data, "input_boolean")
+    if not entity_id:
+        pytest.skip(f"Could not determine entity_id from response: {create_data}")
+
     cleanup_tracker.track("input_boolean", entity_id)
     logger.info(f"Created test input_boolean: {entity_id}")
 

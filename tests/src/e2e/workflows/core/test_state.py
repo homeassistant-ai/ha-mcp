@@ -98,10 +98,16 @@ async def test_get_state_nonexistent_entity(mcp_client):
 
     data = parse_mcp_result(result)
 
+    # State data may be nested in 'data' key
+    inner_data = data.get("data", data)
     # Should return error response
-    assert data.get("success") is False or "error" in data, (
-        f"Expected error for non-existent entity: {data}"
+    has_error = (
+        inner_data.get("success") is False
+        or "error" in inner_data
+        or data.get("success") is False
+        or "error" in data
     )
+    assert has_error, f"Expected error for non-existent entity: {data}"
 
     logger.info("Non-existent entity properly returned error")
 

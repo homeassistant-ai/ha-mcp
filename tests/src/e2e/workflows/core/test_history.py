@@ -34,14 +34,15 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history for sun.sun")
 
-        # Verify response structure
-        assert "entities" in data, f"Missing 'entities' in response: {data}"
-        assert isinstance(data["entities"], list), (
-            f"entities should be a list: {data}"
+        # Verify response structure - history data is nested in 'data' key
+        inner_data = data.get("data", data)
+        assert "entities" in inner_data, f"Missing 'entities' in response: {data}"
+        assert isinstance(inner_data["entities"], list), (
+            f"entities should be a list: {inner_data}"
         )
 
-        if data["entities"]:
-            entity_history = data["entities"][0]
+        if inner_data["entities"]:
+            entity_history = inner_data["entities"][0]
             assert "entity_id" in entity_history, (
                 f"Missing entity_id: {entity_history}"
             )
@@ -77,8 +78,10 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history with ISO datetime")
 
-        assert "period" in data, f"Missing period info: {data}"
-        logger.info(f"Query period: {data.get('period')}")
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
+        assert "period" in inner_data, f"Missing period info: {data}"
+        logger.info(f"Query period: {inner_data.get('period')}")
 
     async def test_get_history_relative_time_formats(self, mcp_client):
         """Test various relative time formats."""
@@ -98,7 +101,9 @@ class TestGetHistory:
 
             data = parse_mcp_result(result)
 
-            if data.get("success"):
+            # Check nested data for success
+            inner_data = data.get("data", data)
+            if inner_data.get("success") or "entities" in inner_data:
                 logger.info(f"Time format '{time_format}' accepted")
             else:
                 logger.warning(f"Time format '{time_format}' may not be supported")
@@ -134,9 +139,11 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history for multiple entities")
 
-        assert "entities" in data, f"Missing 'entities': {data}"
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
+        assert "entities" in inner_data, f"Missing 'entities': {data}"
         # Should have results for each entity
-        logger.info(f"Retrieved history for {len(data['entities'])} entities")
+        logger.info(f"Retrieved history for {len(inner_data['entities'])} entities")
 
     async def test_get_history_with_limit(self, mcp_client):
         """Test history retrieval respects limit parameter."""
@@ -153,8 +160,10 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history with limit")
 
-        if data.get("entities"):
-            entity_history = data["entities"][0]
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
+        if inner_data.get("entities"):
+            entity_history = inner_data["entities"][0]
             states = entity_history.get("states", [])
             total_available = entity_history.get("total_available", len(states))
 
@@ -182,9 +191,11 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history with minimal_response")
 
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
         # Minimal response should have fewer attributes
-        if data.get("entities") and data["entities"][0].get("states"):
-            first_state = data["entities"][0]["states"][0]
+        if inner_data.get("entities") and inner_data["entities"][0].get("states"):
+            first_state = inner_data["entities"][0]["states"][0]
             logger.info(f"Minimal response state fields: {list(first_state.keys())}")
 
     async def test_get_history_full_response(self, mcp_client):
@@ -203,8 +214,10 @@ class TestGetHistory:
 
         data = assert_mcp_success(result, "Get history with full attributes")
 
-        if data.get("entities") and data["entities"][0].get("states"):
-            first_state = data["entities"][0]["states"][0]
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
+        if inner_data.get("entities") and inner_data["entities"][0].get("states"):
+            first_state = inner_data["entities"][0]["states"][0]
             logger.info(f"Full response state fields: {list(first_state.keys())}")
             # Full response should include attributes
             if "attributes" in first_state:
@@ -224,10 +237,12 @@ class TestGetHistory:
 
         data = parse_mcp_result(result)
 
+        # History data may be nested in 'data' key
+        inner_data = data.get("data", data)
         # Should succeed but return empty history
-        if data.get("success"):
-            if data.get("entities"):
-                entity_history = data["entities"][0]
+        if inner_data.get("success") or "entities" in inner_data:
+            if inner_data.get("entities"):
+                entity_history = inner_data["entities"][0]
                 states = entity_history.get("states", [])
                 logger.info(f"Non-existent entity returned {len(states)} states (expected 0)")
         else:
@@ -248,8 +263,10 @@ class TestGetHistory:
 
         data = parse_mcp_result(result)
 
-        if data.get("success"):
-            logger.info(f"Comma-separated entities accepted: {len(data.get('entities', []))} entities")
+        # History data may be nested in 'data' key
+        inner_data = data.get("data", data)
+        if inner_data.get("success") or "entities" in inner_data:
+            logger.info(f"Comma-separated entities accepted: {len(inner_data.get('entities', []))} entities")
         else:
             logger.info("Comma-separated format may not be supported")
 
@@ -313,12 +330,14 @@ class TestGetStatistics:
 
         data = parse_mcp_result(result)
 
-        if data.get("success"):
-            assert "entities" in data, f"Missing 'entities': {data}"
-            logger.info(f"Statistics retrieved for {len(data.get('entities', []))} entities")
+        # Statistics data may be nested in 'data' key
+        inner_data = data.get("data", data)
+        if inner_data.get("success") or "entities" in inner_data:
+            assert "entities" in inner_data, f"Missing 'entities': {data}"
+            logger.info(f"Statistics retrieved for {len(inner_data.get('entities', []))} entities")
 
-            if data["entities"]:
-                stats_data = data["entities"][0]
+            if inner_data["entities"]:
+                stats_data = inner_data["entities"][0]
                 stats_count = stats_data.get("count", len(stats_data.get("statistics", [])))
                 logger.info(f"Retrieved {stats_count} statistical periods")
                 logger.info(f"Period type: {stats_data.get('period')}")
@@ -326,8 +345,8 @@ class TestGetStatistics:
                     logger.info(f"Unit: {stats_data['unit_of_measurement']}")
         else:
             # Statistics may not be available for all sensors
-            logger.info(f"Statistics not available: {data.get('error', 'Unknown error')}")
-            if "warnings" in data or "suggestions" in data:
+            logger.info(f"Statistics not available: {inner_data.get('error', 'Unknown error')}")
+            if "warnings" in inner_data or "suggestions" in inner_data:
                 logger.info("This is expected for sensors without state_class")
 
     async def test_get_statistics_different_periods(self, mcp_client):
@@ -364,11 +383,13 @@ class TestGetStatistics:
 
             data = parse_mcp_result(result)
 
-            if data.get("success"):
+            # Statistics data may be nested in 'data' key
+            inner_data = data.get("data", data)
+            if inner_data.get("success") or "entities" in inner_data:
                 logger.info(f"Period '{period}' accepted")
             else:
                 # 5minute may not be available for older data
-                logger.info(f"Period '{period}' may not have data: {data.get('error', '')[:50]}")
+                logger.info(f"Period '{period}' may not have data: {str(inner_data.get('error', ''))[:50]}")
 
     async def test_get_statistics_specific_types(self, mcp_client):
         """Test statistics with specific statistic types."""
@@ -402,18 +423,20 @@ class TestGetStatistics:
 
         data = parse_mcp_result(result)
 
-        if data.get("success"):
-            assert "statistic_types" in data or "entities" in data, (
+        # Statistics data may be nested in 'data' key
+        inner_data = data.get("data", data)
+        if inner_data.get("success") or "entities" in inner_data:
+            assert "statistic_types" in inner_data or "entities" in inner_data, (
                 f"Missing expected fields: {data}"
             )
-            logger.info(f"Specific statistic types query succeeded")
+            logger.info("Specific statistic types query succeeded")
 
             # Check if requested types are in response
-            if data.get("entities") and data["entities"][0].get("statistics"):
-                first_stat = data["entities"][0]["statistics"][0]
+            if inner_data.get("entities") and inner_data["entities"][0].get("statistics"):
+                first_stat = inner_data["entities"][0]["statistics"][0]
                 logger.info(f"Statistic fields returned: {list(first_stat.keys())}")
         else:
-            logger.info(f"Statistics query failed (may be expected): {data.get('error', '')[:50]}")
+            logger.info(f"Statistics query failed (may be expected): {str(inner_data.get('error', ''))[:50]}")
 
     async def test_get_statistics_invalid_period(self, mcp_client):
         """Test statistics with invalid period."""
@@ -430,13 +453,19 @@ class TestGetStatistics:
 
         data = parse_mcp_result(result)
 
+        # Statistics data may be nested in 'data' key
+        inner_data = data.get("data", data)
         # Should return error for invalid period
-        assert data.get("success") is False or "error" in data, (
-            f"Expected error for invalid period: {data}"
+        has_error = (
+            inner_data.get("success") is False
+            or "error" in inner_data
+            or data.get("success") is False
+            or "error" in data
         )
+        assert has_error, f"Expected error for invalid period: {data}"
 
-        if "valid_periods" in data:
-            logger.info(f"Valid periods listed: {data['valid_periods']}")
+        if "valid_periods" in inner_data:
+            logger.info(f"Valid periods listed: {inner_data['valid_periods']}")
 
         logger.info("Invalid period properly rejected")
 
@@ -456,11 +485,13 @@ class TestGetStatistics:
 
         data = parse_mcp_result(result)
 
+        # Statistics data may be nested in 'data' key
+        inner_data = data.get("data", data)
         # May succeed but with warnings or empty data
-        if data.get("success"):
-            if data.get("warnings"):
-                logger.info(f"Properly warned about no statistics: {data['warnings']}")
-            entities_data = data.get("entities", [])
+        if inner_data.get("success") or "entities" in inner_data:
+            if inner_data.get("warnings"):
+                logger.info(f"Properly warned about no statistics: {inner_data['warnings']}")
+            entities_data = inner_data.get("entities", [])
             if entities_data and entities_data[0].get("count") == 0:
                 logger.info("Entity returned 0 statistics (expected for non-numeric entity)")
         else:
@@ -486,9 +517,11 @@ async def test_get_history_query_params_in_response(mcp_client):
 
     data = assert_mcp_success(result, "Get history with all params")
 
+    # History data is nested in 'data' key
+    inner_data = data.get("data", data)
     # Verify query_params in response
-    if "query_params" in data:
-        params = data["query_params"]
+    if "query_params" in inner_data:
+        params = inner_data["query_params"]
         logger.info(f"Query params in response: {params}")
         assert params.get("minimal_response") is True, f"minimal_response mismatch: {params}"
         assert params.get("significant_changes_only") is True, (
