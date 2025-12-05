@@ -21,11 +21,11 @@ class TestSearchToolsE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True, f"Search failed: {data}"
-        assert "results" in data["data"] or "categories" in data["data"]
+        assert data.get("success") is True, f"Search failed: {data}"
+        assert "results" in data or "categories" in data
 
-        if "results" in data["data"]:
-            results = data["data"]["results"]
+        if "results" in data:
+            results = data["results"]
             assert len(results) > 0, "Expected automation tools in results"
             # Check that automation tools are found
             tool_names = [r["tool_name"] for r in results]
@@ -42,12 +42,12 @@ class TestSearchToolsE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
+        assert data.get("success") is True
         # Empty query should show categories
-        if "mode" in data["data"]:
-            assert data["data"]["mode"] == "categories_overview"
-        assert "categories" in data["data"]
-        assert len(data["data"]["categories"]) > 0
+        if "mode" in data:
+            assert data["mode"] == "categories_overview"
+        assert "categories" in data
+        assert len(data["categories"]) > 0
 
     @pytest.mark.asyncio
     async def test_search_tools_with_category_filter(self, mcp_client):
@@ -58,8 +58,8 @@ class TestSearchToolsE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        results = data["data"].get("results", [])
+        assert data.get("success") is True
+        results = data.get("results", [])
         # All results should be in search category
         for r in results:
             assert r["category"] == "search", f"Expected search category, got {r['category']}"
@@ -73,9 +73,9 @@ class TestSearchToolsE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert data["data"]["total_matches"] == 0
-        assert "suggestions" in data["data"]
+        assert data.get("success") is True
+        assert data["total_matches"] == 0
+        assert "suggestions" in data
 
     @pytest.mark.asyncio
     async def test_search_tools_by_action(self, mcp_client):
@@ -86,9 +86,9 @@ class TestSearchToolsE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        if data["data"]["total_matches"] > 0:
-            results = data["data"]["results"]
+        assert data.get("success") is True
+        if data["total_matches"] > 0:
+            results = data["results"]
             # Should find delete tools
             tool_names = [r["tool_name"] for r in results]
             assert any("delete" in t for t in tool_names)
@@ -106,9 +106,9 @@ class TestListToolProfilesE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert "profiles" in data["data"]
-        profiles = data["data"]["profiles"]
+        assert data.get("success") is True
+        assert "profiles" in data
+        profiles = data["profiles"]
         assert len(profiles) >= 5, "Expected at least 5 profiles"
 
         # Check expected profiles exist
@@ -126,7 +126,7 @@ class TestListToolProfilesE2E:
         )
         data = parse_mcp_result(result)
 
-        for profile in data["data"]["profiles"]:
+        for profile in data["profiles"]:
             assert "name" in profile
             assert "description" in profile
             assert "tool_count" in profile
@@ -145,12 +145,12 @@ class TestGetToolProfileE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert "profile" in data["data"]
-        assert data["data"]["profile"]["name"] == "minimal"
-        assert "all_tools" in data["data"]
+        assert data.get("success") is True
+        assert "profile" in data
+        assert data["profile"]["name"] == "minimal"
+        assert "all_tools" in data
         # Minimal should have limited tools
-        assert len(data["data"]["all_tools"]) <= 15
+        assert len(data["all_tools"]) <= 15
 
     @pytest.mark.asyncio
     async def test_get_full_profile(self, mcp_client):
@@ -161,10 +161,10 @@ class TestGetToolProfileE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert data["data"]["profile"]["name"] == "full"
+        assert data.get("success") is True
+        assert data["profile"]["name"] == "full"
         # Full should have many tools
-        assert len(data["data"]["all_tools"]) >= 50
+        assert len(data["all_tools"]) >= 50
 
     @pytest.mark.asyncio
     async def test_get_invalid_profile(self, mcp_client):
@@ -175,11 +175,10 @@ class TestGetToolProfileE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is False or data["data"].get("success") is False
+        assert data.get("success") is False
         # Should suggest available profiles
-        response_data = data.get("data", data)
-        if "available_profiles" in response_data:
-            assert "full" in response_data["available_profiles"]
+        if "available_profiles" in data:
+            assert "full" in data["available_profiles"]
 
     @pytest.mark.asyncio
     async def test_profile_has_tools_by_category(self, mcp_client):
@@ -190,9 +189,9 @@ class TestGetToolProfileE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert "tools_by_category" in data["data"]
-        tools_by_cat = data["data"]["tools_by_category"]
+        assert data.get("success") is True
+        assert "tools_by_category" in data
+        tools_by_cat = data["tools_by_category"]
         assert isinstance(tools_by_cat, dict)
         # Should have at least some categories
         assert len(tools_by_cat) > 0
@@ -210,9 +209,9 @@ class TestListToolCategoriesE2E:
         )
         data = parse_mcp_result(result)
 
-        assert data["success"] is True
-        assert "categories" in data["data"]
-        categories = data["data"]["categories"]
+        assert data.get("success") is True
+        assert "categories" in data
+        categories = data["categories"]
         assert len(categories) >= 10, "Expected at least 10 categories"
 
     @pytest.mark.asyncio
@@ -224,7 +223,7 @@ class TestListToolCategoriesE2E:
         )
         data = parse_mcp_result(result)
 
-        for category in data["data"]["categories"]:
+        for category in data["categories"]:
             assert "name" in category
             assert "description" in category
             assert "tool_count" in category
@@ -241,12 +240,12 @@ class TestListToolCategoriesE2E:
         )
         data = parse_mcp_result(result)
 
-        assert "total_tools" in data["data"]
-        total = data["data"]["total_tools"]
+        assert "total_tools" in data
+        total = data["total_tools"]
         assert total >= 50, f"Expected at least 50 total tools, got {total}"
 
         # Verify sum matches
-        categories = data["data"]["categories"]
+        categories = data["categories"]
         calculated_total = sum(c["tool_count"] for c in categories)
         assert calculated_total == total
 
@@ -263,7 +262,7 @@ class TestToolDiscoveryIntegration:
             {"query": "automation"}
         )
         search_data = parse_mcp_result(search_result)
-        assert search_data["success"] is True
+        assert search_data.get("success") is True
 
         # Then get the developer profile (should include automation)
         profile_result = await mcp_client.call_tool(
@@ -271,10 +270,10 @@ class TestToolDiscoveryIntegration:
             {"profile_name": "developer"}
         )
         profile_data = parse_mcp_result(profile_result)
-        assert profile_data["success"] is True
+        assert profile_data.get("success") is True
 
         # Verify automation tools are in developer profile
-        dev_tools = profile_data["data"]["all_tools"]
+        dev_tools = profile_data["all_tools"]
         assert any("automation" in t for t in dev_tools)
 
     @pytest.mark.asyncio
@@ -286,7 +285,7 @@ class TestToolDiscoveryIntegration:
             {}
         )
         cat_data = parse_mcp_result(cat_result)
-        categories = [c["name"] for c in cat_data["data"]["categories"]]
+        categories = [c["name"] for c in cat_data["categories"]]
 
         # Search with category filter for each
         for category_name in categories[:3]:  # Test first 3
@@ -295,7 +294,7 @@ class TestToolDiscoveryIntegration:
                 {"query": "", "category": category_name}
             )
             search_data = parse_mcp_result(search_result)
-            assert search_data["success"] is True
+            assert search_data.get("success") is True
             # Results should all be in that category
-            for r in search_data["data"].get("results", []):
+            for r in search_data.get("results", []):
                 assert r["category"] == category_name
