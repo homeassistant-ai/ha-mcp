@@ -24,7 +24,7 @@
 
 ---
 
-![Home Assistant MCP Demo](docs/img/demo.webp)
+![Demo with Claude Desktop](docs/img/demo.webp)
 
 ---
 
@@ -35,9 +35,9 @@ Just talk to Claude naturally. Here are some real examples:
 | You Say | What Happens |
 |---------|--------------|
 | *"Create an automation that turns on the porch light at sunset"* | Creates the automation with proper triggers and actions |
+| *"Add a weather card to my dashboard"* | Updates your Lovelace dashboard with the new card |
 | *"The motion sensor automation isn't working, debug it"* | Analyzes execution traces, identifies the issue, suggests fixes |
 | *"Make my morning routine automation also turn on the coffee maker"* | Reads the existing automation, adds the new action, updates it |
-| *"Show me all automations that control the living room lights"* | Deep searches through automation configs to find matches |
 | *"Create a script that sets movie mode: dim lights, close blinds, turn on TV"* | Creates a reusable script with the sequence of actions |
 
 Spend less time configuring, more time enjoying your smart home.
@@ -128,7 +128,7 @@ You're now connected to the demo environment! [Connect your own Home Assistant â
 
 </details>
 
-**[FAQ & Troubleshooting](docs/FAQ.md)**
+Having issues? Check the **[FAQ & Troubleshooting](docs/FAQ.md)**
 
 ---
 

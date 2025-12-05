@@ -1,6 +1,6 @@
-# macOS Quick Start
+# macOS Setup Guide
 
-Control Home Assistant with Claude Desktop in 2 minutes.
+Control Home Assistant with Claude Desktop in about 10 minutes.
 
 **Works with free Claude account** - no subscription needed.
 
