@@ -33,9 +33,10 @@ Want to test before connecting to your own Home Assistant? Use our public demo:
 | Setting | Value |
 |---------|-------|
 | **URL** | `https://ha-mcp-demo-server.qc-h.net` |
-| **Username** | `mcp` |
-| **Password** | `mcp` |
-| **Token** | See [tests/test_constants.py](../tests/test_constants.py) |
+| **Token** | `demo` |
+| **Web UI** | Login with `mcp` / `mcp` |
+
+Just set `HOMEASSISTANT_TOKEN` to `demo` and ha-mcp will automatically use the demo credentials.
 
 The demo environment resets weekly. Your changes won't persist.
 

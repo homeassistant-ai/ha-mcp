@@ -64,7 +64,7 @@ Don't have Home Assistant yet? Use our public demo environment:
       "args": ["ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
-        "HOMEASSISTANT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
+        "HOMEASSISTANT_TOKEN": "demo"
       }
     }
   }

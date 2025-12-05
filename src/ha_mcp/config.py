@@ -14,6 +14,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 project_root = Path(__file__).parent.parent.parent
 
+# Demo environment token - use HOMEASSISTANT_TOKEN="demo" to connect to the public demo
+# Demo server: https://ha-mcp-demo-server.qc-h.net (login: mcp/mcp, resets weekly)
+DEMO_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
+
 # Support for different environment files via HAMCP_ENV_FILE
 env_file = os.getenv("HAMCP_ENV_FILE", ".env")
 env_path = project_root / env_file
@@ -76,9 +80,12 @@ class Settings(BaseSettings):
     @field_validator("homeassistant_token")
     @classmethod
     def validate_homeassistant_token(cls, v: str) -> str:
-        """Ensure token is not empty."""
+        """Ensure token is not empty. Use 'demo' for public demo environment."""
         if not v or v == "your_long_lived_access_token_here":
             raise ValueError("Home Assistant token must be provided")
+        # Replace "demo" with actual demo token for easy onboarding
+        if v.lower() == "demo":
+            return DEMO_TOKEN
         return v
 
     @field_validator("fuzzy_threshold")
