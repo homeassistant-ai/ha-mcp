@@ -6,7 +6,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <a href="https://github.com/homeassistant-ai/ha-mcp"><img src="https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant" alt="Home Assistant Add-on"></a>
+    <img src="https://img.shields.io/badge/tools-80+-blue" alt="80+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -84,31 +84,13 @@ No YAML editing. No entity ID lookups. Just describe what you want.
 
 ---
 
-## 🚀 Installation
+## 🚀 Quick Start (Claude Desktop)
 
-Choose the installation method that best fits your setup:
+**5 minutes. Free. No subscription needed.**
 
-### Method 1: Running Python with UV (Recommended for Claude Desktop)
+### Step-by-step guides: **[macOS](docs/macOS-uv-guide.md)** | **[Windows](docs/Windows-uv-guide.md)** | **[FAQ](docs/FAQ.md)**
 
-**Best for:** Claude Desktop users on any platform
-
-> **Platform guides:** [macOS](docs/macOS-uv-guide.md) | [Windows](docs/Windows-uv-guide.md)
-
-**Prerequisites:**
-- [UV package manager](https://docs.astral.sh/uv/getting-started/installation/)
-  - Windows: winget install astral-sh.uv -e
-  - MacOS: brew install uv
-- Your Home assistant URL (ex: http://localhost:8123) for HOMEASSISTANT_URL variable
-- A Home Assistant long-lived access token (Profile → Security → Long-Lived Access Tokens) for HOMEASSISTANT_TOKEN variable
-
-**Client Configuration:**
-
-<details>
-<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
-
-**Config file:**
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+### Try it now with our demo environment:
 
 ```json
 {
@@ -117,29 +99,33 @@ Choose the installation method that best fits your setup:
       "command": "uvx",
       "args": ["ha-mcp@latest"],
       "env": {
-        "HOMEASSISTANT_URL": "http://localhost:8123",
-        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
+        "HOMEASSISTANT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
       }
     }
   }
 }
 ```
-Note: replace both HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN with your values.
 
-</details>
+1. Install [Claude Desktop](https://claude.ai/download) (free) and [uv](https://docs.astral.sh/uv/)
+2. Settings → Developer → Edit Config → Paste the above
+3. Restart Claude Desktop
+4. Ask: **"Give me an overview of this Home Assistant"**
+
+Web UI: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`) - resets weekly
+
+---
+
+## 📱 Other Clients
 
 <details>
-<summary><b>🆚 VSCode (GitHub Copilot and others)</b></summary>
+<summary><b>🆚 VSCode (GitHub Copilot)</b></summary>
 
-**Prerequisite:** Install uvx first
-- Windows: `winget install astral-sh.uv -e`
-- macOS: `brew install uv`
+**Prerequisite:** Install uv first (`winget install astral-sh.uv -e` on Windows, `brew install uv` on macOS)
 
 **One-click install:**
 
 [![Install in VSCode](https://img.shields.io/badge/VSCode-Install_Home_Assistant_MCP-0098FF?style=flat-square&logo=visualstudiocode&logoColor=ffffff)](vscode:mcp/install?%7B%22name%22%3A%22Home%20Assistant%22%2C%22inputs%22%3A%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-url%22%2C%22description%22%3A%22Your%20Home%20Assistant%20URL%20(ex%3A%20http%3A%2F%2Fhomeassistant.local%3A8123)%22%2C%22default%22%3A%22http%3A%2F%2Fhomeassistant.local%3A8123%22%2C%22password%22%3Afalse%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-token%22%2C%22description%22%3A%22Your%20long%20lived%20access%20token%20(generate%20in%20your%20profile%20page%2C%20Security%20tab)%22%2C%22password%22%3Atrue%7D%5D%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22ha-mcp%40latest%22%5D%2C%22env%22%3A%7B%22HOMEASSISTANT_URL%22%3A%22%24%7Binput%3Ahomeassistant-url%7D%22%2C%22HOMEASSISTANT_TOKEN%22%3A%22%24%7Binput%3Ahomeassistant-token%7D%22%7D%7D)
-
-Clicking the button will prompt you for your Home Assistant URL and token.
 
 </details>
 
@@ -158,17 +144,8 @@ claude mcp add --transport stdio home-assistant \
 <details>
 <summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-Run the MCP server with uvx (replace the values of the environement variables):
+Run the MCP server with uvx (replace environment variables):
 
-Windows:
-```bash
-set HOMEASSISTANT_URL=http://localhost:8123
-set HOMEASSISTANT_TOKEN=your_long_lived_token
-set MCP_PORT=8086
-set MCP_SECRET_PATH=/__my_secret__
-uvx --from ha-mcp@latest ha-mcp-web
-```
-Others:
 ```bash
 export HOMEASSISTANT_URL=http://localhost:8123
 export HOMEASSISTANT_TOKEN=your_long_lived_token
@@ -177,80 +154,27 @@ export MCP_SECRET_PATH=/__my_secret__
 uvx --from ha-mcp@latest ha-mcp-web
 ```
 
-Web client required https and a public URL. You need to use a proxy in front of `http://localhost:8086`.
-
-Easiest option is to download [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release)
-
-**In another terminal, start Cloudflare Tunnel:**
+Web clients require HTTPS. Use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release):
 
 ```bash
 cloudflared tunnel --url http://localhost:8086
 ```
 
-Use the public url provided and add your secret path like so `https://XYZ.trycloudflare.com/__my_secret__`. This url must be used in your Web client MCP configuration and kept secret.
+Use the URL: `https://XYZ.trycloudflare.com/__my_secret__`
+
 </details>
 
----
-
-### Method 2: Home Assistant Add-on
-
-**Best for:** Users running Home Assistant OS
-
-**Advantages:**
-- ✅ 5 clicks installation
-- ✅ Isolated environment
-- ✅ Automatic updates
-- ✅ Part of your Home Assistant Setup
-
-**Installation Steps:**
-
-1. **Click the button to add the repository** to your Home Assistant instance:
-
-   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
-
-   Or manually add this repository URL in Supervisor → Add-on Store:
-   ```
-   https://github.com/homeassistant-ai/ha-mcp
-   ```
-
-2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
-
-3. **Click Install, Wait and then Start**
-
-4. Follow the [configuration instructions for clients in the add-on documentation](homeassistant-addon/DOCS.md)
-
----
-
-### Method 3: Container
-
-**Best for:** Home Assistant Container users or when Docker is preferred
-
-**Advantages:**
-- ✅ No installation
-- ✅ Isolated environment
-- ✅ Automatic updates
-
-**Get a long-lived token:** Home Assistant → Your Profile → Security → Long-Lived Access Tokens
-
-**Client Configuration:**
-
 <details>
-<summary><b>📱 Claude Desktop or any mcp.json format</b></summary>
+<summary><b>🐳 Docker</b></summary>
 
-**Location:**
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-Add to your `mcp.json`:
 ```json
 {
   "mcpServers": {
     "home-assistant": {
       "command": "docker",
       "args": [
-        "run",
-        "--rm",
-        "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
+        "run", "--rm",
+        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
         "ghcr.io/homeassistant-ai/ha-mcp:latest"
       ]
@@ -262,60 +186,15 @@ Add to your `mcp.json`:
 </details>
 
 <details>
-<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
+<summary><b>🏠 Home Assistant Add-on (Optional)</b></summary>
 
-1. **Create a docker-compose.yml:**
-   ```yaml
-   version: '3.8'
-   services:
-     ha-mcp:
-       image: ghcr.io/homeassistant-ai/ha-mcp:latest
-       container_name: ha-mcp
-       ports:
-         - "8086:8086"
-       environment:
-         HOMEASSISTANT_URL: http://homeassistant.local:8123
-         HOMEASSISTANT_TOKEN: your_long_lived_token
-         MCP_SECRET_PATH: /__your_secret_string__
-       command: ["fastmcp", "run", "fastmcp-webclient.json"]
-       restart: unless-stopped
+**Note:** The add-on is just an alternative installation method. You do NOT need it for ha-mcp to work. Most users run ha-mcp directly on their computer.
 
-     cloudflared:
-       image: cloudflare/cloudflared:latest
-       command: tunnel --url http://ha-mcp:8086
-       depends_on:
-         - ha-mcp
-   ```
+The add-on is useful if you want to run ha-mcp inside your Home Assistant OS environment.
 
-2. **Start the services:**
-   ```bash
-   docker compose up -d
-   ```
+[![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
-3. **Check cloudflared logs for your URL:**
-   ```bash
-   docker compose logs cloudflared
-   ```
-
-4. **Use:** `https://abc-def.trycloudflare.com/__your_secret_string__`
-
-</details>
-
-<details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add-json home-assistant '{
-  "command": "docker",
-  "args": [
-    "run",
-    "--rm",
-    "-e", "HOMEASSISTANT_URL=http://homeassistant.local:8123",
-    "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
-    "ghcr.io/homeassistant-ai/ha-mcp:latest"
-  ]
-}'
-```
+See [add-on documentation](homeassistant-addon/DOCS.md) for details.
 
 </details>
 

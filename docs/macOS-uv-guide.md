@@ -1,65 +1,82 @@
-# macOS UV Setup Guide for ha-mcp
+# macOS Setup Guide
 
-This guide walks through running the ha-mcp server locally on macOS with Claude using the [uv](https://docs.astral.sh/uv/) package manager. Expect the process to take about 10 minutes.
+Get ha-mcp running with Claude Desktop in about 5 minutes.
 
-## Prerequisites
-
-- [Claude Desktop](https://claude.ai/download) - Works with a free Claude account
-- A Home Assistant instance with a long-lived access token
+**Works with free Claude account** - no subscription needed.
 
 ## 1. Install uv
 
-Open **Terminal** and run one of the following:
-
-**Using Homebrew (recommended if you have Homebrew):**
+Open **Terminal** and run:
 
 ```bash
 brew install uv
 ```
 
-**Using the standalone installer:**
-
+Don't have Homebrew? Use the standalone installer instead:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-After installation, verify it works:
-
-```bash
-uvx --version
-```
-
 ## 2. Configure Claude Desktop
 
-1. Open **Claude Desktop**.
-2. Click **Claude** in the menu bar → **Settings...** → **Developer** → **Edit Config**.
-3. Replace the contents of `claude_desktop_config.json` with:
+1. Open **Claude Desktop**
+2. Menu bar → **Claude** → **Settings...** → **Developer** → **Edit Config**
+3. Paste this configuration:
 
-    ```json
-    {
-      "mcpServers": {
-        "Home Assistant": {
-          "command": "uvx",
-          "args": ["ha-mcp@latest"],
-          "env": {
-            "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
-            "HOMEASSISTANT_TOKEN": "your_long_lived_token"
-          }
-        }
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
       }
     }
-    ```
+  }
+}
+```
 
-- **HOMEASSISTANT_URL**: Use the same URL (https or http) that you use for accessing Home Assistant
-- **HOMEASSISTANT_TOKEN**: Click your username on the bottom left of HA, click Security at the top, and scroll all the way down and create a new token. Note: this token will be displayed only once
+**Replace:**
+- `HOMEASSISTANT_URL` - Your Home Assistant URL (same one you use in browser)
+- `HOMEASSISTANT_TOKEN` - Generate in HA: Your Profile → Security → Long-lived access tokens
 
-4. Quit Claude completely (**Cmd+Q**), then relaunch it. Under **Settings → Developer** you should see the MCP server running.
+## 3. Restart & Test
 
-Ask Claude to verify access (e.g., "Can you see my Home Assistant interface?"). If it enumerates integrations or entities, the setup succeeded.
+1. Quit Claude completely (**Cmd+Q**)
+2. Reopen Claude Desktop
+3. Ask: **"Can you see my Home Assistant?"**
 
-## Troubleshooting
+If Claude lists your entities, you're done!
 
-- **`uvx` not found:** If you used the curl installer, you may need to restart Terminal or run `source ~/.zshrc` (or `~/.bashrc`) to update your PATH.
-- **Authentication failures:** Regenerate the long-lived token and update Claude's config.
-- **Server closes immediately:** Check the console log for missing dependencies or incorrect configuration.
-- **Homebrew not installed:** Install it from [brew.sh](https://brew.sh) or use the curl installer method above.
+---
+
+## Try the Demo First
+
+Don't have Home Assistant yet? Use our public demo environment:
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
+        "HOMEASSISTANT_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
+      }
+    }
+  }
+}
+```
+
+Web UI: https://ha-mcp-demo-server.qc-h.net (login: `mcp` / `mcp`)
+
+The demo resets weekly - your changes won't persist.
+
+---
+
+## Problems?
+
+See the [FAQ & Troubleshooting Guide](FAQ.md) for common issues.
