@@ -17,6 +17,20 @@ from ...utilities.assertions import assert_mcp_success, parse_mcp_result
 logger = logging.getLogger(__name__)
 
 
+def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
+    """Extract entity_id from helper create response.
+
+    The API may return entity_id directly or we may need to construct it
+    from helper_data.id.
+    """
+    entity_id = data.get("entity_id")
+    if not entity_id:
+        helper_id = data.get("helper_data", {}).get("id")
+        if helper_id:
+            entity_id = f"{helper_type}.{helper_id}"
+    return entity_id
+
+
 @pytest.mark.asyncio
 @pytest.mark.config
 class TestInputBooleanCRUD:
@@ -56,7 +70,7 @@ class TestInputBooleanCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create input_boolean")
-        entity_id = create_data.get("entity_id")
+        entity_id = get_entity_id_from_response(create_data, "input_boolean")
         assert entity_id, f"Missing entity_id in create response: {create_data}"
         cleanup_tracker.track("input_boolean", entity_id)
         logger.info(f"Created input_boolean: {entity_id}")
@@ -131,7 +145,8 @@ class TestInputBooleanCRUD:
         )
 
         data = assert_mcp_success(result, "Create with initial state")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_boolean")
+        assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_boolean", entity_id)
         logger.info(f"Created with initial=on: {entity_id}")
 
@@ -181,7 +196,7 @@ class TestInputNumberCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create input_number")
-        entity_id = create_data.get("entity_id")
+        entity_id = get_entity_id_from_response(create_data, "input_number")
         assert entity_id, f"Missing entity_id: {create_data}"
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created input_number: {entity_id}")
@@ -224,7 +239,8 @@ class TestInputNumberCRUD:
         )
 
         data = assert_mcp_success(result, "Create box mode input_number")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_number")
+        assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created box mode number: {entity_id}")
 
@@ -272,7 +288,7 @@ class TestInputSelectCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create input_select")
-        entity_id = create_data.get("entity_id")
+        entity_id = get_entity_id_from_response(create_data, "input_select")
         assert entity_id, f"Missing entity_id: {create_data}"
         cleanup_tracker.track("input_select", entity_id)
         logger.info(f"Created input_select: {entity_id}")
@@ -357,7 +373,7 @@ class TestInputTextCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create input_text")
-        entity_id = create_data.get("entity_id")
+        entity_id = get_entity_id_from_response(create_data, "input_text")
         assert entity_id, f"Missing entity_id: {create_data}"
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created input_text: {entity_id}")
@@ -385,7 +401,8 @@ class TestInputTextCRUD:
         )
 
         data = assert_mcp_success(result, "Create password mode input_text")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_text")
+        assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created password text: {entity_id}")
 
@@ -429,7 +446,7 @@ class TestInputDatetimeCRUD:
         )
 
         data = assert_mcp_success(result, "Create date-only input_datetime")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_datetime")
         assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_datetime", entity_id)
         logger.info(f"Created date-only datetime: {entity_id}")
@@ -455,7 +472,8 @@ class TestInputDatetimeCRUD:
         )
 
         data = assert_mcp_success(result, "Create time-only input_datetime")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_datetime")
+        assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_datetime", entity_id)
         logger.info(f"Created time-only datetime: {entity_id}")
 
@@ -480,7 +498,8 @@ class TestInputDatetimeCRUD:
         )
 
         data = assert_mcp_success(result, "Create full input_datetime")
-        entity_id = data.get("entity_id")
+        entity_id = get_entity_id_from_response(data, "input_datetime")
+        assert entity_id, f"Missing entity_id: {data}"
         cleanup_tracker.track("input_datetime", entity_id)
         logger.info(f"Created full datetime: {entity_id}")
 
@@ -526,7 +545,7 @@ class TestInputButtonCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create input_button")
-        entity_id = create_data.get("entity_id")
+        entity_id = get_entity_id_from_response(create_data, "input_button")
         assert entity_id, f"Missing entity_id: {create_data}"
         cleanup_tracker.track("input_button", entity_id)
         logger.info(f"Created input_button: {entity_id}")
@@ -571,7 +590,8 @@ async def test_helper_with_area_assignment(mcp_client, cleanup_tracker):
     )
 
     data = assert_mcp_success(result, "Create helper")
-    entity_id = data.get("entity_id")
+    entity_id = get_entity_id_from_response(data, "input_boolean")
+    assert entity_id, f"Missing entity_id: {data}"
     cleanup_tracker.track("input_boolean", entity_id)
     logger.info(f"Created helper: {entity_id}")
 
