@@ -128,7 +128,7 @@ if ($ClaudeNotInstalled) {
     Write-Host "  2. Create a free account at claude.ai (if you haven't)"
     Write-Host '  3. Open Claude Desktop and ask: "Can you see my Home Assistant?"'
 } else {
-    Write-Host "  1. Exit Claude Desktop: File > Exit (or Alt+F4)"
+    Write-Host "  1. Exit Claude Desktop: File > Exit (or right-click system tray > Exit)"
     Write-Host '  2. Reopen and ask: "Can you see my Home Assistant?"'
 }
 Write-Host ""

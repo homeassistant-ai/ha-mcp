@@ -123,7 +123,7 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
    ```powershell
    irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/main/scripts/install-windows.ps1 | iex
    ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart if already installed: File → Exit)
+3. [Download Claude Desktop](https://claude.ai/download) (or restart: File → Exit)
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
 You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-6-connect-your-home-assistant)
