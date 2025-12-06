@@ -1,0 +1,89 @@
+name: Validate Hotfix Branch
+
+# Validates that hotfix/* branches are based on a stable release tag
+# Prevents accidentally including unreleased master commits in a hotfix
+on:
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  validate-hotfix:
+    name: Validate Hotfix Origin
+    # Only run for hotfix branches
+    if: startsWith(github.head_ref, 'hotfix/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate hotfix is based on stable tag
+        run: |
+          echo "Validating hotfix branch: ${{ github.head_ref }}"
+
+          # Check if stable tag exists
+          if ! git rev-parse stable &>/dev/null; then
+            echo "::warning::No 'stable' tag found. Skipping validation."
+            echo "Consider creating a 'stable' tag pointing to the latest stable release."
+            exit 0
+          fi
+
+          STABLE_COMMIT=$(git rev-parse stable)
+          STABLE_TAG_NAME=$(git describe --tags --exact-match $STABLE_COMMIT 2>/dev/null || echo "stable")
+          echo "Stable tag points to: $STABLE_TAG_NAME ($STABLE_COMMIT)"
+
+          # Get the merge base between the hotfix and master
+          MASTER_HEAD=$(git rev-parse origin/master)
+          HOTFIX_HEAD=$(git rev-parse HEAD)
+          MERGE_BASE=$(git merge-base origin/master HEAD)
+
+          echo "Master HEAD: $MASTER_HEAD"
+          echo "Hotfix HEAD: $HOTFIX_HEAD"
+          echo "Merge base: $MERGE_BASE"
+
+          # Check if there are commits on master that are NOT in stable but ARE in the hotfix
+          # This would indicate the hotfix was branched from master instead of stable
+
+          # Get commits on master since stable
+          MASTER_COMMITS_SINCE_STABLE=$(git log $STABLE_COMMIT..$MASTER_HEAD --oneline 2>/dev/null | wc -l)
+          echo "Commits on master since stable: $MASTER_COMMITS_SINCE_STABLE"
+
+          if [ "$MASTER_COMMITS_SINCE_STABLE" -eq 0 ]; then
+            echo "✓ Master is at stable - hotfix validation passed"
+            exit 0
+          fi
+
+          # Check if merge base is at or before stable
+          if git merge-base --is-ancestor $MERGE_BASE $STABLE_COMMIT; then
+            echo "✓ Hotfix is based on stable or earlier - validation passed"
+            exit 0
+          fi
+
+          # Check if stable is ancestor of merge base (hotfix branched after stable)
+          if git merge-base --is-ancestor $STABLE_COMMIT $MERGE_BASE; then
+            # Hotfix was branched from somewhere after stable
+            # This means it might contain unreleased master commits
+            echo ""
+            echo "::error::Hotfix branch appears to be based on master, not stable!"
+            echo ""
+            echo "Your hotfix may contain these unreleased commits from master:"
+            git log $STABLE_COMMIT..$MERGE_BASE --oneline | head -10
+            echo ""
+            echo "To fix this, rebase your hotfix onto the 'stable' tag:"
+            echo ""
+            echo "  git checkout ${{ github.head_ref }}"
+            echo "  git rebase --onto stable \$(git merge-base origin/master HEAD) HEAD"
+            echo "  git push --force-with-lease"
+            echo ""
+            echo "Or start fresh:"
+            echo ""
+            echo "  git checkout stable"
+            echo "  git checkout -b hotfix/your-fix"
+            echo "  # Apply your fix"
+            echo "  git push -u origin hotfix/your-fix"
+            echo ""
+            exit 1
+          fi
+
+          echo "✓ Hotfix validation passed"

@@ -538,7 +538,11 @@ await mcp.call_tool("ha_config_set_helper", {
 3. For delete operations: only keep domain-specific params (no `name=""` cruft)
 4. Use automated transformation where possible (sed scripts, bulk find/replace)
 
-## 📦 Semantic Versioning with semantic-release
+## 📦 Release Process and Versioning
+
+### Semantic Versioning
+
+This project uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
 
 **Commit message format controls version bumps:**
 
@@ -558,10 +562,98 @@ feat: description
 
 BREAKING CHANGE: explanation of breaking change
 
-# No version bump
+# No version bump (no release created)
 chore: maintenance task
 docs: documentation update
 test: test changes
 ```
 
 **Configuration location:** `pyproject.toml` under `[tool.semantic_release]`
+
+### Release Channels
+
+| Channel | Version Format | Docker Tag | When Updated |
+|---------|----------------|------------|--------------|
+| **Dev** | `4.16.2.dev5` | `:dev`, `:dev-abc1234` | Every commit to master |
+| **Stable** | `4.16.2` | `:stable`, `:latest`, `:4.16.2` | Weekly (Tuesday 10:00 UTC) |
+
+**Dev channel** (`publish-dev.yml`):
+- Triggered on every push to master
+- Creates pre-release with `.devN` suffix
+- Includes binaries (Linux, macOS, Windows) and MCPB bundle
+- Safe for testing, may contain breaking changes
+
+**Stable channel** (`semver-release.yml`):
+- Runs automatically every Tuesday at 10:00 UTC
+- Can be triggered manually via GitHub Actions
+- Only releases if there are `feat:` or `fix:` commits since last stable
+- Updates the `stable` git tag
+
+### Normal Bug Fix Workflow
+
+For **non-critical bugs**, use the normal release process:
+
+1. Create a branch: `git checkout -b fix/your-bug-description`
+2. Commit with `fix:` prefix: `git commit -m "fix: description"`
+3. Open PR to master
+4. After merge → dev release created immediately
+5. Bug fix included in next Tuesday's stable release
+
+**When to use:** Most bugs that don't require immediate production release.
+
+### 🚨 Hotfix Workflow (Critical Bugs Only)
+
+For **critical bugs** that need immediate release without including unreleased features:
+
+**Before implementing a bug fix, ask the user:**
+> "Is this critical enough to warrant a hotfix? Hotfixes release immediately but require extra steps. Normal bugs are included in the weekly stable release."
+
+**If user confirms hotfix:**
+
+```bash
+# 1. Branch from the stable tag (NOT from master!)
+git checkout -b hotfix/critical-bug-description stable
+
+# 2. Make your fix
+# ... edit files ...
+git commit -m "fix: critical bug description"
+
+# 3. Push and create PR to master
+git push -u origin hotfix/critical-bug-description
+gh pr create --base master --title "fix: critical bug description"
+
+# 4. PR validation runs automatically
+# - Validates hotfix is based on stable tag
+# - Prevents accidental inclusion of unreleased master commits
+
+# 5. When PR is merged:
+# - Hotfix release created automatically (e.g., 4.16.3)
+# - 'stable' tag updated
+# - Master now includes the fix
+```
+
+**Important hotfix rules:**
+- **Always branch from `stable` tag**, not from master
+- The `stable` tag always points to the latest stable release
+- PR validation will fail if hotfix contains unreleased master commits
+- If validation fails, rebase onto `stable`:
+  ```bash
+  git rebase --onto stable $(git merge-base origin/master HEAD) HEAD
+  git push --force-with-lease
+  ```
+
+### Version Examples
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Feature merged (Tuesday release) | `4.16.2` | `4.17.0` |
+| Bug fix merged (Tuesday release) | `4.16.2` | `4.16.3` |
+| Dev build after any merge | `4.16.2` | `4.16.2.dev7` |
+| Hotfix for critical bug | `4.16.2` | `4.16.3` (immediate) |
+
+### Manual Release Trigger
+
+To force a stable release before Tuesday:
+1. Go to Actions → SemVer Release
+2. Click "Run workflow"
+3. Optionally check "Force release even without changes"
