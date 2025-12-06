@@ -1076,24 +1076,35 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     // Deployment instructions (for network/remote)
     if (derivedDeployment && !isLocal) {
       let deployInstr = '';
+      // For remote connections, add secret path for security
+      const secretPathNote = isRemote ? `
+          <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mt-3">
+            <p class="text-red-300 text-sm font-medium">🔒 Security Warning</p>
+            <p class="text-red-200/80 text-xs mt-1">When exposing to the internet, <strong>always use a secret path</strong> to prevent unauthorized access. Keep this path private!</p>
+          </div>` : '';
+
       if (derivedDeployment === 'uvx') {
+        const secretPathEnv = isRemote ? `export MCP_SECRET_PATH=/secret_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
+        const serverPath = isRemote ? '/secret_{{RANDOM_STRING}}' : '/mcp';
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐍 Start HTTP Server (uvx)</h4>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
-uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086/mcp</code></p>
+${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${secretPathNote}
         </div>`;
       } else if (derivedDeployment === 'docker') {
+        const secretPathEnv = isRemote ? `  -e MCP_SECRET_PATH=/secret_{{RANDOM_STRING}} \\\n` : '';
+        const serverPath = isRemote ? '/secret_{{RANDOM_STRING}}' : '/mcp';
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐳 Start Docker Container</h4>
           <pre class="code-block"><code>docker run -d --name ha-mcp \\
   -p 8086:8086 \\
   -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  ghcr.io/homeassistant-ai/ha-mcp:latest \\
+${secretPathEnv}  ghcr.io/homeassistant-ai/ha-mcp:latest \\
   fastmcp run fastmcp-http.json</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086/mcp</code></p>
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${secretPathNote}
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
@@ -1133,7 +1144,8 @@ docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.interna
           <p class="text-slate-300 mb-2">Quick tunnel (temporary):</p>
           <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
-          <p class="text-sm text-slate-400">Your MCP URL: <code>https://random-words.trycloudflare.com/mcp</code></p>
+          <p class="text-sm text-green-400 font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/secret_{{RANDOM_STRING}}</code></p>
+          <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
         </div>`;
       } else if (state.proxy === 'custom') {
         proxyInstr = `<div class="instruction-block">
@@ -1357,6 +1369,9 @@ mcpServers:
     if (isStdio || derivedDeployment === 'uvx' || derivedDeployment === 'docker') {
       hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Your Home Assistant URL (e.g., http://homeassistant.local:8123)</li>`);
       hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> → Your long-lived access token</li>`);
+    }
+    if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker')) {
+      hints.push(`<li><code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> → A random secret string (e.g., <code>abc123xyz</code>) - <strong class="text-red-400">keep this private!</strong></li>`);
     }
     if (!isStdio) {
       hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> → Your MCP server URL (from deployment step above)</li>`);
