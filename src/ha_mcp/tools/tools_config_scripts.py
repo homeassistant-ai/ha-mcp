@@ -212,6 +212,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Delete script: ha_config_remove_script("old_script")
         - Delete script: ha_config_remove_script("temporary_script")
 
+        **IMPORTANT LIMITATION:**
+        This tool can only delete scripts created via the Home Assistant UI.
+        Scripts defined in YAML configuration files (scripts.yaml or configuration.yaml)
+        cannot be deleted through the API and will return a 405 Method Not Allowed error.
+
+        To remove YAML-defined scripts, you must edit the configuration file directly.
+
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
