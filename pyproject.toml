@@ -194,6 +194,11 @@ remove_dist = false
 commit_parser = "angular"
 commit_parser_options = { major_tags = ["BREAKING", "!"], minor_tags = ["feat"], patch_tags = ["fix", "perf", "refactor"] }
 
+# Exclude commits that only touch the static site
+exclude_commit_patterns = [
+    "^.*\\(site\\).*$",  # Exclude commits with (site) scope
+]
+
 # Changelog configuration
 changelog_sections = "feature,fix,breaking,documentation,performance"
 changelog_components = "feat,fix,docs,style,refactor,perf,test,chore"
