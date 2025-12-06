@@ -113,3 +113,33 @@ class TestConfigErrorHandling:
 
         assert result.returncode == 0
         assert "SMOKE TEST PASSED" in result.stdout
+
+
+class TestToolProfileConfig:
+    """Test tool profile configuration validation."""
+
+    def test_valid_tool_profiles(self):
+        """Valid tool profile values should be accepted."""
+        from ha_mcp.config import Settings
+
+        valid_profiles = ["minimal", "standard", "extended", "full", "developer", "monitoring"]
+        for profile in valid_profiles:
+            # Should not raise
+            validated = Settings.validate_tool_profile(profile)
+            assert validated == profile.lower()
+
+    def test_tool_profile_case_insensitive(self):
+        """Tool profile should be case-insensitive."""
+        from ha_mcp.config import Settings
+
+        assert Settings.validate_tool_profile("FULL") == "full"
+        assert Settings.validate_tool_profile("Minimal") == "minimal"
+        assert Settings.validate_tool_profile("DeVeLoPeR") == "developer"
+
+    def test_invalid_tool_profile_raises(self):
+        """Invalid tool profile should raise ValueError."""
+        from ha_mcp.config import Settings
+
+        with pytest.raises(ValueError) as exc_info:
+            Settings.validate_tool_profile("nonexistent")
+        assert "Tool profile must be one of" in str(exc_info.value)
