@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - 'docs-site/**'
+      - 'site/**'
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./docs-site/site
+        working-directory: ./site
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: docs-site/site/package-lock.json
+          cache-dependency-path: site/package-lock.json
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -45,7 +45,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./docs-site/site/dist
+          path: ./site/dist
 
   deploy:
     environment:
