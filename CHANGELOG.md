@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.16.2 (2025-12-06)
+
+### Bug Fixes
+
+- Return helpful error message for YAML script delete attempts (#268)
+  ([#268](https://github.com/homeassistant-ai/ha-mcp/pull/268),
+  [`01195ae`](https://github.com/homeassistant-ai/ha-mcp/commit/01195aec5b42848b0133bdb4cc5c9e52f3786227))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`ecff2c6`](https://github.com/homeassistant-ai/ha-mcp/commit/ecff2c657c9caa0822608e170de85b656a80339e))
+
+
 ## v4.16.1 (2025-12-06)
 
 ### Bug Fixes
