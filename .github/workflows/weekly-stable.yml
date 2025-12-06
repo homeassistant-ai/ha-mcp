@@ -1,0 +1,194 @@
+name: Weekly Stable Release
+
+on:
+  schedule:
+    # Every Tuesday at 10:00 UTC
+    - cron: '0 10 * * 2'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force release even with blockers'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+
+jobs:
+  check-blockers:
+    name: Check for release blockers
+    runs-on: ubuntu-latest
+    outputs:
+      has_blockers: ${{ steps.check.outputs.has_blockers }}
+      blocker_count: ${{ steps.check.outputs.blocker_count }}
+    steps:
+      - name: Check for critical issues
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Check for issues with 'critical' or 'release-blocker' labels
+          BLOCKERS=$(gh issue list --repo ${{ github.repository }} \
+            --label "critical,release-blocker" \
+            --state open \
+            --json number,title \
+            --jq 'length')
+
+          if [ "$BLOCKERS" -gt 0 ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "has_blockers=true" >> $GITHUB_OUTPUT
+            echo "blocker_count=$BLOCKERS" >> $GITHUB_OUTPUT
+            echo "::warning::Found $BLOCKERS critical issues blocking release"
+
+            # List the blocking issues
+            gh issue list --repo ${{ github.repository }} \
+              --label "critical,release-blocker" \
+              --state open \
+              --json number,title \
+              --jq '.[] | "- #\(.number): \(.title)"'
+          else
+            echo "has_blockers=false" >> $GITHUB_OUTPUT
+            echo "blocker_count=0" >> $GITHUB_OUTPUT
+          fi
+
+  check-changes:
+    name: Check for changes since last stable
+    needs: check-blockers
+    if: needs.check-blockers.outputs.has_blockers != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+      commits_since: ${{ steps.check.outputs.commits_since }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Find the last stable release (non-prerelease, non-dev)
+          LAST_STABLE=$(gh release list --repo ${{ github.repository }} --limit 20 \
+            | grep -v "Pre-release" \
+            | grep -v "\.dev" \
+            | head -1 \
+            | awk '{print $1}')
+
+          if [ -z "$LAST_STABLE" ]; then
+            echo "No previous stable release found"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "commits_since=unknown" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Last stable release: $LAST_STABLE"
+
+          # Count commits since last stable
+          COMMITS=$(git rev-list --count "${LAST_STABLE}..HEAD" 2>/dev/null || echo "0")
+
+          if [ "$COMMITS" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "commits_since=$COMMITS" >> $GITHUB_OUTPUT
+            echo "Found $COMMITS commits since $LAST_STABLE"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "commits_since=0" >> $GITHUB_OUTPUT
+            echo "No changes since $LAST_STABLE"
+          fi
+
+  # Note: Don't run semantic-release here - it already runs on every push to master
+  # via semver-release.yml. This workflow just ensures :stable tag is updated weekly.
+
+  tag-stable:
+    name: Tag Docker :stable
+    needs: [check-blockers, check-changes]
+    if: |
+      needs.check-blockers.outputs.has_blockers != 'true' &&
+      needs.check-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest stable version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get the latest non-prerelease version
+          LATEST=$(gh release list --repo ${{ github.repository }} --limit 20 \
+            | grep -v "Pre-release" \
+            | grep -v "\.dev" \
+            | head -1 \
+            | awk '{print $1}' \
+            | sed 's/^v//')
+
+          if [ -z "$LATEST" ]; then
+            echo "No stable release found"
+            exit 1
+          fi
+
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest stable version: $LATEST"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag latest release as :stable
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository }}"
+
+          echo "Tagging ${IMAGE}:${VERSION} as :stable"
+
+          # Check if the versioned image exists
+          if ! docker manifest inspect "${IMAGE}:${VERSION}" &>/dev/null; then
+            echo "::error::Image ${IMAGE}:${VERSION} not found"
+            exit 1
+          fi
+
+          # Pull, tag, and push as stable
+          docker pull "${IMAGE}:${VERSION}" --platform linux/amd64
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:stable"
+          docker push "${IMAGE}:stable"
+
+          echo "Successfully tagged ${IMAGE}:${VERSION} as ${IMAGE}:stable"
+
+      - name: Summary
+        run: |
+          echo "## Weekly Stable Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commits since last stable tag:** ${{ needs.check-changes.outputs.commits_since }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tagged:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  skip-release:
+    name: Skip release (no changes or blockers)
+    needs: [check-blockers, check-changes]
+    if: |
+      needs.check-blockers.outputs.has_blockers == 'true' ||
+      needs.check-changes.outputs.has_changes != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report skip reason
+        run: |
+          echo "## Weekly Stable Release Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.check-blockers.outputs.has_blockers }}" == "true" ]; then
+            echo "**Reason:** ${{ needs.check-blockers.outputs.blocker_count }} critical issue(s) blocking release" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To force release despite blockers, run workflow manually with 'force' option." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Reason:** No changes since last stable release" >> $GITHUB_STEP_SUMMARY
+          fi
