@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.16.0 (2025-12-06)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`37b8e7e`](https://github.com/homeassistant-ai/ha-mcp/commit/37b8e7e2ac72eccc61e22e379560cf4584393e52))
+
+### Features
+
+- Implement dual-channel release strategy (dev + stable) (#291)
+  ([#291](https://github.com/homeassistant-ai/ha-mcp/pull/291),
+  [`c18fd92`](https://github.com/homeassistant-ai/ha-mcp/commit/c18fd92db173d63a8123c679408387258b41d05e))
+
+
 ## v4.15.1 (2025-12-05)
 
 ### Bug Fixes
