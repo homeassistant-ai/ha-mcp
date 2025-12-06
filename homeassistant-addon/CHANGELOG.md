@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.17.1 (2025-12-06)
+
+### Bug Fixes
+
+- Regenerate package-lock.json for CI compatibility
+  ([`3462d5e`](https://github.com/homeassistant-ai/ha-mcp/commit/3462d5e4b1a8c77c21d84d2cce0791ceed8704bd))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`03a430e`](https://github.com/homeassistant-ai/ha-mcp/commit/03a430ebf47e2d4c0a015419a9a2cdc4143aceae))
+
+
 ## v4.17.0 (2025-12-06)
 
 ### Chores
