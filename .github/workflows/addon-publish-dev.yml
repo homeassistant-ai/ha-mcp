@@ -1,0 +1,100 @@
+name: Home Assistant Add-on Publish (Dev)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'homeassistant-addon/**'
+      - 'homeassistant-addon-dev/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}-addon-dev
+
+# Restrict permissions by default
+permissions:
+  contents: read
+
+jobs:
+  # Skip if commit is from semantic-release
+  check-skip:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+    steps:
+      - name: Check if should skip
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [[ "$COMMIT_MSG" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || [[ "$COMMIT_MSG" =~ "chore(release)" ]]; then
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-addon-dev:
+    name: Build Dev Add-on (${{ matrix.arch }})
+    needs: check-skip
+    if: needs.check-skip.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        arch:
+          - amd64
+          - aarch64
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate dev version
+      id: version
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        DEV_VERSION="dev-${SHORT_SHA}"
+        echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
+        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+        echo "Dev add-on version: $DEV_VERSION"
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./homeassistant-addon-dev/Dockerfile
+        push: true
+        platforms: ${{ matrix.platform }}
+        tags: |
+          ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:latest
+          ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:dev
+          ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+        labels: |
+          io.hass.name=Home Assistant MCP Server (Dev)
+          io.hass.description=Development channel - AI assistant integration via MCP
+          io.hass.version=${{ steps.version.outputs.version }}
+          io.hass.type=addon
+          io.hass.arch=${{ matrix.arch }}
+        cache-from: type=gha,scope=addon-dev-${{ matrix.arch }}
+        cache-to: type=gha,mode=max,scope=addon-dev-${{ matrix.arch }}
+        build-args: |
+          BUILD_VERSION=${{ steps.version.outputs.version }}
+          BUILD_ARCH=${{ matrix.arch }}

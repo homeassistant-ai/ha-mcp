@@ -1,0 +1,24 @@
+name: "Home Assistant MCP Server (Dev)"
+description: "Development channel - AI assistant integration via MCP (unstable)"
+version: "dev"
+slug: "ha_mcp_dev"
+url: "https://github.com/homeassistant-ai/ha-mcp"
+stage: experimental
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: manual
+hassio_api: true
+hassio_role: default
+homeassistant_api: true
+host_network: true
+image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
+options:
+  backup_hint: "normal"
+schema:
+  backup_hint: list(strong|normal|weak|auto)
+  secret_path: str?
+ports:
+  9583/tcp: 9583

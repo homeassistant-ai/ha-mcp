@@ -1,0 +1,293 @@
+name: Publish Dev Channel
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/workflows/close-inactive-issues.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+# Restrict permissions by default
+permissions:
+  contents: read
+
+jobs:
+  # Skip if commit is from semantic-release (version bump commits)
+  check-skip:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+    steps:
+      - name: Check if should skip
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [[ "$COMMIT_MSG" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || [[ "$COMMIT_MSG" =~ "chore(release)" ]]; then
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping dev publish for release commit"
+          else
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  prepare:
+    needs: check-skip
+    if: needs.check-skip.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      dev_version: ${{ steps.version.outputs.dev_version }}
+      short_sha: ${{ steps.version.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate dev version
+        id: version
+        run: |
+          # Get base version from pyproject.toml
+          BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DEV_VERSION="${BASE_VERSION}.dev${{ github.run_number }}"
+
+          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
+
+  publish-docker-dev:
+    name: Publish Docker (dev channel)
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image (dev tags)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}:dev
+            ${{ env.REGISTRY }}/${{ github.repository }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}:dev-${{ needs.prepare.outputs.short_sha }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_VERSION=${{ needs.prepare.outputs.dev_version }}
+
+  build-binaries:
+    name: Build binaries
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ha-mcp-linux
+            binary_ext: ''
+          - os: windows-latest
+            artifact_name: ha-mcp-windows
+            binary_ext: '.exe'
+          - os: macos-latest
+            artifact_name: ha-mcp-macos-arm64
+            binary_ext: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          uv venv .venv
+          uv pip install -e . pyinstaller
+        shell: bash
+
+      - name: Activate venv (Unix)
+        if: runner.os != 'Windows'
+        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Activate venv (Windows)
+        if: runner.os == 'Windows'
+        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Build binary
+        run: pyinstaller packaging/binary/ha-mcp.spec
+
+      - name: Run smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/ha-mcp
+          ./dist/ha-mcp --smoke-test
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "dist\ha-mcp.exe" --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Rename binary for artifact
+        shell: bash
+        run: mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+
+  create-mcpb:
+    name: Create MCPB bundle
+    needs: [prepare, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ha-mcp-windows
+          path: mcpb-bundle
+
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ha-mcp-macos-arm64
+          path: mcpb-bundle
+
+      - name: Create MCPB bundle
+        run: |
+          VERSION="${{ needs.prepare.outputs.dev_version }}"
+
+          mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
+          mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
+
+          # Copy icons
+          cp packaging/mcpb/icon-*.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-*.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/icon.png
+
+          # Generate manifest
+          python packaging/mcpb/generate_manifest.py "$VERSION"
+
+          # Create .mcpb file
+          cd mcpb-bundle && zip -r ../ha-mcp.mcpb * && cd ..
+
+      - name: Upload mcpb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ha-mcp-mcpb
+          path: ha-mcp.mcpb
+
+  publish-prerelease:
+    name: Publish GitHub pre-release
+    needs: [prepare, build-binaries, create-mcpb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.dev_version }}"
+          TAG="v${VERSION}"
+          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
+
+          # Create release notes
+          cat > release_notes.md << EOF
+          ## Development Build
+
+          **Version:** ${VERSION}
+          **Commit:** ${SHORT_SHA}
+          **Branch:** master
+
+          This is an automated development build. Use at your own risk.
+
+          For stable releases, download from the [latest release](https://github.com/${{ github.repository }}/releases/latest).
+
+          ### Installation
+
+          **Docker (dev channel):**
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:dev
+          \`\`\`
+
+          **PyPI (dev channel):**
+          \`\`\`bash
+          pip install ha-mcp --pre
+          \`\`\`
+          EOF
+
+          # Delete old pre-release with same tag if exists
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin --delete "$TAG" 2>/dev/null || true
+
+          # Create new pre-release
+          gh release create "$TAG" \
+            --title "Dev Build $VERSION" \
+            --notes-file release_notes.md \
+            --prerelease \
+            artifacts/ha-mcp-linux/ha-mcp-linux \
+            artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+            artifacts/ha-mcp-mcpb/ha-mcp.mcpb
+
+  cleanup-old-prereleases:
+    name: Cleanup old pre-releases
+    needs: publish-prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete old dev releases (keep last 5)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get all pre-releases with .dev in the tag, sorted by date
+          gh release list --repo ${{ github.repository }} --limit 100 \
+            | grep -E "\.dev[0-9]+" \
+            | tail -n +6 \
+            | awk '{print $1}' \
+            | while read tag; do
+                echo "Deleting old dev release: $tag"
+                gh release delete "$tag" --yes --repo ${{ github.repository }}
+                git push origin --delete "$tag" 2>/dev/null || true
+              done
