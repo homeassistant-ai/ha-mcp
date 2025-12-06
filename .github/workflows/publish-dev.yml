@@ -218,9 +218,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: ha-mcp-*
           path: artifacts
 
       - name: Create pre-release
