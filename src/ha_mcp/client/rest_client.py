@@ -766,11 +766,21 @@ class HomeAssistantClient:
                 "result": response.get("result", "ok"),
                 "operation": "deleted",
             }
-        except Exception as e:
-            if "404" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Script not found: {script_id}", status_code=404
                 )
+            elif e.status_code == 405:
+                raise HomeAssistantAPIError(
+                    f"Cannot delete script '{script_id}': This script is defined in YAML configuration files "
+                    f"(e.g., scripts.yaml or configuration.yaml) and cannot be deleted via the API. "
+                    f"Only UI-created scripts can be deleted through this method. "
+                    f"To remove YAML-defined scripts, edit the configuration file directly.",
+                    status_code=405,
+                )
+            raise
+        except Exception as e:
             raise
 
 
