@@ -1,0 +1,94 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      # Only run on code changes that could affect performance
+      - 'src/**'
+      - 'tests/src/e2e/performance/**'
+      - 'tests/src/e2e/utilities/performance.py'
+      - '.github/workflows/performance-tests.yml'
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'src/**'
+      - 'tests/src/e2e/performance/**'
+      - 'tests/src/e2e/utilities/performance.py'
+      - '.github/workflows/performance-tests.yml'
+  workflow_dispatch:
+  # Run weekly to catch performance regressions
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6 AM UTC
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+
+jobs:
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run performance tests
+      id: perf_tests
+      run: |
+        echo "Running performance tests..."
+        uv run pytest tests/src/e2e/performance/ \
+          -v \
+          --tb=short \
+          -m performance \
+          --log-cli-level=INFO \
+          2>&1 | tee performance_output.txt
+
+        # Capture exit code
+        exit_code=${PIPESTATUS[0]}
+        echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+        exit $exit_code
+      env:
+        HAMCP_ENV_FILE: "tests/.env.test"
+
+    - name: Upload performance results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results
+        path: performance_output.txt
+        retention-days: 30
+
+    - name: Performance summary
+      if: always()
+      run: |
+        echo "## Performance Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.perf_tests.outputs.exit_code }}" = "0" ]; then
+          echo ":white_check_mark: **All performance tests passed**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo ":x: **Some performance tests failed**" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Timing Results" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        grep -E "(avg=|p95=|SLOW|target)" performance_output.txt | head -30 >> $GITHUB_STEP_SUMMARY || echo "No timing data found" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

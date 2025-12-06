@@ -154,6 +154,7 @@ markers = [
     "convenience: convenience tools tests (scene, weather, energy, docs)",
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
+    "performance: performance measurement and regression tests",
 ]
 asyncio_mode = "auto"
 
