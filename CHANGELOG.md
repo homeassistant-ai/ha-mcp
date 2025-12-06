@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v4.17.0 (2025-12-06)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`1f8c1c1`](https://github.com/homeassistant-ai/ha-mcp/commit/1f8c1c17d964c5e92cd96705a22f7f93b0eeacdf))
+
+### Features
+
+- Add MCP client configuration docs site (#286)
+  ([#286](https://github.com/homeassistant-ai/ha-mcp/pull/286),
+  [`73e1930`](https://github.com/homeassistant-ai/ha-mcp/commit/73e1930d29c8b3250987ba55f35d3cddf9cf96db))
+
+
 ## v4.16.2 (2025-12-06)
 
 ### Bug Fixes
