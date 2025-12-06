@@ -1,0 +1,323 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+---
+
+<Layout title="FAQ & Troubleshooting - Home Assistant MCP">
+  <!-- Navigation Bar -->
+  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+    <div class="container mx-auto px-4 max-w-4xl">
+      <div class="flex items-center justify-between h-14">
+        <a href={withBase('/')} class="flex items-center gap-2">
+          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
+          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
+          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
+        </a>
+        <div class="flex items-center gap-6">
+          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
+          <a href={withBase('/setup')} class="text-sm text-slate-300 hover:text-white transition-colors">Setup</a>
+          <a href={withBase('/faq')} class="text-sm text-blue-400 font-medium">FAQ</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <!-- Header -->
+    <header class="mb-10">
+      <h1 class="text-3xl font-bold text-white mb-2">FAQ & Troubleshooting</h1>
+      <p class="text-slate-400">Common questions and solutions for ha-mcp setup.</p>
+    </header>
+
+    <!-- General Questions -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">General Questions</h2>
+
+      <div class="space-y-6">
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant Add-on?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Do I need a Claude Pro subscription?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> Claude Desktop works with a free Claude account. The MCP integration is available to all users.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">What's the difference between ha-mcp and Home Assistant's built-in MCP?</h3>
+          <div class="overflow-x-auto mt-3">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-700">
+                  <th class="text-left py-2 text-slate-300">Feature</th>
+                  <th class="text-left py-2 text-slate-300">Built-in HA MCP</th>
+                  <th class="text-left py-2 text-slate-300">ha-mcp</th>
+                </tr>
+              </thead>
+              <tbody class="text-slate-400">
+                <tr class="border-b border-slate-800">
+                  <td class="py-2">Tools</td>
+                  <td class="py-2">~7 basic tools</td>
+                  <td class="py-2 text-green-400">80+ comprehensive tools</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2">Focus</td>
+                  <td class="py-2">Device control</td>
+                  <td class="py-2 text-green-400">Full system administration</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2">Automations</td>
+                  <td class="py-2">Limited</td>
+                  <td class="py-2 text-green-400">Create, edit, debug, trace</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2">Dashboards</td>
+                  <td class="py-2">No</td>
+                  <td class="py-2 text-green-400">Full dashboard management</td>
+                </tr>
+                <tr>
+                  <td class="py-2">Cameras</td>
+                  <td class="py-2">No</td>
+                  <td class="py-2 text-green-400">Screenshot and analysis</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="text-slate-400 text-sm mt-3">Built-in = operate devices. ha-mcp = administer your system.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Try Without Your Own HA -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Try Without Your Own Home Assistant</h2>
+      <p class="text-slate-300 mb-4">Want to test before connecting to your own Home Assistant? Use our public demo:</p>
+
+      <div class="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
+        <div class="space-y-3">
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">URL</span>
+            <code class="bg-slate-900 px-2 py-1 rounded text-green-400">https://ha-mcp-demo-server.qc-h.net</code>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">Token</span>
+            <code class="bg-slate-900 px-2 py-1 rounded text-green-400">demo</code>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">Web UI</span>
+            <span class="text-slate-300">Login with <code class="bg-slate-900 px-1 rounded">mcp</code> / <code class="bg-slate-900 px-1 rounded">mcp</code></span>
+          </div>
+        </div>
+        <p class="text-slate-500 text-sm mt-4">The demo environment resets weekly. Your changes won't persist.</p>
+      </div>
+    </section>
+
+    <!-- Troubleshooting -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Troubleshooting</h2>
+
+      <div class="space-y-6">
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">MCP server not showing in Claude Desktop</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>Restart Claude completely</strong> - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window</li>
+            <li><strong>Check config file location:</strong>
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside">
+                <li>Mac: <code class="bg-slate-800 px-1 rounded text-xs">~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+                <li>Windows: <code class="bg-slate-800 px-1 rounded text-xs">%APPDATA%\Claude\claude_desktop_config.json</code></li>
+              </ul>
+            </li>
+            <li><strong>Verify JSON syntax</strong> - No trailing commas, proper quotes</li>
+            <li><strong>Check the MCP icon</strong> - Bottom left of Claude Desktop shows connected servers</li>
+          </ol>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">"uvx not found" error</h3>
+          <div class="space-y-4">
+            <div>
+              <p class="text-slate-400 mb-2">Mac:</p>
+              <pre class="code-block"><code># If using curl installer, reload shell
+source ~/.zshrc
+# Or use full path
+~/.local/bin/uvx --version</code></pre>
+            </div>
+            <div>
+              <p class="text-slate-400 mb-2">Windows:</p>
+              <pre class="code-block"><code># Restart PowerShell/cmd after installing uv
+# Or use full path
+%USERPROFILE%\.local\bin\uvx.exe --version</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">"Connection refused" or timeout errors</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>Verify Home Assistant is running</strong> - Open HOMEASSISTANT_URL in a browser</li>
+            <li><strong>Check the URL format</strong> - Include <code class="bg-slate-800 px-1 rounded">http://</code> or <code class="bg-slate-800 px-1 rounded">https://</code> and the port (usually <code class="bg-slate-800 px-1 rounded">:8123</code>)</li>
+            <li><strong>Network access</strong> - Ensure your computer can reach Home Assistant</li>
+            <li><strong>Docker users</strong> - Use <code class="bg-slate-800 px-1 rounded">host.docker.internal</code> instead of <code class="bg-slate-800 px-1 rounded">localhost</code></li>
+          </ol>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">"Token invalid" or authentication errors</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>Generate a new token:</strong>
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside">
+                <li>Home Assistant &rarr; Click your username (bottom left)</li>
+                <li>Security tab &rarr; Long-lived access tokens</li>
+                <li>Create Token &rarr; Copy immediately (shown only once)</li>
+              </ul>
+            </li>
+            <li><strong>Check token format</strong> - Don't wrap the token in quotes in your config</li>
+            <li><strong>Token expiration</strong> - Tokens don't expire by default, but can be revoked</li>
+          </ol>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Claude says it can't see Home Assistant</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Click the <strong>MCP server icon</strong> (bottom left in Claude Desktop)</li>
+            <li>Check if "Home Assistant" is listed</li>
+            <li>If not listed, check your config file syntax</li>
+            <li>Try asking: "Can you list your available tools?"</li>
+          </ol>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Server works but responses are slow</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>First request is slow</strong> - <code class="bg-slate-800 px-1 rounded">uvx</code> downloads packages on first run</li>
+            <li><strong>Subsequent requests</strong> - Should be faster (packages cached)</li>
+            <li><strong>Alternative</strong> - Use Docker for consistent performance</li>
+          </ol>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">"Entity not found" errors</h3>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Entity IDs are case-sensitive</li>
+            <li>Use the search tool: "Search for kitchen light"</li>
+            <li>Check if the entity exists in Home Assistant Developer Tools &rarr; States</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- Configuration Options -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Configuration Options</h2>
+
+      <div class="space-y-6">
+        <div>
+          <h3 class="text-lg font-medium text-white mb-3">Environment Variables</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-700">
+                  <th class="text-left py-2 text-slate-300">Variable</th>
+                  <th class="text-left py-2 text-slate-300">Description</th>
+                  <th class="text-left py-2 text-slate-300">Required</th>
+                </tr>
+              </thead>
+              <tbody class="text-slate-400">
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code></td>
+                  <td class="py-2">Your Home Assistant URL</td>
+                  <td class="py-2 text-amber-400">Yes</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code></td>
+                  <td class="py-2">Long-lived access token (or <code class="bg-slate-800 px-1 rounded">demo</code>)</td>
+                  <td class="py-2 text-amber-400">Yes</td>
+                </tr>
+                <tr>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">BACKUP_HINT</code></td>
+                  <td class="py-2">Backup recommendation level</td>
+                  <td class="py-2 text-slate-500">No</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-medium text-white mb-3">Backup Hint Modes</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-700">
+                  <th class="text-left py-2 text-slate-300">Mode</th>
+                  <th class="text-left py-2 text-slate-300">Behavior</th>
+                </tr>
+              </thead>
+              <tbody class="text-slate-400">
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">strong</code></td>
+                  <td class="py-2">Suggests backup before first modification each day/session</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">normal</code></td>
+                  <td class="py-2">Suggests backup only before irreversible operations (recommended)</td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">weak</code></td>
+                  <td class="py-2">Rarely suggests backups</td>
+                </tr>
+                <tr>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">auto</code></td>
+                  <td class="py-2">Same as normal (future: auto-detection)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Feedback & Help -->
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold text-white mb-6">Feedback & Help</h2>
+      <p class="text-slate-300 mb-4">We'd love to hear how you're using ha-mcp!</p>
+      <ul class="space-y-3">
+        <li>
+          <a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank">GitHub Discussions</a>
+          <span class="text-slate-400"> — Share how you use it, ask questions, show off your automations</span>
+        </li>
+        <li>
+          <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank">GitHub Issues</a>
+          <span class="text-slate-400"> — Report bugs or request features</span>
+        </li>
+        <li>
+          <a href="https://community.home-assistant.io/t/brand-new-claude-ai-chatgpt-integration-ha-mcp/937847" class="text-blue-400 hover:underline" target="_blank">Home Assistant Forum</a>
+          <span class="text-slate-400"> — Community discussion thread</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- Footer -->
+    <div class="mt-12 pt-8 border-t border-slate-800">
+      <p class="text-slate-400 text-center">
+        Ready to get started? <a href={withBase('/setup')} class="text-blue-400 hover:underline">Go to Setup Wizard</a>
+      </p>
+    </div>
+  </div>
+</Layout>
+
+<style>
+  .faq-item {
+    @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-6;
+  }
+  .code-block {
+    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-green-400;
+  }
+</style>

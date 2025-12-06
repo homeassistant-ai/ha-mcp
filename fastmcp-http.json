@@ -7,7 +7,11 @@
   "deployment": {
     "transport": "streamable-http",
     "host": "0.0.0.0",
-    "port": 8086,
-    "path": "/mcp"
+    "port": "${MCP_PORT:-8086}",
+    "path": "${MCP_SECRET_PATH:-/mcp}",
+    "env": {
+      "HOMEASSISTANT_URL": "${HOMEASSISTANT_URL}",
+      "HOMEASSISTANT_TOKEN": "${HOMEASSISTANT_TOKEN}"
+    }
   }
 }
