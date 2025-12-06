@@ -1,0 +1,230 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+---
+
+<Layout title="macOS Setup Guide - Home Assistant MCP">
+  <!-- Navigation Bar -->
+  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+    <div class="container mx-auto px-4 max-w-4xl">
+      <div class="flex items-center justify-between h-14">
+        <a href={withBase('/')} class="flex items-center gap-2">
+          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
+          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
+          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
+        </a>
+        <div class="flex items-center gap-6">
+          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
+          <a href={withBase('/setup')} class="text-sm text-slate-300 hover:text-white transition-colors">Setup</a>
+          <a href={withBase('/faq')} class="text-sm text-slate-300 hover:text-white transition-colors">FAQ</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <!-- Header -->
+    <header class="mb-10">
+      <div class="flex items-center gap-2 text-sm text-slate-400 mb-4">
+        <a href={withBase('/setup')} class="hover:text-white">&larr; Back to Setup</a>
+      </div>
+      <div class="flex items-center gap-4 mb-4">
+        <span class="text-5xl">🍎</span>
+        <div>
+          <h1 class="text-3xl font-bold text-white">macOS Setup Guide</h1>
+          <p class="text-slate-400">Claude Desktop + Home Assistant in ~10 minutes</p>
+        </div>
+      </div>
+      <div class="bg-green-900/20 border border-green-700/50 rounded-xl p-4">
+        <p class="text-green-300 font-medium">Works with free Claude account - no subscription needed.</p>
+      </div>
+    </header>
+
+    <!-- Steps -->
+    <div class="space-y-8">
+      <!-- Step 1 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">1</span>
+          <h2 class="text-xl font-semibold text-white">Create a Claude Account</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Go to <a href="https://claude.ai" class="text-blue-400 hover:underline" target="_blank">claude.ai</a> and create a free account.</p>
+        </div>
+      </section>
+
+      <!-- Step 2 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">2</span>
+          <h2 class="text-xl font-semibold text-white">Run the Installer</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Open <strong>Terminal</strong> and paste:</p>
+          <pre class="code-block"><code>curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh</code></pre>
+          <p class="text-slate-400 text-sm mt-3">This installs the required tools and configures Claude Desktop for the demo environment.</p>
+
+          <details class="mt-4">
+            <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual Installation (if the installer doesn't work)</summary>
+            <div class="mt-4 pl-4 border-l-2 border-slate-700">
+              <h4 class="font-medium text-white mb-2">Install uv</h4>
+              <pre class="code-block mb-4"><code>brew install uv</code></pre>
+              <p class="text-slate-400 text-sm mb-4">Or without Homebrew: <code class="bg-slate-800 px-1 rounded">curl -LsSf https://astral.sh/uv/install.sh | sh</code></p>
+
+              <h4 class="font-medium text-white mb-2">Configure Claude Desktop</h4>
+              <ol class="text-slate-300 space-y-2 mb-4">
+                <li>1. Open Claude Desktop</li>
+                <li>2. Menu bar → <strong>Claude</strong> → <strong>Settings...</strong> → <strong>Developer</strong> → <strong>Edit Config</strong></li>
+                <li>3. Paste the following configuration:</li>
+              </ol>
+              <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
+        "HOMEASSISTANT_TOKEN": "demo"
+      }
+    }
+  }
+}`}</code></pre>
+              <p class="text-slate-400 text-sm mt-3">4. Save and restart Claude: <strong>Claude menu → Quit Claude</strong>, then reopen.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- Step 3 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">3</span>
+          <h2 class="text-xl font-semibold text-white">Install or Restart Claude Desktop</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Download and install <strong>Claude Desktop</strong> from <a href="https://claude.ai/download" class="text-blue-400 hover:underline" target="_blank">claude.ai/download</a>.</p>
+          <p class="text-slate-400">Already have it? Restart it: <strong>Claude menu → Quit Claude</strong>, then reopen.</p>
+        </div>
+      </section>
+
+      <!-- Step 4 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">4</span>
+          <h2 class="text-xl font-semibold text-white">Test It</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Open Claude Desktop and ask:</p>
+          <pre class="code-block"><code>Can you see my Home Assistant?</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Claude should respond with a list of entities from the demo environment (lights, sensors, switches, etc.).</p>
+        </div>
+      </section>
+
+      <!-- Step 5 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">5</span>
+          <h2 class="text-xl font-semibold text-white">Explore the Demo</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">The demo environment is a real Home Assistant you can experiment with:</p>
+          <div class="bg-slate-800/50 rounded-lg p-4 mb-4">
+            <p class="text-slate-300"><strong>Web UI:</strong> <a href="https://ha-mcp-demo-server.qc-h.net" class="text-blue-400 hover:underline" target="_blank">ha-mcp-demo-server.qc-h.net</a></p>
+            <p class="text-slate-300"><strong>Login:</strong> <code class="bg-slate-700 px-1 rounded">mcp</code> / <code class="bg-slate-700 px-1 rounded">mcp</code></p>
+            <p class="text-slate-400 text-sm mt-2">Note: Resets weekly - your changes won't persist</p>
+          </div>
+          <p class="text-slate-300 mb-2">Try asking Claude:</p>
+          <ul class="text-slate-400 space-y-1 list-disc list-inside">
+            <li>"Turn on the kitchen lights"</li>
+            <li>"What's the temperature in the living room?"</li>
+            <li>"Create an automation that turns off all lights at midnight"</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Step 6 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">6</span>
+          <h2 class="text-xl font-semibold text-white">Connect Your Home Assistant</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Ready to use your own Home Assistant? Edit the config file:</p>
+          <pre class="code-block"><code>open "$HOME/Library/Application Support/Claude/claude_desktop_config.json"</code></pre>
+
+          <p class="text-slate-300 mt-4 mb-4">Replace the demo values:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+      }
+    }
+  }
+}`}</code></pre>
+
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
+            <h4 class="font-medium text-amber-300 mb-2">To get your token:</h4>
+            <ol class="text-amber-200/80 space-y-1 text-sm">
+              <li>1. Open Home Assistant in your browser</li>
+              <li>2. Click your username (bottom left)</li>
+              <li>3. <strong>Security</strong> tab → <strong>Long-lived access tokens</strong></li>
+              <li>4. Create token → Copy immediately (shown only once)</li>
+            </ol>
+          </div>
+
+          <p class="text-slate-400 mt-4">Then restart Claude: <strong>Claude menu → Quit Claude</strong>, then reopen.</p>
+        </div>
+      </section>
+
+      <!-- Step 7 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">7</span>
+          <h2 class="text-xl font-semibold text-white">Share Your Feedback</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">We'd love to hear how you're using ha-mcp!</p>
+          <ul class="space-y-2">
+            <li><a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank">GitHub Discussions</a> — Share your automations, ask questions</li>
+            <li><a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank">GitHub Issues</a> — Report bugs or request features</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <!-- Footer -->
+    <div class="mt-12 pt-8 border-t border-slate-800">
+      <p class="text-slate-400 text-center">
+        Having issues? See the <a href={withBase('/faq')} class="text-blue-400 hover:underline">FAQ & Troubleshooting Guide</a>
+      </p>
+    </div>
+  </div>
+</Layout>
+
+<style>
+  .guide-step {
+    @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-6;
+  }
+  .step-header {
+    @apply flex items-center gap-3 mb-4;
+  }
+  .step-number {
+    @apply w-8 h-8 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
+  }
+  .step-content {
+    @apply pl-11;
+  }
+  .code-block {
+    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-green-400;
+  }
+</style>

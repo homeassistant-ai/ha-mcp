@@ -1,0 +1,1384 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+
+const base = import.meta.env.BASE_URL;
+
+const clients = await getCollection('clients');
+const platforms = await getCollection('platforms');
+const connections = await getCollection('connections');
+const deployment = await getCollection('deployment');
+
+// Sort by order
+const sortedClients = clients.sort((a, b) => a.data.order - b.data.order);
+const sortedPlatforms = platforms.sort((a, b) => a.data.order - b.data.order);
+const sortedConnections = connections.sort((a, b) => a.data.order - b.data.order);
+const sortedDeployment = deployment.sort((a, b) => a.data.order - b.data.order);
+
+// Helper to add base URL (ensure path keeps leading slash)
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+
+// Create serializable data for client-side JS
+const clientsData = sortedClients.map(c => ({
+  id: c.slug,
+  ...c.data,
+  logo: withBase(c.data.logo),
+}));
+const platformsData = sortedPlatforms.map(p => ({
+  id: p.slug,
+  ...p.data,
+}));
+const connectionsData = sortedConnections.map(c => ({
+  id: c.slug,
+  ...c.data,
+}));
+const deploymentData = sortedDeployment.map(d => ({
+  id: d.slug,
+  ...d.data,
+}));
+
+// Client transport capabilities for filtering
+// stdio-only: clients that need mcp-proxy for HTTP connections
+const stdioOnlyClients = ['claude-desktop', 'jetbrains', 'zed'];
+// http-only: clients that don't support stdio at all
+const httpOnlyClients = ['chatgpt', 'claude-ai'];
+// remote-only: clients that require HTTPS (can't use local HTTP)
+const remoteOnlyClients = ['chatgpt', 'claude-ai'];
+---
+
+<Layout title="Home Assistant MCP Setup Wizard">
+  <!-- Navigation Bar -->
+  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+    <div class="container mx-auto px-4 max-w-4xl">
+      <div class="flex items-center justify-between h-14">
+        <a href={withBase('/')} class="flex items-center gap-2">
+          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
+          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
+          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
+        </a>
+        <div class="flex items-center gap-6">
+          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
+          <a href="#section-client" class="text-sm text-blue-400 font-medium">Setup</a>
+          <a href={withBase('/faq')} class="text-sm text-slate-300 hover:text-white transition-colors">FAQ</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mx-auto px-4 py-8 max-w-4xl">
+    <!-- Hero Section -->
+    <header class="text-center mb-10">
+      <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
+      <p class="text-slate-400 mb-8">Configure the Home Assistant MCP Server for your AI assistant</p>
+
+      <!-- Get Started Quick Options -->
+      <div class="mb-8">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-sm mb-4">
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+          </span>
+          Get Started - Easy Setup
+        </div>
+        <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+          <a href={withBase('/guide-macos')} class="quick-start-card group">
+            <div class="flex items-center gap-4">
+              <span class="text-5xl">🍎</span>
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">macOS + Claude Desktop</h3>
+                <p class="text-slate-400">Complete guided setup</p>
+              </div>
+            </div>
+            <span class="quick-start-badge" title="10 minutes to get you started. No subscription needed.">Quick start</span>
+          </a>
+          <a href={withBase('/guide-windows')} class="quick-start-card group">
+            <div class="flex items-center gap-4">
+              <span class="text-5xl">🪟</span>
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Windows + Claude Desktop</h3>
+                <p class="text-slate-400">Complete guided setup</p>
+              </div>
+            </div>
+            <span class="quick-start-badge" title="10 minutes to get you started. No subscription needed.">Quick start</span>
+          </a>
+        </div>
+        <p class="text-slate-500 text-sm mt-6">Or choose from all options below</p>
+      </div>
+    </header>
+
+    <!-- Wizard Sections (Vertical Accumulation) -->
+    <div class="space-y-6">
+
+      <!-- Section 1: Client Selection -->
+      <section class="wizard-section" id="section-client">
+        <h2 class="section-header">
+          <span class="section-number">1</span>
+          Select Your AI Client
+        </h2>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="client-grid">
+          {sortedClients.map((client) => (
+            <button
+              data-client={client.slug}
+              data-transports={JSON.stringify(client.data.transports)}
+              class="option-card group"
+            >
+              <div class="flex items-center gap-2 mb-1">
+                <img src={withBase(client.data.logo)} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
+                <div class="min-w-0">
+                  <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.data.name}</h3>
+                  <p class="text-xs text-slate-500">{client.data.company}</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 mt-2">
+                {client.data.transports.includes('stdio') && (
+                  <span class="transport-badge bg-green-900/50 text-green-400">stdio</span>
+                )}
+                {(client.data.transports.includes('sse') || client.data.transports.includes('streamable-http')) && (
+                  <span class="transport-badge bg-blue-900/50 text-blue-400">HTTP</span>
+                )}
+                {client.data.beta && (
+                  <span class="transport-badge bg-amber-900/50 text-amber-400">BETA</span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <!-- Section 2: Connection Type -->
+      <section class="wizard-section hidden" id="section-connection">
+        <h2 class="section-header">
+          <span class="section-number">2</span>
+          Select Connection Type
+          <span class="selected-badge" id="selected-client"></span>
+        </h2>
+        <div class="grid md:grid-cols-3 gap-4" id="connection-grid">
+          {sortedConnections.map((conn) => (
+            <button
+              data-connection={conn.slug}
+              data-transport={conn.data.transport}
+              class="option-card-large connection-option"
+            >
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-2xl">
+                  {conn.data.icon === 'computer' && '💻'}
+                  {conn.data.icon === 'network' && '🌐'}
+                  {conn.data.icon === 'globe' && '🌍'}
+                </span>
+                <span class="complexity-badge" data-complexity={conn.slug === 'local' ? 'quick' : conn.slug === 'network' ? 'complex' : 'advanced'}>
+                  {conn.slug === 'local' && '⚡ Quick'}
+                  {conn.slug === 'network' && '🔧 Complex'}
+                  {conn.slug === 'remote' && '🛠️ Advanced'}
+                </span>
+              </div>
+              <h3 class="font-semibold text-white mb-1">{conn.data.name}</h3>
+              <p class="text-sm text-slate-400">{conn.data.description}</p>
+              <div class="mt-3">
+                <span class="px-2 py-1 text-xs rounded bg-slate-700 text-slate-300">
+                  {conn.data.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <!-- Architecture Diagram (shows after connection selected) -->
+      <section class="wizard-section hidden" id="section-architecture">
+        <h2 class="section-header">
+          <span class="text-xl">📐</span>
+          Architecture Overview
+        </h2>
+
+        <!-- Local Architecture -->
+        <div id="arch-local" class="hidden">
+          <div class="architecture-diagram arch-local-diagram">
+            <div class="arch-row">
+              <div class="arch-box arch-client">
+                <div class="arch-icon">💻</div>
+                <div class="arch-label">Your Computer</div>
+                <div class="arch-sublabel">AI Client + ha-mcp</div>
+              </div>
+              <div class="arch-arrow-section">
+                <div class="arch-arrow">→</div>
+                <div class="arch-transport-label">HTTP/HTTPS*</div>
+              </div>
+              <div class="arch-box arch-ha">
+                <div class="arch-icon">🏠</div>
+                <div class="arch-label">Home Assistant</div>
+                <div class="arch-sublabel">API</div>
+              </div>
+            </div>
+            <div class="arch-boundary arch-local-boundary">
+              <span>Local / Remote Network</span>
+            </div>
+          </div>
+          <p class="text-slate-400 text-sm mt-4 text-center">ha-mcp runs as a subprocess on your computer, connecting directly to Home Assistant.</p>
+          <p class="text-amber-400/70 text-xs mt-2 text-center">* HTTPS recommended for remote networks</p>
+        </div>
+
+        <!-- Network Architecture -->
+        <div id="arch-network" class="hidden">
+          <div class="architecture-diagram">
+            <div class="arch-row">
+              <div class="arch-col">
+                <div class="arch-box arch-client arch-small">
+                  <div class="arch-icon">💻</div>
+                  <div class="arch-label">Desktop</div>
+                </div>
+                <div class="arch-box arch-client arch-small mt-2">
+                  <div class="arch-icon">💻</div>
+                  <div class="arch-label">Laptop</div>
+                </div>
+              </div>
+              <div class="arch-arrow-section">
+                <div class="arch-arrow">→</div>
+                <div class="arch-transport-label">HTTP*</div>
+              </div>
+              <div class="arch-box arch-server">
+                <div class="arch-icon">🖥️</div>
+                <div class="arch-label">ha-mcp Server</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-box arch-ha">
+                <div class="arch-icon">🏠</div>
+                <div class="arch-label">Home Assistant</div>
+              </div>
+            </div>
+            <div class="arch-boundary arch-local-boundary">
+              <span>Local Network (LAN)</span>
+            </div>
+          </div>
+          <p class="text-slate-400 text-sm mt-4 text-center">ha-mcp runs as a persistent HTTP server on your network. Multiple clients can connect.</p>
+          <p class="text-amber-400/70 text-xs mt-2 text-center">* Should not be exposed externally (No HTTPS). Use Remote for internet access.</p>
+        </div>
+
+        <!-- Remote Architecture -->
+        <div id="arch-remote" class="hidden">
+          <div class="architecture-diagram arch-remote-diagram">
+            <div class="arch-row arch-row-top">
+              <div class="arch-box arch-client">
+                <div class="arch-icon">🌍</div>
+                <div class="arch-label">AI Client</div>
+                <div class="arch-sublabel">Anywhere</div>
+              </div>
+              <div class="arch-arrow-section">
+                <div class="arch-arrow">→</div>
+                <div class="arch-internet-label">HTTPS</div>
+              </div>
+              <div class="arch-network-boundary">
+                <div class="arch-network-row">
+                  <div class="arch-box arch-proxy arch-gateway-overlap">
+                    <div class="arch-icon">🔒</div>
+                    <div class="arch-label">Reverse Proxy</div>
+                    <div class="arch-sublabel">SSL Certificate</div>
+                  </div>
+                  <div class="arch-arrow-section">
+                    <div class="arch-arrow">→</div>
+                    <div class="arch-transport-label">HTTP</div>
+                  </div>
+                  <div class="arch-box arch-server arch-small">
+                    <div class="arch-icon">🖥️</div>
+                    <div class="arch-label">ha-mcp</div>
+                    <div class="arch-sublabel">Secret URL</div>
+                  </div>
+                  <div class="arch-arrow">→</div>
+                  <div class="arch-box arch-ha arch-small">
+                    <div class="arch-icon">🏠</div>
+                    <div class="arch-label">Home Assistant</div>
+                  </div>
+                </div>
+                <div class="arch-boundary-label">Your Network</div>
+              </div>
+            </div>
+          </div>
+          <p class="text-slate-400 text-sm mt-4 text-center">Access from anywhere via secure HTTPS tunnel. Required for ChatGPT, Claude.ai web clients.</p>
+        </div>
+      </section>
+
+      <!-- Section 3: Platform Selection (for local/stdio only) -->
+      <section class="wizard-section hidden" id="section-platform">
+        <h2 class="section-header">
+          <span class="section-number">3</span>
+          Select Your Platform
+          <span class="selected-badge" id="selected-connection"></span>
+        </h2>
+        <p class="text-slate-400 text-sm mb-4">Required for installing uv/uvx</p>
+        <div class="grid md:grid-cols-3 gap-4" id="platform-grid">
+          {sortedPlatforms.map((platform) => (
+            <button
+              data-platform={platform.slug}
+              class="option-card-large"
+            >
+              <div class="text-3xl mb-2">
+                {platform.data.icon === 'apple' && '🍎'}
+                {platform.data.icon === 'linux' && '🐧'}
+                {platform.data.icon === 'windows' && '🪟'}
+              </div>
+              <h3 class="font-semibold text-white">{platform.data.name}</h3>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <!-- Section 3: Server Setup (for network/remote - combined platform + deployment) -->
+      <section class="wizard-section hidden" id="section-server-setup">
+        <h2 class="section-header">
+          <span class="section-number">3</span>
+          Server Setup
+          <span class="selected-badge" id="selected-connection-server"></span>
+        </h2>
+        <p class="text-slate-400 text-sm mb-4">Choose how to run the ha-mcp HTTP server</p>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4" id="server-setup-grid">
+          <!-- uvx options with platform -->
+          <button data-server-setup="macos-uvx" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🍎</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">macOS</h3>
+            <p class="text-sm text-slate-400">uvx</p>
+          </button>
+          <button data-server-setup="linux-uvx" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🐧</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">Linux</h3>
+            <p class="text-sm text-slate-400">uvx</p>
+          </button>
+          <button data-server-setup="windows-uvx" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🪟</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">Windows</h3>
+            <p class="text-sm text-slate-400">uvx</p>
+          </button>
+          <!-- HA Add-on -->
+          <button data-server-setup="ha-addon" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🏠</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">HA OS</h3>
+            <p class="text-sm text-slate-400">Add-on</p>
+          </button>
+          <!-- Docker -->
+          <button data-server-setup="docker" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🐳</span>
+              <span class="complexity-badge" data-complexity="complex">🔧 Complex</span>
+            </div>
+            <h3 class="font-semibold text-white">Docker</h3>
+            <p class="text-sm text-slate-400">Container</p>
+          </button>
+          <!-- HA Custom Component -->
+          <button data-server-setup="ha-component" class="option-card-large opacity-50" disabled>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🏠</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">HA Component</h3>
+            <p class="text-sm text-slate-400">Coming Soon</p>
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 4: Reverse Proxy (for remote only) -->
+      <section class="wizard-section hidden" id="section-proxy">
+        <h2 class="section-header">
+          <span class="section-number">4</span>
+          HTTPS Reverse Proxy
+          <span class="selected-badge" id="selected-server-setup"></span>
+        </h2>
+        <p class="text-slate-400 text-sm mb-4">Expose your MCP server securely to the internet</p>
+        <div class="grid md:grid-cols-2 gap-4" id="proxy-grid">
+          <button data-proxy="cloudflared" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">☁️</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">Cloudflare Tunnel</h3>
+            <p class="text-sm text-slate-400">Free, no port forwarding needed</p>
+          </button>
+          <button data-proxy="custom" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🔧</span>
+              <span class="complexity-badge" data-complexity="advanced">🛠️ Advanced</span>
+            </div>
+            <h3 class="font-semibold text-white">Custom Reverse Proxy</h3>
+            <p class="text-sm text-slate-400">Caddy, Nginx, Traefik, etc.</p>
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 6: Configuration Output -->
+      <section class="wizard-section hidden" id="section-config">
+        <h2 class="section-header">
+          <span class="section-number" id="config-step-num">4</span>
+          Your Configuration
+          <span class="selected-badge" id="selected-final"></span>
+        </h2>
+
+        <!-- Summary -->
+        <div class="bg-slate-800/50 rounded-xl border border-slate-700 p-4 mb-6">
+          <div class="flex flex-wrap gap-2 text-sm" id="config-summary">
+            <!-- Filled by JS -->
+          </div>
+        </div>
+
+        <!-- Setup Instructions -->
+        <div id="setup-instructions" class="mb-6 space-y-4">
+          <!-- Filled by JS -->
+        </div>
+
+        <!-- Configuration -->
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Client Configuration</h3>
+            <button id="copy-btn" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors">
+              Copy
+            </button>
+          </div>
+          <pre id="config-output" class="text-sm bg-slate-900/50 p-4 rounded-lg overflow-x-auto border border-slate-700"><code></code></pre>
+        </div>
+
+        <!-- Environment Variables -->
+        <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-6">
+          <h3 class="font-medium text-amber-300 mb-2">Replace these values:</h3>
+          <ul class="text-sm text-amber-200/80 space-y-1" id="replace-hints">
+            <!-- Filled by JS -->
+          </ul>
+        </div>
+
+        <!-- Additional Notes -->
+        <div id="config-notes" class="text-sm text-slate-400">
+          <!-- Filled by JS -->
+        </div>
+
+        <div class="mt-6 text-center">
+          <button id="start-over" class="px-4 py-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900/20 rounded-lg transition-colors">
+            ← Start Over
+          </button>
+        </div>
+      </section>
+
+      <!-- Scroll spacer to allow last sections to scroll to top -->
+      <div class="scroll-spacer" aria-hidden="true"></div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-12 text-center text-slate-500 text-sm">
+      <p>
+        <a href="https://github.com/homeassistant-ai/ha-mcp" class="hover:text-slate-300">GitHub</a>
+        ·
+        <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="hover:text-slate-300">Issues</a>
+      </p>
+    </footer>
+  </div>
+</Layout>
+
+<style>
+  /* Smooth scroll behavior */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  .wizard-section {
+    @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-5;
+    scroll-margin-top: 5rem; /* Account for sticky nav */
+  }
+
+  /* Spacer to allow last sections to scroll to consistent position */
+  .scroll-spacer {
+    height: 60vh;
+    pointer-events: none;
+  }
+
+  /* Quick Start Cards */
+  .quick-start-card {
+    @apply relative pt-10 pb-6 px-6 rounded-2xl border-2 border-green-700/50 bg-gradient-to-br from-green-900/20 to-slate-800/50 hover:border-green-500 hover:from-green-900/30 transition-all text-left cursor-pointer block no-underline;
+  }
+  .quick-start-card:hover {
+    @apply shadow-xl shadow-green-900/30 scale-[1.02];
+  }
+  .quick-start-card:hover h3 {
+    @apply text-blue-400;
+  }
+  .quick-start-badge {
+    @apply absolute top-2 right-2 px-3 py-1 text-xs rounded-full bg-green-600 text-white font-medium cursor-help;
+  }
+
+  .section-header {
+    @apply text-lg font-semibold text-white mb-4 flex items-center gap-3 flex-wrap;
+  }
+  .section-number {
+    @apply w-7 h-7 rounded-full bg-blue-600 text-white text-sm flex items-center justify-center flex-shrink-0;
+  }
+  .selected-badge {
+    @apply px-3 py-1 rounded-full bg-green-900/50 text-green-400 text-sm font-normal cursor-pointer hover:bg-green-900/70 transition-colors;
+  }
+  .selected-badge:empty {
+    @apply hidden;
+  }
+  .option-card {
+    @apply p-3 rounded-xl border border-slate-700 bg-slate-800/50 hover:bg-slate-700/50 hover:border-blue-500 transition-all text-left cursor-pointer;
+  }
+  .option-card.selected {
+    @apply ring-2 ring-blue-500 bg-blue-900/20;
+  }
+  .option-card:disabled {
+    @apply opacity-40 cursor-not-allowed hover:border-slate-700 hover:bg-slate-800/50;
+  }
+  .option-card-large {
+    @apply p-5 rounded-xl border border-slate-700 bg-slate-800/50 hover:bg-slate-700/50 hover:border-blue-500 transition-all text-left cursor-pointer;
+  }
+  .option-card-large.selected {
+    @apply ring-2 ring-blue-500 bg-blue-900/20;
+  }
+  .option-card-large:disabled {
+    @apply opacity-40 cursor-not-allowed hover:border-slate-700 hover:bg-slate-800/50;
+  }
+  .transport-badge {
+    @apply px-1.5 py-0.5 text-xs rounded;
+  }
+  .complexity-badge {
+    @apply px-2 py-0.5 text-xs rounded-full bg-slate-700/50 text-slate-300;
+  }
+  .complexity-badge[data-complexity="quick"] {
+    @apply bg-green-900/30 text-green-400;
+  }
+  .complexity-badge[data-complexity="complex"] {
+    @apply bg-yellow-900/30 text-yellow-400;
+  }
+  .complexity-badge[data-complexity="advanced"] {
+    @apply bg-red-900/30 text-red-400;
+  }
+  .instruction-block {
+    @apply bg-slate-800/50 rounded-xl p-4 border border-slate-700;
+  }
+  .instruction-title {
+    @apply font-medium text-white mb-2 flex items-center gap-2;
+  }
+  .code-block {
+    @apply bg-slate-900/50 p-3 rounded text-sm overflow-x-auto;
+  }
+
+  /* Architecture Diagram Styles */
+  .architecture-diagram {
+    @apply relative bg-slate-900/50 rounded-xl p-6 border border-slate-700/50;
+  }
+  .arch-row {
+    @apply flex items-center justify-center gap-4 flex-wrap;
+  }
+  .arch-col {
+    @apply flex flex-col items-center;
+  }
+  .arch-box {
+    @apply bg-slate-800 rounded-xl p-4 border border-slate-600 text-center min-w-[120px];
+  }
+  .arch-box.arch-small {
+    @apply p-3 min-w-[100px];
+  }
+  .arch-client {
+    @apply border-blue-600/50 bg-blue-900/20;
+  }
+  .arch-server {
+    @apply border-purple-600/50 bg-purple-900/20;
+  }
+  .arch-ha {
+    @apply border-cyan-600/50 bg-cyan-900/20;
+  }
+  .arch-proxy {
+    @apply border-amber-600/50 bg-amber-900/20;
+  }
+  .arch-icon {
+    @apply text-2xl mb-1;
+  }
+  .arch-label {
+    @apply text-white font-medium text-sm;
+  }
+  .arch-sublabel {
+    @apply text-slate-400 text-xs mt-1;
+  }
+  .arch-arrow {
+    @apply text-2xl text-slate-500 font-bold;
+  }
+  .arch-arrow-down {
+    @apply text-xl text-slate-500 font-bold my-1;
+  }
+  .arch-arrow-section {
+    @apply flex flex-col items-center;
+  }
+  .arch-transport-label {
+    @apply text-xs text-slate-400 mt-1;
+  }
+  .arch-internet-label {
+    @apply text-xs text-amber-400 mt-1;
+  }
+  /* Remote diagram - network boundary with gateway overlap */
+  .arch-row-top {
+    @apply items-center;
+  }
+  .arch-network-boundary {
+    @apply relative border-2 border-dashed border-green-700/50 rounded-xl p-4 pl-14 ml-4;
+  }
+  .arch-network-row {
+    @apply flex items-center gap-2;
+  }
+  .arch-gateway-overlap {
+    @apply -ml-14;
+  }
+  /* Local diagram needs more padding for boundary label */
+  .arch-local-diagram {
+    @apply pb-8;
+  }
+  .arch-boundary {
+    @apply absolute inset-4 border-2 border-dashed rounded-xl pointer-events-none flex items-end justify-center pb-1;
+  }
+  .arch-local-diagram .arch-boundary {
+    @apply inset-3;
+  }
+  .arch-boundary span {
+    @apply text-xs px-2 py-0.5 rounded bg-slate-800;
+  }
+  .arch-local-boundary {
+    @apply border-green-700/50;
+  }
+  .arch-local-boundary span {
+    @apply text-green-400;
+  }
+  .arch-boundary-label {
+    @apply absolute -bottom-3 left-1/2 -translate-x-1/2 text-xs px-2 py-0.5 rounded bg-slate-900 text-green-400 whitespace-nowrap;
+  }
+
+  /* Hover Preview Styles */
+  .arch-preview {
+    @apply bg-slate-900/50 rounded-lg p-4 border border-slate-700/50;
+  }
+  .arch-preview-row {
+    @apply flex items-center justify-center gap-2 flex-wrap text-sm;
+  }
+  .arch-preview-box {
+    @apply px-3 py-2 rounded-lg text-center text-xs;
+  }
+  .arch-preview-client {
+    @apply bg-blue-900/30 border border-blue-600/30 text-blue-300;
+  }
+  .arch-preview-server {
+    @apply bg-purple-900/30 border border-purple-600/30 text-purple-300;
+  }
+  .arch-preview-ha {
+    @apply bg-cyan-900/30 border border-cyan-600/30 text-cyan-300;
+  }
+  .arch-preview-proxy {
+    @apply bg-amber-900/30 border border-amber-600/30 text-amber-300;
+  }
+  .arch-preview-arrow {
+    @apply text-slate-500 text-center;
+  }
+  .arch-preview small {
+    @apply text-slate-500 text-[10px];
+  }
+</style>
+
+<script define:vars={{ clientsData, platformsData, connectionsData, deploymentData, stdioOnlyClients, httpOnlyClients, remoteOnlyClients }}>
+  // State
+  let state = {
+    client: null,
+    connection: null,
+    platform: null,       // For local (stdio) only
+    serverSetup: null,    // For network/remote (combined platform + deployment)
+    proxy: null,
+  };
+
+  // Server setup options mapping
+  const serverSetupOptions = {
+    'macos-uvx': { platform: 'macos', deployment: 'uvx', label: 'macOS (uvx)' },
+    'linux-uvx': { platform: 'linux', deployment: 'uvx', label: 'Linux (uvx)' },
+    'windows-uvx': { platform: 'windows', deployment: 'uvx', label: 'Windows (uvx)' },
+    'ha-addon': { platform: null, deployment: 'ha-addon', label: 'HA OS Add-on' },
+    'docker': { platform: null, deployment: 'docker', label: 'Docker' },
+  };
+
+  // Helper to check if client is stdio-only (needs mcp-proxy for HTTP)
+  function isStdioOnly(clientId) {
+    return stdioOnlyClients.includes(clientId);
+  }
+
+  // Helper to check if client is HTTP-only
+  function isHttpOnly(clientId) {
+    return httpOnlyClients.includes(clientId);
+  }
+
+  // Helper to check if client requires remote (HTTPS)
+  function isRemoteOnly(clientId) {
+    return remoteOnlyClients.includes(clientId);
+  }
+
+  // Smooth scroll to a section with a slight delay for the animation
+  function scrollToSection(sectionId, delay = 100) {
+    setTimeout(() => {
+      const section = document.getElementById(sectionId);
+      if (section && !section.classList.contains('hidden')) {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, delay);
+  }
+
+  // Show/hide sections based on state
+  function updateSections(scrollTo = null) {
+    const isLocal = state.connection?.id === 'local';
+    const isNetwork = state.connection?.id === 'network';
+    const isRemote = state.connection?.id === 'remote';
+
+    const sections = {
+      connection: !!state.client,
+      architecture: !!state.connection,
+      platform: !!state.connection && isLocal,
+      serverSetup: !!state.connection && !isLocal,
+      proxy: !!state.serverSetup && isRemote,
+      config: shouldShowConfig(),
+    };
+
+    document.getElementById('section-connection').classList.toggle('hidden', !sections.connection);
+    document.getElementById('section-architecture').classList.toggle('hidden', !sections.architecture);
+    document.getElementById('section-platform').classList.toggle('hidden', !sections.platform);
+    document.getElementById('section-server-setup').classList.toggle('hidden', !sections.serverSetup);
+    document.getElementById('section-proxy').classList.toggle('hidden', !sections.proxy);
+    document.getElementById('section-config').classList.toggle('hidden', !sections.config);
+
+    // Show/hide appropriate architecture diagram
+    document.getElementById('arch-local').classList.toggle('hidden', !isLocal);
+    document.getElementById('arch-network').classList.toggle('hidden', !isNetwork);
+    document.getElementById('arch-remote').classList.toggle('hidden', !isRemote);
+
+    // Update step numbers
+    let stepNum = 4;
+    if (isLocal) {
+      stepNum = 4;
+    } else if (isNetwork) {
+      stepNum = 4;
+    } else if (isRemote) {
+      stepNum = 5;
+    }
+    document.getElementById('config-step-num').textContent = stepNum;
+
+    // Update selected badges
+    if (state.client) {
+      document.getElementById('selected-client').textContent = state.client.name;
+    }
+    if (state.connection) {
+      document.getElementById('selected-connection').textContent = state.connection.name;
+      document.getElementById('selected-connection-server').textContent = state.connection.name;
+    }
+    if (state.platform) {
+      const platformBadge = document.getElementById('selected-platform');
+      if (platformBadge) platformBadge.textContent = state.platform.name;
+    }
+    if (state.serverSetup) {
+      const setup = serverSetupOptions[state.serverSetup];
+      document.getElementById('selected-server-setup').textContent = setup?.label || state.serverSetup;
+    }
+    if (state.proxy || (state.serverSetup && !isRemote)) {
+      const finalText = state.proxy ?
+        (state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : 'Custom Proxy') :
+        serverSetupOptions[state.serverSetup]?.label;
+      document.getElementById('selected-final').textContent = finalText || '';
+    }
+
+    // Scroll to the requested section
+    if (scrollTo) {
+      scrollToSection(scrollTo);
+    }
+  }
+
+  function shouldShowConfig() {
+    if (!state.client || !state.connection) return false;
+    const isLocal = state.connection.id === 'local';
+    if (isLocal) return !!state.platform;
+    if (!state.serverSetup) return false;
+    if (state.connection.id === 'network') return true;
+    if (state.connection.id === 'remote' && state.proxy) return true;
+    return false;
+  }
+
+  // Client selection
+  document.querySelectorAll('[data-client]').forEach(card => {
+    card.addEventListener('click', () => {
+      state.client = clientsData.find(c => c.id === card.dataset.client);
+      // Reset downstream selections
+      state.connection = null;
+      state.platform = null;
+      state.serverSetup = null;
+      state.proxy = null;
+
+      // Update UI
+      document.querySelectorAll('[data-client]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+
+      // Update connection options based on client capabilities
+      const transports = JSON.parse(card.dataset.transports);
+      document.querySelectorAll('[data-connection]').forEach(conn => {
+        conn.classList.remove('selected');
+        const connTransport = conn.dataset.transport;
+        const isRemote = conn.dataset.connection === 'remote';
+        const isNetwork = conn.dataset.connection === 'network';
+        const isLocal = conn.dataset.connection === 'local';
+
+        let supported = true;
+        let reason = '';
+
+        // Check transport support (new schema uses 'sse' and 'streamable-http' instead of 'http')
+        const hasHttpSupport = transports.includes('sse') || transports.includes('streamable-http');
+        if (isLocal && !transports.includes('stdio')) {
+          supported = false;
+          reason = `${state.client.name} doesn't support stdio`;
+        } else if ((isNetwork || isRemote) && !hasHttpSupport) {
+          // stdio-only clients can use HTTP via mcp-proxy
+          if (!transports.includes('stdio')) {
+            supported = false;
+            reason = `${state.client.name} doesn't support HTTP`;
+          }
+        }
+
+        // Remote-only clients can't use local or network
+        if (isRemoteOnly(state.client.id) && !isRemote) {
+          supported = false;
+          reason = `${state.client.name} requires HTTPS`;
+        }
+
+        conn.disabled = !supported;
+        conn.title = reason;
+      });
+
+      updateSections('section-connection');
+    });
+  });
+
+  // Connection hover preview - shows the Architecture Overview section
+  document.querySelectorAll('.connection-option').forEach(card => {
+    card.addEventListener('mouseenter', () => {
+      const connType = card.dataset.connection;
+      const archSection = document.getElementById('section-architecture');
+      // Only show on hover if not already selected (i.e., section is hidden)
+      if (archSection.classList.contains('hidden')) {
+        archSection.classList.remove('hidden');
+        archSection.classList.add('hover-preview');
+      }
+      document.getElementById('arch-local').classList.toggle('hidden', connType !== 'local');
+      document.getElementById('arch-network').classList.toggle('hidden', connType !== 'network');
+      document.getElementById('arch-remote').classList.toggle('hidden', connType !== 'remote');
+    });
+    card.addEventListener('mouseleave', () => {
+      const archSection = document.getElementById('section-architecture');
+      // Only hide if it was shown by hover (not selected)
+      if (archSection.classList.contains('hover-preview')) {
+        archSection.classList.add('hidden');
+        archSection.classList.remove('hover-preview');
+      }
+    });
+  });
+
+  // Connection selection
+  document.querySelectorAll('[data-connection]').forEach(card => {
+    card.addEventListener('click', () => {
+      if (card.disabled) return;
+      state.connection = connectionsData.find(c => c.id === card.dataset.connection);
+      state.platform = null;
+      state.serverSetup = null;
+      state.proxy = null;
+
+      document.querySelectorAll('[data-connection]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+
+      // Clear selections in both platform and server-setup grids
+      document.querySelectorAll('[data-platform], [data-server-setup]').forEach(c => c.classList.remove('selected'));
+
+      // Scroll to the appropriate section
+      const nextSection = state.connection.id === 'local' ? 'section-platform' : 'section-server-setup';
+      updateSections(nextSection);
+    });
+  });
+
+  // Platform selection (for local/stdio only)
+  document.querySelectorAll('[data-platform]').forEach(card => {
+    card.addEventListener('click', () => {
+      state.platform = platformsData.find(p => p.id === card.dataset.platform);
+      state.proxy = null;
+
+      document.querySelectorAll('[data-platform]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+
+      // For local, go straight to config
+      updateSections('section-config');
+      generateConfig();
+    });
+  });
+
+  // Server setup selection (for network/remote - combined platform + deployment)
+  document.querySelectorAll('[data-server-setup]').forEach(card => {
+    card.addEventListener('click', () => {
+      state.serverSetup = card.dataset.serverSetup;
+      state.proxy = null;
+
+      document.querySelectorAll('[data-server-setup]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+
+      // Scroll to proxy (for remote) or config (for network)
+      const nextSection = state.connection?.id === 'remote' ? 'section-proxy' : 'section-config';
+      updateSections(nextSection);
+      if (state.connection?.id === 'network') {
+        generateConfig();
+      }
+    });
+  });
+
+  // Proxy selection
+  document.querySelectorAll('[data-proxy]').forEach(card => {
+    card.addEventListener('click', () => {
+      if (card.disabled) return;
+      state.proxy = card.dataset.proxy;
+
+      document.querySelectorAll('[data-proxy]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+
+      updateSections('section-config');
+      generateConfig();
+    });
+  });
+
+  // Click on selected badges to go back
+  document.getElementById('selected-client')?.addEventListener('click', () => {
+    state.connection = null;
+    state.platform = null;
+    state.serverSetup = null;
+    state.proxy = null;
+    document.querySelectorAll('[data-connection], [data-platform], [data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-connection');
+  });
+
+  document.getElementById('selected-connection')?.addEventListener('click', () => {
+    state.platform = null;
+    state.serverSetup = null;
+    state.proxy = null;
+    document.querySelectorAll('[data-platform], [data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
+    const nextSection = state.connection?.id === 'local' ? 'section-platform' : 'section-server-setup';
+    updateSections(nextSection);
+  });
+
+  document.getElementById('selected-connection-server')?.addEventListener('click', () => {
+    state.serverSetup = null;
+    state.proxy = null;
+    document.querySelectorAll('[data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-server-setup');
+  });
+
+  document.getElementById('selected-platform')?.addEventListener('click', () => {
+    // For local only - just regenerate config
+    updateSections('section-config');
+    generateConfig();
+  });
+
+  document.getElementById('selected-server-setup')?.addEventListener('click', () => {
+    state.proxy = null;
+    document.querySelectorAll('[data-proxy]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-proxy');
+  });
+
+  // Start over
+  document.getElementById('start-over').addEventListener('click', () => {
+    state = { client: null, connection: null, platform: null, serverSetup: null, proxy: null };
+    document.querySelectorAll('[data-client], [data-connection], [data-platform], [data-server-setup], [data-proxy]').forEach(c => {
+      c.classList.remove('selected');
+    });
+    updateSections('section-client');
+  });
+
+  // Generate configuration
+  function generateConfig() {
+    const summaryEl = document.getElementById('config-summary');
+    const instructionsEl = document.getElementById('setup-instructions');
+    const configEl = document.getElementById('config-output').querySelector('code');
+    const hintsEl = document.getElementById('replace-hints');
+    const notesEl = document.getElementById('config-notes');
+
+    const isLocal = state.connection?.id === 'local';
+    const isNetwork = state.connection?.id === 'network';
+    const isRemote = state.connection?.id === 'remote';
+    const needsMcpProxy = isStdioOnly(state.client?.id) && !isLocal;
+
+    // Derive platform and deployment from serverSetup for network/remote
+    const setupInfo = state.serverSetup ? serverSetupOptions[state.serverSetup] : null;
+    const derivedPlatform = isLocal ? state.platform?.id : setupInfo?.platform;
+    const derivedDeployment = isLocal ? null : setupInfo?.deployment;
+
+    // Build summary badges
+    const badges = [];
+    if (state.client) badges.push(`<span class="px-3 py-1 rounded-full bg-blue-900/50 text-blue-300">${state.client.name}</span>`);
+    if (state.connection) badges.push(`<span class="px-3 py-1 rounded-full bg-green-900/50 text-green-300">${state.connection.name}</span>`);
+    if (state.platform && isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-purple-900/50 text-purple-300">${state.platform.name}</span>`);
+    if (setupInfo && !isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-orange-900/50 text-orange-300">${setupInfo.label}</span>`);
+    if (state.proxy) badges.push(`<span class="px-3 py-1 rounded-full bg-cyan-900/50 text-cyan-300">${state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : 'Custom Proxy'}</span>`);
+    summaryEl.innerHTML = badges.join('');
+
+    // Build instructions
+    let instructions = [];
+    let config = '';
+    let hints = [];
+    let notes = '';
+
+    // Add link to full guide for Claude Desktop + Local
+    if (state.client?.id === 'claude-desktop' && isLocal) {
+      const guideUrl = state.platform?.id === 'macos' ? '/ha-mcp/guide-macos' :
+                       state.platform?.id === 'windows' ? '/ha-mcp/guide-windows' : null;
+      if (guideUrl) {
+        instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
+          <h4 class="instruction-title text-blue-300">📘 Full Step-by-Step Guide Available</h4>
+          <p class="text-slate-300 mb-3">For a complete guided walkthrough with screenshots and troubleshooting tips:</p>
+          <a href="${guideUrl}" class="inline-block px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg transition-colors">
+            View ${state.platform?.id === 'macos' ? 'macOS' : 'Windows'} Setup Guide →
+          </a>
+        </div>`);
+      }
+    }
+
+    // Platform instructions (uvx installation) - for local or uvx deployment
+    const platformId = isLocal ? state.platform?.id : derivedPlatform;
+    if (platformId && (isLocal || derivedDeployment === 'uvx' || needsMcpProxy)) {
+      let uvInstall = '';
+      if (platformId === 'macos') {
+        uvInstall = `<div class="instruction-block">
+          <h4 class="instruction-title">🍎 Install uv (macOS)</h4>
+          <pre class="code-block"><code>brew install uv</code></pre>
+          <p class="text-xs text-slate-400 mt-2">Or: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></p>
+        </div>`;
+      } else if (platformId === 'linux') {
+        uvInstall = `<div class="instruction-block">
+          <h4 class="instruction-title">🐧 Install uv (Linux)</h4>
+          <pre class="code-block"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+        </div>`;
+      } else if (platformId === 'windows') {
+        uvInstall = `<div class="instruction-block">
+          <h4 class="instruction-title">🪟 Install uv (Windows)</h4>
+          <pre class="code-block"><code>winget install astral-sh.uv</code></pre>
+        </div>`;
+      }
+      if (uvInstall) {
+        instructions.push(uvInstall);
+      }
+    }
+
+    // Deployment instructions (for network/remote)
+    if (derivedDeployment && !isLocal) {
+      let deployInstr = '';
+      if (derivedDeployment === 'uvx') {
+        deployInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🐍 Start HTTP Server (uvx)</h4>
+          <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
+export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
+uvx --from ha-mcp@latest ha-mcp-web</code></pre>
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086/mcp</code></p>
+        </div>`;
+      } else if (derivedDeployment === 'docker') {
+        deployInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🐳 Start Docker Container</h4>
+          <pre class="code-block"><code>docker run -d --name ha-mcp \\
+  -p 8086:8086 \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  ghcr.io/homeassistant-ai/ha-mcp:latest \\
+  fastmcp run fastmcp-http.json</code></pre>
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086/mcp</code></p>
+        </div>`;
+      } else if (derivedDeployment === 'ha-addon') {
+        deployInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🏠 Home Assistant Add-on</h4>
+          <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
+          <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
+            <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
+          </a>
+          <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the add-on store</p>
+          <p class="text-slate-300">3. Start and check the logs for your MCP URL</p>
+        </div>`;
+      }
+      instructions.push(deployInstr);
+    }
+
+    // Proxy instructions (for remote)
+    if (isRemote && state.proxy) {
+      let proxyInstr = '';
+      if (state.proxy === 'cloudflared') {
+        proxyInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">☁️ Cloudflare Tunnel</h4>
+          <p class="text-slate-300 mb-3">Install cloudflared:</p>
+          <pre class="code-block"><code># macOS
+brew install cloudflared
+
+# Windows
+winget install Cloudflare.cloudflared
+
+# Linux (Debian/Ubuntu)
+curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install cloudflared
+
+# Or use Docker
+docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.internal:8086</code></pre>
+          <p class="text-xs text-slate-500 mt-2 mb-3">More options: <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" class="text-blue-400 hover:underline">Cloudflare Downloads</a></p>
+          <p class="text-slate-300 mb-2">Quick tunnel (temporary):</p>
+          <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
+          <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
+          <p class="text-sm text-slate-400">Your MCP URL: <code>https://random-words.trycloudflare.com/mcp</code></p>
+        </div>`;
+      } else if (state.proxy === 'custom') {
+        proxyInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🔧 Custom Reverse Proxy</h4>
+          <p class="text-slate-300 mb-2">Configure your reverse proxy (Caddy, Nginx, Traefik) to:</p>
+          <ul class="text-sm text-slate-400 list-disc list-inside space-y-1">
+            <li>Proxy requests to <code>http://localhost:8086</code></li>
+            <li>Enable HTTPS with a valid certificate</li>
+            <li>Pass through WebSocket connections</li>
+          </ul>
+        </div>`;
+      }
+      instructions.push(proxyInstr);
+    }
+
+    // mcp-proxy instructions for stdio-only clients
+    if (needsMcpProxy) {
+      const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
+        <h4 class="instruction-title text-yellow-300">⚠️ mcp-proxy Required</h4>
+        <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
+        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
+      </div>`;
+      instructions.push(mcpProxyInstr);
+    }
+
+    instructionsEl.innerHTML = instructions.join('');
+
+    // Generate client config
+    const isStdio = isLocal;
+    const mcpUrl = isRemote ? '{{MCP_SERVER_URL}}' : '{{MCP_SERVER_URL}}';
+
+    if (state.client.configFormat === 'json') {
+      // VS Code uses different structure: mcp.servers instead of mcpServers
+      const isVSCode = state.client.id === 'vscode';
+      const isZed = state.client.id === 'zed';
+
+      if (isStdio) {
+        if (isVSCode) {
+          config = JSON.stringify({
+            mcp: {
+              servers: {
+                "home-assistant": {
+                  command: "uvx",
+                  args: ["ha-mcp@latest"],
+                  env: {
+                    HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
+                    HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
+                  }
+                }
+              }
+            }
+          }, null, 2);
+        } else if (isZed) {
+          // Zed uses context_servers key
+          config = JSON.stringify({
+            context_servers: {
+              "home-assistant": {
+                command: "uvx",
+                args: ["ha-mcp@latest"],
+                env: {
+                  HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
+                  HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
+                }
+              }
+            }
+          }, null, 2);
+        } else {
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                command: "uvx",
+                args: ["ha-mcp@latest"],
+                env: {
+                  HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
+                  HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
+                }
+              }
+            }
+          }, null, 2);
+        }
+      } else if (needsMcpProxy) {
+        // stdio-only client using mcp-proxy
+        if (isZed) {
+          config = JSON.stringify({
+            context_servers: {
+              "home-assistant": {
+                url: mcpUrl
+              }
+            }
+          }, null, 2);
+        } else {
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                command: "uvx",
+                args: ["mcp-proxy", "--transport", "streamablehttp", mcpUrl]
+              }
+            }
+          }, null, 2);
+        }
+      } else {
+        // HTTP-native client
+        if (state.client.id === 'cline') {
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                url: mcpUrl,
+                type: "streamableHttp"
+              }
+            }
+          }, null, 2);
+        } else if (state.client.id === 'windsurf') {
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                serverUrl: mcpUrl
+              }
+            }
+          }, null, 2);
+        } else if (state.client.id === 'gemini-cli') {
+          // Gemini CLI uses 'httpUrl' for HTTP streaming
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                httpUrl: mcpUrl
+              }
+            }
+          }, null, 2);
+        } else if (isVSCode) {
+          config = JSON.stringify({
+            mcp: {
+              servers: {
+                "home-assistant": {
+                  url: mcpUrl,
+                  transport: "http"
+                }
+              }
+            }
+          }, null, 2);
+        } else if (isZed) {
+          // Zed uses context_servers with url key
+          config = JSON.stringify({
+            context_servers: {
+              "home-assistant": {
+                url: mcpUrl
+              }
+            }
+          }, null, 2);
+        } else {
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": {
+                url: mcpUrl,
+                transport: "http"
+              }
+            }
+          }, null, 2);
+        }
+      }
+    } else if (state.client.configFormat === 'yaml') {
+      // Continue uses YAML format
+      if (isStdio) {
+        config = `name: Home Assistant MCP
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: home-assistant
+    command: uvx
+    args:
+      - "ha-mcp@latest"
+    env:
+      HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}"
+      HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"`;
+      } else {
+        config = `mcpServers:
+  - name: home-assistant
+    type: streamable-http
+    url: "${mcpUrl}"`;
+      }
+    } else if (state.client.configFormat === 'cli') {
+      // Claude Code
+      if (isStdio) {
+        config = `claude mcp add home-assistant \\
+  --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  -- uvx ha-mcp@latest`;
+      } else {
+        config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
+      }
+    } else if (state.client.configFormat === 'ui') {
+      if (state.client.id === 'chatgpt') {
+        config = `1. Open ChatGPT → Settings → Connectors
+2. Click Advanced settings → Enable Developer mode
+3. Create custom connector:
+   - Name: Home Assistant
+   - URL: {{MCP_SERVER_URL}}
+   - Auth: None`;
+      } else if (state.client.id === 'claude-ai') {
+        config = `1. Open Claude.ai → Settings → Connectors
+2. Click Add Connector
+3. Enter:
+   - Name: Home Assistant
+   - URL: {{MCP_SERVER_URL}}`;
+      } else if (state.client.id === 'raycast') {
+        config = `1. Open Raycast → Settings → Extensions → AI
+2. Scroll to Model Context Protocol
+3. Click Add Server:
+   - Name: Home Assistant
+   - Command: uvx
+   - Arguments: ha-mcp@latest
+4. Add environment variables:
+   - HOMEASSISTANT_URL: {{HOMEASSISTANT_URL}}
+   - HOMEASSISTANT_TOKEN: {{HOMEASSISTANT_TOKEN}}`;
+      }
+    }
+
+    configEl.textContent = config;
+
+    // Hints
+    hints = [];
+    if (isStdio || derivedDeployment === 'uvx' || derivedDeployment === 'docker') {
+      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Your Home Assistant URL (e.g., http://homeassistant.local:8123)</li>`);
+      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> → Your long-lived access token</li>`);
+    }
+    if (!isStdio) {
+      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> → Your MCP server URL (from deployment step above)</li>`);
+    }
+    hintsEl.innerHTML = hints.join('');
+
+    // Notes
+    if (state.client.configLocation) {
+      notes += `<p class="text-slate-400 mb-2"><strong>Config location:</strong> <code class="bg-slate-800 px-1 rounded">${state.client.configLocation}</code></p>`;
+    }
+    if (state.client.httpNote && !isStdio) {
+      notes += `<p class="text-amber-400">${state.client.httpNote}</p>`;
+    }
+    notesEl.innerHTML = notes;
+  }
+
+  // Copy button
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    const config = document.getElementById('config-output').querySelector('code').textContent;
+    navigator.clipboard.writeText(config);
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 2000);
+  });
+</script>

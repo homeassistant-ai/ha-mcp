@@ -1,0 +1,174 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+---
+
+<Layout title="Contributing - Home Assistant MCP">
+  <!-- Navigation Bar -->
+  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+    <div class="container mx-auto px-4 max-w-4xl">
+      <div class="flex items-center justify-between h-14">
+        <a href={withBase('/')} class="flex items-center gap-2">
+          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
+          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
+          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
+        </a>
+        <div class="flex items-center gap-6">
+          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
+          <a href={withBase('/setup')} class="text-sm text-slate-300 hover:text-white transition-colors">Setup</a>
+          <a href={withBase('/faq')} class="text-sm text-slate-300 hover:text-white transition-colors">FAQ</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <!-- Header -->
+    <header class="mb-10">
+      <h1 class="text-3xl font-bold text-white mb-2">Contributing to ha-mcp</h1>
+      <p class="text-slate-400">Thank you for your interest in contributing!</p>
+    </header>
+
+    <!-- Quick Start -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Quick Start</h2>
+      <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+        <ol class="space-y-4 text-slate-300">
+          <li class="flex gap-3">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">1</span>
+            <span><strong>Fork and clone</strong> the repository</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">2</span>
+            <div>
+              <strong>Install:</strong>
+              <pre class="code-block mt-2"><code>uv sync --group dev</code></pre>
+            </div>
+          </li>
+          <li class="flex gap-3">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">3</span>
+            <div>
+              <strong>Test:</strong> (requires Docker)
+              <pre class="code-block mt-2"><code>uv run pytest tests/src/e2e/ -v</code></pre>
+            </div>
+          </li>
+          <li class="flex gap-3">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">4</span>
+            <span><strong>Make changes</strong> and commit</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">5</span>
+            <span><strong>Open Pull Request</strong></span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Development -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Development</h2>
+
+      <div class="space-y-6">
+        <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+          <h3 class="text-lg font-medium text-white mb-3">Setup</h3>
+          <pre class="code-block"><code>cp .env.example .env    # Edit with your HA details
+uv sync --group dev</code></pre>
+        </div>
+
+        <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+          <h3 class="text-lg font-medium text-white mb-3">Code Quality</h3>
+          <pre class="code-block"><code>uv run ruff format src/ tests/     # Format
+uv run ruff check --fix src/ tests/ # Lint
+uv run mypy src/                   # Type check</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Testing -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Testing</h2>
+      <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+        <p class="text-slate-300 mb-4">Tests use Docker containers via testcontainers. No manual setup needed.</p>
+        <pre class="code-block"><code># Run all E2E tests
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/ -v
+
+# Run specific test file
+uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v</code></pre>
+        <p class="text-slate-400 text-sm mt-4">
+          See <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/tests/README.md" class="text-blue-400 hover:underline" target="_blank">tests/README.md</a> for detailed testing documentation.
+        </p>
+      </div>
+    </section>
+
+    <!-- Guidelines -->
+    <section class="mb-12">
+      <h2 class="text-2xl font-semibold text-white mb-6">Guidelines</h2>
+      <div class="grid gap-4">
+        <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
+            <span class="text-xl">&#128187;</span> Code
+          </h3>
+          <p class="text-slate-400 text-sm">Follow existing patterns, add type hints, test new features</p>
+        </div>
+        <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
+            <span class="text-xl">&#128196;</span> Docs
+          </h3>
+          <p class="text-slate-400 text-sm">Update README.md for user-facing changes</p>
+        </div>
+        <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-5">
+          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
+            <span class="text-xl">&#128230;</span> PRs
+          </h3>
+          <p class="text-slate-400 text-sm">Use the template, ensure tests pass</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Need Help -->
+    <section class="mb-8">
+      <h2 class="text-2xl font-semibold text-white mb-6">Need Help?</h2>
+      <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+        <ul class="space-y-3 text-slate-300">
+          <li>
+            <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank">Open an Issue</a>
+            <span class="text-slate-400"> — Ask questions or report problems</span>
+          </li>
+          <li>
+            <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/CLAUDE.md" class="text-blue-400 hover:underline" target="_blank">CLAUDE.md</a>
+            <span class="text-slate-400"> — AI assistant development guide</span>
+          </li>
+          <li>
+            <a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank">GitHub Discussions</a>
+            <span class="text-slate-400"> — Community discussions</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Thank You -->
+    <section class="text-center bg-gradient-to-br from-green-900/30 to-slate-800/30 rounded-2xl p-10 border border-green-800/30">
+      <h2 class="text-2xl font-bold text-white mb-4">Thank you for contributing!</h2>
+      <p class="text-slate-400">Every contribution helps make ha-mcp better for the community.</p>
+    </section>
+
+    <!-- Footer -->
+    <div class="mt-12 pt-8 border-t border-slate-800">
+      <p class="text-slate-400 text-center">
+        <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank">View on GitHub</a>
+      </p>
+    </div>
+  </div>
+</Layout>
+
+<style>
+  .code-block {
+    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-green-400;
+  }
+</style>
