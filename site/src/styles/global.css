@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #03a9f4;
+  --accent-dark: #0288d1;
+}
+
+html {
+  font-family: system-ui, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+code {
+  font-family: 'Fira Code', 'Menlo', 'Monaco', 'Lucida Console', monospace;
+}
+
+pre {
+  padding: 1.5rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+
+.code-block {
+  background: #1e293b;
+  border: 1px solid #334155;
+}
