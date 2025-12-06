@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.16.1 (2025-12-06)
+
+### Bug Fixes
+
+- Filter artifact download to avoid Docker buildx cache
+  ([`1757e53`](https://github.com/homeassistant-ai/ha-mcp/commit/1757e537a308d43c02df2cbd12f37a6919d40c1a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`de6e5dd`](https://github.com/homeassistant-ai/ha-mcp/commit/de6e5ddbd00a128a7040230eeda403fdd5fe668b))
+
+
 ## v4.16.0 (2025-12-06)
 
 ### Chores
