@@ -1268,7 +1268,7 @@ cloudflared tunnel run ha-mcp</code></pre>
               }
             }
           }, null, 2);
-        } else if (state.client.id === 'windsurf') {
+        } else if (state.client.id === 'windsurf' || state.client.id === 'antigravity') {
           config = JSON.stringify({
             mcpServers: {
               "home-assistant": {
@@ -1390,21 +1390,6 @@ mcpServers:
    - Server URL: {{MCP_SERVER_URL}}
    - Auth: (configure if needed)
 5. Click Save`;
-      } else if (state.client.id === 'antigravity') {
-        config = `1. Click the ... menu in the Agent pane
-2. Select MCP Servers → Manage MCP Servers
-3. Click View raw config
-4. Add to mcp_config.json:
-
-{
-  "mcpServers": {
-    "home-assistant": {
-      "serverUrl": "{{MCP_SERVER_URL}}"
-    }
-  }
-}
-
-5. Save and restart Agent session`;
       }
     }
 
