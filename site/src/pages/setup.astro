@@ -1337,14 +1337,26 @@ mcpServers:
     url: "${mcpUrl}"`;
       }
     } else if (state.client.configFormat === 'cli') {
-      // Claude Code
-      if (isStdio) {
-        config = `claude mcp add home-assistant \\
+      if (state.client.id === 'gemini-cli') {
+        // Gemini CLI
+        if (isStdio) {
+          config = `gemini mcp add \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  home-assistant uvx ha-mcp@latest`;
+        } else {
+          config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
+        }
+      } else {
+        // Claude Code
+        if (isStdio) {
+          config = `claude mcp add home-assistant \\
   --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
   -- uvx ha-mcp@latest`;
-      } else {
-        config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
+        } else {
+          config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
+        }
       }
     } else if (state.client.configFormat === 'ui') {
       if (state.client.id === 'chatgpt') {
@@ -1378,6 +1390,21 @@ mcpServers:
    - Server URL: {{MCP_SERVER_URL}}
    - Auth: (configure if needed)
 5. Click Save`;
+      } else if (state.client.id === 'antigravity') {
+        config = `1. Click the ... menu in the Agent pane
+2. Select MCP Servers → Manage MCP Servers
+3. Click View raw config
+4. Add to mcp_config.json:
+
+{
+  "mcpServers": {
+    "home-assistant": {
+      "serverUrl": "{{MCP_SERVER_URL}}"
+    }
+  }
+}
+
+5. Save and restart Agent session`;
       }
     }
 

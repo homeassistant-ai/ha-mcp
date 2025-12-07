@@ -3,7 +3,7 @@ name: Gemini CLI
 company: Google
 logo: /logos/google.svg
 transports: ['stdio', 'sse', 'streamable-http']
-configFormat: json
+configFormat: cli
 configLocation: ~/.gemini/settings.json
 accuracy: 4
 order: 8
@@ -78,21 +78,43 @@ Gemini CLI uses `httpUrl` key for HTTP streaming transport:
 }
 ```
 
+## Quick Setup with CLI Commands
+
+### stdio (Local)
+
+```bash
+gemini mcp add \
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \
+  home-assistant uvx ha-mcp@latest
+```
+
+### HTTP (Network/Remote)
+
+```bash
+gemini mcp add --transport http home-assistant {{MCP_SERVER_URL}}
+```
+
+### SSE (Network/Remote)
+
+```bash
+gemini mcp add --transport sse home-assistant {{MCP_SERVER_URL}}
+```
+
 ## Management Commands
 
 ```bash
-# Check MCP status
-gemini
+# Check MCP status in chat
 /mcp
 
 # Reload config after manual edits
 /mcp refresh
 
-# Add server via CLI
-gemini mcp add <config>
-
-# List servers
+# List configured servers
 gemini mcp list
+
+# Remove a server
+gemini mcp remove home-assistant
 ```
 
 ## Notes
