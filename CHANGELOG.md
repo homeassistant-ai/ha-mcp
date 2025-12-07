@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.18.2 (2025-12-07)
+
+### Bug Fixes
+
+- **site**: Add stdio support for Antigravity (same config as Windsurf)
+  ([`0fbf5e8`](https://github.com/homeassistant-ai/ha-mcp/commit/0fbf5e8e81bec93f3f003311082b57e92724606e))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`d7af739`](https://github.com/homeassistant-ai/ha-mcp/commit/d7af739fa9012cfeca70ac04c29842123730e161))
+
+
 ## v4.18.1 (2025-12-07)
 
 ### Bug Fixes
