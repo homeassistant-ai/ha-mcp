@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.18.1 (2025-12-07)
+
+### Bug Fixes
+
+- **site**: Add Open WebUI client configuration instructions
+  ([`75f7f8b`](https://github.com/homeassistant-ai/ha-mcp/commit/75f7f8b914731e45d8d1102a88f6e05f8aefb3e1))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`f6d3a48`](https://github.com/homeassistant-ai/ha-mcp/commit/f6d3a486ddb77eb43a221ac3d914bdf5ade95fd8))
+
+
 ## v4.18.0 (2025-12-06)
 
 ### Chores
