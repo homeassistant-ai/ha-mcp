@@ -1,16 +1,64 @@
 name: SemVer Release
 
+# Weekly stable releases + manual trigger + hotfix branches
+# Normal commits to master only create dev releases (via publish-dev.yml)
 on:
-  push:
-    branches: [ main, master ]
+  schedule:
+    # Every Tuesday at 10:00 UTC
+    - cron: '0 10 * * 2'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force release even without changes'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   PYTHON_VERSION: "3.13"
 
 jobs:
+  # Check for changes since last release (skip if no changes)
+  check-changes:
+    name: Check for releasable changes
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for feat/fix commits since last tag
+        id: check
+        run: |
+          # Get latest non-dev tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*dev*' 2>/dev/null || echo "")
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No previous release found, proceeding"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Latest stable tag: $LATEST_TAG"
+
+          # Check for feat/fix commits since last tag
+          CHANGES=$(git log $LATEST_TAG..HEAD --oneline --grep="^feat" --grep="^fix" --grep="^perf" | head -5)
+
+          if [ -n "$CHANGES" ] || [ "${{ inputs.force }}" = "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Changes found:"
+            echo "$CHANGES"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No releasable changes since $LATEST_TAG"
+          fi
+
   # Semantic versioning and release creation
   semantic-release:
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
     name: Semantic Release
     runs-on: ubuntu-latest
     permissions:
@@ -44,3 +92,20 @@ jobs:
         git add homeassistant-addon/CHANGELOG.md
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
         git push
+
+    - name: Update stable git tag
+      if: steps.semantic.outputs.released == 'true'
+      run: |
+        # Move the 'stable' tag to point to the new release
+        VERSION="${{ steps.semantic.outputs.version }}"
+        echo "Updating 'stable' tag to point to v$VERSION"
+
+        # Delete existing stable tag (local and remote)
+        git tag -d stable 2>/dev/null || true
+        git push origin :refs/tags/stable 2>/dev/null || true
+
+        # Create new stable tag pointing to the release commit
+        git tag stable "v$VERSION"
+        git push origin stable
+
+        echo "✓ 'stable' tag now points to v$VERSION"
