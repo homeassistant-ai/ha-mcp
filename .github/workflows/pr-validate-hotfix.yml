@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master, main]
 
+# Restrict permissions
+permissions:
+  contents: read
+
 jobs:
   validate-hotfix:
     name: Validate Hotfix Origin
