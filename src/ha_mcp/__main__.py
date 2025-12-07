@@ -1,11 +1,14 @@
 """Home Assistant MCP Server."""
 
-import asyncio
-import logging
-import os
-import signal
-import sys
-from typing import Any
+import truststore
+truststore.inject_into_ssl()
+
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import signal  # noqa: E402
+import sys  # noqa: E402
+from typing import Any  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

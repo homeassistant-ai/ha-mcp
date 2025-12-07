@@ -59,6 +59,30 @@ docker rm ha-mcp
 docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 ```
 
+## Custom SSL Certificates
+
+If your Home Assistant is behind a reverse proxy with self-signed certificates, you need to provide a CA bundle that includes both your custom CA and the standard root CAs.
+
+### Create Combined CA Bundle
+
+```bash
+# Get the default CA bundle and append your custom CA
+cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt
+```
+
+### Run with Custom CA
+
+```bash
+docker run -d --name ha-mcp \
+  -p 8086:8086 \
+  -e HOMEASSISTANT_URL=https://homeassistant.example.com \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  -e SSL_CERT_FILE=/certs/ca-bundle.crt \
+  -v /path/to/combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  fastmcp run fastmcp-http.json
+```
+
 ## Requirements
 
 - Docker or Docker Desktop installed
