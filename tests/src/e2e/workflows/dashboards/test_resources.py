@@ -247,16 +247,21 @@ class TestDashboardResourceValidation:
     """Test validation and error handling for dashboard resources."""
 
     async def test_invalid_resource_type(self, mcp_client):
-        """Test that invalid resource type is rejected."""
+        """Test that invalid resource type is rejected at schema level."""
         logger.info("Starting invalid resource type test")
+        import pytest
+        from fastmcp.exceptions import ToolError
 
-        result = await mcp_client.call_tool(
-            "ha_config_set_dashboard_resource",
-            {"url": "/local/test.js", "resource_type": "invalid"},
-        )
-        data = parse_mcp_result(result)
-        assert data["success"] is False
-        assert "invalid" in data.get("error", "").lower()
+        # FastMCP validates Literal types at schema level, raising ToolError
+        with pytest.raises(ToolError) as exc_info:
+            await mcp_client.call_tool(
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test.js", "resource_type": "invalid"},
+            )
+
+        # Verify the error message mentions the valid options
+        error_msg = str(exc_info.value).lower()
+        assert "module" in error_msg or "js" in error_msg or "css" in error_msg
 
         logger.info("Invalid resource type test completed successfully")
 
