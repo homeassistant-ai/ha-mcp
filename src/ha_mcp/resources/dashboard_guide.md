@@ -514,10 +514,55 @@ card_config = {
 | Custom card not loading | Check resource type is "module", verify URL |
 | Card too large for inline | Use HACS or filesystem instead |
 
+---
+
+## Part 7: Advanced Workflow - Visual Iteration
+
+For iterative dashboard design with visual feedback, add a browser automation MCP server:
+
+### Recommended MCP Servers
+
+- **Playwright MCP** (`@anthropic/mcp-playwright`) - Take screenshots, interact with pages
+- **Puppeteer MCP** - Similar browser automation capabilities
+- **Browser DevTools MCP** - Inspect elements, debug layouts
+
+### Visual Iteration Workflow
+
+```
+1. Create/update dashboard with ha_update_dashboard_view()
+2. Navigate browser to dashboard URL (e.g., http://homeassistant.local:8123/lovelace/my-dashboard)
+3. Take screenshot to see current layout
+4. Analyze screenshot for issues (spacing, alignment, colors)
+5. Adjust configuration and repeat
+```
+
+### Example with Playwright MCP
+
+```python
+# After updating dashboard
+ha_update_dashboard_view(dashboard_id="...", view_index=0, config={...})
+
+# Use Playwright MCP to capture result
+browser_navigate("http://homeassistant.local:8123/lovelace/my-dashboard")
+browser_screenshot()  # Returns image for visual analysis
+
+# Analyze and iterate based on what you see
+```
+
+### Benefits
+
+- See actual rendered output, not just JSON config
+- Catch visual issues (card overlap, responsive breakpoints)
+- Verify custom card styling
+- Test on different viewport sizes
+
+---
+
 ## Related Tools
 
 - `ha_get_dashboard_guide` - This guide
-- `ha_create_dashboard_resource` - Host inline JS/CSS
+- `ha_config_set_inline_dashboard_resource` - Host inline JS/CSS
+- `ha_config_set_dashboard_resource` - Register external resources
 - `ha_update_dashboard_view` - Update dashboard views
 - `ha_hacs_search` - Find HACS cards
 - `ha_hacs_download` - Install HACS cards

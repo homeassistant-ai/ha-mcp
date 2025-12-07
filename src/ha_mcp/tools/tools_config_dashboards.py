@@ -687,6 +687,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         - Part 4: CSS styling (themes, card-mod patterns)
         - Part 5: HACS integration (finding/installing community cards)
         - Part 6: Complete examples and workflows
+        - Part 7: Visual iteration with Playwright/browser MCP for screenshots
 
         Use this guide before designing dashboards to understand
         all available options, from built-in cards to custom resources.
