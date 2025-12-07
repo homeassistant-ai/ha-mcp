@@ -1141,11 +1141,22 @@ sudo apt update && sudo apt install cloudflared
 # Or use Docker
 docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.internal:8086</code></pre>
           <p class="text-xs text-slate-500 mt-2 mb-3">More options: <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" class="text-blue-400 hover:underline">Cloudflare Downloads</a></p>
-          <p class="text-slate-300 mb-2">Quick tunnel (temporary):</p>
+          <p class="text-slate-300 mb-2">Quick tunnel (temporary URL - changes on restart):</p>
           <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
           <p class="text-sm text-green-400 font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/secret_{{RANDOM_STRING}}</code></p>
           <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
+          <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
+            <p class="text-blue-300 text-sm font-medium">💡 Want a permanent URL?</p>
+            <p class="text-blue-200/80 text-xs mt-1">Create a free <a href="https://dash.cloudflare.com/sign-up" target="_blank" class="text-blue-400 hover:underline">Cloudflare account</a> and set up a <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" target="_blank" class="text-blue-400 hover:underline">Named Tunnel</a> for a stable URL that persists across restarts.</p>
+            <pre class="code-block mt-2 text-xs"><code># One-time setup (requires Cloudflare account)
+cloudflared tunnel login
+cloudflared tunnel create ha-mcp
+cloudflared tunnel route dns ha-mcp mcp.yourdomain.com
+
+# Run with permanent URL
+cloudflared tunnel run ha-mcp</code></pre>
+          </div>
         </div>`;
       } else if (state.proxy === 'custom') {
         proxyInstr = `<div class="instruction-block">
