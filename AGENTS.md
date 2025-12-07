@@ -1,659 +1,233 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working with this repository.
 
-## 🚨 Git Branch Policy
+## Project Overview
 
-**CRITICAL: Never commit directly to master branch!**
+**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 80+ tools for entity control, automations, device management, and more.
 
-- **Always create a feature branch** before making any changes
-- Use naming convention: `feature/description` or `fix/description`
-- Example: `git checkout -b feature/add-new-tool`
-- Do not commit directly to `master` (policy enforced by review, not tooling)
-- All changes must go through Pull Requests
+- **Repo**: `homeassistant-ai/ha-mcp`
+- **Package**: `ha-mcp` on PyPI
+- **Python**: 3.13 only
 
+## External Documentation
+
+When implementing features or debugging, consult these resources:
+
+| Resource | URL | Use For |
+|----------|-----|---------|
+| **Home Assistant REST API** | https://developers.home-assistant.io/docs/api/rest | Entity states, services, config |
+| **Home Assistant WebSocket API** | https://developers.home-assistant.io/docs/api/websocket | Real-time events, subscriptions |
+| **HA Core Source** | `gh api /search/code -f q="... repo:home-assistant/core"` | Undocumented APIs (don't clone) |
+| **HA Add-on Development** | https://developers.home-assistant.io/docs/add-ons | Add-on packaging, config.yaml |
+| **FastMCP Documentation** | https://gofastmcp.com/getting-started/welcome | MCP server framework |
+| **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
+
+## Issue & PR Management
+
+### Issue Labels
+| Label | Meaning |
+|-------|---------|
+| `ready-to-implement` | Clear path, no decisions needed |
+| `needs-choice` | Multiple approaches, needs stakeholder input |
+| `needs-info` | Awaiting clarification from reporter |
+| `priority: high/medium/low` | Relative priority |
+| `triaged` | Analysis complete |
+
+### Issue Triage Workflow
+1. List untriaged issues: `gh issue list --label "" --json number,title`
+2. **Triage in parallel**: Launch a separate triage subagent for each issue simultaneously
+3. Each subagent:
+   - `gh issue view <N> --json title,body,labels,comments`
+   - Explore affected codebase areas
+   - Assess implementation approaches
+   - Update labels: `gh issue edit <N> --add-label "ready-to-implement"` or `"needs-choice"`
+   - Comment with analysis: `gh issue comment <N> --body "## Issue Triage Analysis..."`
+
+### PR Review Comments
+- **Bot comments** (Copilot, Codex): Treat as suggestions to assess, not commands
+- **Human comments**: Address with higher priority
+- Resolve threads with explanation: `gh api graphql -f query='mutation...'`
+
+## Git & PR Policies
+
+**Never commit directly to master.** Always create feature/fix branches:
 ```bash
-# Correct workflow
-git checkout -b feature/your-feature
-# make changes
-git add . && git commit -m "your changes"
+git checkout -b feature/description
+git add . && git commit -m "feat: description"
 # ASK USER before pushing or creating PRs
-# git push -u origin feature/your-feature
-# Create PR on GitHub
 ```
 
-## 🚨 Push and PR Policy
+**Never push or create PRs without user permission.**
 
-**CRITICAL: Always ask user permission before pushing or creating Pull Requests!**
+### PR Workflow
+1. Update tests if needed
+2. Commit and push
+3. Wait ~3 min for CI: `sleep 180`
+4. Check status: `gh pr checks <PR>`
+5. Fix failures: `gh run view <run-id> --log-failed`
+6. Repeat until green
 
-- **Never push to remote** without explicit user consent
-- **Never create PRs** without user approval
-- User must explicitly request push/PR operations
-- Commit locally first, then ask user for next steps
-
-## 🔄 PR Default Workflow
-
-**Standard workflow when user requests PR submission:**
-
-1. **Update tests** - Check if tests need updates for your changes
-2. **Commit and push** - Commit all changes and push to feature branch
-3. **Wait 3 minutes** - GitHub Actions tests take ~2-3 minutes to run
-4. **Check PR status** - Run `gh pr checks <PR-number>` to verify all checks pass
-5. **Fix failures** - If tests fail, fix issues and repeat from step 2
-6. **Report to user** - Inform user of test results
-
+### Hotfix Process (Critical Bugs Only)
+Branch from `stable` tag, not master:
 ```bash
-# Example workflow
-git add -A && git commit -m "feat: description" && git push
-sleep 180  # Wait 3 minutes
-gh pr checks 8  # Check status
+git checkout -b hotfix/description stable
+gh pr create --base master
 ```
 
-**Test failure handling:**
-- Check logs: `gh run view <run-id> --log-failed`
-- Fix code and push again
-- GitHub Actions run on PRs targeting `master` and on pushes to the `main`/`master` branches
+## CI/CD Workflows
 
-## 📝 Updating This File (AGENTS.md)
-
-**When to update AGENTS.md:**
-
-1. **After discovering workflow improvements** - Document patterns that work well
-2. **When solving non-obvious problems** - Add to relevant sections for future reference
-3. **Before completing a PR** - Ask user: "Should we add anything to AGENTS.md?"
-4. **Automatic updates** - If improvement is obviously beneficial, update proactively
-
-**What to document:**
-- API discovery techniques that worked
-- Test patterns that solved problems
-- Configuration gotchas and solutions
-- Tool design patterns learned
-- Build/deployment lessons
-
-**Rule of thumb:** If you struggled with something, document it so next time is easier!
-
-# Home Assistant MCP Server
-
-A production-ready Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart home systems through REST API and WebSocket connections. The project provides fuzzy search, real-time monitoring, and AI-optimized device control with comprehensive test coverage.
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `pr.yml` | PR opened | Lint, type check |
+| `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
+| `publish-dev.yml` | Push to master | Dev release `.devN` |
+| `semver-release.yml` | Weekly Tue 10:00 UTC | Stable release |
+| `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
+| `build-binary.yml` | Release | Linux/macOS/Windows binaries |
+| `addon-publish.yml` | Release | HA add-on update |
 
 ## Development Commands
 
-### Environment Setup
+### Setup
 ```bash
-# Install dependencies (UV required)
-uv sync
-
-# Install with development dependencies  
-uv sync --group dev
-
-# Run the main MCP server (20+ tools)
-uv run ha-mcp
-
-# Or run directly via module
-uv run python -m ha_mcp
+uv sync --group dev        # Install with dev dependencies
+uv run ha-mcp              # Run MCP server (80+ tools)
+cp .env.example .env       # Configure HA connection
 ```
 
-### Configuration
-Copy `.env.example` to `.env` and configure your Home Assistant connection:
+### Testing
+E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
+
 ```bash
-cp .env.example .env
-# Edit .env with your Home Assistant URL and token
+# Run E2E tests (requires Docker daemon)
+uv run pytest tests/src/e2e/ -v --tb=short
+
+# Run specific test
+uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v
+
+# Interactive test environment
+uv run hamcp-test-env                    # Interactive mode
+uv run hamcp-test-env --no-interactive   # For automation
 ```
 
-### Quick Start Scripts
+Test token centralized in `tests/test_constants.py`.
+
+### Code Quality
 ```bash
-# Windows
-./run_mcp_server.bat
-
-# Linux/macOS
-./run_mcp_server.sh
-```
-
-### Testing Commands
-
-#### End-to-End (E2E) Tests
-
-**IMPORTANT: Test paths corrected in v1.0.3+**
-- E2E tests are in `tests/src/e2e/` NOT `tests/e2e/`
-- Test runner is at `tests/src/e2e/run_tests.py`
-- These tests require the Docker CLI; if Docker isn't available locally, rely on the GitHub Actions workflow that runs on pull requests targeting `main`
-
-```bash
-# Prerequisites: Tests use testcontainers - Docker daemon must be running
-# No manual container setup needed - tests auto-create fresh HA instances
-
-# Run all E2E tests (uses testcontainers)
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/src/e2e/run_tests.py
-
-# Run fast tests only (excludes @pytest.mark.slow tests)
-HAMCP_ENV_FILE=tests/.env.test uv run python tests/src/e2e/run_tests.py fast
-
-# Run using pytest directly (recommended for development)
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/ -v --tb=short
-
-# Run single test
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py::TestAutomationLifecycle::test_basic_automation_lifecycle -v
-
-# Run specific test category
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/automation/ -v
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/scripts/ -v
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/error_handling/ -v
-```
-
-#### Interactive Test Environment (hamcp-test-env)
-
-**Quick, isolated Home Assistant environment for development, testing, and API exploration.**
-
-**Features:**
-- 🐳 Auto-managed Docker container with testcontainers
-- 🚀 Ready in ~30 seconds
-- 🔑 Pre-configured auth token for immediate API access
-- 📋 Copy-paste environment variables for testing
-- 🌐 Web UI access for manual inspection
-- 🔄 Can run tests multiple times without restart
-- 🧹 Automatic cleanup on exit
-
-**Usage Patterns:**
-
-```bash
-# Pattern 1: Non-interactive mode for API testing (recommended for automation)
-# The Bash tool automatically backgrounds commands that exceed timeout
-uv run hamcp-test-env --no-interactive 2>&1
-# Command will auto-background after 30s, wait for it to be ready
-sleep 30
-# Container is now running, copy-paste the export lines from output
-export HOMEASSISTANT_URL=http://localhost:PORT
-export HOMEASSISTANT_TOKEN=eyJhbG...
-# Do your testing
-curl -H "Authorization: Bearer $HOMEASSISTANT_TOKEN" $HOMEASSISTANT_URL/api/config | jq
-# Stop by killing the background shell when done
-
-# Pattern 2: Interactive mode for running E2E tests
-uv run hamcp-test-env
-# Wait for status banner showing URL and token
-# Choose option 1 to run tests
-# Choose option 3 to show status again
-# Choose option 2 to stop and exit
-
-# Pattern 3: Quick one-liner API validation
-# Start environment, wait, test, and you're done
-uv run hamcp-test-env --no-interactive 2>&1  # Will auto-background
-sleep 30
-curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." http://localhost:PORT/api/
-```
-
-**Startup Banner provides:**
-- Web UI URL with username/password (mcp/mcp)
-- Copy-pasteable environment variable exports
-- Full API token for curl/scripts
-- API health status
-
-**Use Cases:**
-- Test API endpoints manually before writing tests
-- Validate tool implementations against real HA instance
-- Debug WebSocket connections
-- Explore Home Assistant API behavior
-- Quick smoke tests during development
-
-**Important:**
-- Docker daemon must be running
-- Port is randomly assigned (shown in startup banner)
-- Container auto-cleans up on exit (Ctrl+C or option 2)
-- Use `--no-interactive` for non-interactive/automated usage
-- Interactive mode requires stdin for menu navigation
-- **Test token is centralized in `tests/test_constants.py`** - all test code imports from this single location to avoid duplication and typos
-
-### Code Quality Commands
-```bash
-# Format code
-uv run black src/ tests/
-uv run isort src/ tests/
-
-# Lint code
-uv run ruff check src/ tests/
-uv run ruff check --fix src/ tests/
-
-# Type checking
+uv run ruff check src/ tests/ --fix
 uv run mypy src/
 ```
 
-### Docker Commands
-
-#### Production Docker Image (ghcr.io/homeassistant-ai/ha-mcp)
-
-**Built automatically** via GitHub Actions on every release.
-
-**Default mode: stdio** (for MCP clients like Claude Desktop)
+### Docker
 ```bash
-# Pull the latest image
-docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
+# Stdio mode (Claude Desktop)
+docker run --rm -i -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... ghcr.io/homeassistant-ai/ha-mcp:latest
 
-# Run in stdio mode (default)
-docker run --rm -i \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_token \
-  ghcr.io/homeassistant-ai/ha-mcp:latest
-
-# Use in mcp.json for Claude Desktop:
-{
-  "mcpServers": {
-    "home-assistant": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i",
-               "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
-               "-e", "HOMEASSISTANT_TOKEN=your_token",
-               "ghcr.io/homeassistant-ai/ha-mcp:latest"]
-    }
-  }
-}
+# HTTP mode (web clients)
+docker run -d -p 8086:8086 -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... ghcr.io/homeassistant-ai/ha-mcp:latest fastmcp run fastmcp-http.json
 ```
 
-**HTTP mode** (for Claude Code, remote clients)
+## Architecture
+
+```
+src/ha_mcp/
+├── server.py          # Main server with FastMCP
+├── __main__.py        # Entrypoint (CLI handlers)
+├── config.py          # Pydantic settings management
+├── errors.py          # 38 structured error codes
+├── client/
+│   ├── rest_client.py       # HTTP REST API client
+│   ├── websocket_client.py  # Real-time state monitoring
+│   └── websocket_listener.py
+├── tools/             # 28 modules, 80+ tools
+│   ├── registry.py          # Lazy auto-discovery
+│   ├── smart_search.py      # Fuzzy entity search
+│   ├── device_control.py    # WebSocket-verified control
+│   ├── tools_*.py           # Domain-specific tools
+│   └── util_helpers.py      # Shared utilities
+├── utils/
+│   ├── fuzzy_search.py      # textdistance-based matching
+│   ├── domain_handlers.py   # HA domain logic
+│   └── operation_manager.py # Async operation tracking
+└── resources/
+    ├── card_types.json
+    └── dashboard_guide.md
+```
+
+### Key Patterns
+
+**Tools Registry**: Auto-discovers `tools_*.py` modules with `register_*_tools()` functions. No changes needed when adding new modules.
+
+**Lazy Initialization**: Server, client, and tools created on-demand for fast startup.
+
+**Service Layer**: Business logic in `smart_search.py`, `device_control.py` separate from tool modules.
+
+**WebSocket Verification**: Device operations verified via real-time state changes.
+
+## Home Assistant Add-on
+
+**Required files:**
+- `repository.yaml` (root) - For HA add-on store recognition
+- `homeassistant-addon/config.yaml` - Must match `pyproject.toml` version
+
+**Docs**: https://developers.home-assistant.io/docs/add-ons
+
+## API Research
+
+Finding undocumented HA APIs (don't clone the huge repo):
 ```bash
-# Run in streamable-http mode
-docker run -d --name ha-mcp \
-  -p 8086:8086 \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_token \
-  ghcr.io/homeassistant-ai/ha-mcp:latest \
-  fastmcp run fastmcp-http.json
-
-# Check logs
-docker logs ha-mcp -f
-
-# Stop and remove
-docker stop ha-mcp && docker rm ha-mcp
+gh api /search/code -X GET -f q="helper list websocket repo:home-assistant/core" -f per_page=5 --jq '.items[] | {name, path, url: .html_url}'
 ```
 
-**Key features:**
-- **ENTRYPOINT**: `uv run --no-project` (runs commands with system packages)
-- **Default CMD**: `fastmcp run fastmcp.json` (stdio mode)
-- **HTTP mode**: Override with `fastmcp run fastmcp-http.json`
+**Insight**: Collection-based components (helpers, scripts, automations) follow consistent patterns.
 
-#### Local Docker Build
+## Test Patterns
 
-```bash
-# Build locally from source
-docker build -t ha-mcp:local .
-
-# Run in stdio mode
-docker run --rm -i \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_token \
-  ha-mcp:local
-
-# Run in HTTP mode
-docker run -d --name ha-mcp-local \
-  -p 8086:8086 \
-  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
-  -e HOMEASSISTANT_TOKEN=your_token \
-  ha-mcp:local \
-  fastmcp run fastmcp-http.json
-```
-
-#### Docker Test Environment (for E2E tests)
-
-```bash
-# Launch the interactive Home Assistant test environment manager
-uv run hamcp-test-env
-
-# Non-interactive mode (auto-start, run tests, then shut down)
-uv run hamcp-test-env --no-interactive
-```
-
-- The manager provisions a Home Assistant container with the baseline config from
-  `tests/initial_test_state/` and prints the URL/port once the instance is ready.
-- `tests/test_constants.py` centralizes the long-lived access token and credentials
-  used by both the manager and the test suite.
-- While the container is running, execute tests in another terminal, e.g.
-  `uv run pytest tests/src/e2e/ -v --tb=short`.
-- The manager supports repeated test runs without restarting the container and
-  handles cleanup when you exit.
-
-### Test Environment State
-
-- Baseline Home Assistant configuration files live in `tests/initial_test_state/`.
-- To refresh the baseline or rotate credentials, follow the step-by-step guide in
-  `tests/README.md` ("Updating Test Environment" section).
-- The helper script copies the baseline into a temporary directory for each run, so
-  editing files in `tests/initial_test_state/` keeps all developers in sync.
-
-### Home Assistant Add-on Repository Requirements
-
-**Critical File**: `repository.yaml` at project root
-
-This file is **required** for Home Assistant to recognize the repository as an add-on repository. Without it, the add-on will not appear in the add-on store.
-
-**Structure**:
-```yaml
-name: Home Assistant MCP Server
-url: 'https://github.com/homeassistant-ai/ha-mcp'
-maintainer: Julien <github@qc-h.net>
-```
-
-**Required files for add-on**:
-- `repository.yaml` - Repository metadata (root level)
-- `homeassistant-addon/config.yaml` - Add-on configuration
-- `homeassistant-addon/Dockerfile` - Container build instructions
-- `homeassistant-addon/start.py` - Startup script
-- `homeassistant-addon/README.md` - Add-on documentation
-- `homeassistant-addon/DOCS.md` - Detailed documentation
-
-**Version sync**: The version in `homeassistant-addon/config.yaml` must match `pyproject.toml` version.
-
-**Documentation**: Official Home Assistant add-on docs at https://developers.home-assistant.io/docs/add-ons/
-
-## Architecture Overview
-
-### Core Components Architecture
-The codebase follows a modular architecture with clear separation of concerns:
-
-```
-Home Assistant MCP Server - Current Structure
-├── Core Server (/src/ha_mcp/)
-│   ├── server.py              # Main server implementation with FastMCP
-│   ├── __main__.py            # FastMCP entrypoint (dual CLI/FastMCP support)
-│   └── config.py              # Configuration management with Pydantic
-├── Client Layer (/src/ha_mcp/client/)
-│   ├── rest_client.py         # HTTP REST API client
-│   ├── websocket_client.py    # WebSocket client for real-time monitoring
-│   └── websocket_listener.py  # Background WebSocket listener service
-├── Tools Layer (/src/ha_mcp/tools/)
-│   ├── registry.py                   # Orchestrator for tool registration (76 lines)
-│   ├── util_helpers.py               # Shared utility functions
-│   ├── tools_search.py               # 4 search/discovery tools
-│   ├── tools_service.py              # 4 service call/operation tools
-│   ├── tools_config_helpers.py       # 3 helper config management tools
-│   ├── tools_config_scripts.py       # 3 script config management tools
-│   ├── tools_config_automations.py   # 3 automation config management tools
-│   ├── tools_utility.py              # 3 utility tools (logbook, templates, docs)
-│   ├── backup.py                     # Backup service and tools
-│   ├── device_control.py             # Smart device control service with WebSocket verification
-│   ├── smart_search.py               # Fuzzy entity search service
-│   └── enhanced.py                   # Enhanced tool implementations
-├── Resources Layer (/src/ha_mcp/resources/)
-│   └── manager.py             # MCP resource management
-├── Prompts Layer (/src/ha_mcp/prompts/)
-│   ├── manager.py             # MCP prompt templates
-│   └── enhanced.py            # Enhanced prompts
-└── Utils Layer (/src/ha_mcp/utils/)
-    ├── fuzzy_search.py        # Fuzzy matching engine with textdistance
-    ├── domain_handlers.py     # Home Assistant domain-specific logic
-    ├── operation_manager.py   # Async operation management
-    └── usage_logger.py        # Tool usage logging
-```
-
-### Key Design Patterns
-
-#### Tools Registry Pattern
-- **Orchestrator Architecture**: `tools/registry.py` (76 lines) acts as orchestrator, importing registration functions from specialized modules
-- **Modular Organization**: Tools split into focused modules (`tools_search.py`, `tools_service.py`, `tools_config_*.py`, `tools_utility.py`)
-- **Shared Utilities**: Common functions extracted to `util_helpers.py` (parse_json_param, add_timezone_metadata, etc.)
-- **Service Layer Separation**: Business logic in service classes (device_control.py, smart_search.py) separate from tool modules
-- **Decorator-Based**: Uses `@log_tool_usage` for automatic logging and metrics
-- **Type Safety**: All tools use Pydantic models for parameter validation
-
-#### Async Operation Management
-- **WebSocket Verification**: Device operations verified via WebSocket state changes
-- **Operation Tracking**: In-memory tracking with timeouts for async operations
-- **Bulk Operations**: Parallel execution of multiple device commands
-
-### Home Assistant Integration Points
-
-#### REST API Integration
-- **Client Architecture**: `HomeAssistantClient` handles HTTP requests with retries
-- **OpenAPI Auto-Generation**: FastMCP automatically generates tools from HA OpenAPI spec
-- **Domain Handlers**: Special logic for lights, climate, covers, media players, etc.
-
-#### WebSocket Integration
-- **Real-time Monitoring**: `WebSocketClient` for state change verification
-- **Event Streaming**: Listen for state changes to confirm operations completed
-- **Connection Management**: Auto-reconnect with exponential backoff
-
-#### Smart Search Engine
-- **Fuzzy Matching**: Uses `textdistance[extras]` for high-performance similarity scoring
-- **Multi-language**: Supports French/English entity naming conventions
-- **Area-Based Search**: Groups entities by Home Assistant areas/rooms
-- **AI Optimization**: Provides system overviews optimized for AI understanding
-
-### Testing Strategy
-- **Environment Isolation**: Docker-based test Home Assistant instance
-- **Comprehensive Coverage**: Tests all 20+ tools with real Home Assistant API calls
-- **Snapshot Management**: Clean baseline and token-configured snapshots for testing
-- **Integration Testing**: Full end-to-end testing with WebSocket operations
-
-### Error Handling Patterns
-- **Graceful Degradation**: Operations continue even if WebSocket verification fails
-- **Timeout Management**: Configurable timeouts for operations and connections
-- **Sanitized Responses**: Error messages sanitized to prevent token leakage
-- **Retry Logic**: Exponential backoff for network operations
-
-### Performance Optimizations
-- **Connection Pooling**: HTTP client reuses connections
-- **Parallel Operations**: Bulk device control supports parallel execution
-- **Fuzzy Search Caching**: Search results cached for improved performance
-- **WebSocket Persistence**: Single WebSocket connection reused across operations
-
-## 🔍 Home Assistant API Research
-
-**Finding undocumented Home Assistant APIs:**
-
-When implementing new features that require Home Assistant API endpoints not in the official docs:
-
-1. **Use GitHub code search** with `gh` CLI (don't clone the massive home-assistant/core repo):
-   ```bash
-   # Example: Finding helper list endpoint
-   gh api /search/code \
-     -X GET \
-     -f q="helper list websocket repo:home-assistant/core" \
-     -f per_page=5 \
-     --jq '.items[] | {name: .name, path: .path, url: .html_url}'
-   ```
-
-2. **Search patterns that work well:**
-   - WebSocket endpoints: `"{entity_type}/list" "websocket" repo:home-assistant/core`
-   - REST endpoints: `"api_routes" "{domain}" repo:home-assistant/core`
-   - Component internals: `"class {ComponentName}" repo:home-assistant/core`
-
-3. **Example discoveries:**
-   - Found `{helper_type}/list` websocket endpoint in `collection.py`
-   - Pattern: `DictStorageCollectionWebsocket` provides `list` endpoint for collection types
-   - Applies to: input_boolean, input_number, input_select, input_text, input_datetime, input_button
-
-**Key insight:** Home Assistant's collection-based components (helpers, scripts, automations) follow consistent patterns. If one has a feature, others likely do too.
-
-## 🧪 Test Development Patterns
-
-**Common test pitfalls and solutions:**
-
-### FastMCP Parameter Validation vs Tool Validation
-
-**Problem:** Tests that validate "missing required parameter" will fail with FastMCP.
-
-**Why:** FastMCP validates required parameters at schema level BEFORE tool code runs.
-
-**Solution:** Don't test for missing required parameters - FastMCP handles this automatically.
-
+**FastMCP validates required params at schema level.** Don't test for missing required params:
 ```python
-# ❌ BAD - This will fail with FastMCP validation error
-async def test_error_handling():
-    result = await mcp.call_tool_failure(
-        "ha_config_get_script",
-        {},  # Missing required script_id
-        expected_error="script_id is required"
-    )
+# BAD: Fails at schema validation
+await mcp.call_tool("ha_config_get_script", {})
 
-# ✅ GOOD - Test tool's internal validation
-async def test_error_handling():
-    result = await mcp.call_tool_failure(
-        "ha_config_get_script",
-        {"script_id": "nonexistent"},  # Valid params, invalid data
-        expected_error="not found"
-    )
+# GOOD: Test with valid params but invalid data
+await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 ```
 
-### Test Data Factory Pattern
+**HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
 
-**Use `test_data_factory` fixture** for creating test configs:
+## Release Process
 
-```python
-# Automation config factory
-config = test_data_factory.automation_config(
-    "Morning Routine",
-    trigger=[{"platform": "time", "at": "07:00:00"}],
-    action=[{"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}]
-)
-```
+Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
 
-**Important:** Home Assistant API uses **singular** field names:
-- `trigger` NOT `triggers`
-- `action` NOT `actions`
-- TestDataFactory now returns singular fields (fixed in v1.0.3)
+| Prefix | Bump |
+|--------|------|
+| `fix:`, `perf:`, `refactor:` | Patch |
+| `feat:` | Minor |
+| `feat!:` or `BREAKING CHANGE:` | Major |
+| `chore:`, `docs:`, `test:` | No release |
 
-### Parameter Structure Updates After API Refactoring
+| Channel | When Updated |
+|---------|--------------|
+| Dev (`.devN`) | Every master commit |
+| Stable | Weekly (Tuesday 10:00 UTC) |
 
-When refactoring action-based APIs to split functions:
+Manual release: Actions > SemVer Release > Run workflow.
 
-**Before (action-based):**
-```python
-await mcp.call_tool("ha_manage_helper", {
-    "action": "create",
-    "helper_type": "input_boolean",
-    "name": "test_bool"
-})
-```
+## Custom Agents
 
-**After (split functions):**
-```python
-await mcp.call_tool("ha_config_set_helper", {
-    "helper_type": "input_boolean",
-    "name": "test_bool"
-    # No 'action' parameter - implicit in function name
-})
-```
+Located in `.claude/agents/`:
 
-**Test updates needed:**
-1. Remove `action` parameter from calls
-2. Update tool names
-3. For delete operations: only keep domain-specific params (no `name=""` cruft)
-4. Use automated transformation where possible (sed scripts, bulk find/replace)
+| Agent | Purpose |
+|-------|---------|
+| `triage` | Triage issues, assess complexity, update labels |
+| `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
+| `pr-checker` | Review PR comments, resolve threads, monitor CI |
 
-## 📦 Release Process and Versioning
+## Documentation Updates
 
-### Semantic Versioning
+Update this file when:
+- Discovering workflow improvements
+- Solving non-obvious problems
+- API/test patterns learned
 
-This project uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
-
-**Commit message format controls version bumps:**
-
-```bash
-# Patch bump (1.0.0 → 1.0.1)
-fix: bug description
-perf: performance improvement
-refactor: code refactoring
-
-# Minor bump (1.0.0 → 1.1.0)
-feat: new feature description
-
-# Major bump (1.0.0 → 2.0.0)
-feat!: breaking change description
-# OR
-feat: description
-
-BREAKING CHANGE: explanation of breaking change
-
-# No version bump (no release created)
-chore: maintenance task
-docs: documentation update
-test: test changes
-```
-
-**Configuration location:** `pyproject.toml` under `[tool.semantic_release]`
-
-### Release Channels
-
-| Channel | Version Format | Docker Tag | When Updated |
-|---------|----------------|------------|--------------|
-| **Dev** | `4.16.2.dev5` | `:dev`, `:dev-abc1234` | Every commit to master |
-| **Stable** | `4.16.2` | `:stable`, `:latest`, `:4.16.2` | Weekly (Tuesday 10:00 UTC) |
-
-**Dev channel** (`publish-dev.yml`):
-- Triggered on every push to master
-- Creates pre-release with `.devN` suffix
-- Includes binaries (Linux, macOS, Windows) and MCPB bundle
-- Safe for testing, may contain breaking changes
-
-**Stable channel** (`semver-release.yml`):
-- Runs automatically every Tuesday at 10:00 UTC
-- Can be triggered manually via GitHub Actions
-- Only releases if there are `feat:` or `fix:` commits since last stable
-- Updates the `stable` git tag
-
-### Normal Bug Fix Workflow
-
-For **non-critical bugs**, use the normal release process:
-
-1. Create a branch: `git checkout -b fix/your-bug-description`
-2. Commit with `fix:` prefix: `git commit -m "fix: description"`
-3. Open PR to master
-4. After merge → dev release created immediately
-5. Bug fix included in next Tuesday's stable release
-
-**When to use:** Most bugs that don't require immediate production release.
-
-### 🚨 Hotfix Workflow (Critical Bugs Only)
-
-For **critical bugs** that need immediate release without including unreleased features:
-
-**Before implementing a bug fix, ask the user:**
-> "Is this critical enough to warrant a hotfix? Hotfixes release immediately but require extra steps. Normal bugs are included in the weekly stable release."
-
-**If user confirms hotfix:**
-
-```bash
-# 1. Branch from the stable tag (NOT from master!)
-git checkout -b hotfix/critical-bug-description stable
-
-# 2. Make your fix
-# ... edit files ...
-git commit -m "fix: critical bug description"
-
-# 3. Push and create PR to master
-git push -u origin hotfix/critical-bug-description
-gh pr create --base master --title "fix: critical bug description"
-
-# 4. PR validation runs automatically
-# - Validates hotfix is based on stable tag
-# - Prevents accidental inclusion of unreleased master commits
-
-# 5. When PR is merged:
-# - Hotfix release created automatically (e.g., 4.16.3)
-# - 'stable' tag updated
-# - Master now includes the fix
-```
-
-**Important hotfix rules:**
-- **Always branch from `stable` tag**, not from master
-- The `stable` tag always points to the latest stable release
-- PR validation will fail if hotfix contains unreleased master commits
-- If validation fails, rebase onto `stable`:
-  ```bash
-  git rebase --onto stable $(git merge-base origin/master HEAD) HEAD
-  git push --force-with-lease
-  ```
-
-### Version Examples
-
-| Scenario | Before | After |
-|----------|--------|-------|
-| Feature merged (Tuesday release) | `4.16.2` | `4.17.0` |
-| Bug fix merged (Tuesday release) | `4.16.2` | `4.16.3` |
-| Dev build after any merge | `4.16.2` | `4.16.2.dev7` |
-| Hotfix for critical bug | `4.16.2` | `4.16.3` (immediate) |
-
-### Manual Release Trigger
-
-To force a stable release before Tuesday:
-1. Go to Actions → SemVer Release
-2. Click "Run workflow"
-3. Optionally check "Force release even without changes"
+**Rule:** If you struggled with something, document it for next time.
