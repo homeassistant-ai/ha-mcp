@@ -1,20 +1,59 @@
-"""Unit tests for dashboard resource hosting tools."""
+"""Unit tests for dashboard resource tools."""
 
 import base64
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 
 from ha_mcp.tools.tools_resources import (
-    register_resources_tools,
     WORKER_BASE_URL,
-    MAX_ENCODED_LENGTH,
     MAX_CONTENT_SIZE,
+    MAX_ENCODED_LENGTH,
+    register_resources_tools,
+    _decode_inline_url,
+    _is_inline_url,
+    _encode_content,
 )
 
 
-class TestHaCreateDashboardResource:
-    """Test ha_create_dashboard_resource tool."""
+class TestHelperFunctions:
+    """Test helper functions."""
+
+    def test_encode_content(self):
+        """Test content encoding."""
+        content = "test content"
+        encoded, content_size, encoded_size = _encode_content(content)
+
+        assert content_size == len(content.encode("utf-8"))
+        assert encoded_size == len(encoded)
+        assert base64.urlsafe_b64decode(encoded).decode("utf-8") == content
+
+    def test_is_inline_url_true(self):
+        """Test inline URL detection."""
+        url = f"{WORKER_BASE_URL}/abc123?type=module"
+        assert _is_inline_url(url) is True
+
+    def test_is_inline_url_false(self):
+        """Test non-inline URL detection."""
+        assert _is_inline_url("/local/card.js") is False
+        assert _is_inline_url("https://cdn.example.com/card.js") is False
+
+    def test_decode_inline_url(self):
+        """Test decoding inline URL."""
+        content = "export const x = 1;"
+        encoded = base64.urlsafe_b64encode(content.encode()).decode()
+        url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+
+        decoded = _decode_inline_url(url)
+        assert decoded == content
+
+    def test_decode_inline_url_non_inline(self):
+        """Test decoding non-inline URL returns None."""
+        assert _decode_inline_url("/local/card.js") is None
+
+
+class TestHaConfigListDashboardResources:
+    """Test ha_config_list_dashboard_resources tool."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -35,193 +74,363 @@ class TestHaCreateDashboardResource:
     @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
-        return MagicMock()
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
 
     @pytest.fixture
-    def tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_create_dashboard_resource function."""
+    def list_tool(self, mock_mcp, mock_client):
+        """Register tools and return the list function."""
         register_resources_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_create_dashboard_resource"]
-
-    # --- Success Cases ---
+        return self.registered_tools["ha_config_list_dashboard_resources"]
 
     @pytest.mark.asyncio
-    async def test_create_css_resource(self, tool):
-        """Test creating a CSS resource URL."""
-        css = ".my-card { background: #333; border-radius: 8px; }"
-        result = await tool(content=css, resource_type="css")
+    async def test_list_empty(self, list_tool, mock_client):
+        """Test listing when no resources exist."""
+        mock_client.send_websocket_message.return_value = {"result": []}
+
+        result = await list_tool()
 
         assert result["success"] is True
-        assert result["url"].startswith(WORKER_BASE_URL)
-        assert "?type=css" in result["url"]
-        assert result["resource_type"] == "css"
-        assert result["size"] == len(css.encode("utf-8"))
+        assert result["count"] == 0
+        assert result["resources"] == []
 
     @pytest.mark.asyncio
-    async def test_create_module_resource(self, tool):
-        """Test creating an ES6 module resource URL."""
-        js = "export const formatTemp = (v) => `${v.toFixed(1)}°C`;"
-        result = await tool(content=js, resource_type="module")
+    async def test_list_external_resources(self, list_tool, mock_client):
+        """Test listing external resources."""
+        mock_client.send_websocket_message.return_value = {
+            "result": [
+                {"id": "1", "type": "module", "url": "/local/card.js"},
+                {"id": "2", "type": "css", "url": "/local/theme.css"},
+            ]
+        }
+
+        result = await list_tool()
 
         assert result["success"] is True
-        assert "?type=module" in result["url"]
+        assert result["count"] == 2
+        assert result["by_type"]["module"] == 1
+        assert result["by_type"]["css"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_inline_resources_decoded(self, list_tool, mock_client):
+        """Test that inline resources are decoded with preview."""
+        content = "export const myFunction = () => 'hello world';"
+        encoded = base64.urlsafe_b64encode(content.encode()).decode()
+        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "1", "type": "module", "url": inline_url}]
+        }
+
+        result = await list_tool()
+
+        assert result["success"] is True
+        assert result["inline_count"] == 1
+        resource = result["resources"][0]
+        assert resource["_inline"] is True
+        assert resource["_size"] == len(content)
+        assert resource["_preview"] == content
+        assert resource["url"] == "[inline]"  # URL replaced
+
+    @pytest.mark.asyncio
+    async def test_list_inline_preview_truncated(self, list_tool, mock_client):
+        """Test that long inline content preview is truncated."""
+        content = "x" * 200
+        encoded = base64.urlsafe_b64encode(content.encode()).decode()
+        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "1", "type": "module", "url": inline_url}]
+        }
+
+        result = await list_tool()
+
+        resource = result["resources"][0]
+        assert resource["_preview"].endswith("...")
+        assert len(resource["_preview"]) == 153  # 150 + "..."
+
+
+class TestHaConfigSetInlineDashboardResource:
+    """Test ha_config_set_inline_dashboard_resource tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server that captures all tools."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_inline_tool(self, mock_mcp, mock_client):
+        """Register tools and return the set inline function."""
+        register_resources_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_set_inline_dashboard_resource"]
+
+    # --- Create Cases ---
+
+    @pytest.mark.asyncio
+    async def test_create_inline_module(self, set_inline_tool, mock_client):
+        """Test creating an inline module resource."""
+        mock_client.send_websocket_message.return_value = {
+            "result": {"id": "new-id-123"}
+        }
+
+        content = "export const x = 1;"
+        result = await set_inline_tool(content=content, resource_type="module")
+
+        assert result["success"] is True
+        assert result["action"] == "created"
+        assert result["resource_id"] == "new-id-123"
         assert result["resource_type"] == "module"
-
-    @pytest.mark.asyncio
-    async def test_default_type_is_module(self, tool):
-        """Test that default resource_type is 'module'."""
-        result = await tool(content="export const x = 1;")
-
-        assert result["success"] is True
-        assert "?type=module" in result["url"]
-
-    @pytest.mark.asyncio
-    async def test_url_contains_base64_content(self, tool):
-        """Test that URL contains decodable base64 content."""
-        content = "test content for encoding"
-        result = await tool(content=content)
-
-        assert result["success"] is True
-
-        # Extract and decode
-        encoded_part = result["url"].replace(f"{WORKER_BASE_URL}/", "").split("?")[0]
-        decoded = base64.urlsafe_b64decode(encoded_part).decode("utf-8")
-        assert decoded == content
-
-    @pytest.mark.asyncio
-    async def test_deterministic_urls(self, tool):
-        """Test that same content produces same URL."""
-        content = "const x = 42;"
-
-        result1 = await tool(content=content)
-        result2 = await tool(content=content)
-
-        assert result1["url"] == result2["url"]
-
-    @pytest.mark.asyncio
-    async def test_different_content_different_urls(self, tool):
-        """Test that different content produces different URLs."""
-        result1 = await tool(content="const x = 1;")
-        result2 = await tool(content="const x = 2;")
-
-        assert result1["url"] != result2["url"]
-
-    @pytest.mark.asyncio
-    async def test_size_fields_accurate(self, tool):
-        """Test that size fields are accurate."""
-        content = "Hello, World!"
-        content_bytes = content.encode("utf-8")
-
-        result = await tool(content=content)
-
-        assert result["size"] == len(content_bytes)
-        assert result["encoded_size"] == len(base64.urlsafe_b64encode(content_bytes))
-
-    @pytest.mark.asyncio
-    async def test_unicode_content(self, tool):
-        """Test handling of Unicode content."""
-        content = "const greeting = '你好世界';"
-        result = await tool(content=content)
-
-        assert result["success"] is True
-
-        # Verify roundtrip
-        encoded_part = result["url"].replace(f"{WORKER_BASE_URL}/", "").split("?")[0]
-        decoded = base64.urlsafe_b64decode(encoded_part).decode("utf-8")
-        assert decoded == content
-
-    @pytest.mark.asyncio
-    async def test_multiline_content(self, tool):
-        """Test handling of multiline content."""
-        content = """
-        // Line 1
-        const a = 1;
-        // Line 2
-        const b = 2;
-        """
-        result = await tool(content=content)
-
-        assert result["success"] is True
         assert result["size"] == len(content.encode("utf-8"))
 
+        # Verify WebSocket call
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "lovelace/resources/create"
+        assert call_args["res_type"] == "module"
+        assert WORKER_BASE_URL in call_args["url"]
+
     @pytest.mark.asyncio
-    async def test_special_characters(self, tool):
-        """Test handling of special characters."""
-        content = "const url = 'https://example.com?foo=bar&baz=qux';"
-        result = await tool(content=content)
+    async def test_create_inline_css(self, set_inline_tool, mock_client):
+        """Test creating an inline CSS resource."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "css-123"}}
+
+        result = await set_inline_tool(
+            content=".card { color: red; }", resource_type="css"
+        )
 
         assert result["success"] is True
-
-        # Verify roundtrip
-        encoded_part = result["url"].replace(f"{WORKER_BASE_URL}/", "").split("?")[0]
-        decoded = base64.urlsafe_b64decode(encoded_part).decode("utf-8")
-        assert decoded == content
+        assert result["resource_type"] == "css"
 
     @pytest.mark.asyncio
-    async def test_urlsafe_base64_no_plus_slash(self, tool):
-        """Test that URL-safe base64 is used (no + or /)."""
-        # Content that would produce + and / in standard base64
-        content = "test>>>test???"
-        result = await tool(content=content)
+    async def test_default_type_is_module(self, set_inline_tool, mock_client):
+        """Test that default resource_type is 'module'."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "123"}}
+
+        result = await set_inline_tool(content="const x = 1;")
+
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["res_type"] == "module"
+
+    # --- Update Cases ---
+
+    @pytest.mark.asyncio
+    async def test_update_inline_resource(self, set_inline_tool, mock_client):
+        """Test updating an existing inline resource."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
+
+        result = await set_inline_tool(
+            content="export const x = 2;",
+            resource_type="module",
+            resource_id="existing",
+        )
 
         assert result["success"] is True
-        encoded_part = result["url"].replace(f"{WORKER_BASE_URL}/", "").split("?")[0]
-        assert "+" not in encoded_part
-        assert "/" not in encoded_part
+        assert result["action"] == "updated"
+        assert result["resource_id"] == "existing"
 
-    # --- Error Cases ---
+        # Verify WebSocket call uses update
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "lovelace/resources/update"
+        assert call_args["resource_id"] == "existing"
+
+    # --- Validation Cases ---
 
     @pytest.mark.asyncio
-    async def test_empty_content_error(self, tool):
+    async def test_empty_content_error(self, set_inline_tool, mock_client):
         """Test that empty content returns error."""
-        result = await tool(content="")
+        result = await set_inline_tool(content="")
 
         assert result["success"] is False
         assert "empty" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_whitespace_only_error(self, tool):
+    async def test_whitespace_only_error(self, set_inline_tool, mock_client):
         """Test that whitespace-only content returns error."""
-        result = await tool(content="   \n\t  ")
+        result = await set_inline_tool(content="   \n\t  ")
 
         assert result["success"] is False
         assert "empty" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_content_too_large_error(self, tool):
-        """Test that oversized content returns error with suggestions."""
+    async def test_content_too_large_error(self, set_inline_tool, mock_client):
+        """Test that oversized content returns error."""
         large_content = "x" * (MAX_CONTENT_SIZE + 1000)
-        result = await tool(content=large_content)
+        result = await set_inline_tool(content=large_content)
 
         assert result["success"] is False
         assert "too large" in result["error"].lower()
-        assert "size" in result
         assert "suggestions" in result
 
-    # --- Edge Cases ---
+
+class TestHaConfigSetDashboardResource:
+    """Test ha_config_set_dashboard_resource tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server that captures all tools."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_tool(self, mock_mcp, mock_client):
+        """Register tools and return the set function."""
+        register_resources_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_set_dashboard_resource"]
 
     @pytest.mark.asyncio
-    async def test_content_at_size_limit(self, tool):
-        """Test content just under the size limit succeeds."""
-        content = "x" * (MAX_CONTENT_SIZE - 100)
-        result = await tool(content=content)
+    async def test_create_local_resource(self, set_tool, mock_client):
+        """Test creating a local resource."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "local-1"}}
+
+        result = await set_tool(url="/local/my-card.js", resource_type="module")
 
         assert result["success"] is True
+        assert result["action"] == "created"
+        assert result["url"] == "/local/my-card.js"
 
     @pytest.mark.asyncio
-    async def test_single_character(self, tool):
-        """Test minimal content."""
-        result = await tool(content="x")
+    async def test_create_hacs_resource(self, set_tool, mock_client):
+        """Test creating a HACS resource."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "hacs-1"}}
+
+        result = await set_tool(
+            url="/hacsfiles/lovelace-mushroom/mushroom.js", resource_type="module"
+        )
 
         assert result["success"] is True
-        assert result["size"] == 1
+        assert result["action"] == "created"
+
+    @pytest.mark.asyncio
+    async def test_update_resource(self, set_tool, mock_client):
+        """Test updating an existing resource."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
+
+        result = await set_tool(
+            url="/local/card-v2.js", resource_type="module", resource_id="existing"
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "updated"
+
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "lovelace/resources/update"
+
+    @pytest.mark.asyncio
+    async def test_supports_js_type(self, set_tool, mock_client):
+        """Test that legacy js type is supported for external resources."""
+        mock_client.send_websocket_message.return_value = {"result": {"id": "123"}}
+
+        result = await set_tool(url="/local/legacy.js", resource_type="js")
+
+        assert result["success"] is True
+        assert result["resource_type"] == "js"
+
+    @pytest.mark.asyncio
+    async def test_invalid_type_error(self, set_tool, mock_client):
+        """Test that invalid resource type returns error."""
+        result = await set_tool(url="/local/card.js", resource_type="invalid")
+
+        assert result["success"] is False
+        assert "invalid" in result["error"].lower()
+
+
+class TestHaConfigDeleteDashboardResource:
+    """Test ha_config_delete_dashboard_resource tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server that captures all tools."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def delete_tool(self, mock_mcp, mock_client):
+        """Register tools and return the delete function."""
+        register_resources_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_delete_dashboard_resource"]
+
+    @pytest.mark.asyncio
+    async def test_delete_success(self, delete_tool, mock_client):
+        """Test successful deletion."""
+        mock_client.send_websocket_message.return_value = {"success": True}
+
+        result = await delete_tool(resource_id="abc123")
+
+        assert result["success"] is True
+        assert result["action"] == "delete"
+        assert result["resource_id"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_delete_idempotent_not_found(self, delete_tool, mock_client):
+        """Test that deleting non-existent resource is idempotent."""
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "Resource not found"},
+        }
+
+        result = await delete_tool(resource_id="nonexistent")
+
+        assert result["success"] is True  # Idempotent
+        assert "already deleted" in result["message"].lower()
 
 
 class TestToolRegistration:
     """Test tool registration."""
 
-    def test_registers_tool(self):
-        """Test that register_resources_tools registers the tool."""
+    def test_registers_all_tools(self):
+        """Test that all four tools are registered."""
         mcp = MagicMock()
         registered = []
 
@@ -235,15 +444,18 @@ class TestToolRegistration:
         mcp.tool = tool_decorator
         register_resources_tools(mcp, MagicMock())
 
-        assert "ha_create_dashboard_resource" in registered
+        assert "ha_config_list_dashboard_resources" in registered
+        assert "ha_config_set_inline_dashboard_resource" in registered
+        assert "ha_config_set_dashboard_resource" in registered
+        assert "ha_config_delete_dashboard_resource" in registered
 
-    def test_tool_annotations(self):
-        """Test tool has correct annotations."""
+    def test_inline_tool_has_destructive_hint(self):
+        """Test set inline tool has destructiveHint."""
         mcp = MagicMock()
-        captured = {}
+        captured_annotations = []
 
         def tool_decorator(*args, **kwargs):
-            captured.update(kwargs.get("annotations", {}))
+            captured_annotations.append(kwargs.get("annotations", {}))
 
             def wrapper(func):
                 return func
@@ -253,10 +465,9 @@ class TestToolRegistration:
         mcp.tool = tool_decorator
         register_resources_tools(mcp, MagicMock())
 
-        assert captured.get("readOnlyHint") is True
-        assert captured.get("idempotentHint") is True
-        assert "resources" in captured.get("tags", [])
-        assert "dashboard" in captured.get("tags", [])
+        # Find the set_inline tool annotations (second tool registered)
+        set_inline_annotations = captured_annotations[1]
+        assert set_inline_annotations.get("destructiveHint") is True
 
 
 class TestConstants:
