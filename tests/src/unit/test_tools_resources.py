@@ -150,6 +150,24 @@ class TestHaConfigListDashboardResources:
         assert resource["_preview"].endswith("...")
         assert len(resource["_preview"]) == 153  # 150 + "..."
 
+    @pytest.mark.asyncio
+    async def test_list_include_content_flag(self, list_tool, mock_client):
+        """Test that include_content=True returns full content."""
+        content = "x" * 200
+        encoded = base64.urlsafe_b64encode(content.encode()).decode()
+        inline_url = f"{WORKER_BASE_URL}/{encoded}?type=module"
+
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"id": "1", "type": "module", "url": inline_url}]
+        }
+
+        result = await list_tool(include_content=True)
+
+        resource = result["resources"][0]
+        assert "_content" in resource
+        assert resource["_content"] == content
+        assert "_preview" not in resource  # Preview not included when content is
+
 
 class TestHaConfigSetInlineDashboardResource:
     """Test ha_config_set_inline_dashboard_resource tool."""

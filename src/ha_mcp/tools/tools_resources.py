@@ -69,13 +69,25 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
     )
     @log_tool_usage
-    async def ha_config_list_dashboard_resources() -> dict[str, Any]:
+    async def ha_config_list_dashboard_resources(
+        include_content: Annotated[
+            bool,
+            Field(
+                description="Include full decoded content for inline resources. "
+                "Default False to save tokens (shows 150-char preview instead)."
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
         """
         List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
 
         Returns all registered resources. For inline resources (created with
         ha_config_set_inline_dashboard_resource), shows a preview of the content
         instead of the full encoded URL to save tokens.
+
+        Args:
+            include_content: If True, includes full decoded content for inline
+                resources in "_content" field. Default False (150-char preview only).
 
         Resource types:
         - module: ES6 JavaScript modules (modern custom cards)
@@ -86,6 +98,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         EXAMPLES:
         - List all resources: ha_config_list_dashboard_resources()
+        - List with full content: ha_config_list_dashboard_resources(include_content=True)
 
         Note: Requires advanced mode to be enabled in Home Assistant for resource
         management through the UI, but API access works regardless.
@@ -108,16 +121,22 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 url = res.get("url", "")
 
                 if _is_inline_url(url):
-                    # Decode inline content for preview
+                    # Decode inline content
                     content = _decode_inline_url(url)
                     if content:
                         res["_inline"] = True
                         res["_size"] = len(content)
-                        # Show preview (first 150 chars) instead of full URL
-                        preview = content[:150]
-                        if len(content) > 150:
-                            preview += "..."
-                        res["_preview"] = preview
+
+                        if include_content:
+                            # Include full content when requested
+                            res["_content"] = content
+                        else:
+                            # Show preview (first 150 chars) to save tokens
+                            preview = content[:150]
+                            if len(content) > 150:
+                                preview += "..."
+                            res["_preview"] = preview
+
                         # Replace URL with placeholder to save tokens
                         res["url"] = "[inline]"
 
