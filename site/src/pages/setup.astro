@@ -1359,6 +1359,14 @@ mcpServers:
 4. Add environment variables:
    - HOMEASSISTANT_URL: {{HOMEASSISTANT_URL}}
    - HOMEASSISTANT_TOKEN: {{HOMEASSISTANT_TOKEN}}`;
+      } else if (state.client.id === 'open-webui') {
+        config = `1. Open Admin Settings → External Tools
+2. Click + (Add Server)
+3. Set Type: MCP (Streamable HTTP)
+4. Enter:
+   - Server URL: {{MCP_SERVER_URL}}
+   - Auth: (configure if needed)
+5. Click Save`;
       }
     }
 
