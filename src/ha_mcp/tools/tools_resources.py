@@ -10,6 +10,7 @@ See: https://github.com/homeassistant-ai/ha-mcp/issues/266
 
 import base64
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 from .helpers import log_tool_usage
@@ -27,6 +28,11 @@ MAX_ENCODED_LENGTH = 32000
 MAX_CONTENT_SIZE = 24000
 
 
+def _get_resources_dir() -> Path:
+    """Get the path to the resources directory."""
+    return Path(__file__).parent.parent / "resources"
+
+
 def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register dashboard resource hosting tools."""
 
@@ -41,7 +47,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_create_dashboard_resource(
         content: str,
-        resource_type: Literal["module", "js", "css"] = "module",
+        resource_type: Literal["module", "css"] = "module",
     ) -> dict[str, Any]:
         """
         Convert inline JavaScript or CSS to a hosted URL for dashboard use.
@@ -52,8 +58,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Args:
             content: JavaScript or CSS code to host (max ~24KB)
             resource_type: Type of resource:
-                - "module": ES6 module (default) - for custom cards using import
-                - "js": Plain JavaScript - for simple scripts
+                - "module": ES6 JavaScript module (default) - for custom cards
                 - "css": Stylesheet - for custom themes/styling
 
         Returns:
@@ -78,6 +83,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - URLs are deterministic (same content = same URL)
             - Content is not stored, decoded on-the-fly from URL
             - For files >24KB, use filesystem access instead
+            - Use ha_get_dashboard_resource_guide for examples and patterns
         """
         # Validate content
         if not content or not content.strip():
@@ -128,4 +134,54 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "size": content_size,
             "encoded_size": encoded_size,
             "resource_type": resource_type,
+        }
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["resources", "dashboard", "guide"],
+            "title": "Get Dashboard Resource Guide",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_dashboard_resource_guide() -> dict[str, Any]:
+        """
+        Get a guide for creating custom dashboard resources.
+
+        Returns comprehensive documentation on:
+        - Creating custom cards (JavaScript modules)
+        - CSS styling and theming
+        - Code examples and templates
+        - Best practices and workflow
+
+        Use this before creating dashboard resources to understand
+        the required code structure and patterns.
+
+        Returns:
+            Dictionary with:
+            - guide: Full markdown guide content
+            - sections: List of section titles for reference
+        """
+        guide_path = _get_resources_dir() / "dashboard_resources_guide.md"
+
+        try:
+            content = guide_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {
+                "success": False,
+                "error": "Dashboard resources guide not found",
+            }
+
+        # Extract section titles for quick reference
+        sections = [
+            line.strip("# ").strip()
+            for line in content.split("\n")
+            if line.startswith("## ")
+        ]
+
+        return {
+            "success": True,
+            "guide": content,
+            "sections": sections,
         }
