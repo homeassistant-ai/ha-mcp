@@ -57,3 +57,9 @@ ChatGPT supports MCP servers via the Connectors feature (web UI only).
 - Requires paid subscription (Plus/Pro/Business/Enterprise)
 - No stdio support - remote server required
 - This feature is currently in **BETA**
+
+## UX Limitation
+
+ChatGPT's MCP support requires navigating to Settings → Connectors each time you want to enable it for a conversation. This can be cumbersome for frequent use.
+
+**Alternative:** If you have a Plus subscription, consider using **GitHub Copilot Codex** in VS Code instead - it uses the same MCP configuration as VS Code Copilot and provides a better integrated experience for agentic workflows.
