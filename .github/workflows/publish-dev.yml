@@ -283,12 +283,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Get all pre-releases with .dev in the tag, sorted by date
+          # gh release list output is tab-separated: TITLE<tab>TYPE<tab>TAG<tab>DATE
           gh release list --repo ${{ github.repository }} --limit 100 \
             | grep -E "\.dev[0-9]+" \
             | tail -n +6 \
-            | awk '{print $1}' \
+            | awk -F'\t' '{print $3}' \
             | while read tag; do
-                echo "Deleting old dev release: $tag"
-                gh release delete "$tag" --yes --repo ${{ github.repository }}
-                git push origin --delete "$tag" 2>/dev/null || true
+                if [ -n "$tag" ]; then
+                  echo "Deleting old dev release: $tag"
+                  gh release delete "$tag" --yes --repo ${{ github.repository }} || true
+                  git push origin --delete "$tag" 2>/dev/null || true
+                fi
               done
