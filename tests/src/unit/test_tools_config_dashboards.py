@@ -10,45 +10,13 @@ Tests validation logic and error handling for dashboard resource management tool
 import copy
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
-from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
-
-
-class MockToolRegistry:
-    """Helper class to capture tool registrations."""
-
-    def __init__(self):
-        self.registered_tools: dict[str, callable] = {}
-
-    def tool(self, *args, **kwargs):
-        """Decorator that captures registered tools."""
-        def wrapper(func):
-            self.registered_tools[func.__name__] = func
-            return func
-        return wrapper
+# Import shared fixtures and helpers from conftest
+from tests.src.unit.conftest import compute_config_hash
 
 
 class TestHaConfigAddDashboardResource:
     """Test ha_config_add_dashboard_resource tool validation logic."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
 
     # =========================================================================
     # Resource Type Validation Tests
@@ -264,24 +232,6 @@ class TestHaConfigAddDashboardResource:
 class TestHaConfigUpdateDashboardResource:
     """Test ha_config_update_dashboard_resource tool validation logic."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     # =========================================================================
     # Parameter Validation Tests
     # =========================================================================
@@ -421,24 +371,6 @@ class TestHaConfigUpdateDashboardResource:
 class TestHaConfigDeleteDashboardResource:
     """Test ha_config_delete_dashboard_resource tool validation logic."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     # =========================================================================
     # Successful Deletion Tests
     # =========================================================================
@@ -527,24 +459,6 @@ class TestHaConfigDeleteDashboardResource:
 class TestHaConfigListDashboardResources:
     """Test ha_config_list_dashboard_resources tool."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     # =========================================================================
     # Successful List Tests
     # =========================================================================
@@ -560,11 +474,10 @@ class TestHaConfigListDashboardResources:
         assert result["success"] is True
         assert result["resources"] == []
         assert result["count"] == 0
-        assert result["by_type"] == {"module": 0, "js": 0, "css": 0}
 
     @pytest.mark.asyncio
     async def test_list_with_resources(self, registered_tools, mock_client):
-        """List should return resources with count and categorization."""
+        """List should return resources with count."""
         mock_client.send_websocket_message.return_value = {
             "result": [
                 {"id": "1", "url": "/local/card1.js", "type": "module"},
@@ -579,9 +492,7 @@ class TestHaConfigListDashboardResources:
 
         assert result["success"] is True
         assert result["count"] == 4
-        assert result["by_type"]["module"] == 2
-        assert result["by_type"]["css"] == 1
-        assert result["by_type"]["js"] == 1
+        assert len(result["resources"]) == 4
 
     @pytest.mark.asyncio
     async def test_list_returns_resource_structure(self, registered_tools, mock_client):
@@ -635,24 +546,6 @@ class TestHaConfigListDashboardResources:
 class TestResourceTypeEdgeCases:
     """Test edge cases for resource type handling."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     @pytest.mark.asyncio
     async def test_add_case_sensitive_type(self, registered_tools, mock_client):
         """Resource type should be case-sensitive (MODULE != module)."""
@@ -682,24 +575,6 @@ class TestResourceTypeEdgeCases:
 
 class TestURLPatternEdgeCases:
     """Test edge cases for URL pattern handling."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
 
     @pytest.mark.asyncio
     async def test_url_with_query_params(self, registered_tools, mock_client):
@@ -751,24 +626,6 @@ class TestURLPatternEdgeCases:
 
 class TestWebSocketMessageFormat:
     """Test that WebSocket messages are formatted correctly."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures tool registrations."""
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        """Register tools and return the registry."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
 
     @pytest.mark.asyncio
     async def test_add_sends_correct_message(self, registered_tools, mock_client):
@@ -1006,42 +863,24 @@ class TestGetCardsContainer:
 class TestHaDashboardRemoveCard:
     """Test ha_dashboard_remove_card tool."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     @pytest.mark.asyncio
     async def test_remove_card_from_flat_view(self, registered_tools, mock_client):
         """Should remove card from flat view and save config."""
-        config_response = {
-            "result": {
-                "views": [{
-                    "title": "View",
-                    "cards": [
-                        {"type": "markdown", "content": "Card 0"},
-                        {"type": "markdown", "content": "Card 1"},
-                        {"type": "markdown", "content": "Card 2"},
-                    ]
-                }]
-            }
+        config = {
+            "views": [{
+                "title": "View",
+                "cards": [
+                    {"type": "markdown", "content": "Card 0"},
+                    {"type": "markdown", "content": "Card 1"},
+                    {"type": "markdown", "content": "Card 2"},
+                ]
+            }]
         }
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
             # First call: get config
-            copy.deepcopy(config_response),
-            # Second call: verify config unchanged (optimistic locking) - fresh copy
-            copy.deepcopy(config_response),
-            # Third call: save config
+            {"result": copy.deepcopy(config)},
+            # Second call: save config
             {"result": None, "success": True}
         ]
 
@@ -1050,14 +889,16 @@ class TestHaDashboardRemoveCard:
             url_path="test-dashboard",
             view_index=0,
             card_index=1,
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
         assert result["action"] == "remove_card"
         assert result["removed_card"]["content"] == "Card 1"
+        assert "config_hash" in result  # New hash returned
 
         # Verify save was called with correct config (card removed)
-        save_call = mock_client.send_websocket_message.call_args_list[2]
+        save_call = mock_client.send_websocket_message.call_args_list[1]
         saved_config = save_call[0][0]["config"]
         assert len(saved_config["views"][0]["cards"]) == 2
         assert saved_config["views"][0]["cards"][0]["content"] == "Card 0"
@@ -1066,23 +907,21 @@ class TestHaDashboardRemoveCard:
     @pytest.mark.asyncio
     async def test_remove_card_from_section(self, registered_tools, mock_client):
         """Should remove card from sections view."""
-        config_response = {
-            "result": {
-                "views": [{
-                    "type": "sections",
-                    "sections": [
-                        {"cards": [{"type": "tile", "entity": "light.one"}]},
-                        {"cards": [
-                            {"type": "tile", "entity": "light.two"},
-                            {"type": "tile", "entity": "light.three"},
-                        ]},
-                    ]
-                }]
-            }
+        config = {
+            "views": [{
+                "type": "sections",
+                "sections": [
+                    {"cards": [{"type": "tile", "entity": "light.one"}]},
+                    {"cards": [
+                        {"type": "tile", "entity": "light.two"},
+                        {"type": "tile", "entity": "light.three"},
+                    ]},
+                ]
+            }]
         }
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1092,6 +931,7 @@ class TestHaDashboardRemoveCard:
             view_index=0,
             section_index=1,
             card_index=0,
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1100,17 +940,16 @@ class TestHaDashboardRemoveCard:
     @pytest.mark.asyncio
     async def test_remove_card_index_out_of_bounds(self, registered_tools, mock_client):
         """Should return error for invalid card index."""
-        mock_client.send_websocket_message.return_value = {
-            "result": {
-                "views": [{"cards": [{"type": "markdown"}]}]
-            }
-        }
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
+        mock_client.send_websocket_message.return_value = {"result": config}
 
         tool = registered_tools["ha_dashboard_remove_card"]
         result = await tool(
             url_path="test-dashboard",
             view_index=0,
             card_index=5,
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1121,28 +960,13 @@ class TestHaDashboardRemoveCard:
 class TestHaDashboardAddCard:
     """Test ha_dashboard_add_card tool."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     @pytest.mark.asyncio
     async def test_add_card_append_to_flat_view(self, registered_tools, mock_client):
         """Should append card to end of flat view."""
-        config_response = {"result": {"views": [{"cards": [{"type": "markdown"}]}]}}
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1151,22 +975,24 @@ class TestHaDashboardAddCard:
             url_path="test-dashboard",
             view_index=0,
             card_config={"type": "tile", "entity": "light.new"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
         assert result["action"] == "add_card"
         assert result["location"]["card_index"] == 1  # Appended at end
+        assert "config_hash" in result  # New hash returned
 
     @pytest.mark.asyncio
     async def test_add_card_with_position(self, registered_tools, mock_client):
         """Should insert card at specified position."""
-        config_response = {"result": {"views": [{"cards": [
+        config = {"views": [{"cards": [
             {"type": "markdown", "content": "0"},
             {"type": "markdown", "content": "1"},
-        ]}]}}
+        ]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1176,26 +1002,27 @@ class TestHaDashboardAddCard:
             view_index=0,
             card_config={"type": "tile", "entity": "light.inserted"},
             position=1,
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
         assert result["location"]["card_index"] == 1
 
         # Verify insertion position
-        save_call = mock_client.send_websocket_message.call_args_list[2]
+        save_call = mock_client.send_websocket_message.call_args_list[1]
         saved_cards = save_call[0][0]["config"]["views"][0]["cards"]
         assert saved_cards[1]["entity"] == "light.inserted"
 
     @pytest.mark.asyncio
     async def test_add_card_to_section(self, registered_tools, mock_client):
         """Should add card to sections view."""
-        config_response = {"result": {"views": [{
+        config = {"views": [{
             "type": "sections",
             "sections": [{"cards": []}]
-        }]}}
+        }]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1205,6 +1032,7 @@ class TestHaDashboardAddCard:
             view_index=0,
             section_index=0,
             card_config={"type": "tile", "entity": "light.new"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1230,10 +1058,10 @@ class TestHaDashboardAddCard:
     @pytest.mark.asyncio
     async def test_add_card_json_string_config(self, registered_tools, mock_client):
         """Should accept card_config as JSON string."""
-        config_response = {"result": {"views": [{"cards": []}]}}
+        config = {"views": [{"cards": []}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1242,6 +1070,7 @@ class TestHaDashboardAddCard:
             url_path="test-dashboard",
             view_index=0,
             card_config='{"type": "markdown", "content": "Hello"}',
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1250,30 +1079,15 @@ class TestHaDashboardAddCard:
 class TestHaDashboardUpdateCard:
     """Test ha_dashboard_update_card tool."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     @pytest.mark.asyncio
     async def test_update_card_replaces_entirely(self, registered_tools, mock_client):
         """Should replace card config entirely (no merge)."""
-        config_response = {"result": {"views": [{"cards": [
+        config = {"views": [{"cards": [
             {"type": "markdown", "content": "Old content", "title": "Old Title"}
-        ]}]}}
+        ]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1283,6 +1097,7 @@ class TestHaDashboardUpdateCard:
             view_index=0,
             card_index=0,
             card_config={"type": "markdown", "content": "New content"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1291,17 +1106,18 @@ class TestHaDashboardUpdateCard:
         assert result["updated_card"]["content"] == "New content"
         # Title should NOT exist (replaced, not merged)
         assert "title" not in result["updated_card"]
+        assert "config_hash" in result  # New hash returned
 
     @pytest.mark.asyncio
     async def test_update_card_in_section(self, registered_tools, mock_client):
         """Should update card within sections view."""
-        config_response = {"result": {"views": [{
+        config = {"views": [{
             "type": "sections",
             "sections": [{"cards": [{"type": "tile", "entity": "light.old"}]}]
-        }]}}
+        }]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1312,6 +1128,7 @@ class TestHaDashboardUpdateCard:
             section_index=0,
             card_index=0,
             card_config={"type": "tile", "entity": "light.new", "name": "Updated"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1321,9 +1138,9 @@ class TestHaDashboardUpdateCard:
     @pytest.mark.asyncio
     async def test_update_card_index_out_of_bounds(self, registered_tools, mock_client):
         """Should return error for invalid card index."""
-        mock_client.send_websocket_message.return_value = {
-            "result": {"views": [{"cards": [{"type": "markdown"}]}]}
-        }
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
+        mock_client.send_websocket_message.return_value = {"result": config}
 
         tool = registered_tools["ha_dashboard_update_card"]
         result = await tool(
@@ -1331,6 +1148,7 @@ class TestHaDashboardUpdateCard:
             view_index=0,
             card_index=99,
             card_config={"type": "markdown"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1339,10 +1157,10 @@ class TestHaDashboardUpdateCard:
     @pytest.mark.asyncio
     async def test_update_card_json_string_config(self, registered_tools, mock_client):
         """Should accept card_config as JSON string."""
-        config_response = {"result": {"views": [{"cards": [{"type": "markdown"}]}]}}
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"result": None, "success": True}
         ]
 
@@ -1352,6 +1170,7 @@ class TestHaDashboardUpdateCard:
             view_index=0,
             card_index=0,
             card_config='{"type": "button", "entity": "switch.test"}',
+            config_hash=config_hash,
         )
 
         assert result["success"] is True
@@ -1404,6 +1223,7 @@ class TestHaDashboardUpdateCard:
             view_index=0,
             card_index=0,
             card_config={"type": "markdown"},
+            config_hash="any-hash",  # Will fail before hash check
         )
 
         assert result["success"] is False
@@ -1412,10 +1232,10 @@ class TestHaDashboardUpdateCard:
     @pytest.mark.asyncio
     async def test_update_card_save_failure(self, registered_tools, mock_client):
         """Should return error when SAVE fails."""
-        config_response = {"result": {"views": [{"cards": [{"type": "markdown"}]}]}}
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"success": False, "error": {"message": "Permission denied"}}
         ]
 
@@ -1425,6 +1245,7 @@ class TestHaDashboardUpdateCard:
             view_index=0,
             card_index=0,
             card_config={"type": "button"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1433,21 +1254,6 @@ class TestHaDashboardUpdateCard:
 
 class TestHaDashboardRemoveCardErrorPaths:
     """Test error paths for ha_dashboard_remove_card."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
 
     @pytest.mark.asyncio
     async def test_remove_card_get_dashboard_failure(self, registered_tools, mock_client):
@@ -1462,6 +1268,7 @@ class TestHaDashboardRemoveCardErrorPaths:
             url_path="nonexistent-dashboard",
             view_index=0,
             card_index=0,
+            config_hash="any-hash",  # Will fail before hash check
         )
 
         assert result["success"] is False
@@ -1470,10 +1277,10 @@ class TestHaDashboardRemoveCardErrorPaths:
     @pytest.mark.asyncio
     async def test_remove_card_save_failure(self, registered_tools, mock_client):
         """Should return error when SAVE fails."""
-        config_response = {"result": {"views": [{"cards": [{"type": "markdown"}]}]}}
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"success": False, "error": {"message": "Permission denied"}}
         ]
 
@@ -1482,6 +1289,7 @@ class TestHaDashboardRemoveCardErrorPaths:
             url_path="test-dashboard",
             view_index=0,
             card_index=0,
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1490,21 +1298,6 @@ class TestHaDashboardRemoveCardErrorPaths:
 
 class TestHaDashboardAddCardErrorPaths:
     """Test error paths for ha_dashboard_add_card."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
 
     @pytest.mark.asyncio
     async def test_add_card_get_dashboard_failure(self, registered_tools, mock_client):
@@ -1519,6 +1312,7 @@ class TestHaDashboardAddCardErrorPaths:
             url_path="nonexistent-dashboard",
             view_index=0,
             card_config={"type": "markdown"},
+            config_hash="any-hash",  # Will fail before hash check
         )
 
         assert result["success"] is False
@@ -1527,10 +1321,10 @@ class TestHaDashboardAddCardErrorPaths:
     @pytest.mark.asyncio
     async def test_add_card_save_failure(self, registered_tools, mock_client):
         """Should return error when SAVE fails."""
-        config_response = {"result": {"views": [{"cards": []}]}}
+        config = {"views": [{"cards": []}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(config_response),
-            copy.deepcopy(config_response),  # verify unchanged
+            {"result": copy.deepcopy(config)},
             {"success": False, "error": {"message": "Permission denied"}}
         ]
 
@@ -1539,6 +1333,7 @@ class TestHaDashboardAddCardErrorPaths:
             url_path="test-dashboard",
             view_index=0,
             card_config={"type": "markdown"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1547,8 +1342,10 @@ class TestHaDashboardAddCardErrorPaths:
     @pytest.mark.asyncio
     async def test_add_card_position_out_of_bounds(self, registered_tools, mock_client):
         """Should return error for invalid position."""
+        config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.return_value = {
-            "result": {"views": [{"cards": [{"type": "markdown"}]}]}
+            "result": copy.deepcopy(config)
         }
 
         tool = registered_tools["ha_dashboard_add_card"]
@@ -1557,6 +1354,7 @@ class TestHaDashboardAddCardErrorPaths:
             view_index=0,
             card_config={"type": "markdown"},
             position=99,
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1566,28 +1364,18 @@ class TestHaDashboardAddCardErrorPaths:
 class TestEdgeCases:
     """Test edge cases identified during code review."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        return MockToolRegistry()
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def registered_tools(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return mock_mcp.registered_tools
-
     @pytest.mark.asyncio
     async def test_empty_config_response(self, registered_tools, mock_client):
         """Should return error when dashboard config is empty/null."""
         mock_client.send_websocket_message.return_value = {"result": None}
 
         tool = registered_tools["ha_dashboard_remove_card"]
-        result = await tool(url_path="test-dashboard", view_index=0, card_index=0)
+        result = await tool(
+            url_path="test-dashboard",
+            view_index=0,
+            card_index=0,
+            config_hash="any-hash",  # Will fail before hash check
+        )
 
         assert result["success"] is False
         assert "empty" in result["error"].lower()
@@ -1596,12 +1384,19 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_remove_card_from_empty_container(self, registered_tools, mock_client):
         """Should return clear error message for empty cards list."""
+        config = {"views": [{"cards": []}]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.return_value = {
-            "result": {"views": [{"cards": []}]}
+            "result": copy.deepcopy(config)
         }
 
         tool = registered_tools["ha_dashboard_remove_card"]
-        result = await tool(url_path="test-dashboard", view_index=0, card_index=0)
+        result = await tool(
+            url_path="test-dashboard",
+            view_index=0,
+            card_index=0,
+            config_hash=config_hash,
+        )
 
         assert result["success"] is False
         assert "out of bounds" in result["error"].lower() or "no cards" in str(result).lower()
@@ -1650,8 +1445,10 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_update_card_corrupted_existing_card(self, registered_tools, mock_client):
         """Should return error when existing card is not a dict."""
+        config = {"views": [{"cards": [None]}]}  # Corrupted card (null)
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.return_value = {
-            "result": {"views": [{"cards": [None]}]}  # Corrupted card (null)
+            "result": copy.deepcopy(config)
         }
 
         tool = registered_tools["ha_dashboard_update_card"]
@@ -1660,6 +1457,7 @@ class TestEdgeCases:
             view_index=0,
             card_index=0,
             card_config={"type": "markdown"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1669,8 +1467,10 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_corrupted_view_not_dict(self, registered_tools, mock_client):
         """Should return error when view is not a dict."""
+        config = {"views": [None]}  # Corrupted view (null)
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.return_value = {
-            "result": {"views": [None]}  # Corrupted view (null)
+            "result": copy.deepcopy(config)
         }
 
         tool = registered_tools["ha_dashboard_add_card"]
@@ -1678,6 +1478,7 @@ class TestEdgeCases:
             url_path="test-dashboard",
             view_index=0,
             card_config={"type": "markdown"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1686,11 +1487,13 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_corrupted_section_not_dict(self, registered_tools, mock_client):
         """Should return error when section is not a dict."""
+        config = {"views": [{
+            "type": "sections",
+            "sections": ["not a dict"]  # Corrupted section
+        }]}
+        config_hash = compute_config_hash(config)
         mock_client.send_websocket_message.return_value = {
-            "result": {"views": [{
-                "type": "sections",
-                "sections": ["not a dict"]  # Corrupted section
-            }]}
+            "result": copy.deepcopy(config)
         }
 
         tool = registered_tools["ha_dashboard_add_card"]
@@ -1699,6 +1502,7 @@ class TestEdgeCases:
             view_index=0,
             section_index=0,
             card_config={"type": "markdown"},
+            config_hash=config_hash,
         )
 
         assert result["success"] is False
@@ -1707,24 +1511,26 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_optimistic_locking_conflict(self, registered_tools, mock_client):
         """Should reject update when dashboard changed between read and save."""
-        # First read returns one config
-        initial_config = {"result": {"views": [{"cards": [{"type": "markdown"}]}]}}
-        # Verification read returns different config (simulating external modification)
-        modified_config = {"result": {"views": [{"cards": [
+        # Initial config when we first read the dashboard
+        initial_config = {"views": [{"cards": [{"type": "markdown"}]}]}
+        initial_hash = compute_config_hash(initial_config)
+
+        # Server returns a modified config (simulating external modification)
+        modified_config = {"views": [{"cards": [
             {"type": "markdown"},
             {"type": "tile", "entity": "light.added_externally"}
-        ]}]}}
+        ]}]}
 
-        mock_client.send_websocket_message.side_effect = [
-            copy.deepcopy(initial_config),
-            copy.deepcopy(modified_config),  # Different! External change detected
-        ]
+        mock_client.send_websocket_message.return_value = {
+            "result": copy.deepcopy(modified_config)  # Different from initial!
+        }
 
         tool = registered_tools["ha_dashboard_add_card"]
         result = await tool(
             url_path="test-dashboard",
             view_index=0,
             card_config={"type": "button", "entity": "switch.test"},
+            config_hash=initial_hash,  # Hash from original read
         )
 
         assert result["success"] is False

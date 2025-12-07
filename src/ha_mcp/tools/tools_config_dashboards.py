@@ -327,11 +327,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             # Extract config from WebSocket response
             config = response.get("result") if isinstance(response, dict) else response
+
+            # Compute hash for optimistic locking in subsequent operations
+            config_hash = _compute_config_hash(config) if isinstance(config, dict) else None
+
             return {
                 "success": True,
                 "action": "get",
                 "url_path": url_path,
                 "config": config,
+                "config_hash": config_hash,
             }
         except Exception as e:
             logger.error(f"Error getting dashboard config: {e}")
@@ -1060,9 +1065,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             int | None,
             Field(ge=0, description="Section index (0-based). Required for sections views."),
         ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="Config hash from ha_config_get_dashboard (required). "
+                "Ensures dashboard hasn't changed since read."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Remove a card from a dashboard view or section.
+
+        WORKFLOW (required for all card operations):
+        1. get = ha_config_get_dashboard(url_path="my-dash")
+        2. result = ha_dashboard_remove_card(..., config_hash=get["config_hash"])
+        3. For next operation, use config_hash=result["config_hash"]
 
         Returns the removed card configuration for potential undo operations.
 
@@ -1072,7 +1089,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ha_dashboard_remove_card(
             url_path="my-dashboard",
             view_index=0,
-            card_index=2
+            card_index=2,
+            config_hash="abc123"
         )
 
         Remove card from sections view:
@@ -1080,13 +1098,23 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             url_path="my-dashboard",
             view_index=0,
             section_index=1,
-            card_index=0
+            card_index=0,
+            config_hash="abc123"
         )
-
-        Remove from default dashboard:
-        ha_dashboard_remove_card(view_index=0, card_index=0)
         """
         try:
+            # Validate config_hash is provided
+            if config_hash is None:
+                return {
+                    "success": False,
+                    "action": "remove_card",
+                    "url_path": url_path,
+                    "error": "config_hash is required",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard first",
+                        "Use the config_hash from that response",
+                    ],
+                }
             # 1. Fetch current dashboard config
             get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
             if url_path:
@@ -1119,8 +1147,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "suggestions": ["Initialize with ha_config_set_dashboard"],
                 }
 
-            # Compute hash for optimistic locking
-            original_hash = _compute_config_hash(config)
+            # Verify config_hash for optimistic locking
+            current_hash = _compute_config_hash(config)
+            if current_hash != config_hash:
+                return {
+                    "success": False,
+                    "action": "remove_card",
+                    "url_path": url_path,
+                    "error": "Dashboard modified since last read (conflict)",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard again to get fresh config_hash",
+                        "Retry operation with new config_hash",
+                    ],
+                }
 
             # 2. Navigate to cards container
             nav_result = _get_cards_container(config, view_index, section_index)
@@ -1149,17 +1188,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # 4. Remove card and store for response
             removed_card = cards.pop(card_index)
 
-            # 5. Verify config unchanged (optimistic locking)
-            verify_result = await _verify_config_unchanged(client, url_path, original_hash)
-            if not verify_result["success"]:
-                return {
-                    "success": False,
-                    "action": "remove_card",
-                    "url_path": url_path,
-                    **{k: v for k, v in verify_result.items() if k != "success"},
-                }
-
-            # 6. Save modified config
+            # 5. Save modified config
             save_data: dict[str, Any] = {
                 "type": "lovelace/config/save",
                 "config": config,
@@ -1184,10 +1213,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ],
                 }
 
+            # Compute new hash for chaining operations
+            new_config_hash = _compute_config_hash(config)
+
             return {
                 "success": True,
                 "action": "remove_card",
                 "url_path": url_path,
+                "config_hash": new_config_hash,
                 "location": {
                     "view_index": view_index,
                     "section_index": section_index,
@@ -1249,9 +1282,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             int | None,
             Field(ge=0, description="Insert position (0-based). Omit to append."),
         ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="Config hash from ha_config_get_dashboard (required). "
+                "Ensures dashboard hasn't changed since read."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Add a new card to a dashboard view or section.
+
+        WORKFLOW (required for all card operations):
+        1. get = ha_config_get_dashboard(url_path="my-dash")
+        2. result = ha_dashboard_add_card(..., config_hash=get["config_hash"])
+        3. For next operation, use config_hash=result["config_hash"]
 
         IMPORTANT: Use ha_get_card_types() to see available card types.
         Use ha_get_card_documentation(card_type) for detailed config options.
@@ -1262,15 +1307,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ha_dashboard_add_card(
             url_path="my-dashboard",
             view_index=0,
-            card_config={"type": "tile", "entity": "light.living_room"}
-        )
-
-        Insert markdown card at position 0:
-        ha_dashboard_add_card(
-            url_path="my-dashboard",
-            view_index=0,
-            card_config={"type": "markdown", "content": "# Welcome"},
-            position=0
+            card_config={"type": "tile", "entity": "light.living_room"},
+            config_hash="abc123"
         )
 
         Add card to sections view:
@@ -1278,15 +1316,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             url_path="my-dashboard",
             view_index=0,
             section_index=1,
-            card_config={
-                "type": "tile",
-                "entity": "climate.thermostat",
-                "features": [{"type": "target-temperature"}]
-            }
+            card_config={"type": "tile", "entity": "climate.thermostat"},
+            config_hash="abc123"
         )
         """
         try:
-            # 1. Validate and parse card_config
+            # 1. Validate config_hash
+            if config_hash is None:
+                return {
+                    "success": False,
+                    "action": "add_card",
+                    "url_path": url_path,
+                    "error": "config_hash is required",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard first",
+                        "Use the config_hash from that response",
+                    ],
+                }
+
+            # 2. Validate and parse card_config
             if card_config is None:
                 return {
                     "success": False,
@@ -1358,8 +1406,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "suggestions": ["Initialize with ha_config_set_dashboard"],
                 }
 
-            # Compute hash for optimistic locking
-            original_hash = _compute_config_hash(config)
+            # Verify config_hash for optimistic locking
+            current_hash = _compute_config_hash(config)
+            if current_hash != config_hash:
+                return {
+                    "success": False,
+                    "action": "add_card",
+                    "url_path": url_path,
+                    "error": "Dashboard modified since last read (conflict)",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard again to get fresh config_hash",
+                        "Retry operation with new config_hash",
+                    ],
+                }
 
             # 3. Navigate to cards container
             nav_result = _get_cards_container(config, view_index, section_index)
@@ -1390,17 +1449,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # 5. Insert card
             cards.insert(insert_pos, parsed_config)
 
-            # 6. Verify config unchanged (optimistic locking)
-            verify_result = await _verify_config_unchanged(client, url_path, original_hash)
-            if not verify_result["success"]:
-                return {
-                    "success": False,
-                    "action": "add_card",
-                    "url_path": url_path,
-                    **{k: v for k, v in verify_result.items() if k != "success"},
-                }
-
-            # 7. Save modified config
+            # 6. Save modified config
             save_data: dict[str, Any] = {
                 "type": "lovelace/config/save",
                 "config": config,
@@ -1425,10 +1474,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ],
                 }
 
+            # Compute new hash for chaining operations
+            new_config_hash = _compute_config_hash(config)
+
             return {
                 "success": True,
                 "action": "add_card",
                 "url_path": url_path,
+                "config_hash": new_config_hash,
                 "location": {
                     "view_index": view_index,
                     "section_index": section_index,
@@ -1495,9 +1548,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             dict[str, Any] | str,
             Field(description="New card configuration (replaces entire card). Dict or JSON string."),
         ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="Config hash from ha_config_get_dashboard (required). "
+                "Ensures dashboard hasn't changed since read."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Update an existing card's configuration.
+
+        WORKFLOW (required for all card operations):
+        1. get = ha_config_get_dashboard(url_path="my-dash")
+        2. result = ha_dashboard_update_card(..., config_hash=get["config_hash"])
+        3. For next operation, use config_hash=result["config_hash"]
 
         The new card_config completely replaces the existing card configuration.
         Returns both previous and updated card configs for verification/undo.
@@ -1509,10 +1574,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             url_path="my-dashboard",
             view_index=0,
             card_index=2,
-            card_config={
-                "type": "markdown",
-                "content": "## Updated Header\\nNew content here"
-            }
+            card_config={"type": "markdown", "content": "## Updated"},
+            config_hash="abc123"
         )
 
         Update card in sections view:
@@ -1521,24 +1584,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             view_index=0,
             section_index=1,
             card_index=0,
-            card_config={
-                "type": "tile",
-                "entity": "light.bedroom",
-                "name": "Bedroom Light",
-                "features": [{"type": "light-brightness"}]
-            }
-        )
-
-        Change card type:
-        ha_dashboard_update_card(
-            url_path="my-dashboard",
-            view_index=0,
-            card_index=0,
-            card_config={"type": "button", "entity": "switch.test", "name": "Toggle"}
+            card_config={"type": "tile", "entity": "light.bedroom"},
+            config_hash="abc123"
         )
         """
         try:
-            # 1. Validate and parse card_config
+            # 1. Validate config_hash
+            if config_hash is None:
+                return {
+                    "success": False,
+                    "action": "update_card",
+                    "url_path": url_path,
+                    "error": "config_hash is required",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard first",
+                        "Use the config_hash from that response",
+                    ],
+                }
+
+            # 2. Validate and parse card_config
             if card_config is None:
                 return {
                     "success": False,
@@ -1610,8 +1674,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "suggestions": ["Initialize with ha_config_set_dashboard"],
                 }
 
-            # Compute hash for optimistic locking
-            original_hash = _compute_config_hash(config)
+            # Verify config_hash for optimistic locking
+            current_hash = _compute_config_hash(config)
+            if current_hash != config_hash:
+                return {
+                    "success": False,
+                    "action": "update_card",
+                    "url_path": url_path,
+                    "error": "Dashboard modified since last read (conflict)",
+                    "suggestions": [
+                        "Call ha_config_get_dashboard again to get fresh config_hash",
+                        "Retry operation with new config_hash",
+                    ],
+                }
 
             # 3. Navigate to cards container
             nav_result = _get_cards_container(config, view_index, section_index)
@@ -1653,17 +1728,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             previous_card = existing_card.copy()
             cards[card_index] = parsed_config
 
-            # 6. Verify config unchanged (optimistic locking)
-            verify_result = await _verify_config_unchanged(client, url_path, original_hash)
-            if not verify_result["success"]:
-                return {
-                    "success": False,
-                    "action": "update_card",
-                    "url_path": url_path,
-                    **{k: v for k, v in verify_result.items() if k != "success"},
-                }
-
-            # 7. Save modified config
+            # 6. Save modified config
             save_data: dict[str, Any] = {
                 "type": "lovelace/config/save",
                 "config": config,
@@ -1688,10 +1753,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ],
                 }
 
+            # Compute new hash for chaining operations
+            new_config_hash = _compute_config_hash(config)
+
             return {
                 "success": True,
                 "action": "update_card",
                 "url_path": url_path,
+                "config_hash": new_config_hash,
                 "location": {
                     "view_index": view_index,
                     "section_index": section_index,

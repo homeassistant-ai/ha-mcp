@@ -79,6 +79,7 @@ archive/
 docs/review/
 docs/development/
 .local/
+/.claude/settings.local.json
 fastmcp/
 
 # HACS frontend - large (~51MB) JavaScript assets, downloaded during test setup

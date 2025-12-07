@@ -385,7 +385,14 @@ class TestCardOperations:
         await asyncio.sleep(1)
 
         try:
-            # 1. Add card
+            # Get initial config with hash
+            get_initial = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-card-ops"},
+            )
+            config_hash = get_initial["config_hash"]
+
+            # 1. Add card (using config_hash for optimistic locking)
             logger.info("Adding card...")
             add_result = await mcp.call_tool_success(
                 "ha_dashboard_add_card",
@@ -393,10 +400,12 @@ class TestCardOperations:
                     "url_path": "test-card-ops",
                     "view_index": 0,
                     "card_config": {"type": "markdown", "content": "# Test Card"},
+                    "config_hash": config_hash,
                 },
             )
             assert add_result["success"] is True
             assert add_result["location"]["card_index"] == 0
+            config_hash = add_result["config_hash"]  # Use new hash for next op
 
             # 2. Verify card exists
             get_result = await mcp.call_tool_success(
@@ -404,6 +413,7 @@ class TestCardOperations:
                 {"url_path": "test-card-ops"},
             )
             assert len(get_result["config"]["views"][0]["cards"]) == 1
+            config_hash = get_result["config_hash"]
 
             # 3. Update card
             logger.info("Updating card...")
@@ -414,11 +424,13 @@ class TestCardOperations:
                     "view_index": 0,
                     "card_index": 0,
                     "card_config": {"type": "markdown", "content": "# Updated!"},
+                    "config_hash": config_hash,
                 },
             )
             assert update_result["success"] is True
             assert update_result["previous_card"]["content"] == "# Test Card"
             assert update_result["updated_card"]["content"] == "# Updated!"
+            config_hash = update_result["config_hash"]
 
             # 4. Add second card at position 0
             add_result2 = await mcp.call_tool_success(
@@ -428,9 +440,11 @@ class TestCardOperations:
                     "view_index": 0,
                     "card_config": {"type": "button", "entity": "switch.test"},
                     "position": 0,
+                    "config_hash": config_hash,
                 },
             )
             assert add_result2["location"]["card_index"] == 0
+            config_hash = add_result2["config_hash"]
 
             # 5. Verify order
             get_result2 = await mcp.call_tool_success(
@@ -441,6 +455,7 @@ class TestCardOperations:
             assert len(cards) == 2
             assert cards[0]["type"] == "button"
             assert cards[1]["type"] == "markdown"
+            config_hash = get_result2["config_hash"]
 
             # 6. Remove first card
             logger.info("Removing card...")
@@ -450,6 +465,7 @@ class TestCardOperations:
                     "url_path": "test-card-ops",
                     "view_index": 0,
                     "card_index": 0,
+                    "config_hash": config_hash,
                 },
             )
             assert remove_result["success"] is True
@@ -500,6 +516,13 @@ class TestCardOperations:
         await asyncio.sleep(1)
 
         try:
+            # Get initial config with hash
+            get_initial = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-sections-ops"},
+            )
+            config_hash = get_initial["config_hash"]
+
             # Add card to section 1
             add_result = await mcp.call_tool_success(
                 "ha_dashboard_add_card",
@@ -508,10 +531,12 @@ class TestCardOperations:
                     "view_index": 0,
                     "section_index": 1,
                     "card_config": {"type": "tile", "entity": "light.test"},
+                    "config_hash": config_hash,
                 },
             )
             assert add_result["success"] is True
             assert add_result["location"]["section_index"] == 1
+            config_hash = add_result["config_hash"]
 
             # Verify card in correct section
             get_result = await mcp.call_tool_success(
@@ -522,6 +547,7 @@ class TestCardOperations:
             assert len(sections[0]["cards"]) == 0
             assert len(sections[1]["cards"]) == 1
             assert sections[1]["cards"][0]["entity"] == "light.test"
+            config_hash = get_result["config_hash"]
 
             # Update card in section
             update_result = await mcp.call_tool_success(
@@ -532,9 +558,11 @@ class TestCardOperations:
                     "section_index": 1,
                     "card_index": 0,
                     "card_config": {"type": "tile", "entity": "light.updated"},
+                    "config_hash": config_hash,
                 },
             )
             assert update_result["success"] is True
+            config_hash = update_result["config_hash"]
 
             # Remove card
             remove_result = await mcp.call_tool_success(
@@ -544,6 +572,7 @@ class TestCardOperations:
                     "view_index": 0,
                     "section_index": 1,
                     "card_index": 0,
+                    "config_hash": config_hash,
                 },
             )
             assert remove_result["success"] is True
@@ -573,10 +602,22 @@ class TestCardOperations:
         await asyncio.sleep(1)
 
         try:
+            # Get config with hash for error tests
+            get_result = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-errors"},
+            )
+            config_hash = get_result["config_hash"]
+
             # Test view index out of bounds
             result = await mcp_client.call_tool(
                 "ha_dashboard_remove_card",
-                {"url_path": "test-errors", "view_index": 99, "card_index": 0},
+                {
+                    "url_path": "test-errors",
+                    "view_index": 99,
+                    "card_index": 0,
+                    "config_hash": config_hash,
+                },
             )
             parsed = parse_mcp_result(result)
             assert parsed["success"] is False
@@ -590,6 +631,7 @@ class TestCardOperations:
                     "view_index": 0,
                     "card_index": 99,
                     "card_config": {"type": "markdown"},
+                    "config_hash": config_hash,
                 },
             )
             parsed = parse_mcp_result(result)
@@ -603,6 +645,7 @@ class TestCardOperations:
                     "url_path": "test-errors",
                     "view_index": 0,
                     "card_config": {"entity": "light.no_type"},
+                    "config_hash": config_hash,
                 },
             )
             parsed = parse_mcp_result(result)
@@ -637,6 +680,13 @@ class TestCardOperations:
         await asyncio.sleep(1)
 
         try:
+            # Get config with hash
+            get_result = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-strategy"},
+            )
+            config_hash = get_result["config_hash"]
+
             # Attempt to add card - should fail with strategy error
             result = await mcp_client.call_tool(
                 "ha_dashboard_add_card",
@@ -644,6 +694,7 @@ class TestCardOperations:
                     "url_path": "test-strategy",
                     "view_index": 0,
                     "card_config": {"type": "markdown", "content": "Test"},
+                    "config_hash": config_hash,
                 },
             )
             parsed = parse_mcp_result(result)
@@ -658,6 +709,7 @@ class TestCardOperations:
                     "view_index": 0,
                     "card_index": 0,
                     "card_config": {"type": "markdown"},
+                    "config_hash": config_hash,
                 },
             )
             parsed = parse_mcp_result(result)
@@ -671,6 +723,7 @@ class TestCardOperations:
                     "url_path": "test-strategy",
                     "view_index": 0,
                     "card_index": 0,
+                    "config_hash": config_hash,
                 },
             )
             parsed = parse_mcp_result(result)
