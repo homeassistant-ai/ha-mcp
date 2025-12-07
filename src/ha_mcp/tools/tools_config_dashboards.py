@@ -671,25 +671,29 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard", "docs"],
+            "tags": ["dashboard", "docs", "guide"],
             "title": "Get Dashboard Guide",
         }
     )
     @log_tool_usage
     async def ha_get_dashboard_guide() -> dict[str, Any]:
         """
-        Get comprehensive dashboard configuration guide for AI agents.
+        Get comprehensive guide for designing Home Assistant dashboards.
 
-        Returns a curated reference guide covering:
-        - Critical validation rules (url_path hyphen requirement)
-        - Modern dashboard patterns (sections, tile cards, grid layouts, navigation)
-        - Dashboard structure and view types
-        - Card categories and configuration
-        - Features, actions, and visibility conditions
-        - Common pitfalls and best practices
-        - Strategy-based dashboard support
+        Covers:
+        - Part 1: Dashboard structure, views, sections, navigation
+        - Part 2: Built-in cards (tile, grid, button), features, actions
+        - Part 3: Custom cards (JavaScript modules, registration)
+        - Part 4: CSS styling (themes, card-mod patterns)
+        - Part 5: HACS integration (finding/installing community cards)
+        - Part 6: Complete examples and workflows
 
-        The guide is optimized for AI agents with grep-able syntax reference.
+        Use this guide before designing dashboards to understand
+        all available options, from built-in cards to custom resources.
+
+        Related tools:
+        - ha_create_dashboard_resource: Host inline JS/CSS
+        - ha_hacs_search / ha_hacs_download: Community cards
 
         EXAMPLES:
         - Get full guide: ha_get_dashboard_guide()

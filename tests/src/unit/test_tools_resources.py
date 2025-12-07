@@ -220,8 +220,8 @@ class TestHaCreateDashboardResource:
 class TestToolRegistration:
     """Test tool registration."""
 
-    def test_registers_tools(self):
-        """Test that register_resources_tools registers both tools."""
+    def test_registers_tool(self):
+        """Test that register_resources_tools registers the tool."""
         mcp = MagicMock()
         registered = []
 
@@ -236,7 +236,6 @@ class TestToolRegistration:
         register_resources_tools(mcp, MagicMock())
 
         assert "ha_create_dashboard_resource" in registered
-        assert "ha_get_dashboard_resource_guide" in registered
 
     def test_tool_annotations(self):
         """Test tool has correct annotations."""
@@ -258,66 +257,6 @@ class TestToolRegistration:
         assert captured.get("idempotentHint") is True
         assert "resources" in captured.get("tags", [])
         assert "dashboard" in captured.get("tags", [])
-
-
-class TestHaGetDashboardResourceGuide:
-    """Test ha_get_dashboard_resource_guide tool."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures both tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
-    def guide_tool(self, mock_mcp):
-        """Register tools and return the guide function."""
-        register_resources_tools(mock_mcp, MagicMock())
-        return self.registered_tools.get("ha_get_dashboard_resource_guide")
-
-    @pytest.mark.asyncio
-    async def test_returns_guide_content(self, guide_tool):
-        """Test that guide tool returns markdown content."""
-        result = await guide_tool()
-
-        assert result["success"] is True
-        assert "guide" in result
-        assert len(result["guide"]) > 1000  # Should be substantial content
-        assert "# Dashboard Resources Guide" in result["guide"]
-
-    @pytest.mark.asyncio
-    async def test_returns_sections_list(self, guide_tool):
-        """Test that guide tool returns section titles."""
-        result = await guide_tool()
-
-        assert result["success"] is True
-        assert "sections" in result
-        assert isinstance(result["sections"], list)
-        assert len(result["sections"]) > 0
-        # Check for expected sections
-        assert "Resource Types" in result["sections"]
-        assert "Custom Card Structure" in result["sections"]
-
-    @pytest.mark.asyncio
-    async def test_guide_contains_examples(self, guide_tool):
-        """Test that guide contains code examples."""
-        result = await guide_tool()
-
-        assert result["success"] is True
-        # Should contain JavaScript examples
-        assert "customElements.define" in result["guide"]
-        # Should contain CSS examples
-        assert "background:" in result["guide"]
 
 
 class TestConstants:
