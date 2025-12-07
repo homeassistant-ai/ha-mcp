@@ -539,11 +539,15 @@ For iterative dashboard design with visual feedback, add a browser automation MC
 ### Example with Playwright MCP
 
 ```python
+# Get base URL from system overview
+overview = ha_get_overview(detail_level="minimal")
+base_url = overview["system_info"]["base_url"]  # e.g., "http://homeassistant.local:8123"
+
 # After updating dashboard
 ha_update_dashboard_view(dashboard_id="...", view_index=0, config={...})
 
 # Use Playwright MCP to capture result
-browser_navigate("http://homeassistant.local:8123/lovelace/my-dashboard")
+browser_navigate(f"{base_url}/lovelace/my-dashboard")
 browser_screenshot()  # Returns image for visual analysis
 
 # Analyze and iterate based on what you see
@@ -561,6 +565,7 @@ browser_screenshot()  # Returns image for visual analysis
 ## Related Tools
 
 - `ha_get_dashboard_guide` - This guide
+- `ha_get_overview` - Get system info including base_url for browser navigation
 - `ha_config_set_inline_dashboard_resource` - Host inline JS/CSS
 - `ha_config_set_dashboard_resource` - Register external resources
 - `ha_update_dashboard_view` - Update dashboard views
