@@ -427,7 +427,7 @@ def register_search_tools(mcp, client, **kwargs):
         """Get AI-friendly system overview with intelligent categorization.
 
         Returns comprehensive system information at the requested detail level,
-        including Home Assistant version, location, timezone, and entity overview.
+        including Home Assistant base_url, version, location, timezone, and entity overview.
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
@@ -443,6 +443,7 @@ def register_search_tools(mcp, client, **kwargs):
         try:
             config = await client.get_config()
             result["system_info"] = {
+                "base_url": client.base_url,
                 "version": config.get("version"),
                 "location_name": config.get("location_name"),
                 "time_zone": config.get("time_zone"),

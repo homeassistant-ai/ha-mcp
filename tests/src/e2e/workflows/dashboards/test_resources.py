@@ -43,19 +43,19 @@ class TestDashboardResourceLifecycle:
         initial_count = initial_list["count"]
         logger.info(f"Initial resource count: {initial_count}")
 
-        # 2. Add a new resource (module type)
+        # 2. Add a new resource (module type) using set (upsert without resource_id = create)
         logger.info("Adding test resource...")
         add_data = await mcp.call_tool_success(
-            "ha_config_add_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {
                 "url": "/local/test-e2e-card.js",
-                "res_type": "module",
+                "resource_type": "module",
             },
         )
         assert add_data["success"] is True
-        assert add_data["action"] == "add"
+        assert add_data["action"] == "created"
         assert add_data["url"] == "/local/test-e2e-card.js"
-        assert add_data["res_type"] == "module"
+        assert add_data["resource_type"] == "module"
         resource_id = add_data.get("resource_id")
         assert resource_id is not None, "Resource creation should return resource_id"
         logger.info(f"Created resource with ID: {resource_id}")
@@ -75,18 +75,18 @@ class TestDashboardResourceLifecycle:
             for r in list_data.get("resources", [])
         )
 
-        # 4. Update the resource URL
+        # 4. Update the resource URL using set with resource_id
         logger.info("Updating resource URL...")
         update_data = await mcp.call_tool_success(
-            "ha_config_update_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {
-                "resource_id": resource_id,
                 "url": "/local/test-e2e-card-v2.js",
+                "resource_type": "module",
+                "resource_id": resource_id,
             },
         )
         assert update_data["success"] is True
-        assert update_data["action"] == "update"
-        assert "url" in update_data.get("updated_fields", {})
+        assert update_data["action"] == "updated"
 
         await asyncio.sleep(1)
 
@@ -140,31 +140,31 @@ class TestDashboardResourceLifecycle:
             # Test module type
             logger.info("Testing module type resource...")
             module_data = await mcp.call_tool_success(
-                "ha_config_add_dashboard_resource",
-                {"url": "/local/test-module.js", "res_type": "module"},
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test-module.js", "resource_type": "module"},
             )
             assert module_data["success"] is True
-            assert module_data["res_type"] == "module"
+            assert module_data["resource_type"] == "module"
             created_ids.append(module_data.get("resource_id"))
 
             # Test js type
             logger.info("Testing js type resource...")
             js_data = await mcp.call_tool_success(
-                "ha_config_add_dashboard_resource",
-                {"url": "/local/test-legacy.js", "res_type": "js"},
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test-legacy.js", "resource_type": "js"},
             )
             assert js_data["success"] is True
-            assert js_data["res_type"] == "js"
+            assert js_data["resource_type"] == "js"
             created_ids.append(js_data.get("resource_id"))
 
             # Test css type
             logger.info("Testing css type resource...")
             css_data = await mcp.call_tool_success(
-                "ha_config_add_dashboard_resource",
-                {"url": "/local/test-theme.css", "res_type": "css"},
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test-theme.css", "resource_type": "css"},
             )
             assert css_data["success"] is True
-            assert css_data["res_type"] == "css"
+            assert css_data["resource_type"] == "css"
             created_ids.append(css_data.get("resource_id"))
 
             await asyncio.sleep(1)
@@ -196,8 +196,8 @@ class TestDashboardResourceLifecycle:
         try:
             # Create resource with js type
             add_data = await mcp.call_tool_success(
-                "ha_config_add_dashboard_resource",
-                {"url": "/local/test-changetype.js", "res_type": "js"},
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test-changetype.js", "resource_type": "js"},
             )
             resource_id = add_data.get("resource_id")
             assert resource_id is not None
@@ -206,11 +206,15 @@ class TestDashboardResourceLifecycle:
 
             # Update to module type
             update_data = await mcp.call_tool_success(
-                "ha_config_update_dashboard_resource",
-                {"resource_id": resource_id, "res_type": "module"},
+                "ha_config_set_dashboard_resource",
+                {
+                    "url": "/local/test-changetype.js",
+                    "resource_type": "module",
+                    "resource_id": resource_id,
+                },
             )
             assert update_data["success"] is True
-            assert "res_type" in update_data.get("updated_fields", {})
+            assert update_data["action"] == "updated"
 
             await asyncio.sleep(1)
 
@@ -243,47 +247,23 @@ class TestDashboardResourceValidation:
     """Test validation and error handling for dashboard resources."""
 
     async def test_invalid_resource_type(self, mcp_client):
-        """Test that invalid resource type is rejected."""
+        """Test that invalid resource type is rejected at schema level."""
         logger.info("Starting invalid resource type test")
+        import pytest
+        from fastmcp.exceptions import ToolError
 
-        result = await mcp_client.call_tool(
-            "ha_config_add_dashboard_resource",
-            {"url": "/local/test.js", "res_type": "invalid"},
-        )
-        data = parse_mcp_result(result)
-        assert data["success"] is False
-        assert "invalid" in data.get("error", "").lower()
-        assert "suggestions" in data
+        # FastMCP validates Literal types at schema level, raising ToolError
+        with pytest.raises(ToolError) as exc_info:
+            await mcp_client.call_tool(
+                "ha_config_set_dashboard_resource",
+                {"url": "/local/test.js", "resource_type": "invalid"},
+            )
+
+        # Verify the error message mentions the valid options
+        error_msg = str(exc_info.value).lower()
+        assert "module" in error_msg or "js" in error_msg or "css" in error_msg
 
         logger.info("Invalid resource type test completed successfully")
-
-    async def test_update_requires_field(self, mcp_client):
-        """Test that update requires at least one field to update."""
-        logger.info("Starting update requires field test")
-
-        result = await mcp_client.call_tool(
-            "ha_config_update_dashboard_resource",
-            {"resource_id": "some-id"},
-        )
-        data = parse_mcp_result(result)
-        assert data["success"] is False
-        assert "at least one" in data.get("error", "").lower()
-
-        logger.info("Update requires field test completed successfully")
-
-    async def test_update_invalid_type(self, mcp_client):
-        """Test that update rejects invalid resource type."""
-        logger.info("Starting update invalid type test")
-
-        result = await mcp_client.call_tool(
-            "ha_config_update_dashboard_resource",
-            {"resource_id": "some-id", "res_type": "invalid"},
-        )
-        data = parse_mcp_result(result)
-        assert data["success"] is False
-        assert "invalid" in data.get("error", "").lower()
-
-        logger.info("Update invalid type test completed successfully")
 
     async def test_delete_nonexistent_resource(self, mcp_client):
         """Test that deleting nonexistent resource is idempotent (succeeds)."""
@@ -317,7 +297,6 @@ class TestDashboardResourceList:
         assert "resources" in list_data
         assert "count" in list_data
         assert "by_type" in list_data
-        assert "note" in list_data
 
         # Verify by_type structure
         by_type = list_data["by_type"]
@@ -337,8 +316,8 @@ class TestDashboardResourceList:
 
         # Create a resource first
         add_data = await mcp.call_tool_success(
-            "ha_config_add_dashboard_resource",
-            {"url": "/local/test-id-check.js", "res_type": "module"},
+            "ha_config_set_dashboard_resource",
+            {"url": "/local/test-id-check.js", "resource_type": "module"},
         )
         resource_id = add_data.get("resource_id")
 
@@ -372,6 +351,24 @@ class TestDashboardResourceList:
 
         logger.info("List resources returns IDs test completed successfully")
 
+    async def test_list_resources_include_content(self, mcp_client):
+        """Test that include_content flag works."""
+        logger.info("Starting list resources include_content test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Just verify the tool accepts the parameter and doesn't error
+        list_data = await mcp.call_tool_success(
+            "ha_config_list_dashboard_resources", {"include_content": False}
+        )
+        assert list_data["success"] is True
+
+        list_data_with_content = await mcp.call_tool_success(
+            "ha_config_list_dashboard_resources", {"include_content": True}
+        )
+        assert list_data_with_content["success"] is True
+
+        logger.info("List resources include_content test completed successfully")
+
 
 class TestDashboardResourceUrlPatterns:
     """Test various URL patterns for resources."""
@@ -382,8 +379,8 @@ class TestDashboardResourceUrlPatterns:
         mcp = MCPAssertions(mcp_client)
 
         add_data = await mcp.call_tool_success(
-            "ha_config_add_dashboard_resource",
-            {"url": "/local/custom-cards/my-card.js", "res_type": "module"},
+            "ha_config_set_dashboard_resource",
+            {"url": "/local/custom-cards/my-card.js", "resource_type": "module"},
         )
         resource_id = add_data.get("resource_id")
 
@@ -405,10 +402,10 @@ class TestDashboardResourceUrlPatterns:
         mcp = MCPAssertions(mcp_client)
 
         add_data = await mcp.call_tool_success(
-            "ha_config_add_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {
                 "url": "https://cdn.jsdelivr.net/npm/test-card@1.0.0/dist/card.js",
-                "res_type": "module",
+                "resource_type": "module",
             },
         )
         resource_id = add_data.get("resource_id")
@@ -431,8 +428,8 @@ class TestDashboardResourceUrlPatterns:
         mcp = MCPAssertions(mcp_client)
 
         add_data = await mcp.call_tool_success(
-            "ha_config_add_dashboard_resource",
-            {"url": "/hacsfiles/button-card/button-card.js", "res_type": "module"},
+            "ha_config_set_dashboard_resource",
+            {"url": "/hacsfiles/button-card/button-card.js", "resource_type": "module"},
         )
         resource_id = add_data.get("resource_id")
 
@@ -447,3 +444,135 @@ class TestDashboardResourceUrlPatterns:
                 )
 
         logger.info("Hacsfiles URL pattern test completed successfully")
+
+
+class TestInlineDashboardResource:
+    """Test inline dashboard resource creation (code to URL)."""
+
+    async def test_create_inline_module(self, mcp_client):
+        """Test creating an inline module resource."""
+        logger.info("Starting inline module creation test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Create inline resource
+        content = "class TestCard extends HTMLElement { connectedCallback() { this.innerHTML = 'Test'; } } customElements.define('test-card', TestCard);"
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_inline_dashboard_resource",
+            {"content": content, "resource_type": "module"},
+        )
+
+        resource_id = create_data.get("resource_id")
+        try:
+            assert create_data["success"] is True
+            assert create_data["action"] == "created"
+            assert create_data["resource_type"] == "module"
+            assert create_data["size"] == len(content.encode("utf-8"))
+            assert resource_id is not None
+
+            # Verify it appears in list with inline marker
+            await asyncio.sleep(1)
+            list_data = await mcp.call_tool_success(
+                "ha_config_list_dashboard_resources", {}
+            )
+
+            # Find our inline resource
+            our_resource = next(
+                (
+                    r
+                    for r in list_data.get("resources", [])
+                    if r.get("id") == resource_id
+                ),
+                None,
+            )
+            assert our_resource is not None
+            assert our_resource.get("_inline") is True
+            assert our_resource.get("url") == "[inline]"
+            assert "_preview" in our_resource or "_size" in our_resource
+
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
+
+        logger.info("Inline module creation test completed successfully")
+
+    async def test_create_inline_css(self, mcp_client):
+        """Test creating an inline CSS resource."""
+        logger.info("Starting inline CSS creation test")
+        mcp = MCPAssertions(mcp_client)
+
+        content = ".my-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; }"
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_inline_dashboard_resource",
+            {"content": content, "resource_type": "css"},
+        )
+
+        resource_id = create_data.get("resource_id")
+        try:
+            assert create_data["success"] is True
+            assert create_data["resource_type"] == "css"
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
+
+        logger.info("Inline CSS creation test completed successfully")
+
+    async def test_inline_empty_content_error(self, mcp_client):
+        """Test that empty content returns error."""
+        logger.info("Starting inline empty content error test")
+
+        result = await mcp_client.call_tool(
+            "ha_config_set_inline_dashboard_resource",
+            {"content": ""},
+        )
+        data = parse_mcp_result(result)
+        assert data["success"] is False
+        assert "empty" in data.get("error", "").lower()
+
+        logger.info("Inline empty content error test completed successfully")
+
+    async def test_inline_update_existing(self, mcp_client):
+        """Test updating an existing inline resource."""
+        logger.info("Starting inline update test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Create initial resource
+        content_v1 = "const VERSION = 1;"
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_inline_dashboard_resource",
+            {"content": content_v1, "resource_type": "module"},
+        )
+        resource_id = create_data.get("resource_id")
+
+        try:
+            assert create_data["action"] == "created"
+
+            await asyncio.sleep(1)
+
+            # Update with new content
+            content_v2 = "const VERSION = 2; // Updated"
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_inline_dashboard_resource",
+                {
+                    "content": content_v2,
+                    "resource_type": "module",
+                    "resource_id": resource_id,
+                },
+            )
+            assert update_data["success"] is True
+            assert update_data["action"] == "updated"
+            assert update_data["size"] == len(content_v2.encode("utf-8"))
+
+        finally:
+            if resource_id:
+                await mcp_client.call_tool(
+                    "ha_config_delete_dashboard_resource",
+                    {"resource_id": resource_id},
+                )
+
+        logger.info("Inline update test completed successfully")
