@@ -15,6 +15,8 @@ const { title } = Astro.props;
     <link rel="icon" type="image/png" href="/ha-mcp/favicon.png" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
+    <!-- Cloudflare Web Analytics -->
+    <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "65196c0f415f4f3690e13ad77fa44cb0"}'></script>
   </head>
   <body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
     <slot />
