@@ -2,6 +2,65 @@
 
 <!-- version list -->
 
+## v4.19.0 (2025-12-07)
+
+### Bug Fixes
+
+- Correct cleanup logic to parse tag from gh release list
+  ([`e3abb76`](https://github.com/homeassistant-ai/ha-mcp/commit/e3abb7615bfe0863038f0eddb01daa25e4e0e067))
+
+- Preserve voice assistant exposure settings when renaming entities (#271)
+  ([#271](https://github.com/homeassistant-ai/ha-mcp/pull/271),
+  [`05690af`](https://github.com/homeassistant-ai/ha-mcp/commit/05690af8a86e6b1cd7a4ec1e02f90abf46a1ded2))
+
+- Use system CA certificates for SSL verification (#294)
+  ([#294](https://github.com/homeassistant-ai/ha-mcp/pull/294),
+  [`ea7b318`](https://github.com/homeassistant-ai/ha-mcp/commit/ea7b318aa318cb088fc4e2869628e06b43379f28))
+
+### Chores
+
+- Rename github-issue-analyzer agent to triage with enhanced behavior
+  ([`a730fd4`](https://github.com/homeassistant-ai/ha-mcp/commit/a730fd43c0df646ba741d4de2b4bb33b582cac64))
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`0cdae7d`](https://github.com/homeassistant-ai/ha-mcp/commit/0cdae7dfd6be4bb94e264a32dc213b07e3d7ec00))
+
+### Documentation
+
+- Update AGENTS.md with parallel triage workflow
+  ([`5239b29`](https://github.com/homeassistant-ai/ha-mcp/commit/5239b295931a2dcc10b841c5d8392c4fa14fe50b))
+
+### Features
+
+- Add dashboard resource management tools (#278)
+  ([#278](https://github.com/homeassistant-ai/ha-mcp/pull/278),
+  [`25c9c94`](https://github.com/homeassistant-ai/ha-mcp/commit/25c9c940b1a6fa74a5d196a95cd9c7ec38063a1d))
+
+- Add filesystem access tools for Home Assistant config files (#276)
+  ([#276](https://github.com/homeassistant-ai/ha-mcp/pull/276),
+  [`8e68d42`](https://github.com/homeassistant-ai/ha-mcp/commit/8e68d42b79ed693413a0ee1e58f7a8fed01079fb))
+
+- Weekly stable releases with hotfix support (#292)
+  ([#292](https://github.com/homeassistant-ai/ha-mcp/pull/292),
+  [`2f396d2`](https://github.com/homeassistant-ai/ha-mcp/commit/2f396d24fd3ad88d7cce52d971b39fbc912a7988))
+
+### Performance Improvements
+
+- Implement parallel operations for improved performance (#258) (#269)
+  ([#269](https://github.com/homeassistant-ai/ha-mcp/pull/269),
+  [`7a2c150`](https://github.com/homeassistant-ai/ha-mcp/commit/7a2c150bbd370e869cf963214561efc3bd478f4d))
+
+### Testing
+
+- Add comprehensive tests for group management tools (#277)
+  ([#277](https://github.com/homeassistant-ai/ha-mcp/pull/277),
+  [`89372f7`](https://github.com/homeassistant-ai/ha-mcp/commit/89372f76ec4f689a127ee8e25ab6424dd929f18c))
+
+- Add performance measurement to E2E tests (#270)
+  ([#270](https://github.com/homeassistant-ai/ha-mcp/pull/270),
+  [`60596e1`](https://github.com/homeassistant-ai/ha-mcp/commit/60596e11e2c17cb49f2f2d6f21b51bc191ab3da3))
+
+
 ## v4.18.2 (2025-12-07)
 
 ### Bug Fixes
