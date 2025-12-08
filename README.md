@@ -253,3 +253,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **[@julienld](https://github.com/julienld)** — Project maintainer & core contributor.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
+- **[@sergeykad](https://github.com/sergeykad)** — Dashboard card-level CRUD operations.
