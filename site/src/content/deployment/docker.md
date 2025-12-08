@@ -87,3 +87,7 @@ docker run -d --name ha-mcp \
 
 - Docker or Docker Desktop installed
 - Network access to Home Assistant
+
+## Troubleshooting
+
+Having issues? Check the [FAQ & Troubleshooting](/faq#ssl-certificates) page.

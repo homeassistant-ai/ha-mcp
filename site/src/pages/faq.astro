@@ -210,6 +210,23 @@ source ~/.zshrc
             <li>Check if the entity exists in Home Assistant Developer Tools &rarr; States</li>
           </ol>
         </div>
+
+        <div class="faq-item" id="ssl-certificates">
+          <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
+          <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>
+          <p class="text-slate-400 mb-2">Docker solution:</p>
+          <ol class="text-slate-300 space-y-3 list-decimal list-inside">
+            <li>Create a combined CA bundle:
+              <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt</code></pre>
+            </li>
+            <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code>:
+              <pre class="code-block mt-2"><code>docker run --rm \
+  -e SSL_CERT_FILE=/certs/ca-bundle.crt \
+  -v ./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
+  ...</code></pre>
+            </li>
+          </ol>
+        </div>
       </div>
     </section>
 

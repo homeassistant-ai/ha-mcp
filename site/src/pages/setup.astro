@@ -306,8 +306,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           Select Your Platform
           <span class="selected-badge" id="selected-connection"></span>
         </h2>
-        <p class="text-slate-400 text-sm mb-4">Required for installing uv/uvx</p>
-        <div class="grid md:grid-cols-3 gap-4" id="platform-grid">
+        <p class="text-slate-400 text-sm mb-4">Choose how to run ha-mcp on your machine</p>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="platform-grid">
           {sortedPlatforms.map((platform) => (
             <button
               data-platform={platform.slug}
@@ -317,6 +317,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
                 {platform.data.icon === 'apple' && '🍎'}
                 {platform.data.icon === 'linux' && '🐧'}
                 {platform.data.icon === 'windows' && '🪟'}
+                {platform.data.icon === 'docker' && '🐳'}
               </div>
               <h3 class="font-semibold text-white">{platform.data.name}</h3>
             </button>
@@ -332,7 +333,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="selected-badge" id="selected-connection-server"></span>
         </h2>
         <p class="text-slate-400 text-sm mb-4">Choose how to run the ha-mcp HTTP server</p>
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4" id="server-setup-grid">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="server-setup-grid">
           <!-- uvx options with platform -->
           <button data-server-setup="macos-uvx" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
@@ -1047,9 +1048,17 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       }
     }
 
-    // Platform instructions (uvx installation) - for local or uvx deployment
+    // Platform instructions (uvx installation or Docker) - for local or uvx deployment
     const platformId = isLocal ? state.platform?.id : derivedPlatform;
-    if (platformId && (isLocal || derivedDeployment === 'uvx' || needsMcpProxy)) {
+    const isDockerPlatform = platformId === 'docker';
+
+    if (isDockerPlatform && isLocal) {
+      // Docker platform instructions
+      instructions.push(`<div class="instruction-block">
+        <h4 class="instruction-title">🐳 Docker Required</h4>
+        <p class="text-slate-300">Make sure Docker or Docker Desktop is installed and running.</p>
+      </div>`);
+    } else if (platformId && !isDockerPlatform && (isLocal || derivedDeployment === 'uvx' || needsMcpProxy)) {
       let uvInstall = '';
       if (platformId === 'macos') {
         uvInstall = `<div class="instruction-block">
@@ -1186,7 +1195,31 @@ cloudflared tunnel run ha-mcp</code></pre>
 
     // Generate client config
     const isStdio = isLocal;
+    const isDocker = state.platform?.id === 'docker';
     const mcpUrl = isRemote ? '{{MCP_SERVER_URL}}' : '{{MCP_SERVER_URL}}';
+
+    // Docker config for local stdio
+    const dockerConfig = {
+      command: "docker",
+      args: [
+        "run", "--rm", "-i",
+        "-e", "HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}",
+        "-e", "HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    };
+
+    // uvx config for local stdio
+    const uvxConfig = {
+      command: "uvx",
+      args: ["ha-mcp@latest"],
+      env: {
+        HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
+        HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
+      }
+    };
+
+    const stdioConfig = isDocker ? dockerConfig : uvxConfig;
 
     if (state.client.configFormat === 'json') {
       // VS Code uses different structure: mcp.servers instead of mcpServers
@@ -1198,14 +1231,7 @@ cloudflared tunnel run ha-mcp</code></pre>
           config = JSON.stringify({
             mcp: {
               servers: {
-                "home-assistant": {
-                  command: "uvx",
-                  args: ["ha-mcp@latest"],
-                  env: {
-                    HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
-                    HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
-                  }
-                }
+                "home-assistant": stdioConfig
               }
             }
           }, null, 2);
@@ -1213,27 +1239,13 @@ cloudflared tunnel run ha-mcp</code></pre>
           // Zed uses context_servers key
           config = JSON.stringify({
             context_servers: {
-              "home-assistant": {
-                command: "uvx",
-                args: ["ha-mcp@latest"],
-                env: {
-                  HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
-                  HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
-                }
-              }
+              "home-assistant": stdioConfig
             }
           }, null, 2);
         } else {
           config = JSON.stringify({
             mcpServers: {
-              "home-assistant": {
-                command: "uvx",
-                args: ["ha-mcp@latest"],
-                env: {
-                  HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
-                  HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
-                }
-              }
+              "home-assistant": stdioConfig
             }
           }, null, 2);
         }
@@ -1319,7 +1331,24 @@ cloudflared tunnel run ha-mcp</code></pre>
     } else if (state.client.configFormat === 'yaml') {
       // Continue uses YAML format
       if (isStdio) {
-        config = `name: Home Assistant MCP
+        if (isDocker) {
+          config = `name: Home Assistant MCP
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: home-assistant
+    command: docker
+    args:
+      - "run"
+      - "--rm"
+      - "-i"
+      - "-e"
+      - "HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}"
+      - "-e"
+      - "HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}"
+      - "ghcr.io/homeassistant-ai/ha-mcp:latest"`;
+        } else {
+          config = `name: Home Assistant MCP
 version: 0.0.1
 schema: v1
 mcpServers:
@@ -1330,6 +1359,7 @@ mcpServers:
     env:
       HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}"
       HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"`;
+        }
       } else {
         config = `mcpServers:
   - name: home-assistant
@@ -1340,20 +1370,36 @@ mcpServers:
       if (state.client.id === 'gemini-cli') {
         // Gemini CLI
         if (isStdio) {
-          config = `gemini mcp add \\
+          if (isDocker) {
+            config = `gemini mcp add home-assistant docker -- \\
+  run --rm -i \\
   -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  home-assistant uvx ha-mcp@latest`;
+  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          } else {
+            config = `gemini mcp add home-assistant uvx -- \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  ha-mcp@latest`;
+          }
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
       } else {
         // Claude Code
         if (isStdio) {
-          config = `claude mcp add home-assistant \\
+          if (isDocker) {
+            config = `claude mcp add home-assistant \\
+  -- docker run --rm -i \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          } else {
+            config = `claude mcp add home-assistant \\
   --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
   -- uvx ha-mcp@latest`;
+          }
         } else {
           config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
         }
@@ -1398,7 +1444,12 @@ mcpServers:
     // Hints
     hints = [];
     if (isStdio || derivedDeployment === 'uvx' || derivedDeployment === 'docker') {
-      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Your Home Assistant URL (e.g., http://homeassistant.local:8123)</li>`);
+      // Docker-specific URL hint
+      if (isDocker) {
+        hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Use <code>http://host.docker.internal:8123</code> if Home Assistant runs on your host machine</li>`);
+      } else {
+        hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Your Home Assistant URL (e.g., http://homeassistant.local:8123)</li>`);
+      }
       hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> → Your long-lived access token</li>`);
     }
     if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker')) {

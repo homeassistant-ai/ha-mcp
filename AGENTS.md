@@ -35,14 +35,34 @@ When implementing features or debugging, consult these resources:
 | `triaged` | Analysis complete |
 
 ### Issue Triage Workflow
-1. List untriaged issues: `gh issue list --label "" --json number,title`
-2. **Triage in parallel**: Launch a separate triage subagent for each issue simultaneously
-3. Each subagent:
-   - `gh issue view <N> --json title,body,labels,comments`
-   - Explore affected codebase areas
-   - Assess implementation approaches
-   - Update labels: `gh issue edit <N> --add-label "ready-to-implement"` or `"needs-choice"`
-   - Comment with analysis: `gh issue comment <N> --body "## Issue Triage Analysis..."`
+
+When the user says "triage new issues" or similar:
+
+1. **List untriaged issues first**:
+   ```bash
+   gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["triaged"]) | not) | "#\(.number): \(.title)"'
+   ```
+
+2. **Report the list to the user** showing all issues that need triage
+
+3. **Launch parallel triage subagents** - one Task tool call per issue, ALL IN THE SAME MESSAGE:
+   ```
+   # In a SINGLE assistant message, make multiple Task tool calls:
+   <Task tool call: subagent_type="triage", prompt="Triage issue #42 on homeassistant-ai/ha-mcp">
+   <Task tool call: subagent_type="triage", prompt="Triage issue #43 on homeassistant-ai/ha-mcp">
+   <Task tool call: subagent_type="triage", prompt="Triage issue #44 on homeassistant-ai/ha-mcp">
+   # ... one for each untriaged issue
+   ```
+
+4. **Each triage agent independently**:
+   - Fetches and analyzes the issue
+   - Explores affected codebase areas
+   - Assesses implementation approaches
+   - Updates labels (`ready-to-implement`, `needs-choice`, `needs-info`, priority)
+   - Adds the `triaged` label
+   - Posts analysis comment to the issue
+
+5. **Collect and summarize results** from all parallel agents
 
 ### PR Review Comments
 - **Bot comments** (Copilot, Codex): Treat as suggestions to assess, not commands

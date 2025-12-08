@@ -35,7 +35,7 @@
 *No paid subscription required.* Click on your operating system:
 
 <p>
-<a href="docs/macOS-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="docs/Windows-uv-guide.md"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
+<a href="https://homeassistant-ai.github.io/ha-mcp/guide-macos/"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-windows/"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
 </p>
 
 ### Quick install (~5 min)
@@ -51,7 +51,7 @@
 3. [Download Claude Desktop](https://claude.ai/download) (or restart: Claude menu → Quit)
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/macOS-uv-guide.md#step-6-connect-your-home-assistant)
+You're now connected to the demo environment! [Connect your own Home Assistant →](https://homeassistant-ai.github.io/ha-mcp/guide-macos/#step-6-connect-your-home-assistant)
 
 </details>
 
@@ -66,11 +66,42 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 3. [Download Claude Desktop](https://claude.ai/download) (or restart: File → Exit)
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
-You're now connected to the demo environment! [Connect your own Home Assistant →](docs/Windows-uv-guide.md#step-6-connect-your-home-assistant)
+You're now connected to the demo environment! [Connect your own Home Assistant →](https://homeassistant-ai.github.io/ha-mcp/guide-windows/#step-6-connect-your-home-assistant)
 
 </details>
 
-Having issues? Check the **[FAQ & Troubleshooting](docs/FAQ.md)**
+<details>
+<summary><b>🐳 Docker</b></summary>
+
+1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
+2. Add this to your Claude Desktop config file:
+   ```json
+   {
+     "mcpServers": {
+       "home-assistant": {
+         "command": "docker",
+         "args": [
+           "run", "--rm", "-i",
+           "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+           "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
+           "ghcr.io/homeassistant-ai/ha-mcp:latest"
+         ]
+       }
+     }
+   }
+   ```
+3. [Download Claude Desktop](https://claude.ai/download) (or restart it)
+4. Ask Claude: **"Can you see my Home Assistant?"**
+
+Replace `your_long_lived_token` with your Home Assistant token.
+
+</details>
+
+### 🧙 Setup Wizard
+
+Not sure which setup is right for you? Use the **[Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)** to configure ha-mcp for any AI client.
+
+Having issues? Check the **[FAQ & Troubleshooting](https://homeassistant-ai.github.io/ha-mcp/faq/)**
 
 ---
 
@@ -127,90 +158,6 @@ Spend less time configuring, more time enjoying your smart home.
 | **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_list_updates`, `ha_get_release_notes`, `ha_get_system_version` |
 | **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
 | **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_list_integrations` |
-
-</details>
-
----
-
-## 📦 Other Installation Methods
-
-<details>
-<summary><b>🆚 VSCode (GitHub Copilot)</b></summary>
-
-**Prerequisite:** Install uv first (`winget install astral-sh.uv -e` on Windows, `brew install uv` on macOS)
-
-**One-click install:**
-
-[![Install in VSCode](https://img.shields.io/badge/VSCode-Install_Home_Assistant_MCP-0098FF?style=flat-square&logo=visualstudiocode&logoColor=ffffff)](vscode:mcp/install?%7B%22name%22%3A%22Home%20Assistant%22%2C%22inputs%22%3A%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-url%22%2C%22description%22%3A%22Your%20Home%20Assistant%20URL%20(ex%3A%20http%3A%2F%2Fhomeassistant.local%3A8123)%22%2C%22default%22%3A%22http%3A%2F%2Fhomeassistant.local%3A8123%22%2C%22password%22%3Afalse%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22homeassistant-token%22%2C%22description%22%3A%22Your%20long%20lived%20access%20token%20(generate%20in%20your%20profile%20page%2C%20Security%20tab)%22%2C%22password%22%3Atrue%7D%5D%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22ha-mcp%40latest%22%5D%2C%22env%22%3A%7B%22HOMEASSISTANT_URL%22%3A%22%24%7Binput%3Ahomeassistant-url%7D%22%2C%22HOMEASSISTANT_TOKEN%22%3A%22%24%7Binput%3Ahomeassistant-token%7D%22%7D%7D)
-
-</details>
-
-<details>
-<summary><b>💻 Claude Code</b></summary>
-
-```bash
-claude mcp add --transport stdio home-assistant \
-  --env HOMEASSISTANT_URL=http://localhost:8123 \
-  --env HOMEASSISTANT_TOKEN=your_long_lived_token \
-  -- uvx ha-mcp@latest
-```
-
-</details>
-
-<details>
-<summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
-
-Run the MCP server with uvx (replace environment variables):
-
-```bash
-export HOMEASSISTANT_URL=http://localhost:8123
-export HOMEASSISTANT_TOKEN=your_long_lived_token
-export MCP_PORT=8086
-export MCP_SECRET_PATH=/__my_secret__
-uvx --from ha-mcp@latest ha-mcp-web
-```
-
-Web clients require HTTPS. Use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/#latest-release):
-
-```bash
-cloudflared tunnel --url http://localhost:8086
-```
-
-Use the URL: `https://XYZ.trycloudflare.com/__my_secret__`
-
-</details>
-
-<details>
-<summary><b>🐳 Docker</b></summary>
-
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "command": "docker",
-      "args": [
-        "run", "--rm",
-        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
-        "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
-        "ghcr.io/homeassistant-ai/ha-mcp:latest"
-      ]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>🏠 Home Assistant Add-on</b></summary>
-
-**Note:** The add-on is just an alternative installation method. You do NOT need it for ha-mcp to work. Most users run ha-mcp directly on their computer.
-
-The add-on is useful if you want to run ha-mcp inside your Home Assistant OS environment.
-
-[![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
-
-See [add-on documentation](homeassistant-addon/DOCS.md) for details.
 
 </details>
 

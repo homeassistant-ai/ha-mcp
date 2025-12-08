@@ -105,6 +105,36 @@ source ~/.zshrc
 2. Use the search tool: "Search for kitchen light"
 3. Check if the entity exists in Home Assistant Developer Tools → States
 
+### SSL certificate errors (self-signed certificates)
+
+If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.
+
+**Docker solution:**
+
+1. Create a combined CA bundle:
+   ```bash
+   cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt
+   ```
+
+2. Mount it and set `SSL_CERT_FILE`:
+   ```json
+   {
+     "mcpServers": {
+       "home-assistant": {
+         "command": "docker",
+         "args": [
+           "run", "--rm",
+           "-e", "HOMEASSISTANT_URL=https://your-ha:8123",
+           "-e", "HOMEASSISTANT_TOKEN=your_token",
+           "-e", "SSL_CERT_FILE=/certs/ca-bundle.crt",
+           "-v", "./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro",
+           "ghcr.io/homeassistant-ai/ha-mcp:latest"
+         ]
+       }
+     }
+   }
+   ```
+
 ---
 
 ## Configuration Options
