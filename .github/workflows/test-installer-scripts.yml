@@ -19,7 +19,7 @@ jobs:
   test-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run macOS installer script (first run)
         run: sh scripts/install-macos.sh
@@ -49,7 +49,7 @@ jobs:
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Windows installer script (first run)
         shell: pwsh
