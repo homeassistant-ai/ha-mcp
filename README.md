@@ -70,36 +70,13 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 
 </details>
 
-<details>
-<summary><b>🐳 Docker</b></summary>
+### 🧙 Setup Wizard for 15+ clients
 
-1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
-2. Add this to your Claude Desktop config file:
-   ```json
-   {
-     "mcpServers": {
-       "home-assistant": {
-         "command": "docker",
-         "args": [
-           "run", "--rm", "-i",
-           "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
-           "-e", "HOMEASSISTANT_TOKEN=your_long_lived_token",
-           "ghcr.io/homeassistant-ai/ha-mcp:latest"
-         ]
-       }
-     }
-   }
-   ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart it)
-4. Ask Claude: **"Can you see my Home Assistant?"**
+**Claude Code, Gemini CLI, ChatGPT, VSCode, Cursor, and more.**
 
-Replace `your_long_lived_token` with your Home Assistant token.
-
-</details>
-
-### 🧙 Setup Wizard
-
-Not sure which setup is right for you? Use the **[Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)** to configure ha-mcp for any AI client.
+<p>
+<a href="https://homeassistant-ai.github.io/ha-mcp/setup/"><img src="https://img.shields.io/badge/Open_Setup_Wizard-4A90D9?style=for-the-badge" alt="Open Setup Wizard" height="40"></a>
+</p>
 
 Having issues? Check the **[FAQ & Troubleshooting](https://homeassistant-ai.github.io/ha-mcp/faq/)**
 
