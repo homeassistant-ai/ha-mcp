@@ -7,7 +7,6 @@ configFormat: json
 configLocation: |
   macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
   Windows: %APPDATA%\Claude\claude_desktop_config.json
-  Linux: ~/.config/Claude/claude_desktop_config.json
 accuracy: 5
 order: 1
 httpNote: Use mcp-proxy for HTTP connections (see Network/Remote setup)

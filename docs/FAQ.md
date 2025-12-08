@@ -4,19 +4,21 @@ Common questions and solutions for ha-mcp setup.
 
 ## General Questions
 
+### Do I need a Claude Pro subscription?
+
+**No.** Claude Desktop works with a free Claude account. The MCP integration is available to all users, though free accounts have usage limits.
+
+You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for 15+ supported clients.
+
 ### Do I need the Home Assistant Add-on?
 
 **No.** The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
-
-### Do I need a Claude Pro subscription?
-
-**No.** Claude Desktop works with a free Claude account. The MCP integration is available to all users.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
 | Feature | Built-in HA MCP | ha-mcp |
 |---------|-----------------|--------|
-| Tools | ~7 basic tools | 80+ comprehensive tools |
+| Tools | ~15 basic tools | 80+ comprehensive tools |
 | Focus | Device control | Full system administration |
 | Automations | Limited | Create, edit, debug, trace |
 | Dashboards | No | Full dashboard management |
@@ -43,67 +45,6 @@ The demo environment resets weekly. Your changes won't persist.
 ---
 
 ## Troubleshooting
-
-### MCP server not showing in Claude Desktop
-
-1. **Restart Claude completely** - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window
-2. **Check config file location:**
-   - Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-3. **Verify JSON syntax** - No trailing commas, proper quotes
-4. **Check the MCP icon** - Bottom left of Claude Desktop shows connected servers
-
-### "uvx not found" error
-
-**Mac:**
-```bash
-# If using curl installer, reload shell
-source ~/.zshrc
-# Or use full path
-~/.local/bin/uvx --version
-```
-
-**Windows:**
-```powershell
-# Restart PowerShell/cmd after installing uv
-# Or use full path
-%USERPROFILE%\.local\bin\uvx.exe --version
-```
-
-### "Connection refused" or timeout errors
-
-1. **Verify Home Assistant is running** - Open HOMEASSISTANT_URL in a browser
-2. **Check the URL format** - Include `http://` or `https://` and the port (usually `:8123`)
-3. **Network access** - Ensure your computer can reach Home Assistant
-4. **Docker users** - Use `host.docker.internal` instead of `localhost`
-
-### "Token invalid" or authentication errors
-
-1. **Generate a new token:**
-   - Home Assistant → Click your username (bottom left)
-   - Security tab → Long-lived access tokens
-   - Create Token → Copy immediately (shown only once)
-2. **Check token format** - Don't wrap the token in quotes in your config
-3. **Token expiration** - Tokens don't expire by default, but can be revoked
-
-### Claude says it can't see Home Assistant
-
-1. Click the **MCP server icon** (bottom left in Claude Desktop)
-2. Check if "Home Assistant" is listed
-3. If not listed, check your config file syntax
-4. Try asking: "Can you list your available tools?"
-
-### Server works but responses are slow
-
-1. **First request is slow** - `uvx` downloads packages on first run
-2. **Subsequent requests** - Should be faster (packages cached)
-3. **Alternative** - Use Docker for consistent performance
-
-### "Entity not found" errors
-
-1. Entity IDs are case-sensitive
-2. Use the search tool: "Search for kitchen light"
-3. Check if the entity exists in Home Assistant Developer Tools → States
 
 ### SSL certificate errors (self-signed certificates)
 
@@ -134,6 +75,57 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
      }
    }
    ```
+
+### "uvx not found" error
+
+After installing uv, **restart your terminal** (or Claude Desktop) for the PATH changes to take effect.
+
+**Mac:**
+```bash
+# Reload shell or restart terminal
+source ~/.zshrc
+# Or verify with full path
+~/.local/bin/uvx --version
+```
+
+**Windows:**
+```powershell
+# Restart PowerShell/cmd after installing uv
+# Or use full path
+%USERPROFILE%\.local\bin\uvx.exe --version
+```
+
+### MCP server not showing in Claude Desktop
+
+1. **Restart Claude completely** - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window
+2. **Check config file location:**
+   - Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+3. **Verify JSON syntax** - No trailing commas, proper quotes
+4. **Check the MCP icon** - Bottom left of Claude Desktop shows connected servers
+
+### "Token invalid" or authentication errors
+
+1. **Generate a new token:**
+   - Home Assistant → Click your username (bottom left)
+   - Security tab → Long-lived access tokens
+   - Create Token → Copy immediately (shown only once)
+2. **Check token format** - Don't wrap the token in quotes in your config
+3. **Token expiration** - Tokens don't expire by default, but can be revoked
+
+### Claude says it can't see Home Assistant
+
+1. Open Claude Desktop **Settings** (gear icon)
+2. Go to the **Developer** tab
+3. Check **Local MCP Servers** for any errors
+4. If "Home Assistant" is not listed, check your config file syntax
+5. Try asking Claude: "Can you list your available tools?"
+
+### Server works but responses are slow
+
+1. **First request is slow** - `uvx` downloads packages on first run
+2. **Subsequent requests** - Should be faster (packages cached)
+3. **Alternative** - Use Docker for consistent performance
 
 ---
 

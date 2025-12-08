@@ -72,7 +72,7 @@ You're now connected to the demo environment! [Connect your own Home Assistant â
 
 ### ðŸ§™ Setup Wizard for 15+ clients
 
-**Claude Code, Gemini CLI, ChatGPT, VSCode, Cursor, and more.**
+**Claude Code, Gemini CLI, ChatGPT, Open WebUI, VSCode, Cursor, and more.**
 
 <p>
 <a href="https://homeassistant-ai.github.io/ha-mcp/setup/"><img src="https://img.shields.io/badge/Open_Setup_Wizard-4A90D9?style=for-the-badge" alt="Open Setup Wizard" height="40"></a>

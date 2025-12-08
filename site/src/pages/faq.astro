@@ -30,24 +30,37 @@ const withBase = (path: string) => {
 
   <div class="container mx-auto px-4 py-8 max-w-3xl">
     <!-- Header -->
-    <header class="mb-10">
+    <header class="mb-8">
       <h1 class="text-3xl font-bold text-white mb-2">FAQ & Troubleshooting</h1>
       <p class="text-slate-400">Common questions and solutions for ha-mcp setup.</p>
     </header>
 
+    <!-- Table of Contents -->
+    <nav class="mb-10 bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+      <h2 class="text-lg font-semibold text-white mb-4">On this page</h2>
+      <ul class="space-y-2 text-sm">
+        <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
+        <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
+        <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
+        <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
+        <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
+      </ul>
+    </nav>
+
     <!-- General Questions -->
-    <section class="mb-12">
+    <section class="mb-12" id="general-questions">
       <h2 class="text-2xl font-semibold text-white mb-6">General Questions</h2>
 
       <div class="space-y-6">
         <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant Add-on?</h3>
-          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
+          <h3 class="text-lg font-medium text-white mb-2">Do I need a Claude Pro subscription?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> Claude Desktop works with a free Claude account. The MCP integration is available to all users, though free accounts have usage limits.</p>
+          <p class="text-slate-400 text-sm mt-2">You can also use ha-mcp with other AI clients. See the <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> for 15+ supported clients.</p>
         </div>
 
         <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">Do I need a Claude Pro subscription?</h3>
-          <p class="text-slate-300"><strong class="text-green-400">No.</strong> Claude Desktop works with a free Claude account. The MCP integration is available to all users.</p>
+          <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant Add-on?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
         </div>
 
         <div class="faq-item">
@@ -64,7 +77,7 @@ const withBase = (path: string) => {
               <tbody class="text-slate-400">
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Tools</td>
-                  <td class="py-2">~7 basic tools</td>
+                  <td class="py-2">~15 basic tools</td>
                   <td class="py-2 text-green-400">80+ comprehensive tools</td>
                 </tr>
                 <tr class="border-b border-slate-800">
@@ -96,7 +109,7 @@ const withBase = (path: string) => {
     </section>
 
     <!-- Try Without Your Own HA -->
-    <section class="mb-12">
+    <section class="mb-12" id="demo">
       <h2 class="text-2xl font-semibold text-white mb-6">Try Without Your Own Home Assistant</h2>
       <p class="text-slate-300 mb-4">Want to test before connecting to your own Home Assistant? Use our public demo:</p>
 
@@ -120,33 +133,36 @@ const withBase = (path: string) => {
     </section>
 
     <!-- Troubleshooting -->
-    <section class="mb-12">
+    <section class="mb-12" id="troubleshooting">
       <h2 class="text-2xl font-semibold text-white mb-6">Troubleshooting</h2>
 
       <div class="space-y-6">
-        <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">MCP server not showing in Claude Desktop</h3>
-          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
-            <li><strong>Restart Claude completely</strong> - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window</li>
-            <li><strong>Check config file location:</strong>
-              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside">
-                <li>Mac: <code class="bg-slate-800 px-1 rounded text-xs">~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
-                <li>Windows: <code class="bg-slate-800 px-1 rounded text-xs">%APPDATA%\Claude\claude_desktop_config.json</code></li>
-              </ul>
+        <div class="faq-item" id="ssl-certificates">
+          <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
+          <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>
+          <p class="text-slate-400 mb-2">Docker solution:</p>
+          <ol class="text-slate-300 space-y-3 list-decimal list-inside">
+            <li>Create a combined CA bundle:
+              <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt</code></pre>
             </li>
-            <li><strong>Verify JSON syntax</strong> - No trailing commas, proper quotes</li>
-            <li><strong>Check the MCP icon</strong> - Bottom left of Claude Desktop shows connected servers</li>
+            <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code>:
+              <pre class="code-block mt-2"><code>docker run --rm \
+  -e SSL_CERT_FILE=/certs/ca-bundle.crt \
+  -v ./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
+  ...</code></pre>
+            </li>
           </ol>
         </div>
 
         <div class="faq-item">
           <h3 class="text-lg font-medium text-white mb-2">"uvx not found" error</h3>
+          <p class="text-slate-300 mb-3">After installing uv, <strong>restart your terminal</strong> (or Claude Desktop) for the PATH changes to take effect.</p>
           <div class="space-y-4">
             <div>
               <p class="text-slate-400 mb-2">Mac:</p>
-              <pre class="code-block"><code># If using curl installer, reload shell
+              <pre class="code-block"><code># Reload shell or restart terminal
 source ~/.zshrc
-# Or use full path
+# Or verify with full path
 ~/.local/bin/uvx --version</code></pre>
             </div>
             <div>
@@ -159,12 +175,17 @@ source ~/.zshrc
         </div>
 
         <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">"Connection refused" or timeout errors</h3>
+          <h3 class="text-lg font-medium text-white mb-2">MCP server not showing in Claude Desktop</h3>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside">
-            <li><strong>Verify Home Assistant is running</strong> - Open HOMEASSISTANT_URL in a browser</li>
-            <li><strong>Check the URL format</strong> - Include <code class="bg-slate-800 px-1 rounded">http://</code> or <code class="bg-slate-800 px-1 rounded">https://</code> and the port (usually <code class="bg-slate-800 px-1 rounded">:8123</code>)</li>
-            <li><strong>Network access</strong> - Ensure your computer can reach Home Assistant</li>
-            <li><strong>Docker users</strong> - Use <code class="bg-slate-800 px-1 rounded">host.docker.internal</code> instead of <code class="bg-slate-800 px-1 rounded">localhost</code></li>
+            <li><strong>Restart Claude completely</strong> - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window</li>
+            <li><strong>Check config file location:</strong>
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside">
+                <li>Mac: <code class="bg-slate-800 px-1 rounded text-xs">~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+                <li>Windows: <code class="bg-slate-800 px-1 rounded text-xs">%APPDATA%\Claude\claude_desktop_config.json</code></li>
+              </ul>
+            </li>
+            <li><strong>Verify JSON syntax</strong> - No trailing commas, proper quotes</li>
+            <li><strong>Check the MCP icon</strong> - Bottom left of Claude Desktop shows connected servers</li>
           </ol>
         </div>
 
@@ -186,10 +207,11 @@ source ~/.zshrc
         <div class="faq-item">
           <h3 class="text-lg font-medium text-white mb-2">Claude says it can't see Home Assistant</h3>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Click the <strong>MCP server icon</strong> (bottom left in Claude Desktop)</li>
-            <li>Check if "Home Assistant" is listed</li>
-            <li>If not listed, check your config file syntax</li>
-            <li>Try asking: "Can you list your available tools?"</li>
+            <li>Open Claude Desktop <strong>Settings</strong> (gear icon)</li>
+            <li>Go to the <strong>Developer</strong> tab</li>
+            <li>Check <strong>Local MCP Servers</strong> for any errors</li>
+            <li>If "Home Assistant" is not listed, check your config file syntax</li>
+            <li>Try asking Claude: "Can you list your available tools?"</li>
           </ol>
         </div>
 
@@ -201,37 +223,11 @@ source ~/.zshrc
             <li><strong>Alternative</strong> - Use Docker for consistent performance</li>
           </ol>
         </div>
-
-        <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">"Entity not found" errors</h3>
-          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Entity IDs are case-sensitive</li>
-            <li>Use the search tool: "Search for kitchen light"</li>
-            <li>Check if the entity exists in Home Assistant Developer Tools &rarr; States</li>
-          </ol>
-        </div>
-
-        <div class="faq-item" id="ssl-certificates">
-          <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
-          <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>
-          <p class="text-slate-400 mb-2">Docker solution:</p>
-          <ol class="text-slate-300 space-y-3 list-decimal list-inside">
-            <li>Create a combined CA bundle:
-              <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt</code></pre>
-            </li>
-            <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code>:
-              <pre class="code-block mt-2"><code>docker run --rm \
-  -e SSL_CERT_FILE=/certs/ca-bundle.crt \
-  -v ./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
-  ...</code></pre>
-            </li>
-          </ol>
-        </div>
       </div>
     </section>
 
     <!-- Configuration Options -->
-    <section class="mb-12">
+    <section class="mb-12" id="configuration">
       <h2 class="text-2xl font-semibold text-white mb-6">Configuration Options</h2>
 
       <div class="space-y-6">
@@ -302,7 +298,7 @@ source ~/.zshrc
     </section>
 
     <!-- Feedback & Help -->
-    <section class="mb-8">
+    <section class="mb-8" id="feedback">
       <h2 class="text-2xl font-semibold text-white mb-6">Feedback & Help</h2>
       <p class="text-slate-300 mb-4">We'd love to hear how you're using ha-mcp!</p>
       <ul class="space-y-3">
