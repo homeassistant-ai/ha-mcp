@@ -55,7 +55,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # For workflow_run, checkout master to get the latest released code
           ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
@@ -126,7 +126,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # For workflow_run, checkout master to get the latest released code
           ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
@@ -216,7 +216,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: master
 
