@@ -157,7 +157,7 @@ printf "\n"
 # Step 3: Pre-download dependencies
 printf "${YELLOW}Step 3: Pre-downloading ha-mcp...${NC}\n"
 printf "  This speeds up Claude Desktop startup...\n"
-"$UVX_PATH" ha-mcp@latest --help > /dev/null 2>&1 || true
+"$UVX_PATH" ha-mcp@latest --version > /dev/null 2>&1 || true
 printf "${GREEN}  Dependencies cached${NC}\n"
 printf "\n"
 
