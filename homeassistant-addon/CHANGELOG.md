@@ -2,6 +2,80 @@
 
 <!-- version list -->
 
+## v4.20.0 (2025-12-09)
+
+### Bug Fixes
+
+- Add --version/-V flag to CLI (#309) ([#309](https://github.com/homeassistant-ai/ha-mcp/pull/309),
+  [`66dd3ed`](https://github.com/homeassistant-ai/ha-mcp/commit/66dd3edceb5f258944275cfdb0d2296210010d8e))
+
+- Add --version/-V flag to CLI (#312) ([#312](https://github.com/homeassistant-ai/ha-mcp/pull/312),
+  [`1446f42`](https://github.com/homeassistant-ai/ha-mcp/commit/1446f427cdfd68e1225f87151bb9942e7ba9889b))
+
+- Update favicon to Home Assistant icon
+  ([`02f33db`](https://github.com/homeassistant-ai/ha-mcp/commit/02f33dbade6176a1aeac4e706d1a3544e1acb720))
+
+- Use --version instead of --help in installer scripts (#310)
+  ([#310](https://github.com/homeassistant-ai/ha-mcp/pull/310),
+  [`564b515`](https://github.com/homeassistant-ai/ha-mcp/commit/564b5159f3df82948075029a8bd48f6f836ce224))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#303) ([#303](https://github.com/homeassistant-ai/ha-mcp/pull/303),
+  [`70afa20`](https://github.com/homeassistant-ai/ha-mcp/commit/70afa2053408bc66b5efbef4dc9d5d3041ba6d87))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`dff57f2`](https://github.com/homeassistant-ai/ha-mcp/commit/dff57f2f2535e91b30e540f32f7e7ec8bd1cdc78))
+
+### Continuous Integration
+
+- **deps**: Bump actions/checkout from 4 to 6 (#302)
+  ([#302](https://github.com/homeassistant-ai/ha-mcp/pull/302),
+  [`dcc8d49`](https://github.com/homeassistant-ai/ha-mcp/commit/dcc8d49dc5495fee29c6a6f24e205e64e119f8c9))
+
+- **deps**: Bump actions/configure-pages from 4 to 5 (#299)
+  ([#299](https://github.com/homeassistant-ai/ha-mcp/pull/299),
+  [`5e7eecb`](https://github.com/homeassistant-ai/ha-mcp/commit/5e7eecb1fba79a254431ab96835448267cbe611c))
+
+- **deps**: Bump actions/download-artifact from 4 to 6 (#305)
+  ([#305](https://github.com/homeassistant-ai/ha-mcp/pull/305),
+  [`a2e6a3f`](https://github.com/homeassistant-ai/ha-mcp/commit/a2e6a3ff7237112be668b68660dcfcb24caae8bd))
+
+- **deps**: Bump actions/setup-node from 4 to 6 (#300)
+  ([#300](https://github.com/homeassistant-ai/ha-mcp/pull/300),
+  [`e9ddbe8`](https://github.com/homeassistant-ai/ha-mcp/commit/e9ddbe81618698974452f330d76a91066b93974b))
+
+- **deps**: Bump actions/upload-pages-artifact from 3 to 4 (#304)
+  ([#304](https://github.com/homeassistant-ai/ha-mcp/pull/304),
+  [`f61535d`](https://github.com/homeassistant-ai/ha-mcp/commit/f61535da22f0404dedf448b0a8ab057ba7f3387b))
+
+- **deps**: Bump renovatebot/github-action from 44.0.4 to 44.0.5 (#301)
+  ([#301](https://github.com/homeassistant-ai/ha-mcp/pull/301),
+  [`e7c7149`](https://github.com/homeassistant-ai/ha-mcp/commit/e7c714954d553541b0e8a4c4e7d5468451166f69))
+
+### Documentation
+
+- Add @sergeykad to contributors
+  ([`9d85ac0`](https://github.com/homeassistant-ai/ha-mcp/commit/9d85ac00b5084400fa2c5418aea2cd48fcd98560))
+
+- Improve Setup Wizard section in README
+  ([`4e1efab`](https://github.com/homeassistant-ai/ha-mcp/commit/4e1efab1b252904dfb8b373617c02ddb7c6d449e))
+
+- Reorganize FAQ and update client list
+  ([`e7852ac`](https://github.com/homeassistant-ai/ha-mcp/commit/e7852ac96715bd8c0a934ce6eb5f1c112e9a19e6))
+
+- Update README links and add Docker platform to setup wizard
+  ([`56f62a6`](https://github.com/homeassistant-ai/ha-mcp/commit/56f62a6a89ae843dc077081dfb74d142faa644ca))
+
+### Features
+
+- Add ha_create_dashboard_resource tool for inline JS/CSS hosting (#297)
+  ([#297](https://github.com/homeassistant-ai/ha-mcp/pull/297),
+  [`6d0e66f`](https://github.com/homeassistant-ai/ha-mcp/commit/6d0e66fb6cbccdf0b7b6429aa0b428797f2abb25))
+
+
 ## v4.19.0 (2025-12-07)
 
 ### Bug Fixes
