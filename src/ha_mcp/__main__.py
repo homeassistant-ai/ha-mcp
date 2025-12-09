@@ -255,6 +255,12 @@ async def _run_with_graceful_shutdown() -> None:
 # CLI entry point (for pyproject.toml) - use FastMCP's built-in runner
 def main() -> None:
     """Run server via CLI using FastMCP's stdio transport."""
+    # Handle --version flag early, before server creation requires config
+    if "--version" in sys.argv or "-V" in sys.argv:
+        from importlib.metadata import version
+        print(f"ha-mcp {version('ha-mcp')}")
+        sys.exit(0)
+
     # Check for smoke test flag
     if "--smoke-test" in sys.argv:
         from ha_mcp.smoke_test import main as smoke_test_main
