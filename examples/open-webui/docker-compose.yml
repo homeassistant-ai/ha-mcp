@@ -38,8 +38,8 @@ services:
           echo "Ollama not ready yet..."
           sleep 2
         done
-        echo "Ollama is ready! Pulling gpt-oss:20b model (this may take a while)..."
-        curl -X POST http://ollama:11434/api/pull -d '{"name":"gpt-oss:20b"}'
+        echo "Ollama is ready! Pulling qwen3:8b model..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name":"qwen3:8b"}'
         echo "Model ready!"
 
   ha-mcp:
@@ -62,7 +62,7 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       # Pre-configure ha-mcp as a tool server
       - TOOL_SERVER_CONNECTIONS=[{"url":"http://ha-mcp:8086/mcp","path":"","type":"mcp","auth_type":"none","key":"","config":{"enable":true},"info":{"id":"ha-mcp","name":"Home Assistant","description":"Control your smart home"}}]
-      - DEFAULT_MODELS=gpt-oss:20b
+      - DEFAULT_MODELS=qwen3:8b
       - WEBUI_AUTH=false  # Disable auth for demo (remove in production!)
     depends_on:
       - ollama
