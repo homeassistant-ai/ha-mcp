@@ -61,7 +61,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       # Pre-configure ha-mcp as a tool server
-      - TOOL_SERVER_CONNECTIONS=[{"url":"http://ha-mcp:8086","path":"/mcp","auth_type":"none","key":"","config":{},"info":{"name":"Home Assistant","description":"Control your smart home"}}]
+      - TOOL_SERVER_CONNECTIONS=[{"url":"http://ha-mcp:8086/mcp","path":"","type":"mcp","auth_type":"none","key":"","config":{}}]
       - DEFAULT_MODELS=qwen3:0.6b
       - WEBUI_AUTH=false  # Disable auth for demo (remove in production!)
     depends_on:
