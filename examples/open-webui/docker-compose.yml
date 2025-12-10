@@ -1,0 +1,74 @@
+# Open WebUI + Ollama + ha-mcp Demo Stack
+# Usage:
+#   1. Copy .env.example to .env and fill in your HA credentials
+#   2. docker compose up -d
+#   3. Wait for model download: docker compose logs -f ollama
+#   4. Open http://localhost:3000
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Init container to pull the model on first start
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: ollama-init
+    depends_on:
+      - ollama
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Ollama to be ready..."
+        until curl -sf http://ollama:11434/api/tags > /dev/null 2>&1; do
+          echo "Ollama not ready yet..."
+          sleep 2
+        done
+        echo "Ollama is ready! Pulling qwen3:0.6b model (this may take a few minutes)..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name":"qwen3:0.6b"}'
+        echo "Model ready!"
+
+  ha-mcp:
+    image: ghcr.io/homeassistant-ai/ha-mcp:latest
+    container_name: ha-mcp
+    command: ["ha-mcp-web"]
+    environment:
+      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
+      - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - open_webui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Pre-configure ha-mcp as a tool server
+      - TOOL_SERVER_CONNECTIONS=[{"type":"mcp","url":"http://ha-mcp:8086/mcp","auth_type":"none","name":"Home Assistant","description":"Control your smart home"}]
+      - DEFAULT_MODELS=qwen3:0.6b
+      - WEBUI_AUTH=false  # Disable auth for demo (remove in production!)
+    depends_on:
+      - ollama
+      - ha-mcp
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  open_webui_data:
