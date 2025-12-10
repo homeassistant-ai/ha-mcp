@@ -1093,18 +1093,31 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </div>` : '';
 
       if (derivedDeployment === 'uvx') {
-        const secretPathEnv = isRemote ? `export MCP_SECRET_PATH=/secret_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
-        const serverPath = isRemote ? '/secret_{{RANDOM_STRING}}' : '/mcp';
-        deployInstr = `<div class="instruction-block">
+        const serverPath = isRemote ? '/private_{{RANDOM_STRING}}' : '/mcp';
+        const portNote = `<p class="text-xs text-slate-500 mt-2">Optional: Set <code>MCP_PORT</code> to change the default port (8086).</p>`;
+        if (platformId === 'windows') {
+          const secretPathEnv = isRemote ? `$env:MCP_SECRET_PATH="/private_{{RANDOM_STRING}}"  # Keep this secret!\n` : '';
+          deployInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🐍 Start HTTP Server (uvx) - PowerShell</h4>
+          <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
+$env:HOMEASSISTANT_TOKEN="{{HOMEASSISTANT_TOKEN}}"
+${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}
+        </div>`;
+        } else {
+          const secretPathEnv = isRemote ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
+          deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐍 Start HTTP Server (uvx)</h4>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${secretPathNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}
         </div>`;
+        }
       } else if (derivedDeployment === 'docker') {
-        const secretPathEnv = isRemote ? `  -e MCP_SECRET_PATH=/secret_{{RANDOM_STRING}} \\\n` : '';
-        const serverPath = isRemote ? '/secret_{{RANDOM_STRING}}' : '/mcp';
+        const secretPathEnv = isRemote ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
+        const serverPath = isRemote ? '/private_{{RANDOM_STRING}}' : '/mcp';
+        const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐳 Start Docker Container</h4>
           <pre class="code-block"><code>docker run -d --name ha-mcp \\
@@ -1113,7 +1126,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
   -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
 ${secretPathEnv}  ghcr.io/homeassistant-ai/ha-mcp:latest \\
   fastmcp run fastmcp-http.json</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${secretPathNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
@@ -1153,7 +1166,7 @@ docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.interna
           <p class="text-slate-300 mb-2">Quick tunnel (temporary URL - changes on restart):</p>
           <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
-          <p class="text-sm text-green-400 font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/secret_{{RANDOM_STRING}}</code></p>
+          <p class="text-sm text-green-400 font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/private_{{RANDOM_STRING}}</code></p>
           <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
           <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
             <p class="text-blue-300 text-sm font-medium">💡 Want a permanent URL?</p>

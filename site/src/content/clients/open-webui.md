@@ -19,30 +19,37 @@ Open WebUI natively supports MCP servers via Streamable HTTP transport.
 
 ### Setup Steps
 
-1. Navigate to **Admin Settings** → **External Tools**
-2. Click **+ (Add Server)**
-3. Set **Type** to **"MCP (Streamable HTTP)"**
+1. Navigate to **Admin Panel** → **Settings** → **Tools**
+2. Click **Manage Tool Servers**
+   - Note: There's also "External Tools" in user settings — use the **Admin** one
+3. Click **+ (Add Server)**
 4. Enter:
    - **Server URL:** `{{MCP_SERVER_URL}}`
-   - **Auth:** Configure if using authentication
+   - **Auth:** Select "None" (or configure if using authentication)
+   - **ID** and **Name:** Fill in as desired
 5. Click **Save**
-6. Restart Open WebUI if prompted
 
-### Local Network Example
+### Finding Your MCP URL
 
-If ha-mcp is running on your network:
+**Home Assistant Add-on:** Check the add-on logs for the URL (e.g., `http://homeassistant.local:8086/private_xyz`)
 
+**Docker on same host:** Use `http://host.docker.internal:8086/mcp`
+
+**Local network:** Use `http://192.168.1.100:8086/mcp`
+
+**Remote (HTTPS):** Use `https://your-tunnel.trycloudflare.com/secret_abc123`
+
+### Running Open WebUI
+
+```bash
+docker run -d \
+  -p 3000:8080 \
+  -v open-webui:/app/backend/data \
+  --name open-webui \
+  ghcr.io/open-webui/open-webui:main
 ```
-Server URL: http://192.168.1.100:8086/mcp
-```
 
-### Remote Example (HTTPS)
-
-If using a secure tunnel:
-
-```
-Server URL: https://your-tunnel.trycloudflare.com/secret_abc123
-```
+Access at: `http://localhost:3000`
 
 ## Supported Transports
 
@@ -52,6 +59,6 @@ Server URL: https://your-tunnel.trycloudflare.com/secret_abc123
 
 - Web-based configuration only (no config file)
 - Supports both HTTP (local) and HTTPS (remote) URLs
-- Multi-tenant environment with per-user authentication
+- Your LLM must support tool use (Ollama, OpenAI, Anthropic, etc.)
 - Use [mcpo](https://github.com/open-webui/mcpo) proxy for stdio-based MCP servers
 - See [Open WebUI MCP docs](https://docs.openwebui.com/features/mcp/) for details
