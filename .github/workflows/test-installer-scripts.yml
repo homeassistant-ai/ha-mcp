@@ -15,6 +15,10 @@ on:
     - cron: '0 21 * * *'  # Daily at 4pm Eastern
   workflow_dispatch:
 
+# Restrict permissions by default (security best practice)
+permissions:
+  contents: read
+
 jobs:
   test-macos:
     runs-on: macos-latest

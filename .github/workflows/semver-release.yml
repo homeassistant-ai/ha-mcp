@@ -17,6 +17,10 @@ on:
 env:
   PYTHON_VERSION: "3.13"
 
+# Restrict permissions by default (security best practice)
+permissions:
+  contents: read
+
 jobs:
   # Check for changes since last release (skip if no changes)
   check-changes:

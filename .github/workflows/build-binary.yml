@@ -258,8 +258,16 @@ jobs:
 
           # Check if release already exists
           if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, uploading binaries to existing release..."
-            # Upload assets to existing release (handles immutable releases)
+            echo "Release $TAG already exists, checking for existing assets..."
+
+            # Check if binaries already uploaded (immutable releases can't be updated)
+            EXISTING_ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+            if echo "$EXISTING_ASSETS" | grep -q "ha-mcp-linux"; then
+              echo "Binaries already uploaded to $TAG, skipping (release may be immutable)"
+              exit 0
+            fi
+
+            echo "Uploading binaries to existing release..."
             gh release upload "$TAG" \
               artifacts/ha-mcp-linux/ha-mcp-linux \
               artifacts/ha-mcp-windows/ha-mcp-windows.exe \
