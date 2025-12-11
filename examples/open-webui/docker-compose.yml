@@ -5,10 +5,19 @@
 #   3. Wait for model download: docker compose logs -f ollama
 #   4. Open http://localhost:3000
 #
+# Tool Server Options:
+#   A) Native MCP (default): Already configured via TOOL_SERVER_CONNECTIONS
+#   B) MCPO OpenAPI bridge: If native MCP tool calling doesn't work with your model:
+#      - Go to Admin Panel -> Settings -> Tools -> Add Connection
+#      - Type: OpenAPI
+#      - URL: http://mcpo:8000/ha-mcp
+#      - Test at http://localhost:8000/ha-mcp/docs
+#
 # Debugging tool calling issues:
 #   - Check Ollama logs: docker compose logs -f ollama
 #   - Check Open WebUI logs: docker compose logs -f open-webui
 #   - Check ha-mcp logs: docker compose logs -f ha-mcp
+#   - Check mcpo logs: docker compose logs -f mcpo
 #   - Test Ollama directly: curl http://localhost:11434/api/chat -d '{"model":"gpt-oss:20b","messages":[{"role":"user","content":"test"}],"stream":false}'
 
 services:
@@ -56,6 +65,19 @@ services:
     container_name: ha-mcp
     # Run with Python verbose logging for debugging
     command: ["python", "-u", "-c", "import logging; logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(name)s %(levelname)s: %(message)s'); from ha_mcp.__main__ import main_web; main_web()"]
+    environment:
+      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
+      - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+    restart: unless-stopped
+
+  # MCPO: MCP-to-OpenAPI bridge (alternative to native MCP if tool calling doesn't work)
+  # Access OpenAPI docs at http://localhost:8000/ha-mcp/docs
+  mcpo:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo
+    ports:
+      - "8000:8000"
+    command: ["--port", "8000", "--", "uvx", "ha-mcp@latest"]
     environment:
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
