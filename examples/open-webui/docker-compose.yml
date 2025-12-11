@@ -54,12 +54,11 @@ services:
   ha-mcp:
     image: ghcr.io/homeassistant-ai/ha-mcp:latest
     container_name: ha-mcp
-    command: ["ha-mcp-web"]
+    # Run with Python verbose logging for debugging
+    command: ["python", "-u", "-c", "import logging; logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(name)s %(levelname)s: %(message)s'); from ha_mcp.__main__ import main_web; main_web()"]
     environment:
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
-      # Enable debug logging for tool calling issues
-      - LOG_LEVEL=DEBUG
     restart: unless-stopped
 
   open-webui:
