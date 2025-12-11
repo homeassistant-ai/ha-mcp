@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # Environment configuration
     environment: str = Field("development", alias="ENVIRONMENT")
 
+    # Tool filtering - comma-separated list of module names to enable
+    # Special values: "all" (default), "automation" (automation-related tools only)
+    # Examples: "tools_config_automations,tools_config_scripts,tools_traces"
+    enabled_tool_modules: str = Field("all", alias="ENABLED_TOOL_MODULES")
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""
