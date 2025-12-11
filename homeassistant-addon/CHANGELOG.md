@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v4.21.0 (2025-12-11)
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`6d05da5`](https://github.com/homeassistant-ai/ha-mcp/commit/6d05da5abfb007b9821e473b2076c5d7deba91c2))
+
+### Documentation
+
+- Update Open WebUI instructions and setup wizard
+  ([`67d03df`](https://github.com/homeassistant-ai/ha-mcp/commit/67d03df80eac5f4e581ef43727b9bbbe04612cc3))
+
+### Features
+
+- Add ENABLED_TOOL_MODULES env var for tool filtering (#316)
+  ([#316](https://github.com/homeassistant-ai/ha-mcp/pull/316),
+  [`d437eb3`](https://github.com/homeassistant-ai/ha-mcp/commit/d437eb39c90be333f6cce3bc3651836271007391))
+
+
 ## v4.20.0 (2025-12-09)
 
 ### Bug Fixes
