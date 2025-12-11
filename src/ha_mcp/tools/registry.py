@@ -181,7 +181,10 @@ class ToolsRegistry:
                 raise
 
         # Register explicit modules (those not following tools_*.py convention)
+        # Only register if they were included in discovered modules (respects filtering)
         for module_name, func_name in EXPLICIT_MODULES.items():
+            if module_name not in self._discovered_modules:
+                continue
             try:
                 module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
                 register_func = getattr(module, func_name)
