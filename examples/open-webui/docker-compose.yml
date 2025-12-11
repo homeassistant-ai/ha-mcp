@@ -8,6 +8,7 @@
 # Debugging tool calling issues:
 #   - Check Ollama logs: docker compose logs -f ollama
 #   - Check Open WebUI logs: docker compose logs -f open-webui
+#   - Check ha-mcp logs: docker compose logs -f ha-mcp
 #   - Test Ollama directly: curl http://localhost:11434/api/chat -d '{"model":"gpt-oss:20b","messages":[{"role":"user","content":"test"}],"stream":false}'
 
 services:
@@ -57,6 +58,8 @@ services:
     environment:
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+      # Enable debug logging for tool calling issues
+      - LOG_LEVEL=DEBUG
     restart: unless-stopped
 
   open-webui:
