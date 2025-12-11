@@ -109,7 +109,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Lazily create and return the tools registry."""
         if self._tools_registry is None:
             from .tools.registry import ToolsRegistry
-            self._tools_registry = ToolsRegistry(self)
+            self._tools_registry = ToolsRegistry(
+                self, enabled_modules=self.settings.enabled_tool_modules
+            )
             logger.debug("Lazily created ToolsRegistry")
         return self._tools_registry
 
