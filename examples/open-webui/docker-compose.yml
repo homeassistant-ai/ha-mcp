@@ -4,6 +4,11 @@
 #   2. docker compose up -d
 #   3. Wait for model download: docker compose logs -f ollama
 #   4. Open http://localhost:3000
+#
+# Debugging tool calling issues:
+#   - Check Ollama logs: docker compose logs -f ollama
+#   - Check Open WebUI logs: docker compose logs -f open-webui
+#   - Test Ollama directly: curl http://localhost:11434/api/chat -d '{"model":"gpt-oss:20b","messages":[{"role":"user","content":"test"}],"stream":false}'
 
 services:
   ollama:
@@ -13,6 +18,9 @@ services:
       - ollama_data:/root/.ollama
     ports:
       - "11434:11434"
+    environment:
+      # Enable debug logging for tool calling issues
+      - OLLAMA_DEBUG=1
     restart: unless-stopped
     # Uncomment for NVIDIA GPU support:
     # deploy:
@@ -38,8 +46,8 @@ services:
           echo "Ollama not ready yet..."
           sleep 2
         done
-        echo "Ollama is ready! Pulling qwen3:8b model..."
-        curl -X POST http://ollama:11434/api/pull -d '{"name":"qwen3:8b"}'
+        echo "Ollama is ready! Pulling gpt-oss:20b model (OpenAI open-source with native tool calling)..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name":"gpt-oss:20b"}'
         echo "Model ready!"
 
   ha-mcp:
@@ -62,7 +70,9 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       # Pre-configure ha-mcp as a tool server
       - TOOL_SERVER_CONNECTIONS=[{"url":"http://ha-mcp:8086/mcp","path":"","type":"mcp","auth_type":"none","key":"","config":{"enable":true},"info":{"id":"ha-mcp","name":"Home Assistant","description":"Control your smart home"}}]
-      - DEFAULT_MODELS=qwen3:8b
+      - DEFAULT_MODELS=gpt-oss:20b
+      # Enable debug logging for tool calling issues
+      - WEBUI_LOG_LEVEL=DEBUG
       - WEBUI_AUTH=false  # Disable auth for demo (remove in production!)
     depends_on:
       - ollama
