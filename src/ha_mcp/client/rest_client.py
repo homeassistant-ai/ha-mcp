@@ -620,7 +620,6 @@ class HomeAssistantClient:
         self, ws_client: Any, message: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle render_template WebSocket command with event-based response."""
-        import json
 
         # Generate our own message ID to track the response
         message_id = ws_client.get_next_message_id()
@@ -687,7 +686,7 @@ class HomeAssistantClient:
                         "template": message.get("template"),
                     }
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 ws_client.cancel_render_template_event(message_id)
                 return {
                     "success": False,
@@ -695,7 +694,7 @@ class HomeAssistantClient:
                     "template": message.get("template"),
                 }
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             ws_client.cancel_pending_response(message_id)
             ws_client.cancel_render_template_event(message_id)
             return {

@@ -449,7 +449,7 @@ class HomeAssistantWebSocketClient:
                 )
                 return {"success": True, **response}
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.cancel_pending_response(message_id)
             raise Exception("Command timeout")
         except Exception:

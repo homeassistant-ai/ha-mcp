@@ -266,6 +266,14 @@ def main() -> None:
         from ha_mcp.smoke_test import main as smoke_test_main
         sys.exit(smoke_test_main())
 
+    # Configure logging before server creation
+    from ha_mcp.config import get_settings
+    settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+    )
+
     # Set up signal handlers before running
     _setup_signal_handlers()
 
@@ -393,6 +401,14 @@ def main_web() -> None:
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
+    # Configure logging before server creation
+    from ha_mcp.config import get_settings
+    settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+    )
+
     _run_http_server("streamable-http")
 
 
@@ -405,6 +421,14 @@ def main_sse() -> None:
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
+    # Configure logging before server creation
+    from ha_mcp.config import get_settings
+    settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+    )
+
     _run_http_server("sse")
 
 
