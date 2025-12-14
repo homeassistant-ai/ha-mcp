@@ -81,7 +81,7 @@ def main() -> int:
 
         if tool_count < 50:
             errors.append(f"Too few tools discovered: {tool_count} (expected 50+)")
-            print(f"  ✗ Tool count too low (expected 50+)")
+            print("  ✗ Tool count too low (expected 50+)")
         else:
             # List a few tool names as examples
             tool_names = list(mcp._tool_manager._tools.keys())[:5]
@@ -100,7 +100,7 @@ def main() -> int:
     else:
         print("SMOKE TEST PASSED: All checks successful!")
         print(f"  - All {len(critical_imports)} critical libraries imported")
-        print(f"  - Server instantiated successfully")
+        print("  - Server instantiated successfully")
         print(f"  - {tool_count} tools discovered")
         return 0
 
