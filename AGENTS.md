@@ -185,6 +185,61 @@ src/ha_mcp/
 
 **WebSocket Verification**: Device operations verified via real-time state changes.
 
+## Context Engineering & Progressive Disclosure
+
+This project applies [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principles to tool design. These complementary approaches help manage cognitive load for both the LLM and the end user.
+
+### Context Engineering
+
+Context engineering treats LLM context as a finite resource with diminishing returns. Rather than front-loading all information, provide the minimum context needed and let the model fetch more when required.
+
+**Guiding principles:**
+- **Favor statelessness** — Avoid server-side session tracking or MCP-side state when possible. Use content-derived identifiers (hashes, IDs) that the client can pass back. Example: dashboard updates use content hashing for optimistic locking—hash is computed on read, verified on write to detect conflicts, no session state needed.
+- Delegate validation to backend systems when they already handle it well (HA Core uses voluptuous schemas with clear error messages)
+- Keep tool parameters simple—let the backend API handle type coercion, defaults, and validation
+- Rely on documentation tools rather than embedding extensive docs in every tool description
+- Trust that model knowledge + on-demand docs = sufficient context
+
+**Example - pass-through approach:**
+```python
+# Let HA validate and return its own error messages
+message = {"type": f"{helper_type}/create", "name": name}
+for param, value in [("latitude", latitude), ("longitude", longitude)]:
+    if value is not None:
+        message[param] = value
+result = await client.send_websocket_message(message)
+```
+
+**When tool-side logic adds value:**
+- Format normalization for UX convenience (e.g., `"09:00"` → `"09:00:00"`)
+- Parsing JSON strings from MCP clients that stringify arrays
+- Combining multiple HA API calls into one logical operation
+
+### Progressive Disclosure
+
+[Jakob Nielsen's progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principle: show essential features first, reveal complexity gradually. This applies directly to [LLM context management](https://www.inferable.ai/blog/posts/llm-progressive-context-encrichment)—giving LLMs more context often makes them perform worse by diluting attention.
+
+**How we apply this in ha-mcp:**
+
+| Pattern | Example |
+|---------|---------|
+| **Docs on demand** | Tool descriptions reference `ha_get_domain_docs()` instead of embedding full documentation |
+| **Hints in UX flow** | First tool in a workflow hints at related tools (e.g., `ha_search_entities` suggests `ha_get_state`) |
+| **Error-driven discovery** | When a tool fails, the error response hints at `ha_get_domain_docs()` for syntax help |
+| **Layered parameters** | Required params first, optional params with sensible defaults |
+| **Focused returns** | Return essential data; let user request details via follow-up tools |
+
+**Practical examples in this codebase:**
+- `ha_config_set_helper` has minimal docstring, points to `ha_get_domain_docs()` for each helper type
+- Search tools return entity IDs and names; full state requires `ha_get_state`
+- Error responses include `suggestions` array guiding next steps
+
+### References
+- [Anthropic: Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+- [Context Engineering Guide](https://www.promptingguide.ai/guides/context-engineering-guide)
+- [Nielsen Norman Group: Progressive Disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
+- [Progressive Context Enrichment for LLMs](https://www.inferable.ai/blog/posts/llm-progressive-context-encrichment)
+
 ## Home Assistant Add-on
 
 **Required files:**
