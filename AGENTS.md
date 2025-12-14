@@ -234,6 +234,31 @@ result = await client.send_websocket_message(message)
 - Search tools return entity IDs and names; full state requires `ha_get_state`
 - Error responses include `suggestions` array guiding next steps
 
+### Testing Model Knowledge
+
+Before adding extensive documentation to tool descriptions, test what models already know. Use a **no-context sub-agent** to probe baseline knowledge:
+
+```
+Task tool with model=haiku or model=sonnet:
+"Without searching or fetching anything, answer from your training data only:
+ How do you create a [X] in Home Assistant via WebSocket API?
+ What parameters are required vs optional?
+ Be honest if you're uncertain."
+```
+
+This reveals:
+- What the model knows from training (no need to document)
+- What gaps exist (target these with `ha_get_domain_docs()` hints)
+- Confidence levels across model tiers (haiku vs sonnet vs opus)
+
+**Example findings from helper analysis:**
+| Model | counter | schedule | zone | tag |
+|-------|---------|----------|------|-----|
+| Haiku | ~60% confident | ~30% uncertain | ~50% | ~20% |
+| Sonnet | ~80% accurate | ~75% knows format | ~85% | ~50% |
+
+This informs whether to embed docs (low model knowledge) or just hint at `ha_get_domain_docs()` (sufficient model knowledge).
+
 ### References
 - [Anthropic: Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 - [Context Engineering Guide](https://www.promptingguide.ai/guides/context-engineering-guide)
