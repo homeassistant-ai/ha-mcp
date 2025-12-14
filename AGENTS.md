@@ -251,6 +251,13 @@ This reveals:
 - What gaps exist (target these with `ha_get_domain_docs()` hints)
 - Confidence levels across model tiers (haiku vs sonnet vs opus)
 
+**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against actual source code or documentation:
+```bash
+# Check HA Core for actual API schema
+gh api /repos/home-assistant/core/contents/homeassistant/components/{domain}/__init__.py \
+  --jq '.content' | base64 -d | grep -A 20 "CREATE_FIELDS\|vol.Schema"
+```
+
 **Example findings from helper analysis:**
 | Model | counter | schedule | zone | tag |
 |-------|---------|----------|------|-----|
