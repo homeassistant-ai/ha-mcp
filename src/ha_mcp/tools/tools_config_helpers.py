@@ -341,44 +341,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Create or update Home Assistant helper entities for automation and UI control.
+        Create or update Home Assistant helper entities.
 
-        Creates a new helper if helper_id is not provided, or updates an existing helper if helper_id is provided.
+        Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
+        Parameters are validated by Home Assistant - errors return clear messages.
 
-        SUPPORTED HELPER TYPES (12 types with WebSocket API support):
-        - input_button: Virtual buttons for triggering automations
-        - input_boolean: Toggle switches/checkboxes
-        - input_datetime: Date and time pickers
-        - input_number: Numeric sliders or input boxes
-        - input_select: Dropdown selection lists
-        - input_text: Text input fields
-        - counter: Counters with increment/decrement/reset (services: counter.increment, counter.decrement, counter.reset)
-        - timer: Countdown timers (services: timer.start, timer.pause, timer.cancel, timer.finish)
-        - schedule: Weekly schedules with time ranges (entity turns on/off based on schedule)
-        - zone: Geographical zones for presence detection (requires latitude/longitude)
-        - person: Person entities linked to device trackers
-        - tag: NFC/QR tags for automation triggers
+        QUICK EXAMPLES:
+        - ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
+        - ha_config_set_helper("counter", "My Counter", initial=0, step=1)
+        - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
+        - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
+        - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
 
-        EXAMPLES:
-        - Create button: ha_config_set_helper("input_button", "My Button", icon="mdi:bell")
-        - Create boolean: ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
-        - Create select: ha_config_set_helper("input_select", "My Options", options=["opt1", "opt2", "opt3"])
-        - Create number: ha_config_set_helper("input_number", "Temperature", min_value=0, max_value=100, step=0.5, unit_of_measurement="°C")
-        - Create counter: ha_config_set_helper("counter", "My Counter", initial=0, min_value=0, max_value=100, step=1)
-        - Create timer: ha_config_set_helper("timer", "My Timer", duration="0:05:00", restore=True)
-        - Create schedule: ha_config_set_helper("schedule", "Work Hours", monday=[{"from": "09:00", "to": "17:00"}])
-        - Create zone: ha_config_set_helper("zone", "Office", latitude=37.7749, longitude=-122.4194, radius=100)
-        - Create person: ha_config_set_helper("person", "John", device_trackers=["device_tracker.john_phone"])
-        - Create tag: ha_config_set_helper("tag", "Front Door Tag", tag_id="front-door-01")
-        - Update helper: ha_config_set_helper("input_button", "New Name", helper_id="my_button", area_id="living_room")
-
-        OTHER HOME ASSISTANT HELPERS (YAML-only, not supported via API):
-        Mathematical: bayesian, derivative, filter, integration, min_max, random, statistics, threshold, trend, utility_meter
-        Time-based: history_stats, tod
-        Control: generic_hygrostat, generic_thermostat, group, manual, switch_as_x, template
-        Environmental: mold_indicator
-
-        **FOR DETAILED HELPER DOCUMENTATION:** Use ha_get_domain_docs() with the specific helper domain.
+        For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
         try:
             # Parse JSON list parameters if provided as strings
@@ -401,7 +376,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Build create message based on helper type
                 message: dict[str, Any] = {"type": f"{helper_type}/create", "name": name}
 
-                if icon:
+                # Icon supported by most helpers except person and tag
+                if icon and helper_type not in ("person", "tag"):
                     message["icon"] = icon
 
                 # Type-specific parameters
@@ -540,14 +516,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             message[day_name] = formatted_ranges
 
                 elif helper_type == "zone":
-                    # Zone parameters: latitude (required), longitude (required), radius, passive
-                    if latitude is None or longitude is None:
-                        return {
-                            "success": False,
-                            "error": "latitude and longitude are required for zone",
-                        }
-                    message["latitude"] = latitude
-                    message["longitude"] = longitude
+                    # Zone parameters - HA validates required fields (latitude, longitude)
+                    if latitude is not None:
+                        message["latitude"] = latitude
+                    if longitude is not None:
+                        message["longitude"] = longitude
                     if radius is not None:
                         message["radius"] = radius
                     if passive is not None:

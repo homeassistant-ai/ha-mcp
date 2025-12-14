@@ -945,21 +945,21 @@ class TestZoneCRUD:
         logger.info("Zone cleanup complete")
 
     async def test_zone_requires_coordinates(self, mcp_client):
-        """Test that zone requires latitude and longitude."""
-        logger.info("Testing zone without coordinates (should fail)")
+        """Test that zone requires latitude and longitude (validated by HA)."""
+        logger.info("Testing zone without coordinates (HA should reject)")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "zone",
                 "name": "E2E No Coords Zone",
-                # Missing required latitude/longitude
+                # Missing required latitude/longitude - HA will validate
             },
         )
 
         data = parse_mcp_result(result)
         assert data.get("success") is False, f"Should fail without coordinates: {data}"
-        logger.info("Zone properly requires coordinates")
+        logger.info("HA properly validates required zone coordinates")
 
 
 @pytest.mark.asyncio
@@ -986,13 +986,12 @@ class TestPersonCRUD:
 
         helper_name = "E2E Test Person"
 
-        # CREATE person
+        # CREATE person (note: person doesn't support icon parameter)
         create_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "person",
                 "name": helper_name,
-                "icon": "mdi:account",
             },
         )
 
