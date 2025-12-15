@@ -3,7 +3,7 @@ Configuration management tools for Home Assistant helpers.
 
 This module provides tools for listing, creating, updating, and removing
 Home Assistant helper entities (input_button, input_boolean, input_select,
-input_number, input_text, input_datetime).
+input_number, input_text, input_datetime, counter, timer, schedule).
 """
 
 import asyncio
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["helper"], "title": "List Input Helpers"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["helper"], "title": "List Helpers"})
     @log_tool_usage
     async def ha_config_list_helpers(
         helper_type: Annotated[
@@ -32,6 +32,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "input_number",
                 "input_text",
                 "input_datetime",
+                "counter",
+                "timer",
+                "schedule",
+                "zone",
+                "person",
+                "tag",
             ],
             Field(description="Type of helper entity to list"),
         ],
@@ -45,17 +51,25 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Area and label assignments
 
         SUPPORTED HELPER TYPES:
-        - input_button: Virtual buttons
-        - input_boolean: Toggle switches
-        - input_select: Dropdown lists
+        - input_button: Virtual buttons for triggering automations
+        - input_boolean: Toggle switches/checkboxes
+        - input_select: Dropdown selection lists
         - input_number: Numeric sliders/input boxes
         - input_text: Text input fields
         - input_datetime: Date/time pickers
+        - counter: Counters with increment/decrement/reset
+        - timer: Countdown timers with start/pause/cancel
+        - schedule: Weekly schedules with time ranges (on/off per day)
+        - zone: Geographical zones for presence detection
+        - person: Person entities linked to device trackers
+        - tag: NFC/QR tags for automation triggers
 
         EXAMPLES:
         - List all number helpers: ha_config_list_helpers("input_number")
-        - List all booleans: ha_config_list_helpers("input_boolean")
-        - List all selects: ha_config_list_helpers("input_select")
+        - List all counters: ha_config_list_helpers("counter")
+        - List all zones: ha_config_list_helpers("zone")
+        - List all persons: ha_config_list_helpers("person")
+        - List all tags: ha_config_list_helpers("tag")
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
@@ -109,6 +123,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "input_number",
                 "input_text",
                 "input_datetime",
+                "counter",
+                "timer",
+                "schedule",
+                "zone",
+                "person",
+                "tag",
             ],
             Field(description="Type of helper entity to create or update"),
         ],
@@ -138,20 +158,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         min_value: Annotated[
             float | None,
             Field(
-                description="Minimum value (input_number) or minimum length (input_text)",
+                description="Minimum value (input_number/counter) or minimum length (input_text)",
                 default=None,
             ),
         ] = None,
         max_value: Annotated[
             float | None,
             Field(
-                description="Maximum value (input_number) or maximum length (input_text)",
+                description="Maximum value (input_number/counter) or maximum length (input_text)",
                 default=None,
             ),
         ] = None,
         step: Annotated[
             float | None,
-            Field(description="Step/increment value for input_number", default=None),
+            Field(description="Step/increment value for input_number or counter", default=None),
         ] = None,
         unit_of_measurement: Annotated[
             str | None,
@@ -168,9 +188,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         initial: Annotated[
-            str | None,
+            str | int | None,
             Field(
-                description="Initial value for the helper (input_select, input_text, input_boolean, input_datetime)",
+                description="Initial value for the helper (input_select, input_text, input_boolean, input_datetime, counter)",
                 default=None,
             ),
         ] = None,
@@ -193,41 +213,147 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include time component for input_datetime", default=None
             ),
         ] = None,
+        restore: Annotated[
+            bool | None,
+            Field(
+                description="Restore state after restart (counter, timer). Defaults to True for counter, False for timer",
+                default=None,
+            ),
+        ] = None,
+        duration: Annotated[
+            str | None,
+            Field(
+                description="Default duration for timer in format 'HH:MM:SS' or seconds (e.g., '0:05:00' for 5 minutes)",
+                default=None,
+            ),
+        ] = None,
+        monday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        tuesday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        wednesday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        thursday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        friday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        saturday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        sunday: Annotated[
+            list[dict[str, str]] | None,
+            Field(
+                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                default=None,
+            ),
+        ] = None,
+        latitude: Annotated[
+            float | None,
+            Field(
+                description="Latitude for zone (required for zone)",
+                default=None,
+            ),
+        ] = None,
+        longitude: Annotated[
+            float | None,
+            Field(
+                description="Longitude for zone (required for zone)",
+                default=None,
+            ),
+        ] = None,
+        radius: Annotated[
+            float | None,
+            Field(
+                description="Radius in meters for zone (default: 100)",
+                default=None,
+            ),
+        ] = None,
+        passive: Annotated[
+            bool | None,
+            Field(
+                description="Passive zone (won't trigger state changes for person entities)",
+                default=None,
+            ),
+        ] = None,
+        user_id: Annotated[
+            str | None,
+            Field(
+                description="User ID to link to person entity",
+                default=None,
+            ),
+        ] = None,
+        device_trackers: Annotated[
+            list[str] | None,
+            Field(
+                description="List of device_tracker entity IDs for person",
+                default=None,
+            ),
+        ] = None,
+        picture: Annotated[
+            str | None,
+            Field(
+                description="Picture URL for person entity",
+                default=None,
+            ),
+        ] = None,
+        tag_id: Annotated[
+            str | None,
+            Field(
+                description="Tag ID for tag (auto-generated if not provided)",
+                default=None,
+            ),
+        ] = None,
+        description: Annotated[
+            str | None,
+            Field(
+                description="Description for tag",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
-        Create or update Home Assistant helper entities for automation and UI control.
+        Create or update Home Assistant helper entities.
 
-        Creates a new helper if helper_id is not provided, or updates an existing helper if helper_id is provided.
+        Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
+        Parameters are validated by Home Assistant - errors return clear messages.
 
-        SUPPORTED HELPER TYPES (6/29 total Home Assistant helpers):
-        - input_button: Virtual buttons for triggering automations
-        - input_boolean: Toggle switches/checkboxes
-        - input_datetime: Date and time pickers
-        - input_number: Numeric sliders or input boxes
-        - input_select: Dropdown selection lists
-        - input_text: Text input fields
+        QUICK EXAMPLES:
+        - ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
+        - ha_config_set_helper("counter", "My Counter", initial=0, step=1)
+        - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
+        - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
+        - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
 
-        EXAMPLES:
-        - Create button: ha_config_set_helper("input_button", "My Button", icon="mdi:bell")
-        - Create boolean: ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
-        - Create select: ha_config_set_helper("input_select", "My Options", options=["opt1", "opt2", "opt3"])
-        - Create number: ha_config_set_helper("input_number", "Temperature", min_value=0, max_value=100, step=0.5, unit_of_measurement="°C")
-        - Create datetime: ha_config_set_helper("input_datetime", "My DateTime", has_date=True, has_time=True, initial="2023-12-25 09:00:00")
-        - Create date-only: ha_config_set_helper("input_datetime", "My Date", has_date=True, has_time=False, initial="2023-12-25")
-        - Update helper: ha_config_set_helper("input_button", "New Name", helper_id="my_button", area_id="living_room", labels=["automation"])
-
-        OTHER HOME ASSISTANT HELPERS (not yet supported):
-        Mathematical: bayesian, derivative, filter, integration, min_max, random, statistics, threshold, trend, utility_meter
-        Time-based: history_stats, schedule, timer, tod
-        Control: counter, generic_hygrostat, generic_thermostat, group, manual, switch_as_x, template
-        Environmental: mold_indicator
-
-        **FOR DETAILED HELPER DOCUMENTATION:** Use ha_get_domain_docs() with the specific helper domain.
-        For example: ha_get_domain_docs("input_button"), ha_get_domain_docs("input_boolean"), etc.
-        This provides comprehensive configuration options, limitations, and advanced features for each helper type.
-
-        **IMPORTANT:** To get help with any specific helper type, use ha_get_domain_docs() with that helper's domain name.
-        For instance, to understand all options for input_number helpers, call: ha_get_domain_docs("input_number")
+        For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
         try:
             # Parse JSON list parameters if provided as strings
@@ -250,7 +376,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Build create message based on helper type
                 message: dict[str, Any] = {"type": f"{helper_type}/create", "name": name}
 
-                if icon:
+                # Icon supported by most helpers except person and tag
+                if icon and helper_type not in ("person", "tag"):
                     message["icon"] = icon
 
                 # Type-specific parameters
@@ -306,7 +433,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 elif helper_type == "input_boolean":
                     if initial is not None:
-                        message["initial"] = initial.lower() in [
+                        initial_str = str(initial).lower()
+                        message["initial"] = initial_str in [
                             "true",
                             "on",
                             "yes",
@@ -338,6 +466,82 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     if initial:
                         message["initial"] = initial
+
+                elif helper_type == "counter":
+                    # Counter parameters: initial, minimum, maximum, step, restore
+                    if initial is not None:
+                        message["initial"] = int(initial) if isinstance(initial, str) else initial
+                    if min_value is not None:
+                        message["minimum"] = int(min_value)
+                    if max_value is not None:
+                        message["maximum"] = int(max_value)
+                    if step is not None:
+                        message["step"] = int(step)
+                    if restore is not None:
+                        message["restore"] = restore
+
+                elif helper_type == "timer":
+                    # Timer parameters: duration, restore
+                    if duration:
+                        message["duration"] = duration
+                    if restore is not None:
+                        message["restore"] = restore
+
+                elif helper_type == "schedule":
+                    # Schedule parameters: monday-sunday with time ranges
+                    # Each day is a list of {"from": "HH:MM:SS", "to": "HH:MM:SS"}
+                    day_params = {
+                        "monday": monday,
+                        "tuesday": tuesday,
+                        "wednesday": wednesday,
+                        "thursday": thursday,
+                        "friday": friday,
+                        "saturday": saturday,
+                        "sunday": sunday,
+                    }
+                    for day_name, day_schedule in day_params.items():
+                        if day_schedule is not None:
+                            # Ensure time format has seconds
+                            formatted_ranges = []
+                            for time_range in day_schedule:
+                                formatted_range = {}
+                                for key in ["from", "to"]:
+                                    if key in time_range:
+                                        time_val = time_range[key]
+                                        # Add seconds if not present
+                                        if time_val.count(":") == 1:
+                                            time_val = f"{time_val}:00"
+                                        formatted_range[key] = time_val
+                                formatted_ranges.append(formatted_range)
+                            message[day_name] = formatted_ranges
+
+                elif helper_type == "zone":
+                    # Zone parameters - HA validates required fields (latitude, longitude)
+                    if latitude is not None:
+                        message["latitude"] = latitude
+                    if longitude is not None:
+                        message["longitude"] = longitude
+                    if radius is not None:
+                        message["radius"] = radius
+                    if passive is not None:
+                        message["passive"] = passive
+
+                elif helper_type == "person":
+                    # Person parameters: user_id, device_trackers, picture
+                    if user_id:
+                        message["user_id"] = user_id
+                    if device_trackers:
+                        message["device_trackers"] = device_trackers
+                    if picture:
+                        message["picture"] = picture
+
+                elif helper_type == "tag":
+                    # Tag parameters: tag_id, description
+                    # Note: name goes into entity registry, not tag storage
+                    if tag_id:
+                        message["tag_id"] = tag_id
+                    if description:
+                        message["description"] = description
 
                 result = await client.send_websocket_message(message)
 
@@ -454,6 +658,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "entity_id": entity_id,
                     }
 
+            # This should never be reached since action is either "create" or "update"
+            return {
+                "success": False,
+                "error": f"Unexpected action: {action}",
+            }
+
         except Exception as e:
             return {
                 "success": False,
@@ -478,6 +688,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "input_number",
                 "input_text",
                 "input_datetime",
+                "counter",
+                "timer",
+                "schedule",
+                "zone",
+                "person",
+                "tag",
             ],
             Field(description="Type of helper entity to delete"),
         ],
@@ -493,10 +709,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         SUPPORTED HELPER TYPES:
         - input_button, input_boolean, input_select, input_number, input_text, input_datetime
+        - counter, timer, schedule, zone, person, tag
 
         EXAMPLES:
         - Delete button: ha_config_remove_helper("input_button", "my_button")
-        - Delete number: ha_config_remove_helper("input_number", "input_number.temperature_offset")
+        - Delete counter: ha_config_remove_helper("counter", "my_counter")
+        - Delete timer: ha_config_remove_helper("timer", "my_timer")
+        - Delete schedule: ha_config_remove_helper("schedule", "work_hours")
 
         **WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.
         Use ha_search_entities() to verify the helper exists before attempting to delete it.
