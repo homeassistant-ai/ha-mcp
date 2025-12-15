@@ -156,7 +156,7 @@ jobs:
         run: mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
@@ -204,7 +204,7 @@ jobs:
           cd mcpb-bundle && zip -r ../ha-mcp.mcpb * && cd ..
 
       - name: Upload mcpb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ha-mcp-mcpb
           path: ha-mcp.mcpb
