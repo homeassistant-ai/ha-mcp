@@ -61,7 +61,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -132,7 +132,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_run' && 'master' || '' }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
