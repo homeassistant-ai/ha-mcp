@@ -2,6 +2,52 @@
 
 <!-- version list -->
 
+## v4.22.0 (2025-12-16)
+
+### Bug Fixes
+
+- Apply LOG_LEVEL environment variable to Python logging (#321)
+  ([#321](https://github.com/homeassistant-ai/ha-mcp/pull/321),
+  [`55c7075`](https://github.com/homeassistant-ai/ha-mcp/commit/55c70758083d5c4e1a86dcdf47b614678f1ba7e4))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#330) ([#330](https://github.com/homeassistant-ai/ha-mcp/pull/330),
+  [`c48762d`](https://github.com/homeassistant-ai/ha-mcp/commit/c48762d23a4fe92ab2aa3cda9cf2b11341dd3814))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`1b1be1c`](https://github.com/homeassistant-ai/ha-mcp/commit/1b1be1c497eaeb0a70c2baec63df711e6e2f7f95))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.0.5 to 44.1.0 (#329)
+  ([#329](https://github.com/homeassistant-ai/ha-mcp/pull/329),
+  [`02cd43a`](https://github.com/homeassistant-ai/ha-mcp/commit/02cd43ae141a5ab64810b5f79d55b729e12595ba))
+
+### Documentation
+
+- Add context engineering & progressive disclosure principles
+  ([`40ab2a6`](https://github.com/homeassistant-ai/ha-mcp/commit/40ab2a65f721f65f16f0cb1d48259bb5e4fafeef))
+
+- Add fact-checking caveat to model knowledge testing
+  ([`ea5cb33`](https://github.com/homeassistant-ai/ha-mcp/commit/ea5cb336fa74378136a197a6da2834ca0c4af79a))
+
+- Add no-context sub-agent strategy for testing model knowledge
+  ([`9e737a0`](https://github.com/homeassistant-ai/ha-mcp/commit/9e737a0b3a3588e0fa31ed331d58c26e43df27b4))
+
+### Features
+
+- Add all helpers with WebSocket API support (#323)
+  ([#323](https://github.com/homeassistant-ai/ha-mcp/pull/323),
+  [`dbf715f`](https://github.com/homeassistant-ai/ha-mcp/commit/dbf715f3fe458235e0991cfe335ad2906b0da7e7))
+
+- Add informational tool for HA configuration access (#322)
+  ([#322](https://github.com/homeassistant-ai/ha-mcp/pull/322),
+  [`b30899e`](https://github.com/homeassistant-ai/ha-mcp/commit/b30899e85c100740d234d65f3fdfd1f1659bb617))
+
+
 ## v4.21.0 (2025-12-11)
 
 ### Chores
