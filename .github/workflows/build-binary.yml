@@ -283,7 +283,7 @@ jobs:
             if [ -n "$ASSETS_TO_UPLOAD" ]; then
               echo "Uploading missing assets to release $TAG..."
               # shellcheck disable=SC2086
-              gh release upload "$TAG" $ASSETS_TO_UPLOAD || echo "Warning: Some assets may already exist (release may be immutable)"
+              gh release upload "$TAG" $ASSETS_TO_UPLOAD
             else
               echo "All assets already exist, nothing to upload"
             fi
