@@ -235,37 +235,61 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
-      - name: Extract changelog for this version
-        id: changelog
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          # Extract changelog section for this version
-          # Look for ## v{version} and extract until next ## v or end
-          awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 > release_notes.md
-          # If no specific section found, use a default message
-          if [ ! -s release_notes.md ]; then
-            echo "Release v${VERSION}" > release_notes.md
-          fi
-          echo "=== Release Notes ==="
-          cat release_notes.md
-
-      - name: Create or update GitHub release with binaries
+      - name: Upload binaries to draft release and publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="v${VERSION}"
 
-          # Check if release already exists
-          if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, checking for missing assets..."
+          # Check release status
+          RELEASE_INFO=$(gh release view "$TAG" --json isDraft,assets 2>/dev/null || echo "")
 
-            # Get list of existing assets
-            EXISTING_ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+          if [ -z "$RELEASE_INFO" ]; then
+            echo "Error: Release $TAG not found. SemVer Release should have created a draft."
+            echo "Creating release now as fallback..."
 
-            # Track if we need to upload anything
+            # Extract changelog for this version
+            awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 > release_notes.md
+            if [ ! -s release_notes.md ]; then
+              echo "Release v${VERSION}" > release_notes.md
+            fi
+
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file release_notes.md \
+              artifacts/ha-mcp-linux/ha-mcp-linux \
+              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+              artifacts/ha-mcp-mcpb/ha-mcp.mcpb
+            echo "✓ Created and published release $TAG"
+            exit 0
+          fi
+
+          IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.isDraft')
+          EXISTING_ASSETS=$(echo "$RELEASE_INFO" | jq -r '.assets[].name' 2>/dev/null || echo "")
+
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "Found draft release $TAG, uploading binaries..."
+
+            # Upload all binaries (--clobber is safe for draft releases)
+            gh release upload "$TAG" \
+              artifacts/ha-mcp-linux/ha-mcp-linux \
+              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+              artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
+              --clobber
+
+            # Publish the draft
+            echo "Publishing release $TAG..."
+            gh release edit "$TAG" --draft=false
+
+            echo "✓ Published release $TAG with binaries"
+          else
+            echo "Release $TAG is already published, checking for missing assets..."
+
+            # For published releases, only upload missing assets
             ASSETS_TO_UPLOAD=""
-
             for asset in "ha-mcp-linux" "ha-mcp-windows.exe" "ha-mcp-macos-arm64" "ha-mcp.mcpb"; do
               if echo "$EXISTING_ASSETS" | grep -q "^${asset}$"; then
                 echo "  Asset $asset already exists, skipping"
@@ -281,19 +305,11 @@ jobs:
             done
 
             if [ -n "$ASSETS_TO_UPLOAD" ]; then
-              echo "Uploading missing assets to release $TAG..."
+              echo "Uploading missing assets..."
               # shellcheck disable=SC2086
               gh release upload "$TAG" $ASSETS_TO_UPLOAD
+              echo "✓ Uploaded missing assets to $TAG"
             else
-              echo "All assets already exist, nothing to upload"
+              echo "✓ All assets already present in $TAG"
             fi
-          else
-            echo "Creating release $TAG with binaries..."
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file release_notes.md \
-              artifacts/ha-mcp-linux/ha-mcp-linux \
-              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
-              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
-              artifacts/ha-mcp-mcpb/ha-mcp.mcpb
           fi
