@@ -258,14 +258,35 @@ jobs:
 
           # Check if release already exists
           if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, uploading binaries to existing release..."
-            # Upload assets to existing release (handles immutable releases)
-            gh release upload "$TAG" \
-              artifacts/ha-mcp-linux/ha-mcp-linux \
-              artifacts/ha-mcp-windows/ha-mcp-windows.exe \
-              artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
-              artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
-              --clobber
+            echo "Release $TAG already exists, checking for missing assets..."
+
+            # Get list of existing assets
+            EXISTING_ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || echo "")
+
+            # Track if we need to upload anything
+            ASSETS_TO_UPLOAD=""
+
+            for asset in "ha-mcp-linux" "ha-mcp-windows.exe" "ha-mcp-macos-arm64" "ha-mcp.mcpb"; do
+              if echo "$EXISTING_ASSETS" | grep -q "^${asset}$"; then
+                echo "  Asset $asset already exists, skipping"
+              else
+                echo "  Asset $asset missing, will upload"
+                case $asset in
+                  "ha-mcp-linux") ASSETS_TO_UPLOAD="$ASSETS_TO_UPLOAD artifacts/ha-mcp-linux/ha-mcp-linux" ;;
+                  "ha-mcp-windows.exe") ASSETS_TO_UPLOAD="$ASSETS_TO_UPLOAD artifacts/ha-mcp-windows/ha-mcp-windows.exe" ;;
+                  "ha-mcp-macos-arm64") ASSETS_TO_UPLOAD="$ASSETS_TO_UPLOAD artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64" ;;
+                  "ha-mcp.mcpb") ASSETS_TO_UPLOAD="$ASSETS_TO_UPLOAD artifacts/ha-mcp-mcpb/ha-mcp.mcpb" ;;
+                esac
+              fi
+            done
+
+            if [ -n "$ASSETS_TO_UPLOAD" ]; then
+              echo "Uploading missing assets to release $TAG..."
+              # shellcheck disable=SC2086
+              gh release upload "$TAG" $ASSETS_TO_UPLOAD || echo "Warning: Some assets may already exist (release may be immutable)"
+            else
+              echo "All assets already exist, nothing to upload"
+            fi
           else
             echo "Creating release $TAG with binaries..."
             gh release create "$TAG" \
