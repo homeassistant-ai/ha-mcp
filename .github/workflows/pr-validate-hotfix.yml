@@ -33,7 +33,8 @@ jobs:
             exit 0
           fi
 
-          STABLE_COMMIT=$(git rev-parse stable)
+          # Use ^{commit} to dereference annotated tags to the commit SHA
+          STABLE_COMMIT=$(git rev-parse stable^{commit})
           STABLE_TAG_NAME=$(git describe --tags --exact-match $STABLE_COMMIT 2>/dev/null || echo "stable")
           echo "Stable tag points to: $STABLE_TAG_NAME ($STABLE_COMMIT)"
 
