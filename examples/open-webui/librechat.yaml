@@ -1,0 +1,51 @@
+# LibreChat Configuration for MCP Testing
+# See: https://www.librechat.ai/docs/features/mcp
+
+version: 1.2.1
+
+cache: true
+
+# Ollama endpoint configuration
+endpoints:
+  ollama:
+    # Base URL for Ollama API
+    baseURL: "http://ollama:11434"
+    # Models available for use
+    models:
+      default: ["qwen2.5:7b", "llama3.1:8b"]
+      fetch: true
+    # Model configuration
+    modelDisplayLabel: "Ollama"
+
+# MCP Server Configuration
+# Test with mini-mcp first (3 simple tools), then switch to ha-mcp
+mcpServers:
+  # Simple test MCP - 3 tools: get_time, add_numbers, greet
+  mini-mcp:
+    type: "streamable-http"
+    url: "http://mcpo-mini:8000/mini-mcp"
+    initTimeout: 30000
+
+  # Home Assistant MCP - full tools
+  # Uncomment to test after mini-mcp works
+  # ha-mcp:
+  #   type: "streamable-http"
+  #   url: "http://mcpo-ha:8000/ha-mcp"
+  #   initTimeout: 60000
+
+# Registration and authentication
+registration:
+  socialLogins: []
+
+# Rate limiting (generous for testing)
+rateLimits:
+  fileUploads:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60
+  conversationsImport:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60

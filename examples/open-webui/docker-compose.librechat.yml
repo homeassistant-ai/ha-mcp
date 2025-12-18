@@ -1,0 +1,114 @@
+# LibreChat + Ollama + MCP Testing Stack
+# Alternative frontend to Open WebUI for testing tool calling with local LLMs.
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your HA credentials
+#   2. docker compose -f docker-compose.librechat.yml up -d
+#   3. Wait for model download: docker compose -f docker-compose.librechat.yml logs -f ollama
+#   4. Open http://localhost:3080
+#
+# Endpoints:
+#   - LibreChat: http://localhost:3080
+#   - MCPO (mini-mcp): http://localhost:8001/mini-mcp/docs
+#   - MCPO (ha-mcp): http://localhost:8000/ha-mcp/docs
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_DEBUG=1
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: ollama-init
+    depends_on:
+      - ollama
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Ollama to be ready..."
+        until curl -sf http://ollama:11434/api/tags > /dev/null 2>&1; do
+          echo "Ollama not ready yet..."
+          sleep 2
+        done
+        echo "Ollama is ready! Pulling qwen2.5:7b..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name":"qwen2.5:7b"}'
+        echo "Model ready!"
+
+  # Mini MCP via MCPO
+  mcpo-mini:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo-mini
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./mini_mcp.py:/app/mini_mcp.py:ro
+    command: ["--port", "8000", "--name", "mini-mcp", "--", "uvx", "--from", "fastmcp", "fastmcp", "run", "/app/mini_mcp.py"]
+    restart: unless-stopped
+
+  # HA-MCP via MCPO
+  mcpo-ha:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo-ha
+    ports:
+      - "8000:8000"
+    command: ["--port", "8000", "--name", "ha-mcp", "--", "uvx", "ha-mcp@latest"]
+    environment:
+      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
+      - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+      - ENABLED_TOOL_MODULES=${ENABLED_TOOL_MODULES:-}
+    restart: unless-stopped
+
+  # MongoDB required by LibreChat
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
+  # LibreChat API
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: librechat
+    ports:
+      - "3080:3080"
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - librechat_data:/app/data
+      - librechat_logs:/app/logs
+    environment:
+      - HOST=0.0.0.0
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Allow registration for testing
+      - ALLOW_REGISTRATION=true
+      - ALLOW_SOCIAL_LOGIN=false
+      # MCP is configured via librechat.yaml
+    depends_on:
+      - mongodb
+      - ollama
+      - mcpo-mini
+      - mcpo-ha
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  mongodb_data:
+  librechat_data:
+  librechat_logs:

@@ -1,77 +1,125 @@
-# Open WebUI + Ollama + ha-mcp Demo
+# MCP Tool Calling Testing Stack
 
-A complete local AI stack for controlling Home Assistant with natural language.
+Test MCP tool calling with local LLMs using Open WebUI or LibreChat.
 
-## What's Included
+This stack helps diagnose tool calling issues with local models by providing:
+- **mini-mcp**: A minimal MCP server with 3 simple tools (get_time, add_numbers, greet)
+- **ha-mcp**: Full Home Assistant MCP server
+- **MCPO**: MCP-to-OpenAPI bridge (helps with compatibility)
+- Two frontends: Open WebUI and LibreChat
 
-- **Open WebUI** - ChatGPT-like interface (port 3000)
-- **Ollama** - Local LLM runtime (port 11434)
-- **smollm2:1.7b** - Small model with tool calling (~1GB RAM)
-- **ha-mcp** - Home Assistant MCP server (pre-configured)
+## Test Strategy
 
-## Quick Start
+1. **Test mini-mcp first** - If the model can't call `get_time()`, it won't work with ha-mcp
+2. **Test via MCPO** - OpenAPI endpoints work better with some models
+3. **Test ha-mcp** - After confirming tools work with simple server
 
-1. **Configure Home Assistant credentials:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your HA URL and token
-   ```
+## Quick Start (Remote Deployment)
 
-2. **Start the stack:**
-   ```bash
-   docker compose up -d
-   ```
+```bash
+# Configure your HA credentials
+cp .env.example .env
+# Edit .env with your settings
 
-3. **Wait for model download** (first time only, ~1GB):
-   ```bash
-   docker compose logs -f ollama-init
-   ```
+# Deploy to remote server with Docker
+./deploy.sh user@your-server.com          # Open WebUI (default)
+./deploy.sh user@your-server.com librechat # LibreChat
+```
 
-4. **Open the UI:**
-   - URL: http://localhost:3000
-   - No login required (demo mode)
+## Local Testing
 
-5. **Test it:**
-   > "What lights are on in my house?"
-   > "Turn off the living room lights"
+```bash
+cp .env.example .env
+# Edit .env
 
-## Requirements
+# Open WebUI stack
+docker compose up -d
 
-- Docker & Docker Compose
-- ~2GB RAM for the model
-- Home Assistant with a long-lived access token
+# OR LibreChat stack
+docker compose -f docker-compose.librechat.yml up -d
+```
 
-## Configuration
+## Endpoints
 
-### Using a different model
+| Service | Port | Description |
+|---------|------|-------------|
+| Open WebUI | 3000 | Chat interface |
+| LibreChat | 3080 | Alternative chat interface |
+| MCPO mini-mcp | 8001 | OpenAPI docs: `/mini-mcp/docs` |
+| MCPO ha-mcp | 8000 | OpenAPI docs: `/ha-mcp/docs` |
+| ha-mcp (native) | 8086 | MCP endpoint: `/mcp` |
+| Ollama | 11434 | LLM API |
 
-Edit `docker-compose.yml`:
-- Change `smollm2:1.7b` in both `ollama-init` and `DEFAULT_MODELS`
-- Other small models with tool support:
-  - `qwen2.5:1.5b` (~1GB)
-  - `granite3.1-moe:1b` (~1GB)
-  - `granite4:2b` (~1.5GB, better tool calling)
+## Test Prompts
 
-### Enable authentication
+**Mini MCP (test these first):**
+- "What time is it?" → calls `get_time()`
+- "What is 5 + 7?" → calls `add_numbers(5, 7)`
+- "Say hello to Bob" → calls `greet("Bob")`
 
-Remove or change `WEBUI_AUTH=false` in the open-webui service.
+**Home Assistant MCP:**
+- "What lights are on?" → calls entity search
+- "Turn off the living room" → calls device control
 
-### GPU acceleration (NVIDIA)
+## Adding Tool Servers in Open WebUI
 
-Uncomment the `deploy` section in the ollama service.
+Go to **Admin Panel → Settings → Tools → Add Connection**
+
+| Setting | Value |
+|---------|-------|
+| Type | OpenAPI |
+| URL (mini-mcp) | `http://mcpo-mini:8000/mini-mcp` |
+| URL (ha-mcp) | `http://mcpo-ha:8000/ha-mcp` |
+| Auth | None |
+
+## Limiting ha-mcp Tools
+
+For smaller models, reduce the number of tools:
+
+```bash
+# In .env
+ENABLED_TOOL_MODULES=tools_config_automations,tools_search
+```
+
+This exposes only ~7 tools instead of 80+.
+
+## Models with Tool Calling Support
+
+| Model | Size | Tool Calling Quality |
+|-------|------|---------------------|
+| qwen2.5:7b | ~4GB | Good |
+| llama3.1:8b | ~5GB | Good |
+| qwen2.5:1.5b | ~1GB | Basic |
+| granite4:2b | ~1.5GB | Decent |
 
 ## Troubleshooting
 
-**Model not loading?**
+**Check if mini-mcp is working:**
 ```bash
-docker compose logs ollama-init
+curl http://localhost:8001/mini-mcp/docs
 ```
 
-**MCP connection issues?**
+**Check ha-mcp logs:**
 ```bash
-docker compose logs ha-mcp
-# Test connectivity:
-docker compose exec open-webui curl http://ha-mcp:8086/mcp
+docker compose logs -f ha-mcp
+docker compose logs -f mcpo-ha
+```
+
+**Test Ollama tool calling directly:**
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "qwen2.5:7b",
+  "messages": [{"role": "user", "content": "What time is it?"}],
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "get_time",
+      "description": "Get current time",
+      "parameters": {"type": "object", "properties": {}}
+    }
+  }],
+  "stream": false
+}'
 ```
 
 **Reset everything:**
@@ -79,3 +127,11 @@ docker compose exec open-webui curl http://ha-mcp:8086/mcp
 docker compose down -v
 docker compose up -d
 ```
+
+## Files
+
+- `docker-compose.yml` - Open WebUI stack
+- `docker-compose.librechat.yml` - LibreChat stack
+- `librechat.yaml` - LibreChat MCP configuration
+- `mini_mcp.py` - Minimal MCP server for testing
+- `deploy.sh` - Remote deployment script
