@@ -8,10 +8,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
+import jq
 from pydantic import Field
 
 from .helpers import log_tool_usage
@@ -221,6 +223,146 @@ def _get_cards_container(
     }
 
 
+def _apply_jq_transform(
+    config: dict[str, Any], expression: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """
+    Apply a jq transformation to dashboard config.
+
+    Returns:
+        tuple: (transformed_config, error_message)
+        - On success: (dict, None)
+        - On failure: (None, error_string)
+    """
+    try:
+        # Compile and validate the jq expression
+        program = jq.compile(expression)
+    except ValueError as e:
+        return None, f"Invalid jq expression: {e}"
+
+    try:
+        # Execute the transformation
+        result = program.input_value(config).first()
+    except StopIteration:
+        return None, "jq expression produced no output"
+    except Exception as e:
+        return None, f"jq transformation error: {e}"
+
+    # Validate result is still a valid dashboard structure
+    if not isinstance(result, dict):
+        return None, f"jq result must be a dict, got {type(result).__name__}"
+
+    if "views" not in result and "strategy" not in result:
+        return None, "jq result missing required 'views' or 'strategy' key"
+
+    return result, None
+
+
+def _find_cards_in_config(
+    config: dict[str, Any],
+    entity_id: str | None = None,
+    card_type: str | None = None,
+    heading: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Find cards in a dashboard config matching the search criteria.
+
+    Returns a list of matches with location info and card config.
+    """
+    matches: list[dict[str, Any]] = []
+
+    if "strategy" in config:
+        return []  # Strategy dashboards don't have explicit cards
+
+    views = config.get("views", [])
+    for view_idx, view in enumerate(views):
+        if not isinstance(view, dict):
+            continue
+
+        view_type = view.get("type", "masonry")
+
+        if view_type == "sections":
+            # Sections-based view
+            sections = view.get("sections", [])
+            for section_idx, section in enumerate(sections):
+                if not isinstance(section, dict):
+                    continue
+                cards = section.get("cards", [])
+                for card_idx, card in enumerate(cards):
+                    if not isinstance(card, dict):
+                        continue
+                    if _card_matches(card, entity_id, card_type, heading):
+                        matches.append({
+                            "view_index": view_idx,
+                            "section_index": section_idx,
+                            "card_index": card_idx,
+                            "jq_path": f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
+                            "card_type": card.get("type"),
+                            "card_config": card,
+                        })
+        else:
+            # Flat view (masonry, panel, sidebar)
+            cards = view.get("cards", [])
+            for card_idx, card in enumerate(cards):
+                if not isinstance(card, dict):
+                    continue
+                if _card_matches(card, entity_id, card_type, heading):
+                    matches.append({
+                        "view_index": view_idx,
+                        "section_index": None,
+                        "card_index": card_idx,
+                        "jq_path": f".views[{view_idx}].cards[{card_idx}]",
+                        "card_type": card.get("type"),
+                        "card_config": card,
+                    })
+
+    return matches
+
+
+def _card_matches(
+    card: dict[str, Any],
+    entity_id: str | None,
+    card_type: str | None,
+    heading: str | None,
+) -> bool:
+    """Check if a card matches the search criteria."""
+    # Type filter
+    if card_type is not None:
+        if card.get("type") != card_type:
+            return False
+
+    # Entity filter (supports partial matching with *)
+    if entity_id is not None:
+        card_entity = card.get("entity", "")
+        # Also check entities list for cards that have multiple entities
+        card_entities = card.get("entities", [])
+        if isinstance(card_entities, list):
+            all_entities = [card_entity] + [
+                e.get("entity", e) if isinstance(e, dict) else e
+                for e in card_entities
+            ]
+        else:
+            all_entities = [card_entity]
+
+        # Support wildcard matching
+        if "*" in entity_id:
+            pattern = entity_id.replace(".", r"\.").replace("*", ".*")
+            if not any(re.match(pattern, e) for e in all_entities if e):
+                return False
+        else:
+            if entity_id not in all_entities:
+                return False
+
+    # Heading filter (for heading cards or section titles)
+    if heading is not None:
+        card_heading = card.get("heading", card.get("title", ""))
+        # Case-insensitive partial match
+        if heading.lower() not in card_heading.lower():
+            return False
+
+    return True
+
+
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
@@ -373,7 +515,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             Field(
                 description="Dashboard configuration with views and cards. "
                 "Can be dict or JSON string. "
-                "Omit or set to None to create dashboard without initial config."
+                "Omit or set to None to create dashboard without initial config. "
+                "Mutually exclusive with jq_transform."
+            ),
+        ] = None,
+        jq_transform: Annotated[
+            str | None,
+            Field(
+                description="jq expression to transform existing dashboard config. "
+                "Mutually exclusive with config. Requires dashboard to exist. "
+                "Examples: '.views[0].sections[1].cards[0].icon = \"mdi:thermometer\"', "
+                "'.views[0].cards += [{\"type\": \"button\", \"entity\": \"light.bedroom\"}]', "
+                "'del(.views[0].sections[0].cards[2])'. "
+                "Use ha_dashboard_find_card() to get jq_path for targeted edits."
             ),
         ] = None,
         title: Annotated[
@@ -398,8 +552,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Create or update a Home Assistant dashboard.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
+        Supports two modes: full config replacement OR jq-based transformation.
 
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
+
+        WHEN TO USE WHICH MODE:
+        - config: Creating new dashboards or replacing entire config
+        - jq_transform: Making targeted changes to existing dashboards (more efficient)
+
+        For dashboards with many cards, prefer jq_transform to minimize token usage and
+        reduce risk of accidentally modifying unrelated parts.
+
+        JQ TRANSFORM EXAMPLES:
+        - Update card icon: '.views[0].sections[1].cards[0].icon = "mdi:thermometer"'
+        - Add card: '.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]'
+        - Delete card: 'del(.views[0].sections[0].cards[2])'
+        - Update by selection: '(.views[0].cards[] | select(.entity == "light.living_room")).icon = "mdi:lamp"'
+
+        TIP: Use ha_dashboard_find_card() to get the jq_path for any card.
 
         MODERN DASHBOARD BEST PRACTICES (2024+):
         - Use "sections" view type (default) with grid-based layouts
@@ -450,6 +620,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             }
         )
 
+        Update card using jq_transform (efficient for small changes):
+        ha_config_set_dashboard(
+            url_path="home-dashboard",
+            jq_transform='.views[0].sections[0].cards[0].features += [{"type": "climate-hvac-modes"}]'
+        )
+
         Create strategy-based dashboard (auto-generated):
         ha_config_set_dashboard(
             url_path="my-home",
@@ -493,6 +669,106 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         f"Try '{url_path.replace('_', '-')}' instead",
                         "Use format like 'my-dashboard' or 'mobile-view'",
                     ],
+                }
+
+            # Validate mutual exclusivity of config and jq_transform
+            if config is not None and jq_transform is not None:
+                return {
+                    "success": False,
+                    "action": "set",
+                    "error": "Cannot use both 'config' and 'jq_transform' parameters",
+                    "suggestions": [
+                        "Use 'config' for full replacement",
+                        "Use 'jq_transform' for targeted changes to existing dashboard",
+                    ],
+                }
+
+            # Handle jq_transform mode
+            if jq_transform is not None:
+                # Fetch current dashboard config
+                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+                if url_path:
+                    get_data["url_path"] = url_path
+
+                response = await client.send_websocket_message(get_data)
+
+                if isinstance(response, dict) and not response.get("success", True):
+                    error_msg = response.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": "jq_transform",
+                        "url_path": url_path,
+                        "error": f"Dashboard not found or inaccessible: {error_msg}",
+                        "suggestions": [
+                            "jq_transform requires an existing dashboard",
+                            "Use 'config' parameter to create a new dashboard",
+                            "Verify dashboard exists with ha_config_list_dashboards()",
+                        ],
+                    }
+
+                current_config = response.get("result") if isinstance(response, dict) else response
+                if not isinstance(current_config, dict):
+                    return {
+                        "success": False,
+                        "action": "jq_transform",
+                        "url_path": url_path,
+                        "error": "Current dashboard config is invalid",
+                        "suggestions": ["Initialize dashboard with 'config' parameter first"],
+                    }
+
+                # Apply jq transformation
+                transformed_config, error = _apply_jq_transform(current_config, jq_transform)
+                if error:
+                    return {
+                        "success": False,
+                        "action": "jq_transform",
+                        "url_path": url_path,
+                        "error": error,
+                        "suggestions": [
+                            "Verify jq syntax: https://jqlang.github.io/jq/manual/",
+                            "Use ha_dashboard_find_card() to get correct jq_path",
+                            "Test expression locally: echo '<config>' | jq '<expression>'",
+                        ],
+                    }
+
+                # Save transformed config
+                save_data: dict[str, Any] = {
+                    "type": "lovelace/config/save",
+                    "config": transformed_config,
+                }
+                if url_path:
+                    save_data["url_path"] = url_path
+
+                save_result = await client.send_websocket_message(save_data)
+
+                if isinstance(save_result, dict) and not save_result.get("success", True):
+                    error_msg = save_result.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": "jq_transform",
+                        "url_path": url_path,
+                        "error": f"Failed to save transformed config: {error_msg}",
+                        "suggestions": [
+                            "jq expression may have produced invalid dashboard structure",
+                            "Verify config format is valid Lovelace JSON",
+                        ],
+                    }
+
+                # Compute new hash for potential chaining
+                # transformed_config is guaranteed to be a dict here (validated above)
+                new_config_hash = _compute_config_hash(cast(dict[str, Any], transformed_config))
+
+                return {
+                    "success": True,
+                    "action": "jq_transform",
+                    "url_path": url_path,
+                    "config_hash": new_config_hash,
+                    "jq_expression": jq_transform,
+                    "message": f"Dashboard {url_path} updated via jq transform",
                 }
 
             # Check if dashboard exists
@@ -569,13 +845,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 config_dict = cast(dict[str, Any], parsed_config)
 
                 # Build save config message
-                save_data: dict[str, Any] = {
+                config_save_data: dict[str, Any] = {
                     "type": "lovelace/config/save",
                     "config": config_dict,
                 }
                 if url_path:
-                    save_data["url_path"] = url_path
-                save_result = await client.send_websocket_message(save_data)
+                    config_save_data["url_path"] = url_path
+                save_result = await client.send_websocket_message(config_save_data)
 
                 # Check if save failed
                 if isinstance(save_result, dict) and not save_result.get(
@@ -1790,6 +2066,188 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             return {
                 "success": False,
                 "action": "update_card",
+                "url_path": url_path,
+                "error": str(e) if str(e) else f"{type(e).__name__} (no details)",
+                "error_type": type(e).__name__,
+                "suggestions": [
+                    "Check HA connection",
+                    "Verify dashboard with ha_config_list_dashboards()",
+                ],
+            }
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["dashboard", "card"],
+            "title": "Find Dashboard Card",
+        }
+    )
+    @log_tool_usage
+    async def ha_dashboard_find_card(
+        url_path: Annotated[
+            str | None,
+            Field(description="Dashboard URL path, e.g. 'lovelace-home'. Omit for default."),
+        ] = None,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description="Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. "
+                "Matches cards with this entity in 'entity' or 'entities' field."
+            ),
+        ] = None,
+        card_type: Annotated[
+            str | None,
+            Field(description="Find cards by type, e.g. 'tile', 'button', 'heading'."),
+        ] = None,
+        heading: Annotated[
+            str | None,
+            Field(
+                description="Find cards by heading/title text (case-insensitive partial match). "
+                "Useful for finding section headings (type: 'heading')."
+            ),
+        ] = None,
+        include_config: Annotated[
+            bool,
+            Field(description="Include full card configuration in results (increases output size)."),
+        ] = False,
+    ) -> dict[str, Any]:
+        """
+        Find cards in a dashboard by entity_id, type, or heading text.
+
+        Returns card locations (view_index, section_index, card_index) and jq_path
+        for use with ha_config_set_dashboard(jq_transform=...) or card update tools.
+
+        Use this tool BEFORE targeted updates to find exact card positions without
+        manually parsing the full dashboard config.
+
+        SEARCH CRITERIA (at least one required):
+        - entity_id: Match cards containing this entity (supports wildcards with *)
+        - card_type: Match cards of this type (e.g., 'tile', 'button', 'heading')
+        - heading: Match cards with this text in heading/title (partial, case-insensitive)
+
+        Multiple criteria are AND-ed together.
+
+        EXAMPLES:
+
+        Find all tile cards:
+        ha_dashboard_find_card(url_path="my-dashboard", card_type="tile")
+
+        Find cards for a specific entity:
+        ha_dashboard_find_card(url_path="my-dashboard", entity_id="light.living_room")
+
+        Find all temperature sensors (wildcard):
+        ha_dashboard_find_card(url_path="my-dashboard", entity_id="sensor.temperature_*")
+
+        Find the "Climate" section heading:
+        ha_dashboard_find_card(url_path="my-dashboard", heading="Climate", card_type="heading")
+
+        WORKFLOW EXAMPLE:
+        1. find = ha_dashboard_find_card(url_path="my-dash", entity_id="light.bedroom")
+        2. # Use jq_path from result to update:
+        3. ha_config_set_dashboard(
+               url_path="my-dash",
+               jq_transform=f'{find["matches"][0]["jq_path"]}.icon = "mdi:lamp"'
+           )
+        """
+        try:
+            # Validate at least one search criteria
+            if entity_id is None and card_type is None and heading is None:
+                return {
+                    "success": False,
+                    "action": "find_card",
+                    "error": "At least one search criteria required",
+                    "suggestions": [
+                        "Provide entity_id, card_type, or heading parameter",
+                        "Use entity_id='sensor.*' to find all sensor cards",
+                        "Use card_type='heading' to find section headings",
+                    ],
+                }
+
+            # Fetch dashboard config
+            get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+            if url_path:
+                get_data["url_path"] = url_path
+
+            response = await client.send_websocket_message(get_data)
+
+            if isinstance(response, dict) and not response.get("success", True):
+                error_msg = response.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "error": f"Failed to get dashboard: {error_msg}",
+                    "suggestions": [
+                        "Verify dashboard exists with ha_config_list_dashboards()",
+                        "Check HA connection",
+                    ],
+                }
+
+            config = response.get("result") if isinstance(response, dict) else response
+            if not isinstance(config, dict):
+                return {
+                    "success": False,
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "error": "Dashboard config is empty or invalid",
+                    "suggestions": ["Initialize dashboard with ha_config_set_dashboard"],
+                }
+
+            # Check for strategy dashboard
+            if "strategy" in config:
+                return {
+                    "success": False,
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "error": "Strategy dashboards have no explicit cards to search",
+                    "suggestions": [
+                        "Use 'Take Control' in HA UI to convert to editable",
+                        "Or create a non-strategy dashboard",
+                    ],
+                }
+
+            # Find matching cards
+            matches = _find_cards_in_config(config, entity_id, card_type, heading)
+
+            # Optionally strip config to reduce output size
+            if not include_config:
+                for match in matches:
+                    del match["card_config"]
+
+            # Compute config hash for potential follow-up operations
+            config_hash = _compute_config_hash(config)
+
+            return {
+                "success": True,
+                "action": "find_card",
+                "url_path": url_path,
+                "config_hash": config_hash,
+                "search_criteria": {
+                    "entity_id": entity_id,
+                    "card_type": card_type,
+                    "heading": heading,
+                },
+                "matches": matches,
+                "match_count": len(matches),
+                "hint": "Use jq_path with ha_config_set_dashboard(jq_transform=...) for targeted updates"
+                if matches else "No matches found. Try broader search criteria.",
+            }
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error finding card: url_path={url_path}, "
+                f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
+                f"error={e}",
+                exc_info=True,
+            )
+            return {
+                "success": False,
+                "action": "find_card",
                 "url_path": url_path,
                 "error": str(e) if str(e) else f"{type(e).__name__} (no details)",
                 "error_type": type(e).__name__,
