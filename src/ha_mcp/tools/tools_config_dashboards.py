@@ -1317,10 +1317,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # Card add/update/remove replaced by jq_transform in ha_config_set_dashboard
     # =========================================================================
 
-    # Check feature flag for partial update tools
-    settings = get_global_settings()
-    if not settings.enable_dashboard_partial_tools:
-        return  # Skip registering find_card if partial tools disabled
+    # Check feature flag for partial update tools (lazy check, default enabled)
+    try:
+        settings = get_global_settings()
+        if not settings.enable_dashboard_partial_tools:
+            return  # Skip registering find_card if partial tools disabled
+    except Exception:
+        pass  # Default: register the tool if settings unavailable
 
     @mcp.tool(
         annotations={
