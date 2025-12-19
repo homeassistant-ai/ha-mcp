@@ -71,4 +71,3 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 - Web-based configuration (edit JSON in browser)
 - stdio is more reliable than HTTP for this MCP server
 - See [Antigravity MCP Guide](https://antigravity.codes/blog/antigravity-mcp-tutorial) for general MCP setup
-- Known issues: [#318](https://github.com/homeassistant-ai/ha-mcp/issues/318)
