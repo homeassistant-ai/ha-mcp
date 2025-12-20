@@ -99,25 +99,6 @@ async def _verify_config_unchanged(
     return {"success": True}
 
 
-def _count_cards_in_config(config: dict[str, Any]) -> int:
-    """Count total cards in a dashboard config."""
-    if "strategy" in config or "views" not in config:
-        return 0
-
-    total = 0
-    for view in config.get("views", []):
-        if not isinstance(view, dict):
-            continue
-        view_type = view.get("type", "masonry")
-        if view_type == "sections":
-            for section in view.get("sections", []):
-                if isinstance(section, dict):
-                    total += len(section.get("cards", []))
-        else:
-            total += len(view.get("cards", []))
-    return total
-
-
 def _apply_jq_transform(
     config: dict[str, Any], expression: str
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -368,8 +349,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Compute hash for optimistic locking in subsequent operations
             config_hash = _compute_config_hash(config) if isinstance(config, dict) else None
 
-            # Count cards for progressive disclosure hint
-            card_count = _count_cards_in_config(config) if isinstance(config, dict) else 0
+            # Calculate config size for progressive disclosure hint
+            config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
             result: dict[str, Any] = {
                 "success": True,
@@ -377,15 +358,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "url_path": url_path,
                 "config": config,
                 "config_hash": config_hash,
-                "card_count": card_count,
+                "config_size_bytes": config_size,
             }
 
-            # Add hint for large dashboards (progressive disclosure)
-            if card_count >= 30:
+            # Add hint for large configs (progressive disclosure) - 10KB ≈ 2-3k tokens
+            if config_size >= 10000:
                 result["hint"] = (
-                    f"Large dashboard ({card_count} cards). For edits, prefer "
+                    f"Large config ({config_size:,} bytes). For edits, use "
                     "ha_dashboard_find_card() + ha_config_set_dashboard(jq_transform=...) "
-                    "over full config replacement to minimize tokens and reduce error risk."
+                    "instead of full config replacement."
                 )
 
             return result
@@ -475,11 +456,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
 
         WHEN TO USE WHICH MODE:
-        - config: Creating new dashboards or replacing entire config
-        - jq_transform: Making targeted changes to existing dashboards (more efficient)
-
-        For dashboards with many cards, prefer jq_transform to minimize token usage and
-        reduce risk of accidentally modifying unrelated parts.
+        - jq_transform: Preferred for edits. Surgical changes, fewer tokens.
+        - config: New dashboards only, or full restructure. Replaces everything.
 
         JQ TRANSFORM EXAMPLES:
         - Update card icon: '.views[0].sections[1].cards[0].icon = "mdi:thermometer"'
@@ -786,7 +764,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             # Set config if provided
             config_updated = False
-            existing_card_count = 0
+            existing_config_size = 0
             hint = None
 
             if config is not None:
@@ -815,7 +793,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     )
 
                     if isinstance(current_config, dict):
-                        existing_card_count = _count_cards_in_config(current_config)
+                        existing_config_size = len(json.dumps(current_config))
 
                         # Optional config_hash validation for full replacement
                         if config_hash is not None:
@@ -832,11 +810,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                                     ],
                                 }
 
-                        # Soft warning for large dashboard full replacement
-                        if existing_card_count >= 30:
+                        # Soft warning for large config full replacement (10KB ≈ 2-3k tokens)
+                        if existing_config_size >= 10000:
                             hint = (
-                                f"Replaced large dashboard ({existing_card_count} cards). "
-                                "Consider using jq_transform for targeted edits to reduce risk."
+                                f"Replaced large config ({existing_config_size:,} bytes). "
+                                "Consider jq_transform for targeted edits."
                             )
 
                 # Build save config message
