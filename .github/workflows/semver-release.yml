@@ -68,18 +68,28 @@ jobs:
       issues: write        # Required for GitHub releases
 
     steps:
+    # Generate GitHub App token with bypass permissions for tag creation
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      # Fallback to RELEASE_TOKEN (PAT) or GITHUB_TOKEN if app credentials not configured
+      continue-on-error: true
+
     - uses: actions/checkout@v6
       with:
         fetch-depth: 0
-        # Use RELEASE_TOKEN (PAT/App token with bypass permissions) if available, fallback to GITHUB_TOKEN
-        token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN
+        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
     - name: Python Semantic Release
       id: semantic
       uses: python-semantic-release/python-semantic-release@v10.5.2
       with:
-        # Use RELEASE_TOKEN to bypass tag creation restrictions
-        github_token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        # Use GitHub App token with bypass permissions
+        github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         verbosity: "2"
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
@@ -87,7 +97,7 @@ jobs:
     - name: Create draft GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
-        GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       run: |
         VERSION="${{ steps.semantic.outputs.version }}"
         TAG="v${VERSION}"
