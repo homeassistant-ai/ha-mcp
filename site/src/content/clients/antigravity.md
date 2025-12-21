@@ -27,8 +27,7 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 ```json
 {
   "mcpServers": {
-    "home-assistant": {
-      "command": "uvx",
+    "homeassistant": {
       "args": ["ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "{{HOMEASSISTANT_URL}}",
@@ -51,7 +50,7 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 ```json
 {
   "mcpServers": {
-    "home-assistant": {
+    "homeassistant": {
       "serverUrl": "{{MCP_SERVER_URL}}"
     }
   }
