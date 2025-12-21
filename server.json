@@ -1,5 +1,5 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.homeassistant-ai/ha-mcp",
   "description": "Comprehensive Model Context Protocol server for managing Home Assistant through AI assistants.",
   "repository": {

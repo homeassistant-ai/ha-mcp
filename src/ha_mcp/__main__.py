@@ -207,8 +207,13 @@ async def _run_with_graceful_shutdown() -> None:
 
     _shutdown_event = asyncio.Event()
 
+    # Respect FastMCP's show_cli_banner setting
+    # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
+    import fastmcp
+    show_banner = fastmcp.settings.show_cli_banner
+
     # Create a task for the MCP server
-    server_task = asyncio.create_task(_get_mcp().run_async())
+    server_task = asyncio.create_task(_get_mcp().run_async(show_banner=show_banner))
 
     # Wait for either the server to complete or a shutdown signal
     shutdown_task = asyncio.create_task(_shutdown_event.wait())
@@ -312,6 +317,11 @@ async def _run_http_with_graceful_shutdown(
 
     _shutdown_event = asyncio.Event()
 
+    # Respect FastMCP's show_cli_banner setting
+    # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
+    import fastmcp
+    show_banner = fastmcp.settings.show_cli_banner
+
     # Create a task for the MCP server
     server_task = asyncio.create_task(
         _get_mcp().run_async(
@@ -319,6 +329,7 @@ async def _run_http_with_graceful_shutdown(
             host=host,
             port=port,
             path=path,
+            show_banner=show_banner,
         )
     )
 

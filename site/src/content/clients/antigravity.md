@@ -27,17 +27,19 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 ```json
 {
   "mcpServers": {
-    "home-assistant": {
-      "command": "uvx",
+    "homeassistant": {
       "args": ["ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "{{HOMEASSISTANT_URL}}",
-        "HOMEASSISTANT_TOKEN": "{{HOMEASSISTANT_TOKEN}}"
+        "HOMEASSISTANT_TOKEN": "{{HOMEASSISTANT_TOKEN}}",
+        "FASTMCP_SHOW_CLI_BANNER": "false"
       }
     }
   }
 }
 ```
+
+> **Note:** `FASTMCP_SHOW_CLI_BANNER=false` disables the startup banner, which prevents "Unexpected server output" errors in Antigravity.
 
 **Important:** Use absolute paths if specifying a local command. Restart the Agent session after saving.
 
@@ -48,7 +50,7 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 ```json
 {
   "mcpServers": {
-    "home-assistant": {
+    "homeassistant": {
       "serverUrl": "{{MCP_SERVER_URL}}"
     }
   }
@@ -57,6 +59,7 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 
 ## Troubleshooting
 
+- **"Unexpected server output" error:** Add `"FASTMCP_SHOW_CLI_BANNER": "false"` to your env config (see example above)
 - **Tools load but fail when called:** Try stdio mode instead of HTTP
 - **"EOF" errors:** Ensure command paths are absolute, not relative
 - **First run timeout:** Run `uvx ha-mcp@latest --version` in terminal first to cache the package
@@ -67,4 +70,3 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 - Web-based configuration (edit JSON in browser)
 - stdio is more reliable than HTTP for this MCP server
 - See [Antigravity MCP Guide](https://antigravity.codes/blog/antigravity-mcp-tutorial) for general MCP setup
-- Known issues: [#318](https://github.com/homeassistant-ai/ha-mcp/issues/318)

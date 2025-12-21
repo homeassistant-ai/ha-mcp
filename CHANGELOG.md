@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v4.22.1 (2025-12-18)
+
+### Bug Fixes
+
+- **ci**: Don't suppress upload errors in build-binary
+  ([`3185c28`](https://github.com/homeassistant-ai/ha-mcp/commit/3185c2816b857df0c17e3068a8d184f73e72c4c5))
+
+- **ci**: Resolve recurring workflow failures
+  ([`ae1934b`](https://github.com/homeassistant-ai/ha-mcp/commit/ae1934b8c446ac06811cdf108c938c0ea58116df))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`01afd07`](https://github.com/homeassistant-ai/ha-mcp/commit/01afd0722fdfa4ee0c0b4823a8930d995b83b304))
+
+### Continuous Integration
+
+- **deps**: Bump actions/download-artifact from 6 to 7 (#325)
+  ([#325](https://github.com/homeassistant-ai/ha-mcp/pull/325),
+  [`2ba83c4`](https://github.com/homeassistant-ai/ha-mcp/commit/2ba83c4af54d8b5a597a84d7e6b04524ae67766f))
+
+- **deps**: Bump actions/setup-python from 5 to 6 (#327)
+  ([#327](https://github.com/homeassistant-ai/ha-mcp/pull/327),
+  [`24734dc`](https://github.com/homeassistant-ai/ha-mcp/commit/24734dc85f6d2fb7458747dd9b83fb0744a51e61))
+
+- **deps**: Bump actions/upload-artifact from 4 to 6 (#328)
+  ([#328](https://github.com/homeassistant-ai/ha-mcp/pull/328),
+  [`9ddf862`](https://github.com/homeassistant-ai/ha-mcp/commit/9ddf8621145fbeb25623ecd18d01f1b251bc01d4))
+
+- **deps**: Bump astral-sh/setup-uv from 4 to 7 (#326)
+  ([#326](https://github.com/homeassistant-ai/ha-mcp/pull/326),
+  [`672f683`](https://github.com/homeassistant-ai/ha-mcp/commit/672f683b64709de16afc904a3ac27bd5b145f7d8))
+
+### Documentation
+
+- **antigravity**: Recommend stdio mode, add troubleshooting
+  ([`8dac62e`](https://github.com/homeassistant-ai/ha-mcp/commit/8dac62e6102e498c1e13ce26787e8699c8193e90))
+
+### Refactoring
+
+- **ci**: Use draft releases for atomic release creation
+  ([`5214097`](https://github.com/homeassistant-ai/ha-mcp/commit/52140979ec71cf6c21b6679a8574585e6ac9e8fb))
+
+
 ## v4.22.0 (2025-12-16)
 
 ### Bug Fixes
