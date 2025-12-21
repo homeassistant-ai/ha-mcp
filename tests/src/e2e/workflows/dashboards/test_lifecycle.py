@@ -365,375 +365,423 @@ class TestDashboardDocumentationTools:
         logger.info("ha_get_card_documentation (invalid) test passed")
 
 
-class TestCardOperations:
-    """E2E tests for card-level CRUD operations."""
+class TestJqTransformAndFindCard:
+    """E2E tests for jq_transform and ha_dashboard_find_card."""
 
-    async def test_card_crud_lifecycle_flat_view(self, mcp_client):
-        """Test add, update, remove card in flat view."""
-        logger.info("Starting card CRUD lifecycle test (flat view)")
+    async def test_jq_transform_update_field(self, mcp_client):
+        """Test updating a card field using jq_transform."""
+        logger.info("Starting jq_transform update field test")
         mcp = MCPAssertions(mcp_client)
 
         # Setup: Create test dashboard
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
-                "url_path": "test-card-ops",
-                "title": "Card Operations Test",
-                "config": {"views": [{"title": "Test View", "cards": []}]},
+                "url_path": "test-jq-update",
+                "title": "JQ Update Test",
+                "config": {
+                    "views": [
+                        {
+                            "title": "Test View",
+                            "cards": [
+                                {"type": "tile", "entity": "sensor.temperature", "icon": "mdi:old"},
+                            ]
+                        }
+                    ]
+                },
             },
         )
         await asyncio.sleep(1)
 
         try:
-            # Get initial config with hash
-            get_initial = await mcp.call_tool_success(
-                "ha_config_get_dashboard",
-                {"url_path": "test-card-ops"},
-            )
-            config_hash = get_initial["config_hash"]
-
-            # 1. Add card (using config_hash for optimistic locking)
-            logger.info("Adding card...")
-            add_result = await mcp.call_tool_success(
-                "ha_dashboard_add_card",
-                {
-                    "url_path": "test-card-ops",
-                    "view_index": 0,
-                    "card_config": {"type": "markdown", "content": "# Test Card"},
-                    "config_hash": config_hash,
-                },
-            )
-            assert add_result["success"] is True
-            assert add_result["location"]["card_index"] == 0
-            config_hash = add_result["config_hash"]  # Use new hash for next op
-
-            # 2. Verify card exists
+            # Get dashboard and config_hash
             get_result = await mcp.call_tool_success(
                 "ha_config_get_dashboard",
-                {"url_path": "test-card-ops"},
+                {"url_path": "test-jq-update"},
             )
-            assert len(get_result["config"]["views"][0]["cards"]) == 1
             config_hash = get_result["config_hash"]
 
-            # 3. Update card
-            logger.info("Updating card...")
+            # Update icon using jq_transform
             update_result = await mcp.call_tool_success(
-                "ha_dashboard_update_card",
+                "ha_config_set_dashboard",
                 {
-                    "url_path": "test-card-ops",
-                    "view_index": 0,
-                    "card_index": 0,
-                    "card_config": {"type": "markdown", "content": "# Updated!"},
+                    "url_path": "test-jq-update",
                     "config_hash": config_hash,
+                    "jq_transform": '.views[0].cards[0].icon = "mdi:thermometer"',
                 },
             )
             assert update_result["success"] is True
-            assert update_result["previous_card"]["content"] == "# Test Card"
-            assert update_result["updated_card"]["content"] == "# Updated!"
-            config_hash = update_result["config_hash"]
+            assert update_result["action"] == "jq_transform"
+            assert "config_hash" in update_result
 
-            # 4. Add second card at position 0
-            add_result2 = await mcp.call_tool_success(
-                "ha_dashboard_add_card",
-                {
-                    "url_path": "test-card-ops",
-                    "view_index": 0,
-                    "card_config": {"type": "button", "entity": "switch.test"},
-                    "position": 0,
-                    "config_hash": config_hash,
-                },
-            )
-            assert add_result2["location"]["card_index"] == 0
-            config_hash = add_result2["config_hash"]
-
-            # 5. Verify order
-            get_result2 = await mcp.call_tool_success(
+            # Verify the change
+            verify_result = await mcp.call_tool_success(
                 "ha_config_get_dashboard",
-                {"url_path": "test-card-ops"},
+                {"url_path": "test-jq-update"},
             )
-            cards = get_result2["config"]["views"][0]["cards"]
-            assert len(cards) == 2
-            assert cards[0]["type"] == "button"
-            assert cards[1]["type"] == "markdown"
-            config_hash = get_result2["config_hash"]
+            assert verify_result["config"]["views"][0]["cards"][0]["icon"] == "mdi:thermometer"
 
-            # 6. Remove first card
-            logger.info("Removing card...")
-            remove_result = await mcp.call_tool_success(
-                "ha_dashboard_remove_card",
-                {
-                    "url_path": "test-card-ops",
-                    "view_index": 0,
-                    "card_index": 0,
-                    "config_hash": config_hash,
-                },
-            )
-            assert remove_result["success"] is True
-            assert remove_result["removed_card"]["type"] == "button"
-
-            # 7. Verify final state
-            get_result3 = await mcp.call_tool_success(
-                "ha_config_get_dashboard",
-                {"url_path": "test-card-ops"},
-            )
-            final_cards = get_result3["config"]["views"][0]["cards"]
-            assert len(final_cards) == 1
-            assert final_cards[0]["type"] == "markdown"
-
-            logger.info("Card CRUD lifecycle test (flat view) passed")
+            logger.info("jq_transform update field test passed")
 
         finally:
-            # Cleanup
-            logger.info("Cleaning up test dashboard...")
             await mcp.call_tool_success(
                 "ha_config_delete_dashboard",
-                {"dashboard_id": "test-card-ops"},
+                {"dashboard_id": "test-jq-update"},
             )
 
-    async def test_card_crud_sections_view(self, mcp_client):
-        """Test card operations in sections-type view."""
-        logger.info("Starting card CRUD test (sections view)")
+    async def test_jq_transform_add_delete_card(self, mcp_client):
+        """Test adding and deleting cards using jq_transform."""
+        logger.info("Starting jq_transform add/delete test")
         mcp = MCPAssertions(mcp_client)
 
-        # Setup: Create dashboard with sections
+        # Setup: Create test dashboard with one card
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
-                "url_path": "test-sections-ops",
-                "title": "Sections Test",
+                "url_path": "test-jq-ops",
+                "title": "JQ Operations Test",
                 "config": {
-                    "views": [{
-                        "title": "Sections View",
-                        "type": "sections",
-                        "sections": [
-                            {"title": "Section 0", "cards": []},
-                            {"title": "Section 1", "cards": []},
-                        ]
-                    }]
+                    "views": [
+                        {
+                            "title": "Test View",
+                            "cards": [
+                                {"type": "tile", "entity": "sensor.temperature"},
+                            ]
+                        }
+                    ]
                 },
             },
         )
         await asyncio.sleep(1)
 
         try:
-            # Get initial config with hash
-            get_initial = await mcp.call_tool_success(
+            # Add a card
+            get_result = await mcp.call_tool_success(
                 "ha_config_get_dashboard",
-                {"url_path": "test-sections-ops"},
+                {"url_path": "test-jq-ops"},
             )
-            config_hash = get_initial["config_hash"]
+            config_hash = get_result["config_hash"]
 
-            # Add card to section 1
             add_result = await mcp.call_tool_success(
-                "ha_dashboard_add_card",
+                "ha_config_set_dashboard",
                 {
-                    "url_path": "test-sections-ops",
-                    "view_index": 0,
-                    "section_index": 1,
-                    "card_config": {"type": "tile", "entity": "light.test"},
+                    "url_path": "test-jq-ops",
                     "config_hash": config_hash,
+                    "jq_transform": '.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]',
                 },
             )
             assert add_result["success"] is True
-            assert add_result["location"]["section_index"] == 1
-            config_hash = add_result["config_hash"]
 
-            # Verify card in correct section
-            get_result = await mcp.call_tool_success(
+            # Verify 2 cards
+            verify_result = await mcp.call_tool_success(
                 "ha_config_get_dashboard",
-                {"url_path": "test-sections-ops"},
+                {"url_path": "test-jq-ops"},
             )
-            sections = get_result["config"]["views"][0]["sections"]
-            assert len(sections[0]["cards"]) == 0
-            assert len(sections[1]["cards"]) == 1
-            assert sections[1]["cards"][0]["entity"] == "light.test"
-            config_hash = get_result["config_hash"]
+            assert len(verify_result["config"]["views"][0]["cards"]) == 2
 
-            # Update card in section
-            update_result = await mcp.call_tool_success(
-                "ha_dashboard_update_card",
+            # Delete the first card
+            config_hash = verify_result["config_hash"]
+            delete_result = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
                 {
-                    "url_path": "test-sections-ops",
-                    "view_index": 0,
-                    "section_index": 1,
-                    "card_index": 0,
-                    "card_config": {"type": "tile", "entity": "light.updated"},
+                    "url_path": "test-jq-ops",
                     "config_hash": config_hash,
+                    "jq_transform": 'del(.views[0].cards[0])',
                 },
             )
-            assert update_result["success"] is True
-            config_hash = update_result["config_hash"]
+            assert delete_result["success"] is True
 
-            # Remove card
-            remove_result = await mcp.call_tool_success(
-                "ha_dashboard_remove_card",
-                {
-                    "url_path": "test-sections-ops",
-                    "view_index": 0,
-                    "section_index": 1,
-                    "card_index": 0,
-                    "config_hash": config_hash,
-                },
+            # Verify 1 card remaining
+            final_result = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-jq-ops"},
             )
-            assert remove_result["success"] is True
+            assert len(final_result["config"]["views"][0]["cards"]) == 1
+            assert final_result["config"]["views"][0]["cards"][0]["type"] == "button"
 
-            logger.info("Card CRUD test (sections view) passed")
+            logger.info("jq_transform add/delete test passed")
 
         finally:
-            # Cleanup
             await mcp.call_tool_success(
                 "ha_config_delete_dashboard",
-                {"dashboard_id": "test-sections-ops"},
+                {"dashboard_id": "test-jq-ops"},
             )
 
-    async def test_card_operation_error_handling(self, mcp_client):
-        """Test error cases for card operations."""
-        logger.info("Starting card operation error handling test")
+    async def test_jq_transform_config_hash_validation(self, mcp_client):
+        """Test config_hash validation prevents conflicts."""
+        logger.info("Starting config_hash validation test")
         mcp = MCPAssertions(mcp_client)
 
         # Setup
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
-                "url_path": "test-errors",
-                "config": {"views": [{"cards": [{"type": "markdown"}]}]},
+                "url_path": "test-hash-validation",
+                "title": "Hash Validation Test",
+                "config": {
+                    "views": [
+                        {
+                            "title": "Test View",
+                            "cards": [{"type": "tile", "entity": "sensor.temperature"}]
+                        }
+                    ]
+                },
             },
         )
         await asyncio.sleep(1)
 
         try:
-            # Get config with hash for error tests
+            # Get config_hash
             get_result = await mcp.call_tool_success(
                 "ha_config_get_dashboard",
-                {"url_path": "test-errors"},
+                {"url_path": "test-hash-validation"},
             )
-            config_hash = get_result["config_hash"]
+            old_hash = get_result["config_hash"]
 
-            # Test view index out of bounds
-            result = await mcp_client.call_tool(
-                "ha_dashboard_remove_card",
+            # Modify dashboard (simulate concurrent edit)
+            await mcp.call_tool_success(
+                "ha_config_set_dashboard",
                 {
-                    "url_path": "test-errors",
-                    "view_index": 99,
-                    "card_index": 0,
-                    "config_hash": config_hash,
+                    "url_path": "test-hash-validation",
+                    "config": {
+                        "views": [
+                            {
+                                "title": "Modified View",
+                                "cards": [{"type": "markdown", "content": "Changed"}]
+                            }
+                        ]
+                    },
+                },
+            )
+
+            # Try to apply jq_transform with stale hash - should fail
+            result = await mcp_client.call_tool(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": "test-hash-validation",
+                    "config_hash": old_hash,
+                    "jq_transform": '.views[0].cards[0].icon = "mdi:new"',
                 },
             )
             parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert "view" in parsed["error"].lower()
+            assert "conflict" in parsed["error"].lower() or "modified" in parsed["error"].lower()
 
-            # Test card index out of bounds
-            result = await mcp_client.call_tool(
-                "ha_dashboard_update_card",
-                {
-                    "url_path": "test-errors",
-                    "view_index": 0,
-                    "card_index": 99,
-                    "card_config": {"type": "markdown"},
-                    "config_hash": config_hash,
-                },
-            )
-            parsed = parse_mcp_result(result)
-            assert parsed["success"] is False
-            assert "card" in parsed["error"].lower()
-
-            # Test missing type field
-            result = await mcp_client.call_tool(
-                "ha_dashboard_add_card",
-                {
-                    "url_path": "test-errors",
-                    "view_index": 0,
-                    "card_config": {"entity": "light.no_type"},
-                    "config_hash": config_hash,
-                },
-            )
-            parsed = parse_mcp_result(result)
-            assert parsed["success"] is False
-            assert "type" in parsed["error"].lower()
-
-            logger.info("Card operation error handling test passed")
+            logger.info("config_hash validation test passed")
 
         finally:
             await mcp.call_tool_success(
                 "ha_config_delete_dashboard",
-                {"dashboard_id": "test-errors"},
+                {"dashboard_id": "test-hash-validation"},
             )
 
-    async def test_strategy_dashboard_rejected(self, mcp_client):
-        """Test that card operations reject strategy-based dashboards."""
-        logger.info("Starting strategy dashboard rejection test")
+    async def test_jq_transform_requires_hash(self, mcp_client):
+        """Test that jq_transform requires config_hash."""
+        logger.info("Starting jq_transform requires hash test")
         mcp = MCPAssertions(mcp_client)
 
-        # Setup: Create dashboard with strategy configuration
+        # Setup
         await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {
-                "url_path": "test-strategy",
-                "title": "Strategy Dashboard",
+                "url_path": "test-requires-hash",
+                "title": "Requires Hash Test",
+                "config": {"views": [{"cards": []}]},
+            },
+        )
+        await asyncio.sleep(1)
+
+        try:
+            # Try jq_transform without config_hash - should fail
+            result = await mcp_client.call_tool(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": "test-requires-hash",
+                    "jq_transform": '.views[0].title = "New Title"',
+                },
+            )
+            parsed = parse_mcp_result(result)
+            assert parsed["success"] is False
+            assert "config_hash is required" in parsed["error"]
+
+            logger.info("jq_transform requires hash test passed")
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard",
+                {"dashboard_id": "test-requires-hash"},
+            )
+
+    async def test_find_card_by_entity(self, mcp_client):
+        """Test finding cards by entity_id."""
+        logger.info("Starting find_card by entity test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Setup: Create dashboard with multiple cards
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": "test-find-entity",
+                "title": "Find Card Test",
                 "config": {
-                    "strategy": {"type": "auto-entities"},
-                    "views": []
+                    "views": [
+                        {
+                            "title": "Test View",
+                            "type": "sections",
+                            "sections": [
+                                {
+                                    "title": "Section 1",
+                                    "cards": [
+                                        {"type": "tile", "entity": "sensor.temperature"},
+                                        {"type": "tile", "entity": "sensor.humidity"},
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
                 },
             },
         )
         await asyncio.sleep(1)
 
         try:
-            # Get config with hash
-            get_result = await mcp.call_tool_success(
-                "ha_config_get_dashboard",
-                {"url_path": "test-strategy"},
-            )
-            config_hash = get_result["config_hash"]
-
-            # Attempt to add card - should fail with strategy error
-            result = await mcp_client.call_tool(
-                "ha_dashboard_add_card",
+            # Find card by entity
+            result = await mcp.call_tool_success(
+                "ha_dashboard_find_card",
                 {
-                    "url_path": "test-strategy",
-                    "view_index": 0,
-                    "card_config": {"type": "markdown", "content": "Test"},
-                    "config_hash": config_hash,
+                    "url_path": "test-find-entity",
+                    "entity_id": "sensor.temperature",
                 },
             )
-            parsed = parse_mcp_result(result)
-            assert parsed["success"] is False
-            assert "strategy" in parsed["error"].lower()
+            assert result["success"] is True
+            assert result["match_count"] == 1
+            assert len(result["matches"]) == 1
 
-            # Attempt to update card - should fail with strategy error
-            result = await mcp_client.call_tool(
-                "ha_dashboard_update_card",
-                {
-                    "url_path": "test-strategy",
-                    "view_index": 0,
-                    "card_index": 0,
-                    "card_config": {"type": "markdown"},
-                    "config_hash": config_hash,
-                },
-            )
-            parsed = parse_mcp_result(result)
-            assert parsed["success"] is False
-            assert "strategy" in parsed["error"].lower()
+            match = result["matches"][0]
+            assert match["view_index"] == 0
+            assert match["section_index"] == 0
+            assert match["card_index"] == 0
+            assert "jq_path" in match
+            assert match["jq_path"] == ".views[0].sections[0].cards[0]"
 
-            # Attempt to remove card - should fail with strategy error
-            result = await mcp_client.call_tool(
-                "ha_dashboard_remove_card",
-                {
-                    "url_path": "test-strategy",
-                    "view_index": 0,
-                    "card_index": 0,
-                    "config_hash": config_hash,
-                },
-            )
-            parsed = parse_mcp_result(result)
-            assert parsed["success"] is False
-            assert "strategy" in parsed["error"].lower()
-
-            logger.info("Strategy dashboard rejection test passed")
+            logger.info("find_card by entity test passed")
 
         finally:
             await mcp.call_tool_success(
                 "ha_config_delete_dashboard",
-                {"dashboard_id": "test-strategy"},
+                {"dashboard_id": "test-find-entity"},
+            )
+
+    async def test_find_card_by_type(self, mcp_client):
+        """Test finding cards by card type."""
+        logger.info("Starting find_card by type test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Setup
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": "test-find-type",
+                "title": "Find Type Test",
+                "config": {
+                    "views": [
+                        {
+                            "cards": [
+                                {"type": "tile", "entity": "sensor.temperature"},
+                                {"type": "markdown", "content": "Test"},
+                                {"type": "tile", "entity": "sensor.humidity"},
+                            ]
+                        }
+                    ]
+                },
+            },
+        )
+        await asyncio.sleep(1)
+
+        try:
+            # Find all tile cards
+            result = await mcp.call_tool_success(
+                "ha_dashboard_find_card",
+                {
+                    "url_path": "test-find-type",
+                    "card_type": "tile",
+                },
+            )
+            assert result["success"] is True
+            assert result["match_count"] == 2
+            assert len(result["matches"]) == 2
+            assert all(m["card_index"] in [0, 2] for m in result["matches"])
+
+            logger.info("find_card by type test passed")
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard",
+                {"dashboard_id": "test-find-type"},
+            )
+
+    async def test_find_card_with_jq_transform(self, mcp_client):
+        """Test workflow: find card -> jq_transform."""
+        logger.info("Starting find_card + jq_transform workflow test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Setup
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": "test-workflow",
+                "title": "Workflow Test",
+                "config": {
+                    "views": [
+                        {
+                            "cards": [
+                                {"type": "tile", "entity": "light.living_room", "icon": "mdi:lamp"},
+                                {"type": "tile", "entity": "light.bedroom", "icon": "mdi:bed"},
+                            ]
+                        }
+                    ]
+                },
+            },
+        )
+        await asyncio.sleep(1)
+
+        try:
+            # Find card
+            find_result = await mcp.call_tool_success(
+                "ha_dashboard_find_card",
+                {
+                    "url_path": "test-workflow",
+                    "entity_id": "light.bedroom",
+                },
+            )
+            assert find_result["match_count"] == 1
+
+            match = find_result["matches"][0]
+            jq_path = match["jq_path"]
+            config_hash = find_result["config_hash"]
+
+            # Update using jq_path
+            update_result = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": "test-workflow",
+                    "config_hash": config_hash,
+                    "jq_transform": f'{jq_path}.icon = "mdi:lightbulb"',
+                },
+            )
+            assert update_result["success"] is True
+
+            # Verify
+            verify_result = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-workflow"},
+            )
+            assert verify_result["config"]["views"][0]["cards"][1]["icon"] == "mdi:lightbulb"
+
+            logger.info("find_card + jq_transform workflow test passed")
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard",
+                {"dashboard_id": "test-workflow"},
             )
