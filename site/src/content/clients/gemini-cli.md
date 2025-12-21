@@ -83,10 +83,10 @@ Gemini CLI uses `httpUrl` key for HTTP streaming transport:
 ### stdio (Local)
 
 ```bash
-gemini mcp add \
+gemini mcp add --scope user homeassistant \
   -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \
   -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \
-  home-assistant uvx ha-mcp@latest
+  uvx -- ha-mcp@latest
 ```
 
 ### HTTP (Network/Remote)

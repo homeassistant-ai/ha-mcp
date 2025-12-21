@@ -1384,17 +1384,16 @@ mcpServers:
         // Gemini CLI
         if (isStdio) {
           if (isDocker) {
-            config = `gemini mcp add home-assistant docker -- \\
-  run --rm -i \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  ghcr.io/homeassistant-ai/ha-mcp:latest`;
-          } else {
-            config = `gemini mcp add home-assistant uvx -- \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-  ha-mcp@latest`;
-          }
+                        config = `gemini mcp add --scope user homeassistant docker -- \\
+              run --rm -i \\
+              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+              ghcr.io/homeassistant-ai/ha-mcp:latest`;
+                        } else {
+                        config = `gemini mcp add --scope user homeassistant \\
+              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+              uvx -- ha-mcp@latest`;          }
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
