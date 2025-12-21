@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v5.0.0 (2025-12-21)
+
+### Bug Fixes
+
+- Respect FASTMCP_SHOW_CLI_BANNER env var for banner control (#336)
+  ([#336](https://github.com/homeassistant-ai/ha-mcp/pull/336),
+  [`53d3d22`](https://github.com/homeassistant-ai/ha-mcp/commit/53d3d22a29dd525b18a7391de82e1511c02e23ac))
+
+- Update MCP Registry schema to 2025-12-11
+  ([`c0f0a2e`](https://github.com/homeassistant-ai/ha-mcp/commit/c0f0a2e487f123b08e11b371dca8a5a23b6aeb1c))
+
+- Update MCP Registry schema to current draft version
+  ([`2401a05`](https://github.com/homeassistant-ai/ha-mcp/commit/2401a0533f47289ee4b4c7c60cf1352b88e3517b))
+
+- **ci**: Dereference annotated tags in hotfix validation
+  ([`9f223f2`](https://github.com/homeassistant-ai/ha-mcp/commit/9f223f277f3357cd6313f2e5fc31d1030f88f56d))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7987e74`](https://github.com/homeassistant-ai/ha-mcp/commit/7987e74a3b2a40ae39b87d4d33ba4d7610f57e6d))
+
+### Documentation
+
+- Add FASTMCP_SHOW_CLI_BANNER workaround for Antigravity
+  ([`eb222dd`](https://github.com/homeassistant-ai/ha-mcp/commit/eb222dd92f0f897a96047c631c5a52505ff86d38))
+
+- **antigravity**: Remove known issues reference
+  ([`f37eed9`](https://github.com/homeassistant-ai/ha-mcp/commit/f37eed9dd23b680242a2066780e21fb4cd65b160))
+
+### Features
+
+- **dashboard**: Add jq_transform and find_card for efficient editing (#333)
+  ([#333](https://github.com/homeassistant-ai/ha-mcp/pull/333),
+  [`1cd6805`](https://github.com/homeassistant-ai/ha-mcp/commit/1cd6805f133ddf1f3150aeb3b6ef6f26c91cd862))
+
+### Breaking Changes
+
+- **dashboard**: Remove ha_dashboard_add_card, ha_dashboard_update_card, ha_dashboard_remove_card
+  tools. Use jq_transform in ha_config_set_dashboard instead for all card operations.
+
+
 ## v4.22.1 (2025-12-18)
 
 ### Bug Fixes
