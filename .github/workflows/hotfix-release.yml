@@ -11,13 +11,16 @@ env:
   PYTHON_VERSION: "3.13"
 
 jobs:
-  release-hotfix:
-    name: Release Hotfix
+  semantic-release:
+    name: Semantic Release
     # Only run for merged hotfix PRs
     if: |
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'hotfix/')
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.semantic.outputs.released }}
+      version: ${{ steps.semantic.outputs.version }}
     permissions:
       contents: write
       id-token: write
@@ -64,7 +67,32 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         verbosity: "2"
+        # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
+
+    - name: Create draft GitHub release
+      if: steps.semantic.outputs.released == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION="${{ steps.semantic.outputs.version }}"
+        TAG="v${VERSION}"
+
+        # Extract changelog for this version
+        awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 > release_notes.md
+        if [ ! -s release_notes.md ]; then
+          echo "Hotfix Release v${VERSION}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "Critical bug fix - see PR #${{ github.event.pull_request.number }}" >> release_notes.md
+        fi
+
+        # Create draft release (build-binary.yml will add binaries and publish)
+        gh release create "$TAG" \
+          --title "🚨 Hotfix $TAG" \
+          --notes-file release_notes.md \
+          --draft
+
+        echo "✓ Created draft hotfix release $TAG (waiting for binaries)"
 
     - name: Copy changelog to addon directory
       if: steps.semantic.outputs.released == 'true'
@@ -99,3 +127,14 @@ jobs:
         echo "**Version:** ${{ steps.semantic.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "**Branch:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
         echo "**PR:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+
+  # Build binaries and attach to release
+  build-and-release:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    uses: ./.github/workflows/_build-and-release.yml
+    with:
+      release_tag: v${{ needs.semantic-release.outputs.version }}
+      is_prerelease: false
+    permissions:
+      contents: write

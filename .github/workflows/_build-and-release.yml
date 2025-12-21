@@ -1,30 +1,27 @@
-name: Build Binary (Test Only)
+name: Build Binaries and Attach to Release
 
-# NOTE: This workflow is for testing binary builds in PRs only.
-# For releases, use the _build-and-release.yml reusable workflow.
+# Reusable workflow for building and releasing binaries
+# Can be called from any release workflow (semver, dev, hotfix, manual)
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - 'src/**'
-      - 'packaging/binary/**'
-      - 'packaging/mcpb/**'
-      - '.github/workflows/build-binary.yml'
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      version:
-        description: 'Version to build (e.g., 4.7.4)'
+      release_tag:
+        description: 'Release tag to attach binaries to (e.g., v5.0.1)'
         required: true
-        default: '0.0.0-dev'
+        type: string
+      is_prerelease:
+        description: 'Whether this is a prerelease (dev build)'
+        required: false
+        type: boolean
+        default: false
 
-# Restrict permissions by default (security best practice)
 permissions:
-  contents: read
+  contents: write  # Required to upload release assets
 
 jobs:
   build:
-    permissions:
-      contents: read
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,12 +39,11 @@ jobs:
             binary_ext: ''
             platform: darwin
 
-    runs-on: ${{ matrix.os }}
-    name: Build on ${{ matrix.os }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -59,36 +55,22 @@ jobs:
         with:
           version: "latest"
 
-      - name: Create virtual environment and install dependencies
-        run: |
-          uv venv .venv
-          uv pip install -e . pyinstaller
-        shell: bash
-
-      - name: Activate venv (Unix)
-        if: runner.os != 'Windows'
-        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
-
-      - name: Activate venv (Windows)
-        if: runner.os == 'Windows'
-        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
-        shell: pwsh
+      - name: Install dependencies
+        run: uv sync --all-extras
 
       - name: Build binary
-        run: pyinstaller packaging/binary/ha-mcp.spec
+        run: uv run python packaging/binary/build.py
 
-      - name: Run smoke test (Unix)
+      - name: Test binary (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           chmod +x dist/ha-mcp
-          # Run the built-in smoke test to verify all libraries are bundled
-          ./dist/ha-mcp --smoke-test
+          dist/ha-mcp --smoke-test
 
-      - name: Run smoke test (Windows)
+      - name: Test binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Run the built-in smoke test to verify all libraries are bundled
           & "dist\ha-mcp.exe" --smoke-test
           if ($LASTEXITCODE -ne 0) {
             Write-Host "Smoke test failed with exit code $LASTEXITCODE"
@@ -108,14 +90,15 @@ jobs:
           if-no-files-found: error
 
   create-mcpb:
+    name: Create MCPB Bundle
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -134,43 +117,20 @@ jobs:
           name: ha-mcp-macos-arm64
           path: mcpb-bundle
 
-      - name: Set version
-        id: version
+      - name: Create MCPB bundle
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-            VERSION="${VERSION:-0.0.0-dev}"
-          else
-            # For pull_request, use dev version
-            VERSION="0.0.0-dev"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
-
-      - name: Create combined mcpb bundle
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ inputs.release_tag }}"
+          VERSION="${VERSION#v}"  # Remove 'v' prefix
 
           # Rename binaries to standard names
           mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
           mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
 
-          # Copy icons to bundle (light + dark variants + main icon)
-          cp packaging/mcpb/icon-16.png mcpb-bundle/
-          cp packaging/mcpb/icon-32.png mcpb-bundle/
-          cp packaging/mcpb/icon-64.png mcpb-bundle/
-          cp packaging/mcpb/icon-128.png mcpb-bundle/
-          cp packaging/mcpb/icon-256.png mcpb-bundle/
-          cp packaging/mcpb/icon-512.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-16.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-32.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-64.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-128.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-256.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-512.png mcpb-bundle/
+          # Copy icons to bundle
+          cp packaging/mcpb/icon-*.png mcpb-bundle/
           cp packaging/mcpb/icon-512.png mcpb-bundle/icon.png
 
-          # Generate manifest.json (multi-platform)
+          # Generate manifest.json
           python packaging/mcpb/generate_manifest.py "$VERSION"
 
           # Create .mcpb file (zip archive)
@@ -178,13 +138,61 @@ jobs:
           zip -r ../ha-mcp.mcpb *
           cd ..
 
-          # List contents for verification
           echo "=== MCPB Contents ==="
           unzip -l ha-mcp.mcpb
 
-      - name: Upload mcpb artifact
+      - name: Upload MCPB artifact
         uses: actions/upload-artifact@v6
         with:
           name: ha-mcp-mcpb
           path: ha-mcp.mcpb
           if-no-files-found: error
+
+  upload-to-release:
+    name: Upload Binaries to Release
+    needs: [build, create-mcpb]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Display artifact structure
+        run: ls -R artifacts/
+
+      - name: Upload binaries to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+
+          echo "Uploading binaries to release $TAG..."
+
+          # Check if release exists and is draft
+          RELEASE_INFO=$(gh api repos/${{ github.repository }}/releases/tags/$TAG 2>/dev/null || echo "")
+
+          if [ -z "$RELEASE_INFO" ]; then
+            echo "Error: Release $TAG not found"
+            exit 1
+          fi
+
+          IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.draft')
+
+          # Upload all binaries
+          gh release upload "$TAG" \
+            artifacts/ha-mcp-linux/ha-mcp-linux \
+            artifacts/ha-mcp-windows/ha-mcp-windows.exe \
+            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
+            artifacts/ha-mcp-mcpb/ha-mcp.mcpb \
+            --clobber
+
+          echo "✓ Uploaded binaries to $TAG"
+
+          # If release is still draft, publish it
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "Publishing draft release..."
+            gh release edit "$TAG" --draft=false
+            echo "✓ Published release $TAG"
+          fi

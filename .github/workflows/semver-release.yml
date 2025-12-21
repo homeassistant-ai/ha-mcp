@@ -61,6 +61,9 @@ jobs:
     if: needs.check-changes.outputs.has_changes == 'true'
     name: Semantic Release
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.semantic.outputs.released }}
+      version: ${{ steps.semantic.outputs.version }}
     permissions:
       contents: write      # Required to push commits and tags
       id-token: write      # Required for trusted publishing
@@ -143,3 +146,14 @@ jobs:
         git push origin stable
 
         echo "✓ 'stable' tag now points to v$VERSION"
+
+  # Build binaries and attach to release
+  build-and-release:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    uses: ./.github/workflows/_build-and-release.yml
+    with:
+      release_tag: v${{ needs.semantic-release.outputs.version }}
+      is_prerelease: false
+    permissions:
+      contents: write

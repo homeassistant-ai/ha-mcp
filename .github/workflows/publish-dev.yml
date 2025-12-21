@@ -94,137 +94,14 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ needs.prepare.outputs.dev_version }}
 
-  build-binaries:
-    name: Build binaries
+  create-prerelease:
+    name: Create GitHub pre-release
     needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact_name: ha-mcp-linux
-            binary_ext: ''
-          - os: windows-latest
-            artifact_name: ha-mcp-windows
-            binary_ext: '.exe'
-          - os: macos-latest
-            artifact_name: ha-mcp-macos-arm64
-            binary_ext: ''
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Create virtual environment and install dependencies
-        run: |
-          uv venv .venv
-          uv pip install -e . pyinstaller
-        shell: bash
-
-      - name: Activate venv (Unix)
-        if: runner.os != 'Windows'
-        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
-
-      - name: Activate venv (Windows)
-        if: runner.os == 'Windows'
-        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
-        shell: pwsh
-
-      - name: Build binary
-        run: pyinstaller packaging/binary/ha-mcp.spec
-
-      - name: Run smoke test (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          chmod +x dist/ha-mcp
-          ./dist/ha-mcp --smoke-test
-
-      - name: Run smoke test (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & "dist\ha-mcp.exe" --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Rename binary for artifact
-        shell: bash
-        run: mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
-
-  create-mcpb:
-    name: Create MCPB bundle
-    needs: [prepare, build-binaries]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
-      - name: Download Windows binary
-        uses: actions/download-artifact@v7
-        with:
-          name: ha-mcp-windows
-          path: mcpb-bundle
-
-      - name: Download macOS binary
-        uses: actions/download-artifact@v7
-        with:
-          name: ha-mcp-macos-arm64
-          path: mcpb-bundle
-
-      - name: Create MCPB bundle
-        run: |
-          VERSION="${{ needs.prepare.outputs.dev_version }}"
-
-          mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
-          mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
-
-          # Copy icons
-          cp packaging/mcpb/icon-*.png mcpb-bundle/
-          cp packaging/mcpb/icon-dark-*.png mcpb-bundle/
-          cp packaging/mcpb/icon-512.png mcpb-bundle/icon.png
-
-          # Generate manifest
-          python packaging/mcpb/generate_manifest.py "$VERSION"
-
-          # Create .mcpb file
-          cd mcpb-bundle && zip -r ../ha-mcp.mcpb * && cd ..
-
-      - name: Upload mcpb artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: ha-mcp-mcpb
-          path: ha-mcp.mcpb
-
-  publish-prerelease:
-    name: Publish GitHub pre-release
-    needs: [prepare, build-binaries, create-mcpb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
-
-      - name: Download binary artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: ha-mcp-*
-          path: artifacts
 
       - name: Create pre-release
         env:
@@ -263,19 +140,27 @@ jobs:
           gh release delete "$TAG" --yes 2>/dev/null || true
           git push origin --delete "$TAG" 2>/dev/null || true
 
-          # Create new pre-release
+          # Create new pre-release (binaries will be added by build-and-release workflow)
           gh release create "$TAG" \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \
-            --prerelease \
-            artifacts/ha-mcp-linux/ha-mcp-linux \
-            artifacts/ha-mcp-windows/ha-mcp-windows.exe \
-            artifacts/ha-mcp-macos-arm64/ha-mcp-macos-arm64 \
-            artifacts/ha-mcp-mcpb/ha-mcp.mcpb
+            --prerelease
+
+          echo "✓ Created pre-release $TAG (waiting for binaries)"
+
+  # Build binaries and attach to release
+  build-and-release:
+    needs: [prepare, create-prerelease]
+    uses: ./.github/workflows/_build-and-release.yml
+    with:
+      release_tag: v${{ needs.prepare.outputs.dev_version }}
+      is_prerelease: true
+    permissions:
+      contents: write
 
   cleanup-old-prereleases:
     name: Cleanup old pre-releases
-    needs: publish-prerelease
+    needs: build-and-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
