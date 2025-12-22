@@ -89,7 +89,7 @@ jobs:
 
     - name: Python Semantic Release
       id: semantic
-      uses: python-semantic-release/python-semantic-release@v10.5.2
+      uses: python-semantic-release/python-semantic-release@v10.5.3
       with:
         # Use GitHub App token with bypass permissions
         github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
