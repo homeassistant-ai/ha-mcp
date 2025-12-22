@@ -42,8 +42,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.release_tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -109,8 +107,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.release_tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -168,8 +164,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.release_tag }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v7
