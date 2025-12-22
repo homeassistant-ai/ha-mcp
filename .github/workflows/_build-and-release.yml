@@ -166,6 +166,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
