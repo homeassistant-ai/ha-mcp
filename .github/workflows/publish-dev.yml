@@ -140,13 +140,14 @@ jobs:
           gh release delete "$TAG" --yes 2>/dev/null || true
           git push origin --delete "$TAG" 2>/dev/null || true
 
-          # Create new pre-release (binaries will be added by build-and-release workflow)
+          # Create new draft pre-release (binaries will be added by build-and-release workflow)
           gh release create "$TAG" \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \
-            --prerelease
+            --prerelease \
+            --draft
 
-          echo "✓ Created pre-release $TAG (waiting for binaries)"
+          echo "✓ Created draft pre-release $TAG (waiting for binaries)"
 
   # Build binaries and attach to release
   build-and-release:
