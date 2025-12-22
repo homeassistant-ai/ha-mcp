@@ -2,6 +2,73 @@
 
 <!-- version list -->
 
+## v5.0.2 (2025-12-22)
+
+### Bug Fixes
+
+- **ci**: Add checkout step for gh release upload
+  ([`4df604a`](https://github.com/homeassistant-ai/ha-mcp/commit/4df604ae3f82f37f46a5f75c785d7f41283ba168))
+
+- **ci**: Add git checkout for gh release upload (#351)
+  ([#351](https://github.com/homeassistant-ai/ha-mcp/pull/351),
+  [`c470d7a`](https://github.com/homeassistant-ai/ha-mcp/commit/c470d7aaff17e10911e8a21874f65a34e19ba271))
+
+- **ci**: Checkout current commit instead of tag in build jobs
+  ([`6f6da4e`](https://github.com/homeassistant-ai/ha-mcp/commit/6f6da4e2a8ff74a7eace2de10dbe9603f231cfe7))
+
+- **ci**: Complete workflow fixes for unified release
+  ([`c64f41a`](https://github.com/homeassistant-ai/ha-mcp/commit/c64f41a390a6cc514d1330d4b39e9e785947bb1e))
+
+- **ci**: Correct build command in reusable workflow
+  ([`e299bf0`](https://github.com/homeassistant-ai/ha-mcp/commit/e299bf0216f3e9d48b9ba55fb3eddc18e3fb0efd))
+
+- **ci**: Correct build command in reusable workflow (#349)
+  ([#349](https://github.com/homeassistant-ai/ha-mcp/pull/349),
+  [`227c8eb`](https://github.com/homeassistant-ai/ha-mcp/commit/227c8eb9e567b7a0529c08482dd475dbf70425a3))
+
+- **ci**: Create draft pre-releases for dev builds (#352)
+  ([#352](https://github.com/homeassistant-ai/ha-mcp/pull/352),
+  [`5c9f38d`](https://github.com/homeassistant-ai/ha-mcp/commit/5c9f38da7fcdc387f98d5908722e85b5eeb7f1f4))
+
+- **ci**: Create pre-release as draft before uploading binaries
+  ([`821bcf4`](https://github.com/homeassistant-ai/ha-mcp/commit/821bcf46d95857a08580db698f5a9275fea33004))
+
+- **ci**: Filter artifact downloads to skip Docker build cache (#350)
+  ([#350](https://github.com/homeassistant-ai/ha-mcp/pull/350),
+  [`3b7621b`](https://github.com/homeassistant-ai/ha-mcp/commit/3b7621b9072a15f0659934f82f60e6bf63773880))
+
+- **ci**: Only download binary artifacts, skip Docker build cache
+  ([`6ca14b3`](https://github.com/homeassistant-ai/ha-mcp/commit/6ca14b3373bad908dc0dd86cd00c2f52ad9668dd))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#344) ([#344](https://github.com/homeassistant-ai/ha-mcp/pull/344),
+  [`9bdf1c6`](https://github.com/homeassistant-ai/ha-mcp/commit/9bdf1c676aeb4a2847f2998fd8cd49ef32bdc9bf))
+
+### Continuous Integration
+
+- **deps**: Bump actions/create-github-app-token from 1 to 2 (#343)
+  ([#343](https://github.com/homeassistant-ai/ha-mcp/pull/343),
+  [`c31f5c2`](https://github.com/homeassistant-ai/ha-mcp/commit/c31f5c2cd69a3e5ce13ba3cc14c56d400a12abc7))
+
+- **deps**: Bump python-semantic-release/python-semantic-release (#346)
+  ([#346](https://github.com/homeassistant-ai/ha-mcp/pull/346),
+  [`ae88081`](https://github.com/homeassistant-ai/ha-mcp/commit/ae880810f04e2ed46416fb2e9aebce138249daf3))
+
+- **deps**: Bump renovatebot/github-action from 44.1.0 to 44.2.1 (#345)
+  ([#345](https://github.com/homeassistant-ai/ha-mcp/pull/345),
+  [`637779b`](https://github.com/homeassistant-ai/ha-mcp/commit/637779b031cdff06d07c6e18d473eb11c415634f))
+
+### Refactoring
+
+- **ci**: Unify release workflows with reusable build workflow
+  ([`048a686`](https://github.com/homeassistant-ai/ha-mcp/commit/048a686c904c96cc6cce9bdb52d95dc20da79b29))
+
+- **ci**: Unify release workflows with reusable build workflow (#348)
+  ([#348](https://github.com/homeassistant-ai/ha-mcp/pull/348),
+  [`3c9ad15`](https://github.com/homeassistant-ai/ha-mcp/commit/3c9ad1549000f668e668ae8b28baa13f2b8586bf))
+
+
 ## v5.0.0 (2025-12-21)
 
 ### Bug Fixes
