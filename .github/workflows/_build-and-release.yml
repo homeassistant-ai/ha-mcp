@@ -169,6 +169,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
+          pattern: ha-mcp-*
           path: artifacts
 
       - name: Display artifact structure
