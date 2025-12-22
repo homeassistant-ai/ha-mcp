@@ -55,11 +55,23 @@ jobs:
         with:
           version: "latest"
 
-      - name: Install dependencies
-        run: uv sync --all-extras
+      - name: Create virtual environment and install dependencies
+        run: |
+          uv venv .venv
+          uv pip install -e . pyinstaller
+        shell: bash
+
+      - name: Activate venv (Unix)
+        if: runner.os != 'Windows'
+        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Activate venv (Windows)
+        if: runner.os == 'Windows'
+        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
+        shell: pwsh
 
       - name: Build binary
-        run: uv run python packaging/binary/build.py
+        run: pyinstaller packaging/binary/ha-mcp.spec
 
       - name: Test binary (Linux/macOS)
         if: runner.os != 'Windows'
