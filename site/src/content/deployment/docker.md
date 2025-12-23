@@ -38,10 +38,25 @@ docker run -d --name ha-mcp \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
-  fastmcp run fastmcp-http.json
+  ha-mcp-web
 ```
 
 Server will be available at: `http://YOUR_IP:8086/mcp`
+
+**Customize port and path:**
+
+```bash
+docker run -d --name ha-mcp \
+  -p 9000:9000 \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  -e MCP_PORT=9000 \
+  -e MCP_SECRET_PATH=/my-secret-path \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-web
+```
+
+Server URL: `http://YOUR_IP:9000/my-secret-path`
 
 ### Management Commands
 
@@ -80,7 +95,7 @@ docker run -d --name ha-mcp \
   -e SSL_CERT_FILE=/certs/ca-bundle.crt \
   -v /path/to/combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
-  fastmcp run fastmcp-http.json
+  ha-mcp-web
 ```
 
 ## Requirements
