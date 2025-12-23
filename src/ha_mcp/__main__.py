@@ -298,10 +298,14 @@ def main() -> None:
 
 
 # HTTP entry point for web clients
-def _get_http_runtime() -> tuple[int, str]:
-    """Return runtime configuration shared by HTTP transports."""
+def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
+    """Return runtime configuration shared by HTTP transports.
 
-    port = int(os.getenv("MCP_PORT", "8086"))
+    Args:
+        default_port: Default port to use if MCP_PORT env var is not set.
+    """
+
+    port = int(os.getenv("MCP_PORT", str(default_port)))
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
     return port, path
 
@@ -375,9 +379,14 @@ async def _run_http_with_graceful_shutdown(
                     pass
 
 
-def _run_http_server(transport: str) -> None:
-    """Common runner for HTTP-based transports."""
-    port, path = _get_http_runtime()
+def _run_http_server(transport: str, default_port: int = 8086) -> None:
+    """Common runner for HTTP-based transports.
+
+    Args:
+        transport: Transport type (streamable-http or sse).
+        default_port: Default port to use if MCP_PORT env var is not set.
+    """
+    port, path = _get_http_runtime(default_port)
 
     # Set up signal handlers before running
     _setup_signal_handlers()
@@ -420,7 +429,7 @@ def main_web() -> None:
         format='%(asctime)s %(name)s %(levelname)s: %(message)s'
     )
 
-    _run_http_server("streamable-http")
+    _run_http_server("streamable-http", default_port=8086)
 
 
 def main_sse() -> None:
@@ -429,7 +438,7 @@ def main_sse() -> None:
     Environment:
     - HOMEASSISTANT_URL (required)
     - HOMEASSISTANT_TOKEN (required)
-    - MCP_PORT (optional, default: 8086)
+    - MCP_PORT (optional, default: 8087)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
     # Configure logging before server creation
@@ -440,7 +449,7 @@ def main_sse() -> None:
         format='%(asctime)s %(name)s %(levelname)s: %(message)s'
     )
 
-    _run_http_server("sse")
+    _run_http_server("sse", default_port=8087)
 
 
 if __name__ == "__main__":
