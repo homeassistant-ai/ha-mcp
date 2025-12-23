@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
-import jq
 from pydantic import Field
 
 from ..config import get_global_settings
@@ -21,6 +20,25 @@ from .helpers import log_tool_usage
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
+
+# Try to import jq - it's not available on Windows ARM64
+try:
+    import jq
+    JQ_AVAILABLE = True
+except ImportError:
+    JQ_AVAILABLE = False
+    logger.warning(
+        "jq library not available - jq_transform features will be disabled. "
+        "This is expected on Windows ARM64 where jq cannot be compiled."
+    )
+
+# Error message when jq_transform is used without jq available
+_JQ_UNAVAILABLE_ERROR = (
+    "jq_transform is not available - jq library could not be imported. "
+    "This is a known limitation on Windows ARM64 where jq cannot be compiled. "
+    "Please use the 'config' parameter for full config replacement instead, "
+    "or use ha-mcp on Windows x64, Linux, or macOS where jq is supported."
+)
 
 # Card documentation base URL
 CARD_DOCS_BASE_URL = (
@@ -110,6 +128,12 @@ def _apply_jq_transform(
         - On success: (dict, None)
         - On failure: (None, error_string)
     """
+    # Check if jq is available
+    if not JQ_AVAILABLE:
+        return None, _JQ_UNAVAILABLE_ERROR
+
+    import jq
+
     try:
         # Compile and validate the jq expression
         program = jq.compile(expression)
