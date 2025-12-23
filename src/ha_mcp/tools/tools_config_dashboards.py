@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Try to import jq - it's not available on Windows ARM64
 try:
     import jq
-
     JQ_AVAILABLE = True
 except ImportError:
     JQ_AVAILABLE = False
@@ -132,6 +131,8 @@ def _apply_jq_transform(
     # Check if jq is available
     if not JQ_AVAILABLE:
         return None, _JQ_UNAVAILABLE_ERROR
+
+    import jq
 
     try:
         # Compile and validate the jq expression
