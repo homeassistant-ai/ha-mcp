@@ -1,14 +1,14 @@
 """
 Integration management tools for Home Assistant MCP server.
 
-This module provides tools to list and query Home Assistant integrations
-(config entries) via the REST API.
+This module provides tools to list, enable, and disable Home Assistant integrations
+(config entries) via the REST and WebSocket APIs.
 """
 
 import logging
 from typing import Any
 
-from .helpers import log_tool_usage
+from .helpers import get_connected_ws_client, log_tool_usage
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +127,273 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure your token has sufficient permissions",
                 ],
             }
+
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["integration"], "title": "Enable Integration"})
+    @log_tool_usage
+    async def ha_enable_integration(
+        entry_id: str,
+    ) -> dict[str, Any]:
+        """
+        Enable a disabled Home Assistant integration (config entry).
+
+        Re-enables an integration that was previously disabled. The integration
+        will be loaded and start functioning again.
+
+        **Parameters:**
+        - entry_id: The config entry ID of the integration to enable.
+                   Use ha_list_integrations() to find entry IDs.
+
+        **Example Usage:**
+        ```python
+        # First, find the integration you want to enable
+        integrations = ha_list_integrations(query="browser_mod")
+        # Look for the entry_id in the results
+
+        # Then enable it
+        ha_enable_integration(entry_id="abc123def456")
+        ```
+
+        **Note:** After enabling, the integration will be loaded automatically.
+        Check the 'state' field in ha_list_integrations() to verify it loaded successfully.
+        """
+        ws_client = None
+        try:
+            # Connect to WebSocket
+            ws_client, error = await get_connected_ws_client(
+                client.base_url, client.token
+            )
+            if error or ws_client is None:
+                return error or {
+                    "success": False,
+                    "error": "Failed to establish WebSocket connection",
+                }
+
+            # Call config_entries/disable with disabled_by=None to enable
+            result = await ws_client.send_command(
+                "config_entries/disable",
+                entry_id=entry_id,
+                disabled_by=None,
+            )
+
+            if not result.get("success"):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "error": f"Failed to enable integration: {error_msg}",
+                    "entry_id": entry_id,
+                }
+
+            # Get updated entry info
+            require_restart = result.get("result", {}).get("require_restart", False)
+
+            return {
+                "success": True,
+                "message": f"Integration enabled successfully",
+                "entry_id": entry_id,
+                "require_restart": require_restart,
+                "note": "The integration has been loaded." if not require_restart else "Home Assistant restart required for changes to take effect.",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to enable integration: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to enable integration: {str(e)}",
+                "entry_id": entry_id,
+            }
+        finally:
+            if ws_client:
+                try:
+                    await ws_client.disconnect()
+                except Exception:
+                    pass
+
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["integration"], "title": "Disable Integration"})
+    @log_tool_usage
+    async def ha_disable_integration(
+        entry_id: str,
+    ) -> dict[str, Any]:
+        """
+        Disable a Home Assistant integration (config entry).
+
+        Disables an integration, stopping it from running. The integration
+        configuration is preserved and can be re-enabled later.
+
+        **Parameters:**
+        - entry_id: The config entry ID of the integration to disable.
+                   Use ha_list_integrations() to find entry IDs.
+
+        **Example Usage:**
+        ```python
+        # First, find the integration you want to disable
+        integrations = ha_list_integrations(query="browser_mod")
+        # Look for the entry_id in the results
+
+        # Then disable it
+        ha_disable_integration(entry_id="abc123def456")
+        ```
+
+        **Note:** Disabling an integration will:
+        - Unload the integration
+        - Stop all entities from updating
+        - Preserve the configuration for later re-enabling
+
+        Use ha_enable_integration() to re-enable the integration.
+        """
+        ws_client = None
+        try:
+            # Connect to WebSocket
+            ws_client, error = await get_connected_ws_client(
+                client.base_url, client.token
+            )
+            if error or ws_client is None:
+                return error or {
+                    "success": False,
+                    "error": "Failed to establish WebSocket connection",
+                }
+
+            # Call config_entries/disable with disabled_by="user" to disable
+            result = await ws_client.send_command(
+                "config_entries/disable",
+                entry_id=entry_id,
+                disabled_by="user",
+            )
+
+            if not result.get("success"):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "error": f"Failed to disable integration: {error_msg}",
+                    "entry_id": entry_id,
+                }
+
+            # Get updated entry info
+            require_restart = result.get("result", {}).get("require_restart", False)
+
+            return {
+                "success": True,
+                "message": f"Integration disabled successfully",
+                "entry_id": entry_id,
+                "require_restart": require_restart,
+                "note": "The integration has been unloaded." if not require_restart else "Home Assistant restart required for changes to take effect.",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to disable integration: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to disable integration: {str(e)}",
+                "entry_id": entry_id,
+            }
+        finally:
+            if ws_client:
+                try:
+                    await ws_client.disconnect()
+                except Exception:
+                    pass
+
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["integration"], "title": "Delete Config Entry"})
+    @log_tool_usage
+    async def ha_delete_config_entry(
+        entry_id: str,
+        confirm: bool | str = False,
+    ) -> dict[str, Any]:
+        """
+        Permanently delete a Home Assistant config entry (integration).
+
+        This removes an integration completely from Home Assistant, including
+        all its configuration. Use this for orphaned entries from dead hardware
+        or integrations you no longer need.
+
+        **WARNING:** This is a destructive operation that cannot be undone.
+        The integration will need to be set up again from scratch if needed later.
+
+        **Parameters:**
+        - entry_id: The config entry ID to delete.
+                   Use ha_list_integrations() to find entry IDs.
+        - confirm: Must be True to confirm deletion (safety measure).
+
+        **Example Usage:**
+        ```python
+        # First, find the integration you want to delete
+        integrations = ha_list_integrations(query="slzb")
+        # Look for the entry_id in the results
+
+        # Then delete it (must confirm)
+        ha_delete_config_entry(entry_id="01JBTD7Q1FSFD9WYNCK7T0WT78", confirm=True)
+        ```
+
+        **Use Cases:**
+        - Remove orphaned entries from dead/replaced hardware
+        - Clean up failed integration setup attempts
+        - Remove integrations that cannot be unloaded normally
+        """
+        # Handle string "true"/"false" from some clients
+        if isinstance(confirm, str):
+            confirm = confirm.lower() == "true"
+
+        if not confirm:
+            return {
+                "success": False,
+                "error": "Deletion not confirmed. Set confirm=True to proceed.",
+                "entry_id": entry_id,
+                "warning": "This will permanently delete the config entry. This cannot be undone.",
+            }
+
+        ws_client = None
+        try:
+            # Connect to WebSocket
+            ws_client, error = await get_connected_ws_client(
+                client.base_url, client.token
+            )
+            if error or ws_client is None:
+                return error or {
+                    "success": False,
+                    "error": "Failed to establish WebSocket connection",
+                }
+
+            # Call config_entries/delete to permanently remove the entry
+            result = await ws_client.send_command(
+                "config_entries/delete",
+                entry_id=entry_id,
+            )
+
+            if not result.get("success"):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "error": f"Failed to delete config entry: {error_msg}",
+                    "entry_id": entry_id,
+                }
+
+            # Get result info
+            require_restart = result.get("result", {}).get("require_restart", False)
+
+            return {
+                "success": True,
+                "message": "Config entry deleted successfully",
+                "entry_id": entry_id,
+                "require_restart": require_restart,
+                "note": "The integration has been permanently removed." if not require_restart else "Home Assistant restart required to complete removal.",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to delete config entry: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to delete config entry: {str(e)}",
+                "entry_id": entry_id,
+            }
+        finally:
+            if ws_client:
+                try:
+                    await ws_client.disconnect()
+                except Exception:
+                    pass
+

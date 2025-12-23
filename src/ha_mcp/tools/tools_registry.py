@@ -382,7 +382,103 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             icon=icon,
             preserve_voice_exposure=should_preserve_exposure,
         )
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "tags": ["system"],
+            "title": "Enable/Disable Entity",
+        }
+    )
+    @log_tool_usage
+    async def ha_set_entity_enabled(
+        entity_id: Annotated[
+            str,
+            Field(description="Entity ID to enable or disable (e.g., 'binary_sensor.motion')"),
+        ],
+        enabled: Annotated[
+            bool | str,
+            Field(
+                description="True to enable the entity, False to disable it"
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """
+        Enable or disable a Home Assistant entity.
 
+        Use this to enable disabled entities or disable entities you don't need.
+        Disabled entities don't appear in the UI and don't consume resources.
+
+        COMMON USE CASES:
+        - Enable sensors that were auto-disabled by integrations
+        - Disable entities you don't need (reduces clutter and resource usage)
+        - Re-enable entities after troubleshooting
+
+        EXAMPLES:
+        - Enable entity: ha_set_entity_enabled("binary_sensor.side_yard_motion", True)
+        - Disable entity: ha_set_entity_enabled("sensor.unused_sensor", False)
+
+        NOTE: Some entities disabled by their integration cannot be enabled via this API.
+        If enabling fails, check if the integration itself needs reconfiguration.
+        """
+        try:
+            # Coerce enabled parameter
+            if isinstance(enabled, str):
+                enabled = enabled.lower() in ("true", "1", "yes", "on")
+
+            # Build the WebSocket message
+            message: dict[str, Any] = {
+                "type": "config/entity_registry/update",
+                "entity_id": entity_id,
+                "disabled_by": None if enabled else "user",
+            }
+
+            logger.info(f"{'Enabling' if enabled else 'Disabling'} entity {entity_id}")
+            result = await client.send_websocket_message(message)
+
+            if result.get("success"):
+                entity_entry = result.get("result", {}).get("entity_entry", {})
+                new_disabled_by = entity_entry.get("disabled_by")
+
+                return {
+                    "success": True,
+                    "entity_id": entity_id,
+                    "enabled": new_disabled_by is None,
+                    "disabled_by": new_disabled_by,
+                    "message": f"Entity {entity_id} {'enabled' if enabled else 'disabled'} successfully",
+                    "entity_entry": {
+                        "entity_id": entity_entry.get("entity_id"),
+                        "name": entity_entry.get("name"),
+                        "platform": entity_entry.get("platform"),
+                        "disabled_by": new_disabled_by,
+                    },
+                    "note": "Entity state will be available after next Home Assistant state refresh" if enabled else None,
+                }
+            else:
+                error = result.get("error", {})
+                error_msg = (
+                    error.get("message", str(error))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
+                return {
+                    "success": False,
+                    "error": f"Failed to {'enable' if enabled else 'disable'} entity: {error_msg}",
+                    "entity_id": entity_id,
+                    "suggestions": [
+                        "Verify the entity exists using ha_search_entities() or ha_get_device()",
+                        "Check if the entity is disabled by its integration (cannot be enabled via API)",
+                        "Some entities require the integration to be reconfigured to enable them",
+                    ],
+                }
+
+        except Exception as e:
+            logger.error(f"Error setting entity enabled state: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to {'enable' if enabled else 'disable'} entity: {str(e)}",
+                "entity_id": entity_id,
+            }
     @mcp.tool(
         annotations={
             "idempotentHint": True,
