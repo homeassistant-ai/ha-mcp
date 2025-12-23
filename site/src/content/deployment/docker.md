@@ -58,6 +58,8 @@ docker run -d --name ha-mcp \
 
 Server URL: `http://YOUR_IP:9000/my-secret-path`
 
+> **Note:** Both the Docker port mapping (`-p 9000:9000`) and the `MCP_PORT` environment variable must match the desired port. The first number in `-p` is the host port, the second is the container port (which matches `MCP_PORT`).
+
 ### Management Commands
 
 ```bash
