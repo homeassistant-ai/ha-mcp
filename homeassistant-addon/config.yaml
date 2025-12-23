@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "5.0.2"
+version: "5.0.3"
 slug: "ha_mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
