@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v5.0.3 (2025-12-23)
+
+### Bug Fixes
+
+- Resolve Docker environment variable validation error (#354) (#356)
+  ([#356](https://github.com/homeassistant-ai/ha-mcp/pull/356),
+  [`c9c0259`](https://github.com/homeassistant-ai/ha-mcp/commit/c9c0259b8c714a76871da7db2b254fcdaff0a629))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`f4a72de`](https://github.com/homeassistant-ai/ha-mcp/commit/f4a72de4ee9227e4d2ce602423330e76aba780ef))
+
+
 ## v5.0.2 (2025-12-22)
 
 ### Bug Fixes
