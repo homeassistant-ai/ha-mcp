@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v5.0.4 (2025-12-23)
+
+### Bug Fixes
+
+- Make jq optional on Windows ARM64 (#359)
+  ([#359](https://github.com/homeassistant-ai/ha-mcp/pull/359),
+  [`6299ae8`](https://github.com/homeassistant-ai/ha-mcp/commit/6299ae87d38ee98148fbcbb15a3f6dad6a8250d0))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`0648603`](https://github.com/homeassistant-ai/ha-mcp/commit/0648603d3897a81c616fb52ca548052c960154e1))
+
+
 ## v5.0.3 (2025-12-23)
 
 ### Bug Fixes
