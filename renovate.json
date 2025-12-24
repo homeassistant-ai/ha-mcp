@@ -3,7 +3,7 @@
   "extends": ["config:recommended"],
   "timezone": "UTC",
   "schedule": ["after 3pm on tuesday"],
-  "enabledManagers": ["regex"],
+  "enabledManagers": ["custom.regex"],
   "customManagers": [
     {
       "customType": "regex",
