@@ -38,3 +38,4 @@ jobs:
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^cat.*", "^echo.*", "^cut.*", "^sed.*", "^git add.*"]'
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
