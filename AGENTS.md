@@ -319,9 +319,14 @@ This informs whether to embed docs (low model knowledge) or just hint at `ha_get
 
 ## API Research
 
-Finding undocumented HA APIs (don't clone the huge repo):
+Search HA Core without cloning (500MB+ repo):
 ```bash
-gh api /search/code -X GET -f q="helper list websocket repo:home-assistant/core" -f per_page=5 --jq '.items[] | {name, path, url: .html_url}'
+# Search for patterns
+gh search code "use_blueprint" --repo home-assistant/core path:tests --json path --limit 10
+
+# Fetch file contents (base64 encoded)
+gh api /repos/home-assistant/core/contents/homeassistant/components/automation/config.py \
+  --jq '.content' | base64 -d > /tmp/ha_config.py
 ```
 
 **Insight**: Collection-based components (helpers, scripts, automations) follow consistent patterns.

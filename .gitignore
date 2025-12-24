@@ -84,3 +84,8 @@ fastmcp/
 
 # HACS frontend - large (~51MB) JavaScript assets, downloaded during test setup
 tests/initial_test_state/custom_components/hacs/hacs_frontend/
+
+# Auto-Claude workspace files
+.auto-claude/
+.worktrees/
+.claude_settings.json
