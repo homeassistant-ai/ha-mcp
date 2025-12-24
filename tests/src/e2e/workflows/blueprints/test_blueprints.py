@@ -10,11 +10,12 @@ Note: Tests are designed to work with both Docker test environment (localhost:81
 and production environments. Blueprint availability may vary.
 """
 
+import asyncio
 import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.assertions import MCPAssertions, parse_mcp_result, wait_for_automation
 
 logger = logging.getLogger(__name__)
 
@@ -395,16 +396,9 @@ async def test_blueprint_automation_lifecycle(mcp_client):
         logger.info(f"✅ Created blueprint automation: {automation_id}")
 
         # If we got here, the automation was created successfully
-        # Step 4: Retrieve the automation and verify no trigger/action fields
-        import asyncio
-        await asyncio.sleep(2)  # Wait for automation to register
-
-        get_result = await mcp.call_tool_success(
-            "ha_config_get_automation",
-            {"identifier": automation_id},
-        )
-
-        config = get_result.get("config", {})
+        # Step 4: Wait for automation to be registered, then verify no trigger/action fields
+        config = await wait_for_automation(mcp_client, automation_id)
+        assert config is not None, f"Automation {automation_id} not found after creation"
         assert "use_blueprint" in config, "Config should have use_blueprint"
         logger.info("✅ Blueprint automation config verified")
 

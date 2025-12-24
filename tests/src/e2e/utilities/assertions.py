@@ -411,3 +411,54 @@ class MCPAssertions:
     def assert_template_failure(self, template_data: dict[str, Any]):
         """Assert template evaluation failure."""
         return assert_template_evaluation(template_data, should_succeed=False)
+
+
+async def wait_for_automation(
+    mcp_client,
+    automation_id: str,
+    timeout: float = 10.0,
+    poll_interval: float = 0.5,
+) -> dict[str, Any] | None:
+    """
+    Wait for an automation to be retrievable from Home Assistant.
+
+    Polls ha_config_get_automation until the automation is found or timeout is reached.
+    This is more robust than a fixed sleep for waiting after automation creation.
+
+    Args:
+        mcp_client: MCP client instance
+        automation_id: Automation entity_id or unique_id to wait for
+        timeout: Maximum seconds to wait (default: 10.0)
+        poll_interval: Seconds between poll attempts (default: 0.5)
+
+    Returns:
+        Automation config dict if found, None if timeout reached
+
+    Example:
+        config = await wait_for_automation(mcp_client, "automation.test")
+        assert config is not None, "Automation not found after creation"
+    """
+    import asyncio
+    import time
+
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        result = await mcp_client.call_tool(
+            "ha_config_get_automation",
+            {"identifier": automation_id},
+        )
+        parsed = parse_mcp_result(result)
+
+        if parsed.get("success"):
+            logger.debug(
+                f"Automation {automation_id} found after {time.time() - start_time:.2f}s"
+            )
+            return parsed.get("config")
+
+        await asyncio.sleep(poll_interval)
+
+    logger.warning(
+        f"Automation {automation_id} not found after {timeout}s timeout"
+    )
+    return None
