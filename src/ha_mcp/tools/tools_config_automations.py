@@ -105,6 +105,30 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Strip empty trigger/action/condition arrays from automation config.
+
+    Blueprint-based automations should not have trigger/action/condition fields
+    since these come from the blueprint itself. If empty arrays are present,
+    they override the blueprint's configuration and break the automation.
+
+    Args:
+        config: Automation configuration dict
+
+    Returns:
+        Configuration with empty trigger/action/condition arrays removed
+    """
+    cleaned = config.copy()
+
+    # Remove empty arrays for blueprint automations
+    for field in ["trigger", "action", "condition"]:
+        if field in cleaned and cleaned[field] == []:
+            del cleaned[field]
+
+    return cleaned
+
+
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
@@ -195,12 +219,23 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
 
-        REQUIRED CONFIG FIELDS:
+        AUTOMATION TYPES:
+
+        1. Regular Automations - Define triggers and actions directly
+        2. Blueprint Automations - Use pre-built templates with customizable inputs
+
+        REQUIRED FIELDS (Regular Automations):
         - alias: Human-readable automation name
         - trigger: List of trigger conditions (time, state, event, etc.)
         - action: List of actions to execute
 
-        OPTIONAL CONFIG FIELDS:
+        REQUIRED FIELDS (Blueprint Automations):
+        - alias: Human-readable automation name
+        - use_blueprint: Blueprint configuration
+          - path: Blueprint file path (e.g., "motion_light.yaml")
+          - input: Dictionary of input values for the blueprint
+
+        OPTIONAL CONFIG FIELDS (Regular Automations):
         - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
         - condition: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
@@ -244,6 +279,37 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             }
         )
 
+        BLUEPRINT AUTOMATION EXAMPLES:
+
+        Create automation from blueprint:
+        ha_config_set_automation({
+            "alias": "Motion Light Kitchen",
+            "use_blueprint": {
+                "path": "homeassistant/motion_light.yaml",
+                "input": {
+                    "motion_entity": "binary_sensor.kitchen_motion",
+                    "light_target": {"entity_id": "light.kitchen"},
+                    "no_motion_wait": 120
+                }
+            }
+        })
+
+        Update blueprint automation inputs:
+        ha_config_set_automation(
+            identifier="automation.motion_light_kitchen",
+            config={
+                "alias": "Motion Light Kitchen",
+                "use_blueprint": {
+                    "path": "homeassistant/motion_light.yaml",
+                    "input": {
+                        "motion_entity": "binary_sensor.kitchen_motion",
+                        "light_target": {"entity_id": "light.kitchen"},
+                        "no_motion_wait": 300
+                    }
+                }
+            }
+        })
+
         TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
         CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
@@ -282,8 +348,15 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Normalize field names (triggers -> trigger, actions -> action, etc.)
             config_dict = _normalize_automation_config(config_dict)
 
-            # Validate required fields
-            required_fields = ["alias", "trigger", "action"]
+            # Validate required fields based on automation type
+            # Blueprint automations only need alias, regular automations need trigger and action
+            if "use_blueprint" in config_dict:
+                required_fields = ["alias"]
+                # Strip empty trigger/action/condition arrays that would override blueprint
+                config_dict = _strip_empty_automation_fields(config_dict)
+            else:
+                required_fields = ["alias", "trigger", "action"]
+
             missing_fields = [f for f in required_fields if f not in config_dict]
             if missing_fields:
                 return create_config_error(

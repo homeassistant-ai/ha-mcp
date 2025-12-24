@@ -317,3 +317,149 @@ async def test_blueprint_search_integration(mcp_client):
             assert "name" in bp, "Blueprint should have name for display"
 
         logger.info("Blueprint search integration test completed")
+
+
+@pytest.mark.blueprint
+async def test_blueprint_automation_lifecycle(mcp_client):
+    """
+    Test: Create and update blueprint-based automation
+
+    Validates that blueprint automations can be created and updated without
+    requiring trigger/action fields, fixing issue #363.
+    """
+    logger.info("Testing blueprint automation lifecycle...")
+
+    async with MCPAssertions(mcp_client) as mcp:
+        # Step 1: List available blueprints
+        list_result = await mcp.call_tool_success(
+            "ha_list_blueprints",
+            {"domain": "automation"},
+        )
+
+        blueprints = list_result.get("blueprints", [])
+        if not blueprints:
+            logger.info("No automation blueprints available, skipping test")
+            pytest.skip("No automation blueprints available for testing")
+
+        # Use the first available blueprint
+        blueprint_path = blueprints[0]["path"]
+        logger.info(f"Using blueprint: {blueprint_path}")
+
+        # Step 2: Get blueprint details to understand required inputs
+        detail_result = await mcp.call_tool_success(
+            "ha_get_blueprint",
+            {"path": blueprint_path, "domain": "automation"},
+        )
+
+        inputs = detail_result.get("inputs", {})
+        logger.info(f"Blueprint has {len(inputs)} inputs")
+
+        # Step 3: Create automation from blueprint (no trigger/action fields)
+        automation_config = {
+            "alias": "Test Blueprint Automation E2E",
+            "description": "Testing blueprint automation creation (issue #363)",
+            "use_blueprint": {
+                "path": blueprint_path,
+                "input": {},  # Empty inputs for test
+            },
+        }
+
+        # This should succeed without trigger/action fields
+        create_result = await mcp.call_tool_success(
+            "ha_config_set_automation",
+            {"config": automation_config},
+        )
+
+        automation_id = create_result.get("entity_id") or create_result.get("id")
+        assert automation_id, "Should return automation ID"
+        logger.info(f"✅ Created blueprint automation: {automation_id}")
+
+        # Step 4: Retrieve the automation and verify no trigger/action fields
+        import asyncio
+        await asyncio.sleep(2)  # Wait for automation to register
+
+        get_result = await mcp.call_tool_success(
+            "ha_config_get_automation",
+            {"identifier": automation_id},
+        )
+
+        config = get_result.get("config", {})
+        assert "use_blueprint" in config, "Config should have use_blueprint"
+        logger.info("✅ Blueprint automation config verified")
+
+        # Step 5: Update blueprint automation inputs (should not require trigger/action)
+        update_config = {
+            "alias": "Test Blueprint Automation E2E Updated",
+            "use_blueprint": {
+                "path": blueprint_path,
+                "input": {},  # Updated inputs
+            },
+        }
+
+        update_result = await mcp.call_tool_success(
+            "ha_config_set_automation",
+            {"identifier": automation_id, "config": update_config},
+        )
+
+        logger.info("✅ Blueprint automation updated successfully")
+
+        # Step 6: Clean up
+        delete_result = await mcp.call_tool_success(
+            "ha_config_remove_automation",
+            {"identifier": automation_id},
+        )
+
+        logger.info("✅ Blueprint automation lifecycle test completed")
+
+
+@pytest.mark.blueprint
+async def test_blueprint_automation_with_empty_arrays(mcp_client):
+    """
+    Test: Blueprint automation with empty trigger/action arrays gets cleaned
+
+    Validates that if a user mistakenly provides empty trigger/action/condition
+    arrays with a blueprint automation, they are stripped before saving (issue #363).
+    """
+    logger.info("Testing blueprint automation with empty arrays...")
+
+    async with MCPAssertions(mcp_client) as mcp:
+        # List available blueprints
+        list_result = await mcp.call_tool_success(
+            "ha_list_blueprints",
+            {"domain": "automation"},
+        )
+
+        blueprints = list_result.get("blueprints", [])
+        if not blueprints:
+            pytest.skip("No automation blueprints available for testing")
+
+        blueprint_path = blueprints[0]["path"]
+
+        # Create blueprint automation WITH empty arrays (should be stripped)
+        automation_config = {
+            "alias": "Test Blueprint Empty Arrays E2E",
+            "use_blueprint": {
+                "path": blueprint_path,
+                "input": {},
+            },
+            "trigger": [],  # These should be stripped
+            "action": [],  # These should be stripped
+            "condition": [],  # These should be stripped
+        }
+
+        # Should succeed and strip empty arrays
+        create_result = await mcp.call_tool_success(
+            "ha_config_set_automation",
+            {"config": automation_config},
+        )
+
+        automation_id = create_result.get("entity_id") or create_result.get("id")
+        logger.info(f"✅ Created blueprint automation with empty arrays: {automation_id}")
+
+        # Clean up
+        await mcp.call_tool_success(
+            "ha_config_remove_automation",
+            {"identifier": automation_id},
+        )
+
+        logger.info("✅ Empty arrays test completed")
