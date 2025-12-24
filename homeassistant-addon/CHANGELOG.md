@@ -2,6 +2,52 @@
 
 <!-- version list -->
 
+## v5.0.5 (2025-12-24)
+
+### Bug Fixes
+
+- Support blueprint automations in ha_config_set_automation (#364)
+  ([#364](https://github.com/homeassistant-ai/ha-mcp/pull/364),
+  [`163f0ee`](https://github.com/homeassistant-ai/ha-mcp/commit/163f0eedea69f50d72458073bca3d7552500b389))
+
+- **ci**: Clear ignorePaths to allow scanning tests/
+  ([`b363519`](https://github.com/homeassistant-ai/ha-mcp/commit/b363519c2a05fb66bf21d012bedcc9d015f2fc28))
+
+- **ci**: Configure Renovate to only handle HA test container
+  ([`22eefd1`](https://github.com/homeassistant-ai/ha-mcp/commit/22eefd1e71fc63f49e0113647c44ba99e2578d63))
+
+- **ci**: Configure Renovate to scan current repository
+  ([`553917a`](https://github.com/homeassistant-ai/ha-mcp/commit/553917a5603f21474e8040a2cc5d050a48f00975))
+
+- **ci**: Correct regex - match version digits only
+  ([`970c358`](https://github.com/homeassistant-ai/ha-mcp/commit/970c358ab8c260564b98f51dd033f4ca06f58fe5))
+
+- **ci**: Improve renovate regex pattern for HA container version
+  ([`32da751`](https://github.com/homeassistant-ai/ha-mcp/commit/32da7510bcc5f71667f243f0d0f942b44348050a))
+
+- **ci**: Update HA test container and separate Renovate schedule
+  ([`0a4bc2f`](https://github.com/homeassistant-ai/ha-mcp/commit/0a4bc2f2de8fce292dd15afe894a088a5e8dec61))
+
+- **ci**: Use correct manager name custom.regex
+  ([`e8bded1`](https://github.com/homeassistant-ai/ha-mcp/commit/e8bded1d8152e242a7aa91d7c66dd5a8256e3f5d))
+
+- **docs**: Update AGENTS.md with ha-mcp-web command
+  ([`25ddcb7`](https://github.com/homeassistant-ai/ha-mcp/commit/25ddcb7e081bf029022588c82e5aeca260f97179))
+
+- **docs**: Update Docker commands to use ha-mcp-web and remove backslashes
+  ([`90822c0`](https://github.com/homeassistant-ai/ha-mcp/commit/90822c087b18cfb68eb2bc23c062a8494356011a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`bb3c3ed`](https://github.com/homeassistant-ai/ha-mcp/commit/bb3c3ed3c26d442f8782a4618a4e3807b9385355))
+
+### Documentation
+
+- Document hotfix workflow with stable tag verification and timing
+  ([`6bbd782`](https://github.com/homeassistant-ai/ha-mcp/commit/6bbd782ea31fad3e5d4d8aac0a03e26a4ec9a41a))
+
+
 ## v5.0.4 (2025-12-23)
 
 ### Bug Fixes
