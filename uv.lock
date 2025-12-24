@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'",
@@ -402,12 +402,12 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "5.0.0"
+version = "5.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
-    { name = "jq" },
+    { name = "jq", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "textdistance" },
@@ -437,7 +437,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=2.11.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "jq", specifier = ">=1.8.0" },
+    { name = "jq", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'", specifier = ">=1.8.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "textdistance", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'arm64'", specifier = ">=4.6.0" },
