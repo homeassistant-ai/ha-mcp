@@ -4,6 +4,7 @@
   "timezone": "UTC",
   "schedule": ["after 3pm on tuesday"],
   "enabledManagers": ["custom.regex"],
+  "ignorePaths": [],
   "customManagers": [
     {
       "customType": "regex",
