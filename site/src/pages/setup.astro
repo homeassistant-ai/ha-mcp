@@ -1120,12 +1120,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐳 Start Docker Container</h4>
-          <pre class="code-block"><code>docker run -d --name ha-mcp \\
-  -p 8086:8086 \\
-  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-${secretPathEnv}  ghcr.io/homeassistant-ai/ha-mcp:latest \\
-  fastmcp run fastmcp-http.json</code></pre>
+          <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv.trim() : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
