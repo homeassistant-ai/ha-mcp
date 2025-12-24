@@ -14,7 +14,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, parse_mcp_result
 
 logger = logging.getLogger(__name__)
 
@@ -369,10 +369,11 @@ async def test_blueprint_automation_lifecycle(mcp_client):
 
         # This should reach HA (proving our validation passed) even if HA rejects it
         # If our validation failed, we'd get a different error code
-        create_result = await mcp_client.call_tool(
+        create_raw_result = await mcp_client.call_tool(
             "ha_config_set_automation",
             {"config": automation_config},
         )
+        create_result = parse_mcp_result(create_raw_result)
 
         # Check if it was our validation or HA's validation that failed
         if not create_result.get("success"):
@@ -453,10 +454,11 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
 
         # The key test: This should pass our validation (not fail with "missing trigger/action")
         # It will fail HA validation due to missing blueprint inputs, but that's expected
-        create_result = await mcp_client.call_tool(
+        create_raw_result = await mcp_client.call_tool(
             "ha_config_set_automation",
             {"config": automation_config},
         )
+        create_result = parse_mcp_result(create_raw_result)
 
         # If our validation works, it should reach HA (which will reject due to missing inputs)
         if not create_result.get("success"):
