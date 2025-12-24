@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "timezone": "UTC",
-  "schedule": ["after 9am on monday"],
+  "schedule": ["after 3pm on tuesday"],
   "customManagers": [
     {
       "customType": "regex",

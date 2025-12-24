@@ -2,8 +2,8 @@ name: Renovate
 
 on:
   schedule:
-    # Run every Monday at 9:00 UTC
-    - cron: '0 9 * * 1'
+    # Run every Tuesday at 15:00 UTC (after Dependabot on Monday)
+    - cron: '0 15 * * 2'
   workflow_dispatch:
     inputs:
       logLevel:
