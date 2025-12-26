@@ -334,11 +334,13 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     async def _consent_post(self, request: Request) -> Response:
         """Handle POST request from consent form."""
+        logger.info("📝 === CONSENT FORM POST RECEIVED ===")
         form = await request.form()
 
         txn_id = form.get("txn_id")
         ha_url = form.get("ha_url")
         ha_token = form.get("ha_token")
+        logger.info(f"📝 Form data: txn_id={txn_id}, ha_url={ha_url}, has_token={ha_token is not None}")
 
         if not txn_id:
             return HTMLResponse(
@@ -396,6 +398,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             ha_url=str(ha_url),
             ha_token=str(ha_token),
         )
+        print(f"\n\n✅✅✅ STORED HA CREDENTIALS for client {client_id}: {str(ha_url)} ✅✅✅\n\n", flush=True)
+        logger.info(f"✅ Stored HA credentials for client {client_id}: {str(ha_url)}")
 
         # Generate authorization code
         auth_code_value = f"ha_auth_code_{secrets.token_hex(16)}"
@@ -520,12 +524,26 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
-        # Store access token with HA credentials reference
+        # Get HA credentials for this client to embed in token claims
+        ha_credentials = self.ha_credentials.get(client.client_id)
+        if not ha_credentials:
+            raise TokenError(
+                "server_error",
+                f"No Home Assistant credentials found for client {client.client_id}",
+            )
+
+        # Store access token with HA credentials in claims
+        # This allows the credentials to be embedded in the JWT token itself,
+        # eliminating the need for server-side storage and surviving restarts
         self.access_tokens[access_token_value] = AccessToken(
             token=access_token_value,
             client_id=client.client_id,
             scopes=authorization_code.scopes,
             expires_at=access_token_expires_at,
+            claims={
+                "ha_url": ha_credentials.ha_url,
+                "ha_token": ha_credentials.ha_token,
+            },
         )
 
         self.refresh_tokens[refresh_token_value] = RefreshToken(
@@ -586,6 +604,13 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         if client.client_id is None:
             raise TokenError("invalid_client", "Client ID is required")
 
+        # Preserve claims from old access token before revoking
+        old_access_token_str = self._refresh_to_access_map.get(refresh_token.token)
+        old_claims = {}
+        if old_access_token_str and old_access_token_str in self.access_tokens:
+            old_access_token = self.access_tokens[old_access_token_str]
+            old_claims = old_access_token.claims or {}
+
         # Revoke old tokens
         self._revoke_internal(refresh_token_str=refresh_token.token)
 
@@ -596,11 +621,13 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
+        # Preserve HA credentials in new access token claims
         self.access_tokens[new_access_token_value] = AccessToken(
             token=new_access_token_value,
             client_id=client.client_id,
             scopes=scopes,
             expires_at=access_token_expires_at,
+            claims=old_claims,  # Preserve HA credentials across token refresh
         )
 
         self.refresh_tokens[new_refresh_token_value] = RefreshToken(

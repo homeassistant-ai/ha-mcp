@@ -471,10 +471,23 @@ def main_oauth() -> None:
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - MCP_BASE_URL (optional, default: http://localhost:{MCP_PORT})
+    - LOG_LEVEL (optional, default: INFO)
 
     Note: HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN are NOT required in this mode.
     They are collected via the OAuth consent form.
     """
+    # Configure logging for OAuth mode
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
+        force=True  # Force reconfiguration
+    )
+    # Also configure all ha_mcp loggers
+    for logger_name in ['ha_mcp', 'ha_mcp.auth', 'ha_mcp.auth.provider']:
+        logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
+    logger.info(f"✅ OAuth mode logging configured at {log_level} level")
+
     port = int(os.getenv("MCP_PORT", "8086"))
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
     base_url = os.getenv("MCP_BASE_URL", f"http://localhost:{port}")
@@ -514,48 +527,77 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     # In OAuth mode, we don't require pre-configured HA credentials in environment.
     # Instead, tools will get credentials from the OAuth provider per-request.
     # The Settings class now has defaults that work for OAuth mode.
-    server = HomeAssistantSmartMCPServer()
+
+    # CRITICAL FIX: Create a proxy client that dynamically forwards to OAuth clients
+    # This is necessary because tools capture a reference to the client at registration time.
+    # Simply replacing the property doesn't work because the ToolsRegistry already captured
+    # the reference in __init__ (line 61: self.client = server.client)
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    class OAuthProxyClient:
+        """Proxy client that dynamically forwards to the correct OAuth-authenticated client."""
+
+        def __init__(self, auth_provider):
+            self._auth_provider = auth_provider
+            self._oauth_clients = {}
+            print(f"\n\n🔧 Created OAuthProxyClient\n\n", flush=True)
+
+        def _get_oauth_client(self):
+            """Get the OAuth client for the current request context."""
+            from fastmcp.server.dependencies import get_access_token
+
+            print(f"\n🔑 OAuthProxyClient getting client for current request\n", flush=True)
+
+            # Get the access token from the current request context
+            token = get_access_token()
+            print(f"Token retrieved: {token is not None}\n", flush=True)
+
+            if not token:
+                logger.warning("⚠️ No access token in context")
+                raise RuntimeError("No OAuth token in request context")
+
+            # Extract HA credentials from token claims
+            # The claims contain ha_url and ha_token embedded in the JWT
+            claims = token.claims
+            print(f"Claims: {claims}\n", flush=True)
+
+            if not claims or "ha_url" not in claims or "ha_token" not in claims:
+                logger.error(f"⚠️ No HA credentials in token claims: {claims}")
+                raise RuntimeError("No Home Assistant credentials in OAuth token claims")
+
+            ha_url = claims["ha_url"]
+            ha_token = claims["ha_token"]
+            print(f"✅ Credentials from claims: {ha_url}\n", flush=True)
+
+            # Create or reuse client for these credentials
+            client_key = f"{ha_url}:{ha_token}"
+            if client_key not in self._oauth_clients:
+                from ha_mcp.config import Settings
+                oauth_settings = Settings(
+                    homeassistant_url=ha_url,
+                    homeassistant_token=ha_token,
+                )
+                self._oauth_clients[client_key] = HomeAssistantClient(settings=oauth_settings)
+                print(f"✅ Created new client for {ha_url}\n\n", flush=True)
+                logger.info(f"✅ Created OAuth client for {ha_url}")
+
+            return self._oauth_clients[client_key]
+
+        def __getattr__(self, name):
+            """Forward all attribute access to the OAuth client."""
+            print(f"🔀 Forwarding '{name}' to OAuth client\n", flush=True)
+            client = self._get_oauth_client()
+            return getattr(client, name)
+
+    # Create proxy client
+    proxy_client = OAuthProxyClient(auth_provider)
+
+    # Create server with the proxy client
+    server = HomeAssistantSmartMCPServer(client=proxy_client)
     mcp = server.mcp
 
-    # Override the client property to create OAuth-aware clients
-    original_client_property = type(server).client.fget
-
-    def oauth_client_property(self):
-        """Create OAuth-aware client that uses credentials from the current request."""
-        from fastmcp.server.dependencies import get_access_token
-        from ha_mcp.client.rest_client import HomeAssistantClient
-
-        # Get the access token from the current request context
-        token = get_access_token()
-        if not token:
-            # Fallback to original behavior if no token (shouldn't happen in OAuth mode)
-            return original_client_property(self)
-
-        # Get HA credentials from the OAuth provider
-        credentials = auth_provider.get_ha_credentials_for_token(token.token)
-        if not credentials:
-            # Fallback to original behavior if no credentials found
-            return original_client_property(self)
-
-        # Create a client with the OAuth-provided credentials
-        # Note: We create a new client per request to use the correct credentials
-        if not hasattr(self, '_oauth_clients'):
-            self._oauth_clients = {}
-
-        client_key = f"{credentials.ha_url}:{credentials.ha_token}"
-        if client_key not in self._oauth_clients:
-            # Create settings-like object with OAuth credentials
-            from ha_mcp.config import Settings
-            oauth_settings = Settings(
-                homeassistant_url=credentials.ha_url,
-                homeassistant_token=credentials.ha_token,
-            )
-            self._oauth_clients[client_key] = HomeAssistantClient(settings=oauth_settings)
-
-        return self._oauth_clients[client_key]
-
-    # Replace the client property
-    type(server).client = property(oauth_client_property)
+    print(f"\n\n✅ Server created with OAuthProxyClient\n\n", flush=True)
+    logger.info("✅ Server created with OAuthProxyClient")
 
     # Add OAuth authentication to the MCP server
     mcp.auth = auth_provider
