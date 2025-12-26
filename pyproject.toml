@@ -33,6 +33,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "truststore>=0.10.0",
     "websockets>=12.0",
+    "cryptography>=45.0.7",
 ]
 
 [project.urls]

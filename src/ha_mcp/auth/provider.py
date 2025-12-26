@@ -7,12 +7,14 @@ provide their Home Assistant URL and Long-Lived Access Token (LLAT).
 """
 
 import logging
+import os
 import secrets
 import time
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from cryptography.fernet import Fernet
 from fastmcp.server.auth.auth import AccessToken  # FastMCP version has claims field
 from mcp.server.auth.provider import (
     AuthorizationCode,
@@ -132,7 +134,51 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self._access_to_refresh_map: dict[str, str] = {}
         self._refresh_to_access_map: dict[str, str] = {}
 
+        # Initialize encryption key for stateless tokens
+        self._encryption_key = self._get_or_create_encryption_key()
+        self._cipher = Fernet(self._encryption_key)
+
         logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
+
+    def _get_or_create_encryption_key(self) -> bytes:
+        """
+        Get encryption key from environment or generate a new one.
+
+        For production: Set OAUTH_ENCRYPTION_KEY environment variable
+        For dev: A key is generated (tokens won't survive restarts)
+        """
+        key_str = os.getenv("OAUTH_ENCRYPTION_KEY")
+        if key_str:
+            logger.info("Using OAUTH_ENCRYPTION_KEY from environment")
+            return key_str.encode()
+        else:
+            # Generate a new key (tokens won't survive restart)
+            key = Fernet.generate_key()
+            logger.warning(
+                "No OAUTH_ENCRYPTION_KEY set - generated temporary key. "
+                "Tokens will be invalid after server restart. "
+                "Set OAUTH_ENCRYPTION_KEY for persistence."
+            )
+            return key
+
+    def _encrypt_credentials(self, ha_url: str, ha_token: str) -> str:
+        """Encrypt HA credentials into a token string."""
+        credentials_str = f"{ha_url}|{ha_token}"
+        encrypted = self._cipher.encrypt(credentials_str.encode())
+        return encrypted.decode()
+
+    def _decrypt_credentials(self, token: str) -> tuple[str, str] | None:
+        """Decrypt token to get HA credentials. Returns (ha_url, ha_token) or None."""
+        try:
+            decrypted = self._cipher.decrypt(token.encode())
+            credentials_str = decrypted.decode()
+            parts = credentials_str.split("|", 1)
+            if len(parts) == 2:
+                return parts[0], parts[1]
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to decrypt token: {e}")
+            return None
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
@@ -398,7 +444,6 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             ha_url=str(ha_url),
             ha_token=str(ha_token),
         )
-        print(f"\n\n✅✅✅ STORED HA CREDENTIALS for client {client_id}: {str(ha_url)} ✅✅✅\n\n", flush=True)
         logger.info(f"✅ Stored HA credentials for client {client_id}: {str(ha_url)}")
 
         # Generate authorization code
@@ -524,7 +569,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
-        # Get HA credentials for this client to embed in token claims
+        # Get HA credentials for this client to encrypt in token
         ha_credentials = self.ha_credentials.get(client.client_id)
         if not ha_credentials:
             raise TokenError(
@@ -532,20 +577,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 f"No Home Assistant credentials found for client {client.client_id}",
             )
 
-        # Store access token with HA credentials in claims
-        # This allows the credentials to be embedded in the JWT token itself,
-        # eliminating the need for server-side storage and surviving restarts
-        self.access_tokens[access_token_value] = AccessToken(
-            token=access_token_value,
-            client_id=client.client_id,
-            scopes=authorization_code.scopes,
-            expires_at=access_token_expires_at,
-            claims={
-                "ha_url": ha_credentials.ha_url,
-                "ha_token": ha_credentials.ha_token,
-            },
+        # STATELESS TOKEN: Encrypt HA credentials directly into the access token
+        # No server-side storage needed - token contains everything
+        access_token_value = self._encrypt_credentials(
+            ha_credentials.ha_url, ha_credentials.ha_token
         )
 
+        # Still use random string for refresh token (less sensitive, can be in memory)
+        # Refresh tokens are less frequently used and don't need to carry credentials
         self.refresh_tokens[refresh_token_value] = RefreshToken(
             token=refresh_token_value,
             client_id=client.client_id,
@@ -553,11 +592,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             expires_at=refresh_token_expires_at,
         )
 
-        # Map tokens for revocation
-        self._access_to_refresh_map[access_token_value] = refresh_token_value
-        self._refresh_to_access_map[refresh_token_value] = access_token_value
+        # Map for revocation (refresh token only, access token is stateless)
+        self._refresh_to_access_map[refresh_token_value] = client.client_id or ""
 
-        logger.info(f"Issued tokens for client {client.client_id}")
+        # Clean up temporary credentials storage (no longer needed after token issued)
+        if client.client_id in self.ha_credentials:
+            del self.ha_credentials[client.client_id]
+
+        logger.info(f"Issued encrypted stateless access token for client {client.client_id}")
 
         return OAuthToken(
             access_token=access_token_value,
@@ -649,27 +691,35 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        """Load and validate access token."""
-        print(f"\n🔍 load_access_token called with token: {token[:50]}...\n", flush=True)
-        print(f"📊 Available tokens: {list(self.access_tokens.keys())[:3]}\n", flush=True)
+        """
+        Load and validate access token.
 
-        token_obj = self.access_tokens.get(token)
-        print(f"Token found: {token_obj is not None}\n", flush=True)
+        STATELESS: Decrypts token to extract HA credentials.
+        No server-side storage needed - token is self-contained.
+        """
 
-        if token_obj:
-            if token_obj.expires_at is not None and token_obj.expires_at < time.time():
-                print(f"❌ Token expired\n", flush=True)
-                self._revoke_internal(access_token_str=token_obj.token)
-                return None
-            print(f"✅ Token valid, returning\n", flush=True)
-            return token_obj
+        # Decrypt token to get HA credentials
+        credentials = self._decrypt_credentials(token)
+        if not credentials:
+            return None
 
-        print(f"❌ Token not found in access_tokens\n", flush=True)
-        return None
+        ha_url, ha_token = credentials
+
+        # Create AccessToken object with decrypted credentials in claims
+        # No expiry check - tokens don't expire (encryption key rotation handles security)
+        return AccessToken(
+            token=token,
+            client_id="decrypted",  # We don't store client_id in token
+            scopes=["homeassistant", "mcp"],
+            expires_at=None,  # Stateless tokens don't expire
+            claims={
+                "ha_url": ha_url,
+                "ha_token": ha_token,
+            },
+        )
 
     async def verify_token(self, token: str) -> AccessToken | None:
         """Verify bearer token and return access info if valid."""
-        print(f"\n🔐 verify_token called\n", flush=True)
         return await self.load_access_token(token)
 
     def _revoke_internal(

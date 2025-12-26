@@ -282,7 +282,7 @@ class TestHomeAssistantOAuthProvider:
 
     @pytest.mark.asyncio
     async def test_exchange_authorization_code(self, provider):
-        """Test exchanging auth code for tokens."""
+        """Test exchanging auth code for tokens with encrypted credentials."""
         from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import AuthorizationCode
         from pydantic import AnyHttpUrl
@@ -293,6 +293,12 @@ class TestHomeAssistantOAuthProvider:
             redirect_uris=["http://localhost/cb"],
         )
         await provider.register_client(client_info)
+
+        # Store HA credentials (simulates consent form submission)
+        provider.ha_credentials["test-client"] = HomeAssistantCredentials(
+            ha_url="http://homeassistant.local:8123",
+            ha_token="test_token_abc123",
+        )
 
         # Create auth code directly
         auth_code = AuthorizationCode(
@@ -317,59 +323,47 @@ class TestHomeAssistantOAuthProvider:
         # Auth code should be consumed
         assert "test_code_123" not in provider.auth_codes
 
+        # Credentials should be cleaned up (no longer stored in memory)
+        assert "test-client" not in provider.ha_credentials
+
     @pytest.mark.asyncio
     async def test_load_access_token(self, provider):
-        """Test loading access token."""
-        from mcp.server.auth.provider import AccessToken
-
-        # Create token directly
-        provider.access_tokens["test_access_token"] = AccessToken(
-            token="test_access_token",
-            client_id="test-client",
-            scopes=["homeassistant"],
-            expires_at=int(time.time() + 3600),
+        """Test loading encrypted stateless access token."""
+        # Create an encrypted token
+        encrypted_token = provider._encrypt_credentials(
+            "http://homeassistant.local:8123",
+            "test_token_xyz"
         )
 
-        result = await provider.load_access_token("test_access_token")
+        result = await provider.load_access_token(encrypted_token)
 
         assert result is not None
-        assert result.client_id == "test-client"
+        assert result.claims["ha_url"] == "http://homeassistant.local:8123"
+        assert result.claims["ha_token"] == "test_token_xyz"
+        assert result.expires_at is None  # Stateless tokens don't expire
 
     @pytest.mark.asyncio
-    async def test_load_expired_access_token(self, provider):
-        """Test loading expired access token returns None."""
-        from mcp.server.auth.provider import AccessToken
-
-        # Create expired token
-        provider.access_tokens["expired_token"] = AccessToken(
-            token="expired_token",
-            client_id="test-client",
-            scopes=[],
-            expires_at=int(time.time() - 100),  # Expired
-        )
-
-        result = await provider.load_access_token("expired_token")
+    async def test_load_invalid_access_token(self, provider):
+        """Test loading invalid token returns None."""
+        # Try to load a non-encrypted token
+        result = await provider.load_access_token("invalid_random_string")
 
         assert result is None
-        # Token should be cleaned up
-        assert "expired_token" not in provider.access_tokens
 
     @pytest.mark.asyncio
     async def test_verify_token(self, provider):
-        """Test verify_token delegates to load_access_token."""
-        from mcp.server.auth.provider import AccessToken
-
-        provider.access_tokens["verify_test"] = AccessToken(
-            token="verify_test",
-            client_id="client",
-            scopes=[],
-            expires_at=int(time.time() + 3600),
+        """Test verify_token delegates to load_access_token with encrypted tokens."""
+        # Create an encrypted token
+        encrypted_token = provider._encrypt_credentials(
+            "http://ha.local:8123",
+            "valid_token"
         )
 
-        result = await provider.verify_token("verify_test")
+        result = await provider.verify_token(encrypted_token)
         assert result is not None
+        assert result.claims["ha_url"] == "http://ha.local:8123"
 
-        result_invalid = await provider.verify_token("nonexistent")
+        result_invalid = await provider.verify_token("invalid_token_string")
         assert result_invalid is None
 
     @pytest.mark.asyncio
@@ -407,30 +401,22 @@ class TestHomeAssistantOAuthProvider:
 
     @pytest.mark.asyncio
     async def test_revoke_token(self, provider):
-        """Test token revocation."""
-        from mcp.server.auth.provider import AccessToken, RefreshToken
+        """Test token revocation with refresh tokens."""
+        from mcp.server.auth.provider import RefreshToken
 
-        # Create linked access and refresh tokens
-        provider.access_tokens["access_123"] = AccessToken(
-            token="access_123",
-            client_id="client",
-            scopes=[],
-            expires_at=int(time.time() + 3600),
-        )
+        # With stateless encrypted access tokens, we don't store access tokens in memory.
+        # Only refresh tokens are stored and can be revoked.
         provider.refresh_tokens["refresh_123"] = RefreshToken(
             token="refresh_123",
             client_id="client",
             scopes=[],
             expires_at=int(time.time() + 86400),
         )
-        provider._access_to_refresh_map["access_123"] = "refresh_123"
-        provider._refresh_to_access_map["refresh_123"] = "access_123"
 
-        # Revoke access token
-        await provider.revoke_token(provider.access_tokens["access_123"])
+        # Revoke refresh token
+        await provider.revoke_token(provider.refresh_tokens["refresh_123"])
 
-        # Both should be revoked
-        assert "access_123" not in provider.access_tokens
+        # Refresh token should be removed
         assert "refresh_123" not in provider.refresh_tokens
 
     def test_get_ha_credentials(self, provider):

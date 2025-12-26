@@ -540,17 +540,14 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         def __init__(self, auth_provider):
             self._auth_provider = auth_provider
             self._oauth_clients = {}
-            print(f"\n\n🔧 Created OAuthProxyClient\n\n", flush=True)
 
         def _get_oauth_client(self):
             """Get the OAuth client for the current request context."""
             from fastmcp.server.dependencies import get_access_token
 
-            print(f"\n🔑 OAuthProxyClient getting client for current request\n", flush=True)
 
             # Get the access token from the current request context
             token = get_access_token()
-            print(f"Token retrieved: {token is not None}\n", flush=True)
 
             if not token:
                 logger.warning("⚠️ No access token in context")
@@ -559,7 +556,6 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
             # Extract HA credentials from token claims
             # The claims contain ha_url and ha_token embedded in the JWT
             claims = token.claims
-            print(f"Claims: {claims}\n", flush=True)
 
             if not claims or "ha_url" not in claims or "ha_token" not in claims:
                 logger.error(f"⚠️ No HA credentials in token claims: {claims}")
@@ -567,7 +563,6 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
 
             ha_url = claims["ha_url"]
             ha_token = claims["ha_token"]
-            print(f"✅ Credentials from claims: {ha_url}\n", flush=True)
 
             # Create or reuse client for these credentials
             client_key = f"{ha_url}:{ha_token}"
@@ -576,14 +571,12 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
                     base_url=ha_url,
                     token=ha_token,
                 )
-                print(f"✅ Created new client for {ha_url}\n\n", flush=True)
                 logger.info(f"✅ Created OAuth client for {ha_url}")
 
             return self._oauth_clients[client_key]
 
         def __getattr__(self, name):
             """Forward all attribute access to the OAuth client."""
-            print(f"🔀 Forwarding '{name}' to OAuth client\n", flush=True)
             client = self._get_oauth_client()
             return getattr(client, name)
 
@@ -594,7 +587,6 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     server = HomeAssistantSmartMCPServer(client=proxy_client)
     mcp = server.mcp
 
-    print(f"\n\n✅ Server created with OAuthProxyClient\n\n", flush=True)
     logger.info("✅ Server created with OAuthProxyClient")
 
     # Add OAuth authentication to the MCP server
