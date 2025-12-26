@@ -12,6 +12,57 @@ from typing import Any  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+class OAuthProxyClient:
+    """Proxy client that dynamically forwards to the correct OAuth-authenticated client.
+
+    This class is necessary because tools capture a reference to the client at registration time.
+    The proxy allows us to inject different credentials per-request based on OAuth token claims.
+    """
+
+    def __init__(self, auth_provider):
+        self._auth_provider = auth_provider
+        self._oauth_clients = {}
+
+    def _get_oauth_client(self):
+        """Get the OAuth client for the current request context."""
+        from fastmcp.server.dependencies import get_access_token
+        from ha_mcp.client.rest_client import HomeAssistantClient
+
+        # Get the access token from the current request context
+        token = get_access_token()
+
+        if not token:
+            logger.warning("⚠️ No access token in context")
+            raise RuntimeError("No OAuth token in request context")
+
+        # Extract HA credentials from token claims
+        claims = token.claims
+
+        if not claims or "ha_url" not in claims or "ha_token" not in claims:
+            logger.error(f"⚠️ No HA credentials in token claims: {claims}")
+            raise RuntimeError("No Home Assistant credentials in OAuth token claims")
+
+        ha_url = claims["ha_url"]
+        ha_token = claims["ha_token"]
+
+        # Create or reuse client for these credentials
+        client_key = f"{ha_url}:{ha_token}"
+        if client_key not in self._oauth_clients:
+            self._oauth_clients[client_key] = HomeAssistantClient(
+                base_url=ha_url,
+                token=ha_token,
+            )
+            logger.info(f"✅ Created OAuth client for {ha_url}")
+
+        return self._oauth_clients[client_key]
+
+    def __getattr__(self, name):
+        """Forward all attribute access to the OAuth client."""
+        client = self._get_oauth_client()
+        return getattr(client, name)
+
+
 # Shutdown configuration
 SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
@@ -528,59 +579,8 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     # Instead, tools will get credentials from the OAuth provider per-request.
     # The Settings class now has defaults that work for OAuth mode.
 
-    # CRITICAL FIX: Create a proxy client that dynamically forwards to OAuth clients
+    # Create proxy client that dynamically forwards to OAuth clients
     # This is necessary because tools capture a reference to the client at registration time.
-    # Simply replacing the property doesn't work because the ToolsRegistry already captured
-    # the reference in __init__ (line 61: self.client = server.client)
-    from ha_mcp.client.rest_client import HomeAssistantClient
-
-    class OAuthProxyClient:
-        """Proxy client that dynamically forwards to the correct OAuth-authenticated client."""
-
-        def __init__(self, auth_provider):
-            self._auth_provider = auth_provider
-            self._oauth_clients = {}
-
-        def _get_oauth_client(self):
-            """Get the OAuth client for the current request context."""
-            from fastmcp.server.dependencies import get_access_token
-
-
-            # Get the access token from the current request context
-            token = get_access_token()
-
-            if not token:
-                logger.warning("⚠️ No access token in context")
-                raise RuntimeError("No OAuth token in request context")
-
-            # Extract HA credentials from token claims
-            # The claims contain ha_url and ha_token embedded in the JWT
-            claims = token.claims
-
-            if not claims or "ha_url" not in claims or "ha_token" not in claims:
-                logger.error(f"⚠️ No HA credentials in token claims: {claims}")
-                raise RuntimeError("No Home Assistant credentials in OAuth token claims")
-
-            ha_url = claims["ha_url"]
-            ha_token = claims["ha_token"]
-
-            # Create or reuse client for these credentials
-            client_key = f"{ha_url}:{ha_token}"
-            if client_key not in self._oauth_clients:
-                self._oauth_clients[client_key] = HomeAssistantClient(
-                    base_url=ha_url,
-                    token=ha_token,
-                )
-                logger.info(f"✅ Created OAuth client for {ha_url}")
-
-            return self._oauth_clients[client_key]
-
-        def __getattr__(self, name):
-            """Forward all attribute access to the OAuth client."""
-            client = self._get_oauth_client()
-            return getattr(client, name)
-
-    # Create proxy client
     proxy_client = OAuthProxyClient(auth_provider)
 
     # Create server with the proxy client
