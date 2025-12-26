@@ -499,8 +499,8 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     """Run the OAuth-authenticated MCP server."""
     global _shutdown_event
 
-    from fastmcp import FastMCP
     from ha_mcp.auth import HomeAssistantOAuthProvider
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
     _shutdown_event = asyncio.Event()
 
@@ -510,37 +510,59 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         service_documentation_url="https://github.com/homeassistant-ai/ha-mcp",
     )
 
-    # Create a minimal FastMCP server with OAuth
-    # Note: In OAuth mode, we create a simpler server that doesn't require
-    # pre-configured HA credentials. The tools will use credentials from OAuth.
-    mcp = FastMCP(
-        name="ha-mcp",
-        version="4.14.0",
-        auth=auth_provider,
-    )
+    # Create full HomeAssistantSmartMCPServer with OAuth authentication
+    # In OAuth mode, we don't require pre-configured HA credentials in environment.
+    # Instead, tools will get credentials from the OAuth provider per-request.
+    # The Settings class now has defaults that work for OAuth mode.
+    server = HomeAssistantSmartMCPServer()
+    mcp = server.mcp
 
-    # Register a simple tool to verify authentication works
-    @mcp.tool
-    async def get_ha_connection_info() -> dict:
-        """Get information about the authenticated Home Assistant connection."""
+    # Override the client property to create OAuth-aware clients
+    original_client_property = type(server).client.fget
+
+    def oauth_client_property(self):
+        """Create OAuth-aware client that uses credentials from the current request."""
         from fastmcp.server.dependencies import get_access_token
+        from ha_mcp.client.rest_client import HomeAssistantClient
 
+        # Get the access token from the current request context
         token = get_access_token()
         if not token:
-            return {"error": "Not authenticated"}
+            # Fallback to original behavior if no token (shouldn't happen in OAuth mode)
+            return original_client_property(self)
 
         # Get HA credentials from the OAuth provider
         credentials = auth_provider.get_ha_credentials_for_token(token.token)
         if not credentials:
-            return {"error": "No Home Assistant credentials found for this session"}
+            # Fallback to original behavior if no credentials found
+            return original_client_property(self)
 
-        return {
-            "ha_url": credentials.ha_url,
-            "authenticated": True,
-            "validated_at": credentials.validated_at,
-        }
+        # Create a client with the OAuth-provided credentials
+        # Note: We create a new client per request to use the correct credentials
+        if not hasattr(self, '_oauth_clients'):
+            self._oauth_clients = {}
 
-    logger.info(f"Starting OAuth-enabled MCP server on {base_url}{path}")
+        client_key = f"{credentials.ha_url}:{credentials.ha_token}"
+        if client_key not in self._oauth_clients:
+            # Create settings-like object with OAuth credentials
+            from ha_mcp.config import Settings
+            oauth_settings = Settings(
+                homeassistant_url=credentials.ha_url,
+                homeassistant_token=credentials.ha_token,
+            )
+            self._oauth_clients[client_key] = HomeAssistantClient(settings=oauth_settings)
+
+        return self._oauth_clients[client_key]
+
+    # Replace the client property
+    type(server).client = property(oauth_client_property)
+
+    # Add OAuth authentication to the MCP server
+    mcp.auth = auth_provider
+
+    # Get tool count (get_tools is async, but we can count registered tools)
+    tools = await mcp.get_tools()
+    logger.info(f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}")
 
     # Run server
     server_task = asyncio.create_task(
