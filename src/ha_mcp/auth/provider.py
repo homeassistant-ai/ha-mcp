@@ -13,8 +13,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from fastmcp.server.auth.auth import AccessToken  # FastMCP version has claims field
 from mcp.server.auth.provider import (
-    AccessToken,
     AuthorizationCode,
     AuthorizationParams,
     AuthorizeError,
@@ -650,16 +650,26 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         """Load and validate access token."""
+        print(f"\n🔍 load_access_token called with token: {token[:50]}...\n", flush=True)
+        print(f"📊 Available tokens: {list(self.access_tokens.keys())[:3]}\n", flush=True)
+
         token_obj = self.access_tokens.get(token)
+        print(f"Token found: {token_obj is not None}\n", flush=True)
+
         if token_obj:
             if token_obj.expires_at is not None and token_obj.expires_at < time.time():
+                print(f"❌ Token expired\n", flush=True)
                 self._revoke_internal(access_token_str=token_obj.token)
                 return None
+            print(f"✅ Token valid, returning\n", flush=True)
             return token_obj
+
+        print(f"❌ Token not found in access_tokens\n", flush=True)
         return None
 
     async def verify_token(self, token: str) -> AccessToken | None:
         """Verify bearer token and return access info if valid."""
+        print(f"\n🔐 verify_token called\n", flush=True)
         return await self.load_access_token(token)
 
     def _revoke_internal(

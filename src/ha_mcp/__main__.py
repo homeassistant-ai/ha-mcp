@@ -572,12 +572,10 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
             # Create or reuse client for these credentials
             client_key = f"{ha_url}:{ha_token}"
             if client_key not in self._oauth_clients:
-                from ha_mcp.config import Settings
-                oauth_settings = Settings(
-                    homeassistant_url=ha_url,
-                    homeassistant_token=ha_token,
+                self._oauth_clients[client_key] = HomeAssistantClient(
+                    base_url=ha_url,
+                    token=ha_token,
                 )
-                self._oauth_clients[client_key] = HomeAssistantClient(settings=oauth_settings)
                 print(f"✅ Created new client for {ha_url}\n\n", flush=True)
                 logger.info(f"✅ Created OAuth client for {ha_url}")
 
