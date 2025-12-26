@@ -36,8 +36,9 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Home Assistant connection
-    homeassistant_url: str = Field(..., alias="HOMEASSISTANT_URL")
-    homeassistant_token: str = Field(..., alias="HOMEASSISTANT_TOKEN")
+    # In OAuth mode, these are optional and provided per-request
+    homeassistant_url: str = Field(default="http://oauth-mode", alias="HOMEASSISTANT_URL")
+    homeassistant_token: str = Field(default="oauth-mode-token", alias="HOMEASSISTANT_TOKEN")
 
     # Server configuration
     timeout: int = Field(30, alias="HA_TIMEOUT")
@@ -83,6 +84,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_homeassistant_url(cls, v: str) -> str:
         """Ensure URL is properly formatted."""
+        # Allow OAuth mode placeholder
+        if v == "http://oauth-mode":
+            return v
         if not v.startswith(("http://", "https://")):
             raise ValueError("Home Assistant URL must start with http:// or https://")
         return v.rstrip("/")  # Remove trailing slash
@@ -91,6 +95,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_homeassistant_token(cls, v: str) -> str:
         """Ensure token is not empty. Use 'demo' for public demo environment."""
+        # Allow OAuth mode placeholder
+        if v == "oauth-mode-token":
+            return v
         if not v or v == "your_long_lived_access_token_here":
             raise ValueError("Home Assistant token must be provided")
         # Replace "demo" with actual demo token for easy onboarding
