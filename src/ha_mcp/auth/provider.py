@@ -141,9 +141,66 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         This extends the base OAuth routes with:
         - GET /authorize - Shows the consent form
         - POST /authorize - Handles consent form submission
+        - Custom /.well-known/oauth-authorization-server with enhanced metadata
         """
         # Get base OAuth routes
         routes = super().get_routes(mcp_path)
+
+        # Override the well-known metadata route to include fields needed by Claude.ai
+        # The MCP SDK omits critical fields like response_modes_supported and
+        # the "none" token_endpoint_auth_method that public clients with PKCE require
+        from starlette.responses import JSONResponse
+
+        async def enhanced_metadata_handler(request: Request) -> Response:
+            """Enhanced OAuth metadata handler with Claude.ai compatibility."""
+            from mcp.server.auth.routes import build_metadata
+
+            # Get base metadata from MCP SDK
+            metadata = build_metadata(
+                issuer_url=self.base_url,  # type: ignore[arg-type]
+                service_documentation_url=AnyHttpUrl("https://github.com/homeassistant-ai/ha-mcp"),
+                client_registration_options=self.client_registration_options or {},  # type: ignore[arg-type]
+                revocation_options=self.revocation_options or {},  # type: ignore[arg-type]
+            )
+
+            # Convert to dict and enhance with missing fields
+            # Use mode='json' to serialize AnyHttpUrl objects to strings
+            metadata_dict = metadata.model_dump(mode='json', exclude_none=True)
+
+            # Add response_modes_supported (required by some OAuth clients)
+            metadata_dict["response_modes_supported"] = ["query"]
+
+            # Add "none" auth method for public clients with PKCE (used by Claude.ai)
+            if "token_endpoint_auth_methods_supported" in metadata_dict:
+                if "none" not in metadata_dict["token_endpoint_auth_methods_supported"]:
+                    metadata_dict["token_endpoint_auth_methods_supported"].append("none")
+
+            # Also add "none" to revocation endpoint auth methods
+            if "revocation_endpoint_auth_methods_supported" in metadata_dict:
+                if "none" not in metadata_dict["revocation_endpoint_auth_methods_supported"]:
+                    metadata_dict["revocation_endpoint_auth_methods_supported"].append("none")
+
+            return JSONResponse(content=metadata_dict)
+
+        # Replace the well-known metadata route
+        enhanced_routes = []
+        for route in routes:
+            if (
+                isinstance(route, Route)
+                and route.path == "/.well-known/oauth-authorization-server"
+            ):
+                from mcp.server.auth.routes import cors_middleware
+                enhanced_routes.append(
+                    Route(
+                        path="/.well-known/oauth-authorization-server",
+                        endpoint=cors_middleware(
+                            enhanced_metadata_handler, ["GET", "OPTIONS"]
+                        ),
+                        methods=["GET", "OPTIONS"],
+                    )
+                )
+            else:
+                enhanced_routes.append(route)
 
         # Add consent form routes (these override the default authorize behavior)
         consent_routes = [
@@ -151,8 +208,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             Route("/consent", endpoint=self._consent_post, methods=["POST"]),
         ]
 
-        routes.extend(consent_routes)
-        return routes
+        enhanced_routes.extend(consent_routes)
+        return enhanced_routes
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Retrieve client information by ID."""
