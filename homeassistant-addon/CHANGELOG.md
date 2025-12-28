@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v5.0.6 (2025-12-28)
+
+### Bug Fixes
+
+- Exclude jq dependency on all Windows platforms (#371)
+  ([#371](https://github.com/homeassistant-ai/ha-mcp/pull/371),
+  [`f80c76a`](https://github.com/homeassistant-ai/ha-mcp/commit/f80c76a7ab5f50088432812a61857cde4ecef497))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7751dd4`](https://github.com/homeassistant-ai/ha-mcp/commit/7751dd418d276496415834ed57615adf2401ec18))
+
+
 ## v5.0.5 (2025-12-24)
 
 ### Bug Fixes
