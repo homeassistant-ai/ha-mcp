@@ -8,7 +8,7 @@ This validates the core functionality users need for reliable device control.
 Now uses Testcontainers for automatic container management with fresh configuration.
 """
 
-import asyncio
+import asyncio  # Keep for wait_for_entity_state polling
 import logging
 from typing import Any
 
@@ -174,7 +174,6 @@ class TestDeviceControl:
 
             # Verify brightness attribute (if supported)
             try:
-                await asyncio.sleep(1)  # Brief delay for attribute update
                 brightness_state_result = await mcp_client.call_tool(
                     "ha_get_state", {"entity_id": test_light_entity}
                 )
@@ -329,7 +328,6 @@ class TestDeviceControl:
 
         # 4. Verify final states of controlled lights
         logger.info("🔍 Verifying final states...")
-        await asyncio.sleep(3)  # Give time for all operations to complete
 
         for i, light_entity in enumerate(test_lights):
             try:
@@ -425,7 +423,6 @@ class TestDeviceControl:
 
         # Verify attributes changed
         try:
-            await asyncio.sleep(2)
             final_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": climate_entity}
             )
@@ -476,7 +473,6 @@ class TestDeviceControl:
         assert_mcp_success(open_result, "open cover")
         logger.info("✅ Cover open command executed")
 
-        await asyncio.sleep(2)
 
         # Test set position (if supported)
         position_result = await mcp_client.call_tool(
@@ -495,7 +491,6 @@ class TestDeviceControl:
         except AssertionError:
             logger.info("ℹ️ Cover does not support position setting")
 
-        await asyncio.sleep(1)
 
         # Test close cover
         close_result = await mcp_client.call_tool(
@@ -552,7 +547,6 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
     assert_mcp_success(toggle_result, "universal toggle")
     logger.info("✅ Universal toggle executed")
 
-    await asyncio.sleep(1)
 
     # Test universal turn_on
     on_result = await mcp_client.call_tool(
@@ -563,7 +557,6 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
     assert_mcp_success(on_result, "universal turn_on")
     logger.info("✅ Universal turn_on executed")
 
-    await asyncio.sleep(1)
 
     # Test universal turn_off
     off_result = await mcp_client.call_tool(
