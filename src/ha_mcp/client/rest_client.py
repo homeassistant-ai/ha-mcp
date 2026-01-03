@@ -591,14 +591,14 @@ class HomeAssistantClient:
         Uses the global WebSocket singleton to avoid race conditions from
         parallel tool calls creating multiple simultaneous connections.
         """
+        from .websocket_client import get_websocket_client
+
         max_retries = 2
         retry_delay = 0.5  # seconds
 
         for attempt in range(max_retries):
             try:
                 # Use singleton WebSocket client (shared, reused connection)
-                from .websocket_client import get_websocket_client
-
                 ws_client = await get_websocket_client()
 
                 # Special handling for render_template which returns an event with the actual result
