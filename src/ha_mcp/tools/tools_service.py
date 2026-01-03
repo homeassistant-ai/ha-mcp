@@ -28,121 +28,38 @@ def register_service_tools(mcp, client, **kwargs):
         return_response: bool | str = False,
     ) -> dict[str, Any]:
         """
-        Execute Home Assistant services with comprehensive validation and examples.
+        Execute Home Assistant services to control entities and trigger automations.
 
-        This is the universal tool for controlling all Home Assistant entities and executing automations.
+        This is the universal tool for controlling all Home Assistant entities. Services follow
+        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
 
-        **Common Usage Examples:**
-
-        **Light Control:**
+        **Basic Usage:**
         ```python
-        # Turn on light
+        # Turn on a light
         ha_call_service("light", "turn_on", entity_id="light.living_room")
 
-        # Turn on with brightness and color
-        ha_call_service("light", "turn_on", entity_id="light.bedroom",
-                      data={"brightness_pct": 75, "color_temp_kelvin": 2700})
-
-        # Turn off all lights
-        ha_call_service("light", "turn_off")
-        ```
-
-        **Climate Control:**
-        ```python
-        # Set temperature
+        # Set temperature with parameters
         ha_call_service("climate", "set_temperature",
                       entity_id="climate.thermostat", data={"temperature": 22})
 
-        # Change mode
-        ha_call_service("climate", "set_hvac_mode",
-                      entity_id="climate.living_room", data={"hvac_mode": "heat"})
-        ```
-
-        **Automation Control:**
-        ```python
-        # Trigger automation (replaces ha_trigger_automation)
+        # Trigger automation
         ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
 
-        # Turn automation on/off
-        ha_call_service("automation", "turn_off", entity_id="automation.night_mode")
-        ha_call_service("automation", "turn_on", entity_id="automation.security_check")
-        ```
-
-        **Scene Activation:**
-        ```python
-        # Activate scene
-        ha_call_service("scene", "turn_on", entity_id="scene.movie_night")
-        ha_call_service("scene", "turn_on", entity_id="scene.bedtime")
-        ```
-
-        **Input Helpers:**
-        ```python
-        # Set input number
-        ha_call_service("input_number", "set_value",
-                      entity_id="input_number.temp_offset", data={"value": 2.5})
-
-        # Toggle input boolean
-        ha_call_service("input_boolean", "toggle", entity_id="input_boolean.guest_mode")
-
-        # Set input text
-        ha_call_service("input_text", "set_value",
-                      entity_id="input_text.status", data={"value": "Away"})
-        ```
-
-        **Universal Controls (works with any entity):**
-        ```python
-        # Universal toggle
+        # Universal controls work with any entity
         ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
-
-        # Universal turn on/off
-        ha_call_service("homeassistant", "turn_on", entity_id="media_player.spotify")
-        ha_call_service("homeassistant", "turn_off", entity_id="fan.ceiling_fan")
         ```
 
-        **Script Execution:**
-        ```python
-        # Run script
-        ha_call_service("script", "turn_on", entity_id="script.bedtime_routine")
-        ha_call_service("script", "good_night_sequence")
-        ```
+        **Parameters:**
+        - **domain**: Service domain (light, climate, automation, etc.)
+        - **service**: Service name (turn_on, set_temperature, trigger, etc.)
+        - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
+        - **data**: Optional dict of service-specific parameters
+        - **return_response**: Set to True for services that return data
 
-        **Media Player Control:**
-        ```python
-        # Volume control
-        ha_call_service("media_player", "volume_set",
-                      entity_id="media_player.living_room", data={"volume_level": 0.5})
+        **For detailed service documentation and parameters, use ha_get_domain_docs(domain).**
 
-        # Play media
-        ha_call_service("media_player", "play_media",
-                      entity_id="media_player.spotify",
-                      data={"media_content_type": "music", "media_content_id": "spotify:playlist:123"})
-        ```
-
-        **Cover Control:**
-        ```python
-        # Open/close covers
-        ha_call_service("cover", "open_cover", entity_id="cover.garage_door")
-        ha_call_service("cover", "close_cover", entity_id="cover.living_room_blinds")
-
-        # Set position
-        ha_call_service("cover", "set_cover_position",
-                      entity_id="cover.bedroom_curtains", data={"position": 50})
-        ```
-
-        **Services with Response Data:**
-        ```python
-        # Some services return response data (e.g., custom components)
-        ha_call_service("ha_mcp_tools", "list_files",
-                      data={"path": "www/"}, return_response=True)
-        # Returns: {"service_response": {"success": true, "files": [...]}}
-        ```
-
-        **Parameter Guidelines:**
-        - **entity_id**: Optional for services that affect all entities of a domain
-        - **data**: Service-specific parameters (brightness, temperature, volume, etc.)
-        - **return_response**: Set to True for services that return data (SupportsResponse.ONLY/OPTIONAL)
-        - Use ha_get_state() first to check current values and supported features
-        - Use ha_get_domain_docs() for detailed service documentation
+        Common patterns: Use ha_get_state() to check current values before making changes.
+        Use ha_search_entities() to find correct entity IDs.
         """
         try:
             # Parse JSON data if provided as string
