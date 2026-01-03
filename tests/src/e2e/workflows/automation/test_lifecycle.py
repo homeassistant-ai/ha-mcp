@@ -8,7 +8,6 @@ Note: Tests are designed to work with both Docker test environment (localhost:81
 and production environments. Entity references are dynamically discovered.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -16,6 +15,11 @@ import pytest
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    wait_for_automation,
+)
+from ...utilities.wait_helpers import (
+    wait_for_entity_state,
+    wait_for_logbook_entry,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,22 +183,12 @@ class TestAutomationLifecycle:
         logger.info(f"✅ Created automation: {automation_entity}")
 
         # 3. VERIFY: Automation exists and is configured correctly
-        # Add a delay to allow Home Assistant to register the new automation
-        await asyncio.sleep(3)
-
+        # Wait for Home Assistant to register the new automation
         logger.info("🔍 Verifying automation configuration...")
-        get_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
-        )
-
-        get_data = assert_mcp_success(get_result, "automation retrieval")
-
-        # Validate automation configuration
-        config = get_data.get("config", {})
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
         if not config:
             raise AssertionError(
-                f"No configuration returned for automation {automation_entity}"
+                f"Automation {automation_entity} not found after creation"
             )
 
         # Check essential fields
@@ -226,29 +220,15 @@ class TestAutomationLifecycle:
 
         # 5. VERIFY: Check that automation ran (via logbook)
         logger.info("📋 Checking automation execution in logbook...")
-        await asyncio.sleep(3)  # Give time for automation to execute and log
-
         try:
-            logbook_result = await mcp_client.call_tool(
-                "ha_get_logbook", {"hours_back": 1}
+            automation_logged = await wait_for_logbook_entry(
+                mcp_client, automation_name, timeout=10, poll_interval=1.0
             )
-            logbook_data = parse_mcp_result(logbook_result)
-
-            if logbook_data.get("success"):
-                entries = logbook_data.get("entries", [])
-                # Look for automation execution in logbook
-                automation_ran = any(
-                    automation_name.lower() in str(entry).lower()
-                    or automation_entity.lower() in str(entry).lower()
-                    for entry in entries
-                )
-                logger.info(f"📋 Automation execution logged: {automation_ran}")
+            if automation_logged:
+                logger.info("📋 Automation execution verified in logbook")
             else:
-                logger.debug(
-                    f"Could not verify automation execution via logbook: {logbook_data.get('error', 'Unknown error')}"
-                )
                 logger.info(
-                    "📋 Logbook verification skipped - automation trigger was successful"
+                    "📋 Logbook verification timeout - automation trigger was successful"
                 )
         except Exception as e:
             logger.warning(f"Logbook verification failed: {e} - continuing with test")
@@ -277,18 +257,7 @@ class TestAutomationLifecycle:
 
         # 7. VERIFY: Update was applied
         logger.info("🔍 Verifying automation update...")
-        await asyncio.sleep(2)  # Allow time for update to propagate
-
-        verify_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
-        )
-
-        verify_data = assert_mcp_success(
-            verify_result, "automation update verification"
-        )
-
-        config = verify_data.get("config", {})
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
         if not config:
             raise AssertionError(
                 f"No configuration returned after update for automation {automation_entity}"
@@ -327,8 +296,16 @@ class TestAutomationLifecycle:
 
         # 9. VERIFY: Automation is gone
         logger.info("🔍 Verifying automation deletion...")
-        await asyncio.sleep(2)  # Allow time for deletion to propagate
+        # Poll to ensure deletion propagated (wait_for_automation returns None if not found)
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=5)
 
+        # If still found, that's a problem
+        if config is not None:
+            raise AssertionError(
+                f"Automation {automation_entity} still exists after deletion: {config}"
+            )
+
+        # Double-check with direct call for error message verification
         final_check = await mcp_client.call_tool(
             "ha_config_get_automation",
             { "identifier": automation_entity}
@@ -385,15 +362,11 @@ class TestAutomationLifecycle:
         cleanup_tracker.track("automation", automation_entity)
 
         # Verify automation starts disabled
-        await asyncio.sleep(2)
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "off", timeout=10
         )
-        state_data = assert_mcp_success(state_result, "automation state check")
-
-        initial_state = state_data.get("data", {}).get("state")
-        assert initial_state == "off", (
-            f"Automation should start disabled, but state is: {initial_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach disabled state 'off' within timeout"
         )
         logger.info("✅ Automation correctly starts in disabled state")
 
@@ -409,17 +382,13 @@ class TestAutomationLifecycle:
         )
 
         enable_data = assert_mcp_success(enable_result, "automation enable")
-        await asyncio.sleep(2)
 
         # Verify automation is now enabled
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "on", timeout=10
         )
-        state_data = assert_mcp_success(state_result, "automation enabled state check")
-
-        enabled_state = state_data.get("data", {}).get("state")
-        assert enabled_state == "on", (
-            f"Automation should be enabled, but state is: {enabled_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach enabled state 'on' within timeout"
         )
         logger.info("✅ Automation successfully enabled")
 
@@ -435,17 +404,13 @@ class TestAutomationLifecycle:
         )
 
         disable_data = assert_mcp_success(disable_result, "automation disable")
-        await asyncio.sleep(2)
 
         # Verify automation is now disabled
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "off", timeout=10
         )
-        state_data = assert_mcp_success(state_result, "automation disabled state check")
-
-        disabled_state = state_data.get("data", {}).get("state")
-        assert disabled_state == "off", (
-            f"Automation should be disabled, but state is: {disabled_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach disabled state 'off' within timeout"
         )
         logger.info("✅ Automation successfully disabled")
 
