@@ -15,7 +15,6 @@ Key test scenarios:
 - Handle non-existent devices
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -513,7 +512,6 @@ async def test_device_entity_independence(mcp_client):
     update_data = parse_mcp_result(update_result)
     assert update_data.get("success"), f"Failed to rename device: {update_data}"
 
-    await asyncio.sleep(1)
 
     # Verify entities still have original entity_ids
     get_result = await mcp_client.call_tool(

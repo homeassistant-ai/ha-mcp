@@ -15,7 +15,6 @@ Each test uses real Home Assistant API calls via the MCP server to ensure
 production-level functionality and compatibility.
 """
 
-import asyncio
 import ast
 import json
 import logging
@@ -88,7 +87,6 @@ class TestDashboardLifecycle:
         assert dashboard_id is not None, "Dashboard creation should return dashboard_id"
 
         # Small delay for HA to process
-        await asyncio.sleep(1)
 
         # 2. List dashboards - verify exists
         logger.info("Listing dashboards...")
@@ -144,7 +142,6 @@ class TestDashboardLifecycle:
         assert delete_data["success"] is True
 
         # 7. Verify deletion
-        await asyncio.sleep(1)
         list_after_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
         assert not any(
             d.get("url_path") == "test-e2e-dashboard"
@@ -171,7 +168,6 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-        await asyncio.sleep(1)
 
         # Verify it exists
         list_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
@@ -215,7 +211,6 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-        await asyncio.sleep(1)
 
         # Update only title
         meta_data = await mcp.call_tool_success(
@@ -246,7 +241,6 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-        await asyncio.sleep(1)
 
         # Verify it exists
         list_data = await mcp.call_tool_success("ha_config_list_dashboards", {})
@@ -391,7 +385,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Get dashboard and config_hash
@@ -452,7 +445,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Add a card
@@ -528,7 +520,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Get config_hash
@@ -589,7 +580,6 @@ class TestJqTransformAndFindCard:
                 "config": {"views": [{"cards": []}]},
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Try jq_transform without config_hash - should fail
@@ -642,7 +632,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Find card by entity
@@ -696,7 +685,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Find all tile cards
@@ -743,7 +731,6 @@ class TestJqTransformAndFindCard:
                 },
             },
         )
-        await asyncio.sleep(1)
 
         try:
             # Find card

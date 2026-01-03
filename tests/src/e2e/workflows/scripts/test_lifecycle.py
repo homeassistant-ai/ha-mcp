@@ -16,7 +16,6 @@ production-level functionality and compatibility.
 Tests are designed for Docker Home Assistant test environment at localhost:8124.
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -174,7 +173,6 @@ async def verify_script_exists_and_registered(
         logger.debug(
             f"🔍 Script {script_entity} not yet registered (elapsed: {elapsed:.1f}s)"
         )
-        await asyncio.sleep(poll_interval)
 
     logger.warning(f"⚠️ Script {script_entity} was not registered within {timeout}s")
     return False
@@ -201,7 +199,6 @@ async def verify_script_execution_state(
                 return state_data
 
             consecutive_failures = 0  # Reset on successful API call
-            await asyncio.sleep(0.8)  # Increased from 0.5s to 0.8s
         except Exception as e:
             consecutive_failures += 1
             logger.debug(
@@ -213,10 +210,8 @@ async def verify_script_execution_state(
                 logger.debug(
                     f"Multiple consecutive failures for {script_entity}, extending wait time"
                 )
-                await asyncio.sleep(2.0)
                 consecutive_failures = 0
             else:
-                await asyncio.sleep(0.8)
 
     logger.warning(f"Could not verify state for {script_entity} within {timeout}s")
     return {"success": False, "timeout": True}
@@ -315,7 +310,6 @@ class TestScriptOrchestration:
             logger.info("✅ Script executed successfully")
 
             # 5. VERIFY: Check script state shows execution
-            await asyncio.sleep(2)  # Allow execution to complete
 
             state_data = await verify_script_execution_state(
                 mcp_client, script_entity, timeout=10
@@ -451,7 +445,6 @@ class TestScriptOrchestration:
             logger.info("✅ Script execution initiated")
 
             # Allow script to complete (should take about 3 seconds total)
-            await asyncio.sleep(4)
             logger.info("✅ Script execution completed")
 
             # Verify final light state (should be off after script completes)
@@ -522,7 +515,6 @@ class TestScriptOrchestration:
             logger.info(f"✅ Created parameterized script: {script_entity}")
 
             # 2. VERIFY: Configuration includes fields and templating
-            await asyncio.sleep(wait_for_script_registration())
 
             get_data = await mcp.call_tool_success(
                 "ha_config_get_script",
@@ -587,7 +579,6 @@ class TestScriptOrchestration:
             )
 
             # Allow execution to complete (should take test_delay + processing time)
-            await asyncio.sleep(test_delay + 1)
 
             # Optional: Check if script is still running in queued mode
             state_data = await verify_script_execution_state(
@@ -634,7 +625,6 @@ class TestScriptOrchestration:
             logger.info(f"✅ Created initial script version: {script_entity}")
 
             # 2. VERIFY: Initial configuration
-            await asyncio.sleep(wait_for_script_registration())
 
             get_data = await mcp.call_tool_success(
                 "ha_config_get_script",
@@ -677,7 +667,6 @@ class TestScriptOrchestration:
             logger.info("✅ Script updated successfully")
 
             # 4. VERIFY: Updated configuration
-            await asyncio.sleep(wait_for_script_registration())
 
             updated_get_data = await mcp.call_tool_success(
                 "ha_config_get_script",
@@ -716,7 +705,6 @@ class TestScriptOrchestration:
             )
             logger.info("✅ Updated script executed successfully")
 
-            await asyncio.sleep(3)  # Allow execution to complete
 
             # 6. CLEANUP: Delete script
             delete_data = await mcp.call_tool_success(
@@ -781,10 +769,8 @@ class TestScriptOrchestration:
                 created_scripts.append((script_id, script_entity, mode))
                 logger.info(f"✅ Created {mode} mode script: {script_entity}")
 
-                await asyncio.sleep(1)  # Small delay between creations
 
             # VERIFY: All scripts created with correct modes
-            await asyncio.sleep(wait_for_script_registration(len(created_scripts)))
 
             for script_id, script_entity, expected_mode in created_scripts:
                 get_data = await mcp.call_tool_success(
@@ -841,11 +827,9 @@ class TestScriptOrchestration:
                     )
                     logger.info(f"✅ Second execution initiated for {mode} mode")
 
-                await asyncio.sleep(0.5)  # Small delay between different scripts
 
             # Allow all executions to complete with generous timeout
             logger.info("⏳ Allowing all script executions to complete...")
-            await asyncio.sleep(6)  # Increased timeout for multiple executions
 
             # CLEANUP: Delete all test scripts
             for script_id, script_entity, mode in created_scripts:
@@ -854,7 +838,6 @@ class TestScriptOrchestration:
                     { "script_id": script_id}
                 )
                 logger.debug(f"🗑️ Deleted {mode} script: {script_entity}")
-                await asyncio.sleep(0.3)  # Small delay between deletions
 
             logger.info("✅ All execution mode scripts cleaned up")
 
@@ -930,7 +913,6 @@ class TestScriptOrchestration:
                     logger.error(f"❌ Failed to create {script_id}: {e}")
                     failed_scripts.append((script_id, str(e)))
 
-                await asyncio.sleep(0.5)  # Small delay between creations
 
             if failed_scripts:
                 logger.warning(
@@ -942,7 +924,6 @@ class TestScriptOrchestration:
             )
 
             # 2. VERIFY: All successfully created scripts exist and have correct configurations
-            await asyncio.sleep(wait_for_script_registration(len(created_scripts)))
 
             logger.info("🔍 Verifying all scripts exist...")
             verified_scripts = []
@@ -992,7 +973,6 @@ class TestScriptOrchestration:
                     logger.error(f"❌ Failed to execute {script_entity}: {e}")
 
             # Allow all executions to complete (max delay is 2s + processing)
-            await asyncio.sleep(4)
             logger.info(
                 f"✅ Bulk execution completed: {len(executed_scripts)} scripts executed"
             )
@@ -1014,7 +994,6 @@ class TestScriptOrchestration:
                     logger.error(f"❌ Failed to delete {script_entity}: {e}")
                     failed_deletions.append((script_id, script_entity, str(e)))
 
-                await asyncio.sleep(0.3)  # Small delay between deletions
 
             logger.info(
                 f"✅ Bulk deletion completed: {len(deleted_scripts)} deleted, {len(failed_deletions)} failed"

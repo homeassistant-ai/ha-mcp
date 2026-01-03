@@ -15,7 +15,6 @@ Tests are designed for Docker Home Assistant test environment with testcontainer
 """
 
 import ast
-import asyncio
 import json
 import logging
 import time
@@ -94,7 +93,6 @@ async def wait_for_item_in_list(
         except Exception as e:
             logger.debug(f"Item check failed: {e}")
 
-        await asyncio.sleep(poll_interval)
 
     logger.warning(f"Item '{item_summary}' not found in {entity_id} within {timeout}s")
     return False
@@ -244,7 +242,6 @@ class TestTodoItemOperations:
             logger.info("Item marked as completed")
 
             # Wait a moment for update to propagate
-            await asyncio.sleep(1)
 
             # Verify the status changed
             verify_result = await mcp.call_tool_success(
@@ -276,7 +273,6 @@ class TestTodoItemOperations:
             logger.info("Item removed successfully")
 
             # Wait and verify item is gone
-            await asyncio.sleep(1)
 
             final_result = await mcp.call_tool_success(
                 "ha_get_todo_items",
@@ -436,7 +432,6 @@ class TestTodoAdvancedFeatures:
                 logger.info("Item with description added successfully")
 
                 # Clean up
-                await asyncio.sleep(0.5)
                 await mcp_client.call_tool(
                     "ha_remove_todo_item",
                     {"entity_id": todo_entity, "item": test_item}
@@ -489,7 +484,6 @@ class TestTodoAdvancedFeatures:
             logger.info("Item renamed successfully")
 
             # Wait and verify
-            await asyncio.sleep(1)
 
             get_result = await mcp.call_tool_success(
                 "ha_get_todo_items",
@@ -549,12 +543,10 @@ class TestTodoBulkOperations:
                     {"entity_id": todo_entity, "summary": item_name}
                 )
                 added_items.append(item_name)
-                await asyncio.sleep(0.3)  # Small delay between adds
 
             logger.info(f"Added {len(added_items)} items")
 
             # Wait for items to appear
-            await asyncio.sleep(2)
 
             # Verify all items exist
             get_result = await mcp.call_tool_success(
@@ -577,7 +569,6 @@ class TestTodoBulkOperations:
                     )
                 except Exception:
                     pass  # Item may already be gone
-                await asyncio.sleep(0.2)
 
             logger.info("Bulk add operations test completed")
 
