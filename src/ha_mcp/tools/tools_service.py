@@ -52,7 +52,7 @@ def register_service_tools(mcp, client, **kwargs):
         **Parameters:**
         - **domain**: Service domain (light, climate, automation, etc.)
         - **service**: Service name (turn_on, set_temperature, trigger, etc.)
-        - **entity_id**: Optional - target entity. Omit to affect all entities in domain
+        - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
         - **data**: Optional dict of service-specific parameters
         - **return_response**: Set to True for services that return data
 
