@@ -330,7 +330,7 @@ await _verify_all_created(entity_ids)
 - E2E tests use polling helpers to wait for completion
 - Some operations appear synchronous but have propagation delays
 
-**Future state (see issue #TBD):**
+**Future state (see issue #381):**
 1. Add `wait` parameter to applicable tools (default `True`)
 2. Implement internal polling with sensible timeouts
 3. Update tool descriptions to document waiting behavior
@@ -371,7 +371,7 @@ assert state_result["state"] == "off"
 ### References
 
 - Issue #365: Replace fixed sleeps with polling (test-side workaround)
-- Issue #TBD: Add wait parameter to tools (proper fix)
+- Issue #381: Add wait parameter to tools (proper fix)
 
 ## Context Engineering & Progressive Disclosure
 
