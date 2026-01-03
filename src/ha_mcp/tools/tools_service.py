@@ -258,9 +258,35 @@ def register_service_tools(mcp, client, **kwargs):
         )
         return cast(dict[str, Any], result)
 
-    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Bulk Status"})
+    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Bulk Operation Status"})
     async def ha_get_bulk_status(operation_ids: list[str]) -> dict[str, Any]:
-        """Check status of multiple WebSocket-monitored operations."""
+        """
+        Check status of multiple device control operations.
+
+        Use this tool to check the status of operations initiated by ha_bulk_control
+        or control_device_smart. Each of these tools returns unique operation_ids
+        that can be tracked here.
+
+        **IMPORTANT:** This tool is for tracking async device operations, NOT for
+        checking current entity states. To get current states of entities, use
+        ha_get_state instead.
+
+        **Args:**
+            operation_ids: List of operation IDs returned by ha_bulk_control or
+                          control_device_smart (e.g., ["op_1234", "op_5678"])
+
+        **Returns:**
+            Status summary with completion/pending/failed counts and detailed
+            results for each operation.
+
+        **Example:**
+            # After calling control_device_smart
+            result = control_device_smart("light.kitchen", "on")
+            op_id = result["operation_id"]  # e.g., "op_1234"
+
+            # Check operation status
+            status = ha_get_bulk_status([op_id])
+        """
         result = await device_tools.get_bulk_operation_status(
             operation_ids=operation_ids
         )
