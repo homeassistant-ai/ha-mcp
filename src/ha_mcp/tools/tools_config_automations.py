@@ -21,21 +21,31 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
-def _normalize_automation_config(config: dict[str, Any]) -> dict[str, Any]:
+def _normalize_automation_config(config: Any) -> Any:
     """
-    Normalize automation config field names to HA API format.
+    Recursively normalize automation config field names to HA API format.
 
     Home Assistant accepts both singular ('trigger', 'action', 'condition')
     and plural ('triggers', 'actions', 'conditions') field names in YAML,
     but the API expects singular forms. This function normalizes plural
-    to singular for consistency.
+    to singular for consistency, recursively processing nested structures
+    like 'choose', 'repeat', 'if/then/else'.
 
     Args:
-        config: Automation configuration dict
+        config: Automation configuration (dict, list, or primitive)
 
     Returns:
         Normalized configuration with singular field names
     """
+    # Handle lists - recursively process each item
+    if isinstance(config, list):
+        return [_normalize_automation_config(item) for item in config]
+
+    # Handle primitives (strings, numbers, etc.)
+    if not isinstance(config, dict):
+        return config
+
+    # Process dictionary
     normalized = config.copy()
 
     # Map plural field names to singular (HA API format)
@@ -43,14 +53,21 @@ def _normalize_automation_config(config: dict[str, Any]) -> dict[str, Any]:
         "triggers": "trigger",
         "actions": "action",
         "conditions": "condition",
+        # Note: 'sequence' is already singular, but some users might use 'sequences'
+        "sequences": "sequence",
     }
 
+    # Apply field mapping to current level
     for plural, singular in field_mappings.items():
         if plural in normalized and singular not in normalized:
             normalized[singular] = normalized.pop(plural)
         elif plural in normalized and singular in normalized:
             # Both exist - prefer singular, remove plural
             del normalized[plural]
+
+    # Recursively process all values in the dictionary
+    for key, value in normalized.items():
+        normalized[key] = _normalize_automation_config(value)
 
     return normalized
 
