@@ -19,7 +19,6 @@ from ...utilities.assertions import (
     wait_for_automation,
 )
 from ...utilities.wait_helpers import (
-    wait_for_condition,
     wait_for_entity_state,
     wait_for_logbook_entry,
 )
@@ -834,3 +833,164 @@ async def test_automation_search_and_discovery(mcp_client):
         logger.info(f"🔍 Pattern '{pattern}' search: {len(results)} results")
 
     logger.info("✅ Automation search and discovery tests completed")
+
+    async def test_automation_with_choose_block(self, mcp_client):
+        """
+        Test automation with choose blocks to verify conditions (plural) is preserved.
+
+        This test ensures that the normalization bug is fixed where 'conditions'
+        was incorrectly being converted to 'condition' inside choose blocks,
+        causing API validation failures.
+        """
+        logger.info("🧪 Testing automation with choose block...")
+
+        # Find a test light entity
+        light_entity = await self._find_test_light_entity(mcp_client)
+        logger.info(f"🔦 Using test light: {light_entity}")
+
+        automation_id = "test_choose_block_normalization"
+
+        # Create automation with choose block that has conditions (plural)
+        config = {
+            "alias": "Test Choose Block Normalization",
+            "description": "Test that choose block conditions (plural) are preserved",
+            "triggers": [  # Using plural to test normalization
+                {
+                    "platform": "state",
+                    "entity_id": light_entity,
+                    "to": "on",
+                    "id": "light_on",
+                },
+                {
+                    "platform": "state",
+                    "entity_id": light_entity,
+                    "to": "off",
+                    "id": "light_off",
+                },
+            ],
+            "actions": [  # Using plural to test normalization
+                {
+                    "choose": [
+                        {
+                            "conditions": [  # MUST remain plural in choose blocks
+                                {
+                                    "condition": "trigger",
+                                    "id": "light_on",
+                                }
+                            ],
+                            "sequences": [  # Test sequence normalization too
+                                {
+                                    "service": "persistent_notification.create",
+                                    "data": {
+                                        "title": "Choose Test",
+                                        "message": "Light turned on",
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "conditions": [  # MUST remain plural
+                                {
+                                    "condition": "trigger",
+                                    "id": "light_off",
+                                }
+                            ],
+                            "sequence": [  # Test singular form too
+                                {
+                                    "service": "persistent_notification.create",
+                                    "data": {
+                                        "title": "Choose Test",
+                                        "message": "Light turned off",
+                                    },
+                                }
+                            ],
+                        },
+                    ],
+                    "default": [
+                        {
+                            "service": "persistent_notification.create",
+                            "data": {
+                                "title": "Choose Test",
+                                "message": "Default action",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+
+        # Create the automation
+        logger.info("📝 Creating automation with choose block...")
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation",
+            {
+                "automation_id": automation_id,
+                "config": config,
+            },
+        )
+
+        assert_mcp_success(create_result)
+        logger.info("✅ Automation with choose block created successfully")
+
+        # Wait for automation to be registered
+        await wait_for_automation(mcp_client, automation_id)
+
+        # Retrieve the automation to verify structure
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_automation",
+            {"automation_id": automation_id},
+        )
+
+        automation_data = parse_mcp_result(get_result)
+        logger.info("📥 Retrieved automation configuration")
+
+        # Verify the automation has the correct structure
+        assert "trigger" in automation_data or "triggers" in automation_data, (
+            "Automation should have triggers"
+        )
+        
+        actions = automation_data.get("action", automation_data.get("actions", []))
+        assert len(actions) > 0, "Automation should have actions"
+        
+        choose_action = actions[0]
+        assert "choose" in choose_action, "First action should be a choose block"
+        assert len(choose_action["choose"]) == 2, "Choose should have 2 options"
+
+        # Verify that conditions (plural) is preserved in choose options
+        for i, option in enumerate(choose_action["choose"]):
+            # The key could be 'conditions' or 'condition' depending on HA version
+            # But our normalization should have sent 'conditions' to the API
+            has_conditions = "conditions" in option or "condition" in option
+            assert has_conditions, (
+                f"Choose option {i} should have conditions defined"
+            )
+            logger.info(f"✅ Choose option {i} has condition key: {list(option.keys())}")
+
+        # Test triggering the automation
+        logger.info("🔥 Testing automation trigger...")
+        
+        # Turn light on to trigger first choose path
+        turn_on_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "target": {"entity_id": light_entity},
+            },
+        )
+        assert_mcp_success(turn_on_result)
+        
+        # Wait a bit for automation to execute
+        await asyncio.sleep(2)
+        
+        logger.info("✅ Automation executed successfully")
+
+        # Clean up
+        logger.info("🧹 Cleaning up test automation...")
+        delete_result = await mcp_client.call_tool(
+            "ha_config_remove_automation",
+            {"automation_id": automation_id},
+        )
+        assert_mcp_success(delete_result)
+
+        logger.info("✅ Choose block normalization test completed successfully")

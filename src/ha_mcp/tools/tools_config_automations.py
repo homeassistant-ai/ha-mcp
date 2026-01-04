@@ -21,25 +21,38 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
-def _normalize_automation_config(config: Any) -> Any:
+def _normalize_automation_config(
+    config: Any, parent_key: str | None = None, in_choose_or_if: bool = False
+) -> Any:
     """
     Recursively normalize automation config field names to HA API format.
 
     Home Assistant accepts both singular ('trigger', 'action', 'condition')
     and plural ('triggers', 'actions', 'conditions') field names in YAML,
-    but the API expects singular forms. This function normalizes plural
-    to singular for consistency, recursively processing nested structures
-    like 'choose', 'repeat', 'if/then/else'.
+    but the API expects singular forms at the root level.
+
+    IMPORTANT: Inside 'choose' and 'if' action blocks, the 'conditions' key
+    (plural) is required by the HA schema and should NOT be normalized to
+    'condition' (singular).
 
     Args:
         config: Automation configuration (dict, list, or primitive)
+        parent_key: The parent dictionary key (for context tracking)
+        in_choose_or_if: Whether we're inside a choose/if option that requires
+                         'conditions' (plural) to remain unchanged
 
     Returns:
-        Normalized configuration with singular field names
+        Normalized configuration with singular field names at root level,
+        but preserving 'conditions' (plural) inside choose/if blocks
     """
     # Handle lists - recursively process each item
     if isinstance(config, list):
-        return [_normalize_automation_config(item) for item in config]
+        # If parent is 'choose' or 'if', items are options that need 'conditions' preserved
+        is_option_list = parent_key in ("choose", "if")
+        return [
+            _normalize_automation_config(item, parent_key, is_option_list)
+            for item in config
+        ]
 
     # Handle primitives (strings, numbers, etc.)
     if not isinstance(config, dict):
@@ -49,13 +62,17 @@ def _normalize_automation_config(config: Any) -> Any:
     normalized = config.copy()
 
     # Map plural field names to singular (HA API format)
+    # EXCEPT 'conditions' when inside choose/if blocks
     field_mappings = {
         "triggers": "trigger",
         "actions": "action",
-        "conditions": "condition",
         # Note: 'sequence' is already singular, but some users might use 'sequences'
         "sequences": "sequence",
     }
+
+    # Only add 'conditions' mapping if NOT inside a choose/if option
+    if not in_choose_or_if:
+        field_mappings["conditions"] = "condition"
 
     # Apply field mapping to current level
     for plural, singular in field_mappings.items():
@@ -67,7 +84,7 @@ def _normalize_automation_config(config: Any) -> Any:
 
     # Recursively process all values in the dictionary
     for key, value in normalized.items():
-        normalized[key] = _normalize_automation_config(value)
+        normalized[key] = _normalize_automation_config(value, key, in_choose_or_if)
 
     return normalized
 
