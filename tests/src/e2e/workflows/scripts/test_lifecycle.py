@@ -211,7 +211,6 @@ async def verify_script_execution_state(
                     f"Multiple consecutive failures for {script_entity}, extending wait time"
                 )
                 consecutive_failures = 0
-            else:
 
     logger.warning(f"Could not verify state for {script_entity} within {timeout}s")
     return {"success": False, "timeout": True}
