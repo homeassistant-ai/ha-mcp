@@ -8,6 +8,7 @@ Note: Tests are designed to work with both Docker test environment (localhost:81
 and production environments. Entity references are dynamically discovered.
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -360,6 +361,9 @@ class TestAutomationLifecycle:
             or f"automation.{automation_name.lower().replace(' ', '_')}"
         )
         cleanup_tracker.track("automation", automation_entity)
+
+        # Give HA a moment to process entity registration before polling
+        await asyncio.sleep(2)
 
         # Verify automation starts disabled
         state_reached = await wait_for_entity_state(

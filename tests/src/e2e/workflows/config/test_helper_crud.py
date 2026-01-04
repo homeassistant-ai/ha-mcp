@@ -7,6 +7,7 @@ Tests the complete lifecycle of input_* helpers including:
 - Type-specific parameter validation
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -74,6 +75,9 @@ class TestInputBooleanCRUD:
         assert entity_id, f"Missing entity_id in create response: {create_data}"
         cleanup_tracker.track("input_boolean", entity_id)
         logger.info(f"Created input_boolean: {entity_id}")
+
+        # Give HA a moment to process entity registration before polling
+        await asyncio.sleep(2)
 
         # Wait for entity to be registered in Home Assistant
         state_reached = await wait_for_entity_state(
@@ -204,6 +208,9 @@ class TestInputNumberCRUD:
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created input_number: {entity_id}")
 
+        # Give HA a moment to process entity registration before polling
+        await asyncio.sleep(2)
+
         # Wait for entity to be registered (input_number typically initializes to min value)
         state_reached = await wait_for_entity_state(
             mcp_client, entity_id, "0.0", timeout=20
@@ -300,9 +307,12 @@ class TestInputSelectCRUD:
         cleanup_tracker.track("input_select", entity_id)
         logger.info(f"Created input_select: {entity_id}")
 
+        # Give HA a moment to process entity registration before polling
+        await asyncio.sleep(2)
+
         # Wait for entity to be registered with initial state
         state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "Option B", timeout=10
+            mcp_client, entity_id, "Option B", timeout=20
         )
         assert state_reached, f"Entity {entity_id} not registered within timeout"
 
@@ -389,9 +399,12 @@ class TestInputTextCRUD:
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created input_text: {entity_id}")
 
+        # Give HA a moment to process entity registration before polling
+        await asyncio.sleep(2)
+
         # Wait for entity to be registered with initial state
         state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "Hello E2E", timeout=10
+            mcp_client, entity_id, "Hello E2E", timeout=20
         )
         assert state_reached, f"Entity {entity_id} not registered within timeout"
 
