@@ -115,9 +115,6 @@ class TestInputBooleanCRUD:
         logger.info(f"✨ Created input_boolean: {entity_id}")
         logger.info(f"📝 Creation response keys: {list(create_data.keys())}")
 
-        # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(5)
-
         # Wait for entity to be registered (existence only, not specific state)
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
         assert entity_ready, f"Entity {entity_id} not registered within timeout"

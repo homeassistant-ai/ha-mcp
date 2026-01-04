@@ -93,6 +93,7 @@ async def wait_for_item_in_list(
         except Exception as e:
             logger.debug(f"Item check failed: {e}")
 
+        await asyncio.sleep(poll_interval)
 
     logger.warning(f"Item '{item_summary}' not found in {entity_id} within {timeout}s")
     return False

@@ -70,6 +70,7 @@ async def wait_for_entity_state(
             logger.debug(
                 f"🔄 Retrying {entity_id} in {delay}s (attempt {attempt + 1}/{max_retries})"
             )
+            await asyncio.sleep(delay)
 
     logger.warning(f"❌ Entity {entity_id} not found after {max_retries} attempts")
     return None

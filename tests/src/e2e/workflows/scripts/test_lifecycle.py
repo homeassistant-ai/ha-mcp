@@ -173,6 +173,7 @@ async def verify_script_exists_and_registered(
         logger.debug(
             f"🔍 Script {script_entity} not yet registered (elapsed: {elapsed:.1f}s)"
         )
+        await asyncio.sleep(poll_interval)
 
     logger.warning(f"⚠️ Script {script_entity} was not registered within {timeout}s")
     return False

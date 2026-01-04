@@ -363,41 +363,13 @@ class TestAutomationLifecycle:
         )
         cleanup_tracker.track("automation", automation_entity)
 
-        # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(5)
-
-        # Wait for automation to be registered (existence only, not specific state)
-        import time as time_module
-        start_time = time_module.time()
-        attempt = [0]  # Use list to allow modification in nested function
-
-        async def automation_exists():
-            attempt[0] += 1
-            result = await mcp_client.call_tool("ha_get_state", {"entity_id": automation_entity})
-            data = parse_mcp_result(result)
-            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            success = 'data' in data and data['data'] is not None
-
-            # Log every attempt with full details
-            elapsed = time_module.time() - start_time
-            logger.info(
-                f"[Attempt {attempt[0]} @ {elapsed:.1f}s] Checking {automation_entity}: "
-                f"success={success}, data keys={list(data.keys())}"
-            )
-
-            if success:
-                state = data.get("data", {}).get("state", "N/A")
-                logger.info(f"✅ Automation {automation_entity} EXISTS with state='{state}'")
-            else:
-                error = data.get("error", "No error message")
-                logger.warning(f"❌ Automation {automation_entity} check failed: {error}")
-
-            return success
-
-        automation_ready = await wait_for_condition(
-            automation_exists, timeout=20, condition_name=f"{automation_entity} registration"
+        # Wait for automation to be registered and verify it starts in disabled state
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "off", timeout=20
         )
-        assert automation_ready, f"Automation {automation_entity} not registered within timeout"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach initial state 'off' within timeout"
+        )
         logger.info("✅ Automation correctly starts in disabled state")
 
         # Enable the automation
