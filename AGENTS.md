@@ -226,152 +226,29 @@ src/ha_mcp/
 
 ## Tool Waiting Behavior
 
-### Design Principle
+**Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
 
-MCP tools should return only when the requested operation is **verifiably complete**, not just when the API call succeeds. This creates a better user experience and eliminates race conditions.
+**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
 
-### Implementation Guidelines
-
-**1. Configuration Operations (MUST wait by default)**
-
-Tools that modify HA configuration should verify the change is queryable before returning:
+**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
 
 ```python
-async def ha_config_set_automation(config: dict, wait: bool = True) -> dict:
-    """Create/update automation.
+# Config operations wait by default
+await ha_config_set_helper(...)  # Polls until entity registered
 
-    Args:
-        config: Automation configuration
-        wait: If True, poll until automation is queryable (default: True)
-    """
-    result = await client.send_websocket_message(...)
-    entity_id = result.get("entity_id")
-
-    if wait and entity_id:
-        # Poll until automation exists in config
-        await _wait_for_config_entry(entity_id, timeout=10)
-
-    return result
-```
-
-**Applies to:**
-- `ha_config_set_automation` - Wait until automation queryable
-- `ha_config_set_helper` - Wait until entity registered
-- `ha_config_set_label` - Already synchronous (no wait needed)
-- `ha_config_set_script` - Wait until script queryable
-
-**2. State-Changing Service Calls (SHOULD wait by default)**
-
-Service calls that change entity state should verify the state change:
-
-```python
-async def ha_call_service(domain: str, service: str, entity_id: str = None,
-                          wait: bool = True) -> dict:
-    """Call a Home Assistant service.
-
-    Args:
-        wait: If True, verify expected state change (default: True)
-    """
-    result = await client.send_websocket_message(...)
-
-    if wait and entity_id and service in STATE_CHANGING_SERVICES:
-        expected_state = _infer_expected_state(domain, service)
-        await _wait_for_entity_state(entity_id, expected_state, timeout=5)
-
-    return result
-```
-
-**Applies to:**
-- `light.turn_on/turn_off` - Wait for state "on"/"off"
-- `switch.turn_on/turn_off` - Wait for state "on"/"off"
-- `automation.trigger` - Wait for state "active" (brief)
-- `script.turn_on` - Wait for execution start
-
-**3. Async Operations (CANNOT wait - return immediately)**
-
-Some operations are inherently async and complete over time:
-
-- **Automation execution** - Triggers are async, may take seconds/minutes
-- **External integrations** - Cloud API calls, device responses
-- **State changes from automations** - Side effects of triggered automations
-
-**Users must poll** using dedicated wait helpers (see E2E test patterns).
-
-**4. Query Operations (no wait needed)**
-
-Read operations return immediately:
-- `ha_get_state`, `ha_config_get_automation`, `ha_search_entities`, etc.
-
-### Wait Parameter Design
-
-**Default behavior:**
-```python
-# Config operations - wait by default (safer, better UX)
-await ha_config_set_helper(...)  # Waits until entity registered
-
-# Query operations - return immediately
-await ha_get_state(...)  # No wait
-```
-
-**Opt-out when needed:**
-```python
-# Bulk operations - disable wait for performance
-for config in bulk_configs:
+# Opt-out for bulk operations
+for config in configs:
     await ha_config_set_automation(config, wait=False)
-
-# Then verify all at once
-await _verify_all_created(entity_ids)
+await _verify_all_created(entity_ids)  # Batch verification
 ```
 
-### Migration Path
+**Tool Categories**:
+- **Config ops** (automations, helpers, scripts): MUST wait by default
+- **Service calls** (lights, switches): SHOULD wait for state change
+- **Async ops** (automation triggers, external integrations): Return immediately, users poll
+- **Query ops** (get_state, search): Return immediately
 
-**Current state (as of #365):**
-- Tools return immediately after API call
-- E2E tests use polling helpers to wait for completion
-- Some operations appear synchronous but have propagation delays
-
-**Future state (see issue #381):**
-1. Add `wait` parameter to applicable tools (default `True`)
-2. Implement internal polling with sensible timeouts
-3. Update tool descriptions to document waiting behavior
-4. E2E tests simplified - remove redundant polling
-
-**Backward compatibility:**
-- Existing code continues to work (wait defaults to True)
-- Tests that poll externally still work (redundant but harmless)
-- Performance-sensitive code can opt out with `wait=False`
-
-### Testing Implications
-
-**Before (current):**
-```python
-# Test must poll to verify completion
-create_result = await mcp_client.call_tool("ha_config_set_helper", {...})
-entity_id = create_result["entity_id"]
-await wait_for_entity_state(mcp_client, entity_id, "off", timeout=10)
-```
-
-**After (with tool waiting):**
-```python
-# Tool waits internally - test just verifies
-create_result = await mcp_client.call_tool("ha_config_set_helper", {...})
-entity_id = create_result["entity_id"]
-
-# Immediately verify state (no polling needed)
-state_result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-assert state_result["state"] == "off"
-```
-
-**Tests still poll for:**
-- Logbook entries (async)
-- Automation side effects
-- Complex multi-step workflows
-- External state changes
-
-### References
-
-- Issue #365: Replace fixed sleeps with polling (test-side workaround)
-- Issue #381: Add wait parameter to tools (proper fix)
+See issue #381 for implementation plan.
 
 ## Context Engineering & Progressive Disclosure
 
