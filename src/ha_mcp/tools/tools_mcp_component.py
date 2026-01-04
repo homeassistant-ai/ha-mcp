@@ -202,21 +202,39 @@ def register_mcp_component_tools(mcp, client, **kwargs):
             repo_id = str(existing_repo.get("id")) if existing_repo else None
 
             if not repo_id:
-                # Re-fetch the list to get the ID
-                list_response = await ws_client.send_command("hacs/repositories/list")
-                repos = list_response.get("result", [])
-                for repo in repos:
-                    if repo.get("full_name", "").lower() == MCP_TOOLS_REPO.lower():
-                        repo_id = str(repo.get("id"))
+                # HACS processes additions asynchronously, so poll for the repo to appear
+                import asyncio
+                max_attempts = 10
+                poll_interval = 1.0  # seconds
+
+                for attempt in range(max_attempts):
+                    logger.debug(f"Polling for repository ID (attempt {attempt + 1}/{max_attempts})")
+                    list_response = await ws_client.send_command("hacs/repositories/list")
+                    repos = list_response.get("result", [])
+                    for repo in repos:
+                        if repo.get("full_name", "").lower() == MCP_TOOLS_REPO.lower():
+                            repo_id = str(repo.get("id"))
+                            logger.info(f"Found repository ID: {repo_id} after {attempt + 1} attempts")
+                            break
+
+                    if repo_id:
                         break
+
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(poll_interval)
 
             if not repo_id:
                 return await add_timezone_metadata(
                     client,
                     {
                         "success": False,
-                        "error": "Could not find repository ID after adding",
+                        "error": "Could not find repository ID after adding (timed out after 10 attempts)",
                         "error_code": "HACS_REPO_ID_NOT_FOUND",
+                        "suggestions": [
+                            "HACS may be processing the request - try again in a few seconds",
+                            "Check HACS logs for errors",
+                            f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
+                        ],
                     },
                 )
 
