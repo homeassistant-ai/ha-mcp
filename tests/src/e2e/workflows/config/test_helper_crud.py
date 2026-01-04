@@ -32,7 +32,8 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
         attempt += 1
         result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
         data = parse_mcp_result(result)
-        success = data.get("success", False)
+        # Check if 'data' key exists (not 'success' key)
+        success = 'data' in data and data['data'] is not None
 
         # Log every attempt with full details
         elapsed = time.time() - start_time

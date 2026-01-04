@@ -375,7 +375,8 @@ class TestAutomationLifecycle:
             attempt[0] += 1
             result = await mcp_client.call_tool("ha_get_state", {"entity_id": automation_entity})
             data = parse_mcp_result(result)
-            success = data.get("success", False)
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            success = 'data' in data and data['data'] is not None
 
             # Log every attempt with full details
             elapsed = time_module.time() - start_time
