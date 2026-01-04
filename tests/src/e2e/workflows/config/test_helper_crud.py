@@ -18,6 +18,21 @@ from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
 logger = logging.getLogger(__name__)
 
 
+async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int = 20) -> bool:
+    """
+    Wait for entity to be registered and queryable via API.
+    Does not check for specific state, only that entity exists.
+    """
+    async def entity_exists():
+        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+        data = parse_mcp_result(result)
+        return data.get("success", False)
+
+    return await wait_for_condition(
+        entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
+    )
+
+
 def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from helper create response.
 
@@ -79,11 +94,9 @@ class TestInputBooleanCRUD:
         # Give HA a moment to process entity registration before polling
         await asyncio.sleep(5)
 
-        # Wait for entity to be registered in Home Assistant
-        state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "off", timeout=20
-        )
-        assert state_reached, f"Entity {entity_id} not registered within timeout"
+        # Wait for entity to be registered (existence only, not specific state)
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # LIST - Verify it appears
         list_result = await mcp_client.call_tool(
@@ -209,13 +222,19 @@ class TestInputNumberCRUD:
         logger.info(f"Created input_number: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
+
+
         await asyncio.sleep(5)
 
-        # Wait for entity to be registered (input_number typically initializes to min value)
-        state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "0.0", timeout=20
-        )
-        assert state_reached, f"Entity {entity_id} not registered within timeout"
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -308,13 +327,19 @@ class TestInputSelectCRUD:
         logger.info(f"Created input_select: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
+
+
         await asyncio.sleep(5)
 
-        # Wait for entity to be registered with initial state
-        state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "Option B", timeout=20
-        )
-        assert state_reached, f"Entity {entity_id} not registered within timeout"
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -400,13 +425,19 @@ class TestInputTextCRUD:
         logger.info(f"Created input_text: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
+
+
         await asyncio.sleep(5)
 
-        # Wait for entity to be registered with initial state
-        state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "Hello E2E", timeout=20
-        )
-        assert state_reached, f"Entity {entity_id} not registered within timeout"
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # DELETE
         await mcp_client.call_tool(

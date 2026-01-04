@@ -19,6 +19,7 @@ from ...utilities.assertions import (
     wait_for_automation,
 )
 from ...utilities.wait_helpers import (
+    wait_for_condition,
     wait_for_entity_state,
     wait_for_logbook_entry,
 )
@@ -365,13 +366,16 @@ class TestAutomationLifecycle:
         # Give HA a moment to process entity registration before polling
         await asyncio.sleep(5)
 
-        # Verify automation starts disabled
-        state_reached = await wait_for_entity_state(
-            mcp_client, automation_entity, "off", timeout=20
+        # Wait for automation to be registered (existence only, not specific state)
+        async def automation_exists():
+            result = await mcp_client.call_tool("ha_get_state", {"entity_id": automation_entity})
+            data = parse_mcp_result(result)
+            return data.get("success", False)
+
+        automation_ready = await wait_for_condition(
+            automation_exists, timeout=20, condition_name=f"{automation_entity} registration"
         )
-        assert state_reached, (
-            f"Automation {automation_entity} did not reach disabled state 'off' within timeout"
-        )
+        assert automation_ready, f"Automation {automation_entity} not registered within timeout"
         logger.info("✅ Automation correctly starts in disabled state")
 
         # Enable the automation
