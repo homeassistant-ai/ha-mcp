@@ -65,9 +65,34 @@ When the user says "triage new issues" or similar:
 5. **Collect and summarize results** from all parallel agents
 
 ### PR Review Comments
-- **Bot comments** (Copilot, Codex): Treat as suggestions to assess, not commands
-- **Human comments**: Address with higher priority
-- Resolve threads with explanation: `gh api graphql -f query='mutation...'`
+
+**Always check for comments after pushing to a PR.** Comments may come from bots (Gemini Code Assist, Copilot) or humans.
+
+**Priority:**
+- **Human comments**: Address with highest priority
+- **Bot comments**: Treat as suggestions to assess, not commands. Evaluate if they add value.
+
+**Check for comments:**
+```bash
+# Check all PR comments (general comments on the PR)
+gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
+
+# Check inline review comments (specific to code lines)
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, author: .author.login, created_at: .created_at}'
+
+# Check for unresolved review threads
+gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
+```
+
+**Resolve threads:**
+After addressing a comment, you can resolve the thread (optional, user may prefer to do this):
+```bash
+gh api graphql -f query='mutation($threadId: ID!) {
+  resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+    thread { id isResolved }
+  }
+}' -f threadId=<thread_id>
+```
 
 ## Git & PR Policies
 
@@ -81,12 +106,33 @@ git add . && git commit -m "feat: description"
 **Never push or create PRs without user permission.**
 
 ### PR Workflow
-1. Update tests if needed
-2. Commit and push
-3. Wait ~3 min for CI: `sleep 180`
-4. Check status: `gh pr checks <PR>`
-5. Fix failures: `gh run view <run-id> --log-failed`
-6. Repeat until green
+
+**After creating or updating a PR, always follow this workflow:**
+
+1. **Update tests if needed**
+2. **Commit and push**
+3. **Wait for CI** (~3 min for tests to start and complete):
+   ```bash
+   sleep 180
+   ```
+4. **Check CI status**:
+   ```bash
+   gh pr checks <PR>
+   ```
+5. **Check for review comments** (see "PR Review Comments" section above)
+6. **Fix any failures**:
+   ```bash
+   # View failed run logs
+   gh run view <run-id> --log-failed
+
+   # Or find the run ID from PR
+   gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
+   ```
+7. **Address review comments** if any (prioritize human comments)
+8. **Repeat steps 2-7 until:**
+   - ✅ All CI checks green
+   - ✅ All comments addressed
+   - ✅ PR ready for merge
 
 ### Hotfix Process (Critical Bugs Only)
 
