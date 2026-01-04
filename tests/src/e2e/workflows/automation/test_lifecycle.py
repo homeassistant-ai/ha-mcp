@@ -367,10 +367,31 @@ class TestAutomationLifecycle:
         await asyncio.sleep(5)
 
         # Wait for automation to be registered (existence only, not specific state)
+        import time as time_module
+        start_time = time_module.time()
+        attempt = [0]  # Use list to allow modification in nested function
+
         async def automation_exists():
+            attempt[0] += 1
             result = await mcp_client.call_tool("ha_get_state", {"entity_id": automation_entity})
             data = parse_mcp_result(result)
-            return data.get("success", False)
+            success = data.get("success", False)
+
+            # Log every attempt with full details
+            elapsed = time_module.time() - start_time
+            logger.info(
+                f"[Attempt {attempt[0]} @ {elapsed:.1f}s] Checking {automation_entity}: "
+                f"success={success}, data keys={list(data.keys())}"
+            )
+
+            if success:
+                state = data.get("data", {}).get("state", "N/A")
+                logger.info(f"✅ Automation {automation_entity} EXISTS with state='{state}'")
+            else:
+                error = data.get("error", "No error message")
+                logger.warning(f"❌ Automation {automation_entity} check failed: {error}")
+
+            return success
 
         automation_ready = await wait_for_condition(
             automation_exists, timeout=20, condition_name=f"{automation_entity} registration"

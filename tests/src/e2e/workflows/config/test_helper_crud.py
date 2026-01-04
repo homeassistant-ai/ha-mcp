@@ -23,10 +23,32 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
     Wait for entity to be registered and queryable via API.
     Does not check for specific state, only that entity exists.
     """
+    import time
+    start_time = time.time()
+    attempt = 0
+
     async def entity_exists():
+        nonlocal attempt
+        attempt += 1
         result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
         data = parse_mcp_result(result)
-        return data.get("success", False)
+        success = data.get("success", False)
+
+        # Log every attempt with full details
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
+            f"success={success}, data keys={list(data.keys())}"
+        )
+
+        if success:
+            state = data.get("data", {}).get("state", "N/A")
+            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
+        else:
+            error = data.get("error", "No error message")
+            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
+
+        return success
 
     return await wait_for_condition(
         entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
@@ -89,7 +111,8 @@ class TestInputBooleanCRUD:
         entity_id = get_entity_id_from_response(create_data, "input_boolean")
         assert entity_id, f"Missing entity_id in create response: {create_data}"
         cleanup_tracker.track("input_boolean", entity_id)
-        logger.info(f"Created input_boolean: {entity_id}")
+        logger.info(f"✨ Created input_boolean: {entity_id}")
+        logger.info(f"📝 Creation response keys: {list(create_data.keys())}")
 
         # Give HA a moment to process entity registration before polling
         await asyncio.sleep(5)
