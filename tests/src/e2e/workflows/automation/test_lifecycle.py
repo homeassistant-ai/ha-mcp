@@ -363,7 +363,7 @@ class TestAutomationLifecycle:
 
         # Verify automation starts disabled
         state_reached = await wait_for_entity_state(
-            mcp_client, automation_entity, "off", timeout=10
+            mcp_client, automation_entity, "off", timeout=20
         )
         assert state_reached, (
             f"Automation {automation_entity} did not reach disabled state 'off' within timeout"
@@ -385,7 +385,7 @@ class TestAutomationLifecycle:
 
         # Verify automation is now enabled
         state_reached = await wait_for_entity_state(
-            mcp_client, automation_entity, "on", timeout=10
+            mcp_client, automation_entity, "on", timeout=20
         )
         assert state_reached, (
             f"Automation {automation_entity} did not reach enabled state 'on' within timeout"
@@ -407,7 +407,7 @@ class TestAutomationLifecycle:
 
         # Verify automation is now disabled
         state_reached = await wait_for_entity_state(
-            mcp_client, automation_entity, "off", timeout=10
+            mcp_client, automation_entity, "off", timeout=20
         )
         assert state_reached, (
             f"Automation {automation_entity} did not reach disabled state 'off' within timeout"

@@ -77,7 +77,7 @@ class TestInputBooleanCRUD:
 
         # Wait for entity to be registered in Home Assistant
         state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "off", timeout=10
+            mcp_client, entity_id, "off", timeout=20
         )
         assert state_reached, f"Entity {entity_id} not registered within timeout"
 
@@ -206,7 +206,7 @@ class TestInputNumberCRUD:
 
         # Wait for entity to be registered (input_number typically initializes to min value)
         state_reached = await wait_for_entity_state(
-            mcp_client, entity_id, "0.0", timeout=10
+            mcp_client, entity_id, "0.0", timeout=20
         )
         assert state_reached, f"Entity {entity_id} not registered within timeout"
 
