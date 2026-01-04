@@ -21,12 +21,11 @@ Codex CLI supports MCP servers via TOML configuration with stdio and HTTP stream
 ### stdio Configuration (Local)
 
 ```toml
-[[mcp.servers]]
-name = "home-assistant"
+[mcp_servers.home-assistant]
 command = "uvx"
 args = ["ha-mcp@latest"]
 
-[mcp.servers.env]
+[mcp_servers.home-assistant.env]
 HOMEASSISTANT_URL = "{{HOMEASSISTANT_URL}}"
 HOMEASSISTANT_TOKEN = "{{HOMEASSISTANT_TOKEN}}"
 ```
@@ -34,21 +33,17 @@ HOMEASSISTANT_TOKEN = "{{HOMEASSISTANT_TOKEN}}"
 ### Streamable HTTP Configuration (Network/Remote)
 
 ```toml
-[[mcp.servers]]
-name = "home-assistant"
+[mcp_servers.home-assistant]
 url = "{{MCP_SERVER_URL}}"
-transport = "http-stream"
 ```
 
 ### With Authentication
 
 ```toml
-[[mcp.servers]]
-name = "home-assistant"
+[mcp_servers.home-assistant]
 url = "{{MCP_SERVER_URL}}"
-transport = "http-stream"
 
-[mcp.servers.headers]
+[mcp_servers.home-assistant.headers]
 Authorization = "Bearer {{API_TOKEN}}"
 ```
 
@@ -57,19 +52,13 @@ Authorization = "Bearer {{API_TOKEN}}"
 ### stdio (Local)
 
 ```bash
-codex mcp add homeassistant \
-  --command uvx \
-  --args ha-mcp@latest \
-  --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \
-  --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
+codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest
 ```
 
 ### HTTP Streaming (Network/Remote)
 
 ```bash
-codex mcp add home-assistant \
-  --url {{MCP_SERVER_URL}} \
-  --transport http-stream
+codex mcp add home-assistant --url {{MCP_SERVER_URL}}
 ```
 
 ## Management Commands
@@ -78,11 +67,11 @@ codex mcp add home-assistant \
 # List configured servers
 codex mcp list
 
+# Show server details
+codex mcp get home-assistant
+
 # Remove a server
 codex mcp remove home-assistant
-
-# Update server configuration
-codex mcp update home-assistant --env HOMEASSISTANT_URL={{NEW_URL}}
 ```
 
 ## Notes

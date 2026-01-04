@@ -1396,20 +1396,12 @@ mcpServers:
         // Codex CLI
         if (isStdio) {
           if (isDocker) {
-            config = `codex mcp add homeassistant \\
-  --command docker \\
-  --args "run,--rm,-i,-e,HOMEASSISTANT_URL={{HOMEASSISTANT_URL}},-e,HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}},ghcr.io/homeassistant-ai/ha-mcp:latest"`;
+            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
           } else {
-            config = `codex mcp add homeassistant \\
-  --command uvx \\
-  --args ha-mcp@latest \\
-  --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-  --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}`;
+            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
           }
         } else {
-          config = `codex mcp add home-assistant \\
-  --url ${mcpUrl} \\
-  --transport http-stream`;
+          config = `codex mcp add home-assistant --url ${mcpUrl}`;
         }
       } else {
         // Claude Code
