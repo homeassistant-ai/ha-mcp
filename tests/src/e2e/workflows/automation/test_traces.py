@@ -5,6 +5,7 @@ Tests the automation trace functionality: Create automation → Trigger → Get 
 Verifies that ha_get_automation_traces returns non-empty traces after automation runs.
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -13,6 +14,7 @@ from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
 )
+from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +265,21 @@ class TestAutomationTraces:
         logger.info("Script executed")
 
         # Wait for trace to be recorded
+        async def check_traces():
+            result = await mcp_client.call_tool(
+                "ha_get_automation_traces",
+                {"automation_id": script_entity_id},
+            )
+            data = parse_mcp_result(result)
+            return data.get("trace_count", 0) > 0
+
+        logger.info("Waiting for script trace to be recorded...")
+        await wait_for_condition(
+            check_traces,
+            timeout=10,
+            poll_interval=0.5,
+            condition_name="script trace to be recorded"
+        )
 
         # 4. Get traces for the script
         traces_result = await mcp_client.call_tool(
