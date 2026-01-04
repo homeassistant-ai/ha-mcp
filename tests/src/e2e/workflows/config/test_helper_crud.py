@@ -943,7 +943,8 @@ class TestScheduleCRUD:
         async def check_schedule_exists():
             result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
             data = parse_mcp_result(result)
-            if data.get("success"):
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in data and data['data'] is not None:
                 state = data.get("data", {}).get("state")
                 return state in ["on", "off"]
             return False
@@ -959,7 +960,8 @@ class TestScheduleCRUD:
             {"entity_id": entity_id},
         )
         state_data = parse_mcp_result(state_result)
-        if state_data.get("success"):
+        # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+        if 'data' in state_data and state_data['data'] is not None:
             state_value = state_data.get("data", {}).get("state")
             logger.info(f"Schedule state: {state_value}")
 
