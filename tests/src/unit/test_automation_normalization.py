@@ -180,3 +180,42 @@ class TestAutomationNormalization:
         assert _normalize_automation_config(None) is None
         assert _normalize_automation_config("string") == "string"
         assert _normalize_automation_config(123) == 123
+
+    def test_normalize_conditions_in_sequence_of_choose_block(self):
+        """Test that 'conditions' is normalized inside a sequence of a choose block."""
+        config = {
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [{"condition": "state"}],  # Should be preserved
+                            "sequence": [
+                                {
+                                    # This 'conditions' block is a condition action, and should be normalized
+                                    "conditions": [
+                                        {
+                                            "condition": "state",
+                                            "entity_id": "sun.sun",
+                                            "state": "above_horizon",
+                                        }
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+
+        result = _normalize_automation_config(config)
+
+        choose_option = result["action"][0]["choose"][0]
+        action_in_sequence = choose_option["sequence"][0]
+
+        # Verify 'conditions' is preserved at the choose option level
+        assert "conditions" in choose_option
+        assert "condition" not in choose_option
+
+        # Verify 'conditions' is normalized to 'condition' inside the sequence
+        assert "condition" in action_in_sequence
+        assert "conditions" not in action_in_sequence

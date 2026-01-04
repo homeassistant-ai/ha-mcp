@@ -987,6 +987,12 @@ async def test_automation_with_choose_block(mcp_client):
         )
         logger.info(f"✅ Choose option {i} has condition key: {list(option.keys())}")
 
+    # The fact that we successfully created and retrieved the automation
+    # with choose blocks proves the normalization fix works.
+    # Execution testing would require more complex setup (triggering actual
+    # entity state changes) which is beyond the scope of this normalization test.
+    logger.info("✅ Choose block normalization verified - automation API accepted the config")
+
     # Clean up
     logger.info("🧹 Cleaning up test automation...")
     delete_result = await mcp_client.call_tool(

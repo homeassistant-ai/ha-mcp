@@ -83,8 +83,9 @@ def _normalize_automation_config(
             del normalized[plural]
 
     # Recursively process all values in the dictionary
+    # Note: Don't pass in_choose_or_if flag down - it only applies to direct children
     for key, value in normalized.items():
-        normalized[key] = _normalize_automation_config(value, key, in_choose_or_if)
+        normalized[key] = _normalize_automation_config(value, key)
 
     return normalized
 
