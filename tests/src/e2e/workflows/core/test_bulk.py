@@ -8,7 +8,6 @@ Note: ha_bulk_control expects 'operations' parameter as a list of dicts,
 each containing 'entity_id' and 'action' keys.
 """
 
-import asyncio
 import json
 import logging
 
@@ -48,7 +47,6 @@ class TestBulkControl:
                 "entity_id": test_light_entity,
             },
         )
-        await asyncio.sleep(0.5)
 
         operations = create_operations([test_light_entity], "on")
         result = await mcp_client.call_tool(
@@ -65,7 +63,6 @@ class TestBulkControl:
         logger.info(f"Bulk turn_on executed: successful={data.get('successful_commands')}")
 
         # Verify state changed
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -89,7 +86,6 @@ class TestBulkControl:
                 "entity_id": test_light_entity,
             },
         )
-        await asyncio.sleep(0.5)
 
         operations = create_operations([test_light_entity], "off")
         result = await mcp_client.call_tool(
@@ -101,7 +97,6 @@ class TestBulkControl:
         logger.info(f"Bulk turn_off executed: successful={data.get('successful_commands')}")
 
         # Verify state changed
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -135,7 +130,6 @@ class TestBulkControl:
         logger.info(f"Bulk toggle executed: successful={data.get('successful_commands')}")
 
         # Verify state toggled
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -186,7 +180,6 @@ class TestBulkControl:
         assert total >= 2, f"Should control multiple entities: {total}"
 
         # Bulk turn off
-        await asyncio.sleep(1)
         operations = create_operations(light_entities, "off")
         result = await mcp_client.call_tool(
             "ha_bulk_control",
@@ -216,7 +209,6 @@ class TestBulkControl:
         logger.info(f"Bulk with brightness executed: successful={data.get('successful_commands')}")
 
         # Verify brightness was applied
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -241,7 +233,6 @@ class TestBulkControl:
             "ha_call_service",
             {"domain": "light", "service": "turn_off", "entity_id": test_light_entity},
         )
-        await asyncio.sleep(0.5)
 
         # Operations as JSON string
         operations_json = json.dumps([{"entity_id": test_light_entity, "action": "on"}])
@@ -452,7 +443,6 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     if len(entity_ids) < 2:
         pytest.skip("Could not create test input_booleans")
 
-    await asyncio.sleep(1)  # Wait for registration
 
     # Bulk turn on
     operations = create_operations(entity_ids, "on")
@@ -465,7 +455,6 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     logger.info(f"Bulk turn_on input_booleans executed: total={data.get('total_operations')}")
 
     # Verify states changed
-    await asyncio.sleep(1)
     for entity_id in entity_ids:
         state_result = await mcp_client.call_tool(
             "ha_get_state",

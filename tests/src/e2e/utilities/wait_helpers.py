@@ -49,7 +49,8 @@ async def wait_for_entity_state(
             )
             state_data = parse_mcp_result(state_result)
 
-            if state_data.get("success"):
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in state_data and state_data['data'] is not None:
                 current_state = state_data.get("data", {}).get("state")
                 logger.debug(f"🔍 {entity_id} current state: {current_state}")
 
@@ -106,7 +107,8 @@ async def wait_for_entity_attribute(
             )
             state_data = parse_mcp_result(state_result)
 
-            if state_data.get("success"):
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in state_data and state_data['data'] is not None:
                 attributes = state_data.get("data", {}).get("attributes", {})
                 current_value = attributes.get(attribute_name)
 
@@ -286,7 +288,8 @@ async def wait_for_logbook_entry(
 
             logbook_data = parse_mcp_result(logbook_result)
 
-            if logbook_data.get("success"):
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in logbook_data and logbook_data['data'] is not None:
                 entries = logbook_data.get("entries", [])
 
                 for entry in entries:
@@ -372,7 +375,8 @@ async def wait_for_state_change(
         )
         initial_data = parse_mcp_result(initial_result)
 
-        if not initial_data.get("success"):
+        # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+        if 'data' not in initial_data or initial_data['data'] is None:
             logger.warning(f"⚠️ Could not get initial state for {entity_id}")
             return None
 
@@ -394,7 +398,8 @@ async def wait_for_state_change(
             )
             state_data = parse_mcp_result(state_result)
 
-            if state_data.get("success"):
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in state_data and state_data['data'] is not None:
                 current_state = state_data.get("data", {}).get("state")
 
                 if current_state != initial_state:

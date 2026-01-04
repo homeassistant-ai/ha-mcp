@@ -13,8 +13,47 @@ import logging
 import pytest
 
 from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
 
 logger = logging.getLogger(__name__)
+
+
+async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int = 20) -> bool:
+    """
+    Wait for entity to be registered and queryable via API.
+    Does not check for specific state, only that entity exists.
+    """
+    import time
+    start_time = time.time()
+    attempt = 0
+
+    async def entity_exists():
+        nonlocal attempt
+        attempt += 1
+        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+        data = parse_mcp_result(result)
+        # Check if 'data' key exists (not 'success' key)
+        success = 'data' in data and data['data'] is not None
+
+        # Log every attempt with full details
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
+            f"success={success}, data keys={list(data.keys())}"
+        )
+
+        if success:
+            state = data.get("data", {}).get("state", "N/A")
+            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
+        else:
+            error = data.get("error", "No error message")
+            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
+
+        return success
+
+    return await wait_for_condition(
+        entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
+    )
 
 
 def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
@@ -73,9 +112,12 @@ class TestInputBooleanCRUD:
         entity_id = get_entity_id_from_response(create_data, "input_boolean")
         assert entity_id, f"Missing entity_id in create response: {create_data}"
         cleanup_tracker.track("input_boolean", entity_id)
-        logger.info(f"Created input_boolean: {entity_id}")
+        logger.info(f"✨ Created input_boolean: {entity_id}")
+        logger.info(f"📝 Creation response keys: {list(create_data.keys())}")
 
-        await asyncio.sleep(1)  # Wait for registration
+        # Wait for entity to be registered (existence only, not specific state)
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # LIST - Verify it appears
         list_result = await mcp_client.call_tool(
@@ -116,8 +158,7 @@ class TestInputBooleanCRUD:
         delete_data = assert_mcp_success(delete_result, "Delete input_boolean")
         logger.info(f"Deleted input_boolean: {delete_data.get('message')}")
 
-        # VERIFY DELETION
-        await asyncio.sleep(1)
+        # VERIFY DELETION - list operation reflects current state
         list_result = await mcp_client.call_tool(
             "ha_config_list_helpers",
             {"helper_type": "input_boolean"},
@@ -201,7 +242,20 @@ class TestInputNumberCRUD:
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created input_number: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Give HA a moment to process entity registration before polling
+
+
+        await asyncio.sleep(5)
+
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -293,7 +347,20 @@ class TestInputSelectCRUD:
         cleanup_tracker.track("input_select", entity_id)
         logger.info(f"Created input_select: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Give HA a moment to process entity registration before polling
+
+
+        await asyncio.sleep(5)
+
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -378,7 +445,20 @@ class TestInputTextCRUD:
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created input_text: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Give HA a moment to process entity registration before polling
+
+
+        await asyncio.sleep(5)
+
+
+
+        # Wait for entity to be registered (existence only, not specific state)
+
+
+        entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
+
+
+        assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # DELETE
         await mcp_client.call_tool(
@@ -550,7 +630,11 @@ class TestInputButtonCRUD:
         cleanup_tracker.track("input_button", entity_id)
         logger.info(f"Created input_button: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Wait for entity to be registered (buttons typically start in unknown state)
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "unknown", timeout=10
+        )
+        assert state_reached, f"Entity {entity_id} not registered within timeout"
 
         # PRESS button via service
         press_result = await mcp_client.call_tool(
@@ -674,7 +758,11 @@ class TestCounterCRUD:
         cleanup_tracker.track("counter", entity_id)
         logger.info(f"Created counter: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Wait for entity to be registered with initial value
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "5", timeout=10
+        )
+        assert state_reached, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -760,18 +848,12 @@ class TestTimerCRUD:
         cleanup_tracker.track("timer", entity_id)
         logger.info(f"Created timer: {entity_id}")
 
-        await asyncio.sleep(1)
-
-        # VERIFY via state
-        state_result = await mcp_client.call_tool(
-            "ha_get_state",
-            {"entity_id": entity_id},
+        # Wait for entity to be registered in idle state
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "idle", timeout=10
         )
-        state_data = parse_mcp_result(state_result)
-        if state_data.get("success"):
-            state_value = state_data.get("data", {}).get("state")
-            logger.info(f"Timer initial state: {state_value}")
-            assert state_value == "idle", f"Timer should be idle, got: {state_value}"
+        assert state_reached, f"Timer {entity_id} not registered in idle state within timeout"
+        logger.info(f"Timer initial state: idle")
 
         # START timer
         start_result = await mcp_client.call_tool(
@@ -785,7 +867,11 @@ class TestTimerCRUD:
         assert_mcp_success(start_result, "Start timer")
         logger.info("Timer started")
 
-        await asyncio.sleep(0.5)
+        # Wait for timer to reach active state
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "active", timeout=5
+        )
+        assert state_reached, f"Timer {entity_id} did not reach active state after start"
 
         # CANCEL timer
         cancel_result = await mcp_client.call_tool(
@@ -850,7 +936,20 @@ class TestScheduleCRUD:
         cleanup_tracker.track("schedule", entity_id)
         logger.info(f"Created schedule: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Wait for entity to be registered (schedule is either on or off depending on current time)
+        async def check_schedule_exists():
+            result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+            data = parse_mcp_result(result)
+            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+            if 'data' in data and data['data'] is not None:
+                state = data.get("data", {}).get("state")
+                return state in ["on", "off"]
+            return False
+
+        state_reached = await wait_for_condition(
+            check_schedule_exists, timeout=10, condition_name=f"schedule {entity_id} registration"
+        )
+        assert state_reached, f"Schedule {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -858,10 +957,10 @@ class TestScheduleCRUD:
             {"entity_id": entity_id},
         )
         state_data = parse_mcp_result(state_result)
-        if state_data.get("success"):
+        # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
+        if 'data' in state_data and state_data['data'] is not None:
             state_value = state_data.get("data", {}).get("state")
             logger.info(f"Schedule state: {state_value}")
-            # Schedule is either on or off depending on current time
 
         # LIST to verify schedule appears
         list_result = await mcp_client.call_tool(
@@ -925,7 +1024,11 @@ class TestZoneCRUD:
         cleanup_tracker.track("zone", entity_id)
         logger.info(f"Created zone: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Wait for entity to be registered (zones start with state "0" - no people in zone)
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "0", timeout=10
+        )
+        assert state_reached, f"Zone {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -1001,7 +1104,11 @@ class TestPersonCRUD:
         cleanup_tracker.track("person", entity_id)
         logger.info(f"Created person: {entity_id}")
 
-        await asyncio.sleep(1)
+        # Wait for entity to be registered (person typically starts with "unknown" state)
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "unknown", timeout=10
+        )
+        assert state_reached, f"Person {entity_id} not registered within timeout"
 
         # VERIFY via state
         state_result = await mcp_client.call_tool(
@@ -1064,9 +1171,7 @@ class TestTagCRUD:
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 
-        await asyncio.sleep(1)
-
-        # LIST to verify tag appears
+        # LIST to verify tag appears (tags don't have entity state, list is authoritative)
         list_result = await mcp_client.call_tool(
             "ha_config_list_helpers",
             {"helper_type": "tag"},

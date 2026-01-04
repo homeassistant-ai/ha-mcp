@@ -13,7 +13,6 @@ Each test uses real Home Assistant API calls via the MCP server to ensure
 production-level functionality and compatibility.
 """
 
-import asyncio
 import logging
 
 # Import test utilities
@@ -61,7 +60,6 @@ class TestDashboardResourceLifecycle:
         logger.info(f"Created resource with ID: {resource_id}")
 
         # Small delay for HA to process
-        await asyncio.sleep(1)
 
         # 3. List resources - verify new resource exists
         logger.info("Verifying resource was added...")
@@ -88,7 +86,6 @@ class TestDashboardResourceLifecycle:
         assert update_data["success"] is True
         assert update_data["action"] == "updated"
 
-        await asyncio.sleep(1)
 
         # 5. Verify update was applied
         logger.info("Verifying resource update...")
@@ -115,7 +112,6 @@ class TestDashboardResourceLifecycle:
         assert delete_data["success"] is True
         assert delete_data["action"] == "delete"
 
-        await asyncio.sleep(1)
 
         # 7. Verify deletion
         logger.info("Verifying resource deletion...")
@@ -167,7 +163,6 @@ class TestDashboardResourceLifecycle:
             assert css_data["resource_type"] == "css"
             created_ids.append(css_data.get("resource_id"))
 
-            await asyncio.sleep(1)
 
             # Verify by_type categorization
             list_data = await mcp.call_tool_success(
@@ -202,7 +197,6 @@ class TestDashboardResourceLifecycle:
             resource_id = add_data.get("resource_id")
             assert resource_id is not None
 
-            await asyncio.sleep(1)
 
             # Update to module type
             update_data = await mcp.call_tool_success(
@@ -216,7 +210,6 @@ class TestDashboardResourceLifecycle:
             assert update_data["success"] is True
             assert update_data["action"] == "updated"
 
-            await asyncio.sleep(1)
 
             # Verify type was changed
             list_data = await mcp.call_tool_success(
@@ -322,7 +315,6 @@ class TestDashboardResourceList:
         resource_id = add_data.get("resource_id")
 
         try:
-            await asyncio.sleep(1)
 
             list_data = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources", {}
@@ -470,7 +462,6 @@ class TestInlineDashboardResource:
             assert resource_id is not None
 
             # Verify it appears in list with inline marker
-            await asyncio.sleep(1)
             list_data = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources", {}
             )
@@ -552,7 +543,6 @@ class TestInlineDashboardResource:
         try:
             assert create_data["action"] == "created"
 
-            await asyncio.sleep(1)
 
             # Update with new content
             content_v2 = "const VERSION = 2; // Updated"

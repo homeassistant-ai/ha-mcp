@@ -222,6 +222,34 @@ src/ha_mcp/
 
 **WebSocket Verification**: Device operations verified via real-time state changes.
 
+**Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
+
+## Tool Waiting Behavior
+
+**Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
+
+**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
+
+**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
+
+```python
+# Config operations wait by default
+await ha_config_set_helper(...)  # Polls until entity registered
+
+# Opt-out for bulk operations
+for config in configs:
+    await ha_config_set_automation(config, wait=False)
+await _verify_all_created(entity_ids)  # Batch verification
+```
+
+**Tool Categories**:
+- **Config ops** (automations, helpers, scripts): MUST wait by default
+- **Service calls** (lights, switches): SHOULD wait for state change
+- **Async ops** (automation triggers, external integrations): Return immediately, users poll
+- **Query ops** (get_state, search): Return immediately
+
+See issue #381 for implementation plan.
+
 ## Context Engineering & Progressive Disclosure
 
 This project applies [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principles to tool design. These complementary approaches help manage cognitive load for both the LLM and the end user.
