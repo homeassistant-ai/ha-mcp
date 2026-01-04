@@ -363,7 +363,7 @@ class TestAutomationLifecycle:
         cleanup_tracker.track("automation", automation_entity)
 
         # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # Verify automation starts disabled
         state_reached = await wait_for_entity_state(

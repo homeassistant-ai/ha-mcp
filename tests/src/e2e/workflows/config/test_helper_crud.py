@@ -77,7 +77,7 @@ class TestInputBooleanCRUD:
         logger.info(f"Created input_boolean: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # Wait for entity to be registered in Home Assistant
         state_reached = await wait_for_entity_state(
@@ -209,7 +209,7 @@ class TestInputNumberCRUD:
         logger.info(f"Created input_number: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # Wait for entity to be registered (input_number typically initializes to min value)
         state_reached = await wait_for_entity_state(
@@ -308,7 +308,7 @@ class TestInputSelectCRUD:
         logger.info(f"Created input_select: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # Wait for entity to be registered with initial state
         state_reached = await wait_for_entity_state(
@@ -400,7 +400,7 @@ class TestInputTextCRUD:
         logger.info(f"Created input_text: {entity_id}")
 
         # Give HA a moment to process entity registration before polling
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # Wait for entity to be registered with initial state
         state_reached = await wait_for_entity_state(

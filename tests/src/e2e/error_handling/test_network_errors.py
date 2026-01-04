@@ -6,6 +6,7 @@ across all MCP tools. These tests ensure robustness and proper error reporting
 which is crucial for production reliability.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any
