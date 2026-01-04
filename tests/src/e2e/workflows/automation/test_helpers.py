@@ -14,7 +14,6 @@ This test suite validates:
 - Field validation and constraints
 """
 
-import asyncio
 import logging
 from typing import Any
 
@@ -195,7 +194,6 @@ class TestHelperIntegration:
         logger.info("✅ Helper deleted successfully")
 
         # 5. VERIFY: Helper is gone - wait a moment for deletion to propagate
-        await asyncio.sleep(2)
         final_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -317,7 +315,6 @@ class TestHelperIntegration:
         assert max_data.get("success"), f"Failed to set max value: {max_data}"
 
         # Allow time for state change and verify
-        await asyncio.sleep(1.5)
         max_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -347,7 +344,6 @@ class TestHelperIntegration:
         )
 
         # Allow time for state change and verify
-        await asyncio.sleep(1.5)
         step_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -442,7 +438,6 @@ class TestHelperIntegration:
         assert select_data.get("success"), f"Failed to select option: {select_data}"
 
         # Verify selection
-        await asyncio.sleep(1)
         new_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -465,7 +460,6 @@ class TestHelperIntegration:
         first_data = parse_mcp_result(first_result)
         assert first_data.get("success"), f"Failed to select first option: {first_data}"
 
-        await asyncio.sleep(1)
         first_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -557,7 +551,6 @@ class TestHelperIntegration:
         assert set_data.get("success"), f"Failed to set valid text: {set_data}"
 
         # Verify new text
-        await asyncio.sleep(1)
         new_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -584,7 +577,6 @@ class TestHelperIntegration:
         max_data = parse_mcp_result(max_result)
         assert max_data.get("success"), f"Failed to set max length text: {max_data}"
 
-        await asyncio.sleep(1)
         max_state_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -704,7 +696,6 @@ class TestHelperIntegration:
             )
 
             # Verify value was set
-            await asyncio.sleep(1)
             new_state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": helper_entity}
             )
@@ -795,7 +786,6 @@ class TestHelperIntegration:
         logger.info("✅ Button press executed successfully")
 
         # 4. VERIFY: Button state after press (shows timestamp when pressed)
-        await asyncio.sleep(1)
         post_press_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": helper_entity}
         )
@@ -827,7 +817,6 @@ class TestHelperIntegration:
             assert multi_press_data.get("success"), (
                 f"Failed button press #{i + 2}: {multi_press_data}"
             )
-            await asyncio.sleep(0.5)
 
         logger.info("✅ Multiple button presses successful")
 
@@ -906,7 +895,6 @@ class TestHelperIntegration:
             cleanup_tracker.track(helper_type, helper_entity)
 
             logger.info(f"✅ Created: {helper_entity}")
-            await asyncio.sleep(0.5)  # Small delay between creations
 
         logger.info(f"✅ Bulk creation completed: {len(created_helpers)} helpers")
 
@@ -945,7 +933,6 @@ class TestHelperIntegration:
                 )
                 logger.info(f"✅ Toggled: {helper_entity}")
 
-        await asyncio.sleep(2)
 
         # 4. CLEANUP: Bulk deletion
         logger.info(f"🗑️ Bulk deleting {len(created_helpers)} helpers...")
@@ -963,7 +950,6 @@ class TestHelperIntegration:
                 f"Failed to delete {helper_entity}: {delete_data}"
             )
             logger.info(f"✅ Deleted: {helper_entity}")
-            await asyncio.sleep(0.5)  # Small delay between deletions
 
         logger.info("✅ Bulk deletion completed")
 
@@ -1103,7 +1089,6 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
         logger.info("✅ Created test input_number")
 
     # Wait for helpers to be registered
-    await asyncio.sleep(2)
 
     # Test listing for each helper type
     for helper_type in helper_types:

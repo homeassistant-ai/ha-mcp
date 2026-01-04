@@ -7,7 +7,6 @@ This represents the critical user journey for Home Assistant label management.
 Note: Tests are designed to work with the Docker test environment.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -112,7 +111,6 @@ class TestLabelLifecycle:
             logger.info(f"Created label with ID: {label_id}")
 
             # 3. LIST: Verify label was created
-            await asyncio.sleep(1)  # Allow for propagation
             list_result = await mcp_client.call_tool("ha_config_list_labels", {})
             list_data = assert_mcp_success(list_result, "list labels after create")
             new_count = list_data.get("count", 0)
@@ -148,7 +146,6 @@ class TestLabelLifecycle:
             logger.info("Label updated successfully")
 
             # 5. VERIFY: Check update was applied
-            await asyncio.sleep(1)
             list_result = await mcp_client.call_tool("ha_config_list_labels", {})
             list_data = assert_mcp_success(list_result, "list labels after update")
             labels = list_data.get("labels", [])
@@ -173,7 +170,6 @@ class TestLabelLifecycle:
             logger.info("Label deleted successfully")
 
             # 7. VERIFY: Label is gone
-            await asyncio.sleep(1)
             list_result = await mcp_client.call_tool("ha_config_list_labels", {})
             list_data = assert_mcp_success(list_result, "list labels after delete")
             final_count = list_data.get("count", 0)

@@ -366,7 +366,6 @@ class TestErrorHandling:
 
                 # Check status of operations
                 if operation_ids:
-                    await asyncio.sleep(2)
                     status_result = await self._safe_tool_call(
                         mcp_client,
                         "ha_get_bulk_status",

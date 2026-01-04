@@ -11,7 +11,6 @@ without Nabu Casa cloud configured. The tests focus on API functionality
 rather than actual voice assistant integration.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -108,7 +107,6 @@ class TestVoiceAssistantExposure:
         entity_id = "input_boolean.test_exposure_check"
         cleanup_tracker.track("input_boolean", entity_id)
 
-        await asyncio.sleep(1)
 
         # Get exposure settings
         result = await mcp_client.call_tool(
@@ -155,7 +153,6 @@ class TestVoiceAssistantExposure:
         entity_id = "input_boolean.test_expose_entity"
         cleanup_tracker.track("input_boolean", entity_id)
 
-        await asyncio.sleep(1)
 
         # Expose to conversation assistant
         expose_result = await mcp_client.call_tool(
@@ -211,7 +208,6 @@ class TestVoiceAssistantExposure:
         entity_id = "input_boolean.test_hide_entity"
         cleanup_tracker.track("input_boolean", entity_id)
 
-        await asyncio.sleep(1)
 
         # Hide from conversation assistant
         hide_result = await mcp_client.call_tool(
@@ -256,7 +252,6 @@ class TestVoiceAssistantExposure:
             entities.append(entity_id)
             cleanup_tracker.track("input_boolean", entity_id)
 
-        await asyncio.sleep(1)
 
         # Expose multiple entities at once
         expose_result = await mcp_client.call_tool(

@@ -5,7 +5,6 @@ Tests the fundamental service call functionality that controls all
 Home Assistant entities and executes automations.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -45,7 +44,6 @@ class TestCallService:
         logger.info(f"Light turn_on executed successfully: {data.get('message')}")
 
         # Verify state changed
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -78,7 +76,6 @@ class TestCallService:
         logger.info(f"Light turn_off executed successfully: {data.get('message')}")
 
         # Verify state changed
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -116,7 +113,6 @@ class TestCallService:
         logger.info(f"Light toggle executed successfully: {data.get('message')}")
 
         # Verify state changed
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -152,7 +148,6 @@ class TestCallService:
         logger.info(f"Light turn_on with brightness executed: {data.get('message')}")
 
         # Verify brightness was applied
-        await asyncio.sleep(1)
         state_result = await mcp_client.call_tool(
             "ha_get_state",
             {"entity_id": test_light_entity},
@@ -214,7 +209,6 @@ class TestCallService:
 
         logger.info(f"Testing automation.trigger on {automation_entity}")
 
-        await asyncio.sleep(2)  # Wait for registration
 
         # Trigger the automation
         result = await mcp_client.call_tool(
@@ -392,7 +386,6 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
     cleanup_tracker.track("input_boolean", entity_id)
     logger.info(f"Created test input_boolean: {entity_id}")
 
-    await asyncio.sleep(1)  # Wait for registration
 
     # Toggle the input_boolean
     result = await mcp_client.call_tool(
@@ -408,7 +401,6 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
     logger.info(f"Input boolean toggle executed: {data.get('message')}")
 
     # Verify state changed to on
-    await asyncio.sleep(1)
     state_result = await mcp_client.call_tool(
         "ha_get_state",
         {"entity_id": entity_id},
