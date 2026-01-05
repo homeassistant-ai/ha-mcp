@@ -134,6 +134,61 @@ git add . && git commit -m "feat: description"
    - ✅ All comments addressed
    - ✅ PR ready for merge
 
+### PR Execution Philosophy
+
+**Work autonomously during PR implementation:**
+- Don't ask the user about every small choice or decision during implementation
+- Make reasonable technical decisions based on codebase patterns and best practices
+- Fix unrelated test failures encountered during CI (even if time-consuming)
+- Document choices for final summary
+
+**Making implementation choices:**
+- **DO NOT** choose based on what's faster to implement
+- **DO** consider long-term codebase health - refactoring that benefits maintainability is valid
+- **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
+- **For obvious choices**: Implement and document in final summary
+
+**Final reporting (only after ALL workflow steps complete):**
+
+Once the PR is ready (all checks green, comments addressed), provide:
+
+1. **Comment on the PR** with comprehensive details:
+   ```markdown
+   ## Implementation Summary
+
+   **Choices Made:**
+   - [List key technical decisions and rationale]
+
+   **Problems Encountered:**
+   - [Issues faced and how they were resolved]
+   - [Unrelated test failures fixed (if any)]
+
+   **Suggested Improvements:**
+   - [Optional follow-up work or technical debt noted]
+   ```
+
+2. **Short summary for user** when returning control:
+   - High-level overview of what was accomplished
+   - Any choices that may need user input
+   - Current PR status
+
+**Example PR comment:**
+```markdown
+## Implementation Summary
+
+**Choices Made:**
+- Used context-aware recursion to preserve `conditions` in choose blocks while normalizing at root level
+- Added both unit tests (fast feedback) and E2E tests (real API validation)
+- Fixed unrelated `test_script_traces` failure by adding polling logic
+
+**Problems Encountered:**
+- Initial implementation incorrectly passed `in_choose_or_if` flag recursively, causing conditions inside sequence blocks to not be normalized
+- Gemini suggested logbook verification in E2E test, but manual trigger bypasses conditions - simplified to structural validation instead
+
+**Suggested Improvements:**
+- Consider adding integration test with actual state changes to verify choose block execution (currently only validates structure)
+```
+
 ### Hotfix Process (Critical Bugs Only)
 
 **When to use hotfix vs regular fix:**
