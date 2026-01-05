@@ -122,7 +122,17 @@ gh pr checks <PR_NUMBER>
 gh pr view <PR_NUMBER> --json statusCheckRollup
 ```
 
-### 7. Final Assessment and Reporting
+### 7. Create Improvement PRs
+
+If you identified improvements with long-term benefit during PR review:
+- **Workflow improvements** (CLAUDE.md/AGENTS.md): Branch from master
+- **Code improvements**: Branch from master when possible
+- **`.claude/agents/` changes**: Always branch from and PR to master
+- Keep focused to avoid merge conflicts
+- Wait for CI (~3 min)
+- Document PR numbers for final report
+
+### 8. Final Assessment and Reporting
 
 Once everything passes, provide comprehensive reporting:
 
@@ -131,6 +141,10 @@ Once everything passes, provide comprehensive reporting:
 gh pr comment <PR_NUMBER> --body "## PR Assessment Summary
 
 ✅ **Status**: Ready for review/merge
+
+**Improvement PRs Created:**
+- PR #<number>: [Description of improvement] - ✅ Ready / ⏳ Pending checks
+- [List all improvement PRs if any, otherwise omit this section]
 
 **Choices Made:**
 - [List key decisions when resolving issues]
@@ -142,19 +156,19 @@ gh pr comment <PR_NUMBER> --body "## PR Assessment Summary
 - [Unrelated test failures fixed: describe what broke and how you fixed it]
 - [Example: Fixed flaky test_xyz by adding proper synchronization]
 
-**Suggested Improvements:**
-- [Optional follow-up work or technical debt identified]
-- [Example: Consider extracting common validation logic]
+**Suggested Improvements Not Implemented:**
+- [Optional follow-up work that wasn't implemented]
+- [Technical debt or opportunities that require more discussion]
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 "
 ```
 
 **B. Report to user with short summary:**
-- PR status: "PR #<number> ready - all checks green"
+- Main PR status: "PR #<number> ready - all checks green"
+- Improvement PRs created (if any): "Also created PR #<number> for [improvement]"
 - Key issues resolved
 - Any unrelated test failures fixed
-- Suggested next steps
 
 ## Special Operations
 

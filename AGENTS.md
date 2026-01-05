@@ -189,6 +189,60 @@ Once the PR is ready (all checks green, comments addressed), provide:
 - Consider adding integration test with actual state changes to verify choose block execution (currently only validates structure)
 ```
 
+### Implementing Improvements in Separate PRs
+
+**When you identify improvements with long-term benefit, implement them in separate PRs:**
+
+**Types of improvements to implement:**
+- Workflow improvements (updates to CLAUDE.md/AGENTS.md)
+- Code quality improvements (refactoring, better patterns)
+- Documentation improvements
+- Test infrastructure improvements
+- Build/CI improvements
+
+**Branching strategy:**
+```bash
+# Prefer branching from master when possible
+git checkout master
+git pull
+git checkout -b improve/description
+
+# Only branch from PR branch if improvement depends on PR changes
+git checkout feature/main-pr-branch
+git checkout -b improve/description-depends-on-main-pr
+```
+
+**Rules:**
+1. **Separate PR required** - never mix improvements with main feature PR
+2. **Branch from master** when possible (most improvements are independent)
+3. **Branch from PR branch** only if improvement depends on PR changes
+4. **Avoid merge conflicts** - keep improvements focused and minimal
+5. **Only implement long-term benefits** - skip "nice to have" without clear value
+6. **For `.claude/agents/` changes**: Always branch from and PR to master
+
+**Workflow:**
+1. Complete main PR (all checks green, comments addressed)
+2. Identify improvements during work
+3. Create separate PR(s) for improvements
+4. Mention improvement PRs in main PR final comment
+5. Return control to user with status of all PRs
+
+**Example final comment mentioning improvements:**
+```markdown
+## Implementation Summary
+
+**Main PR (#123):**
+- ✅ All checks passing, ready for merge
+- Feature X implemented with tests
+
+**Improvement PRs created:**
+- PR #124: Update CLAUDE.md with better CI failure debugging commands
+- PR #125: Refactor common validation logic into shared utility
+
+**Choices Made:** [...]
+**Problems Encountered:** [...]
+```
+
 ### Hotfix Process (Critical Bugs Only)
 
 **When to use hotfix vs regular fix:**

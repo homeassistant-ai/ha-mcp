@@ -75,9 +75,20 @@ Implement GitHub issues completely, from initial branch creation through to a cl
 
 ### Phase 4: Completion and Reporting
 10. **Final verification**: Confirm PR is clean and ready for merge
-11. **Post comprehensive PR comment** (ONLY after all checks pass and comments resolved):
+11. **Create improvement PRs** (if long-term benefits identified):
+    - For workflow improvements (CLAUDE.md/AGENTS.md): Branch from master
+    - For code improvements: Branch from master when possible, from PR branch if dependent
+    - For `.claude/agents/` changes: Always branch from and PR to master
+    - Keep each improvement focused to avoid merge conflicts
+    - Wait for CI on improvement PRs (~3 min)
+    - Document improvement PR numbers for final report
+12. **Post comprehensive PR comment** (ONLY after all checks pass and comments resolved):
     ```bash
     gh pr comment <pr-number> --body "## Implementation Summary
+
+    **Improvement PRs Created:**
+    - PR #<number>: [Description of improvement] - ✅ Ready / ⏳ Pending checks
+    - [List all improvement PRs if any, otherwise omit this section]
 
     **Choices Made:**
     - [List key technical decisions with rationale]
@@ -89,19 +100,18 @@ Implement GitHub issues completely, from initial branch creation through to a cl
     - [Unrelated test failures fixed: describe what broke and how you fixed it]
     - [Example: Fixed flaky test_xyz by adding proper wait condition]
 
-    **Suggested Improvements:**
-    - [Optional follow-up work identified]
-    - [Technical debt or opportunities for future enhancement]
-    - [Example: Consider extracting common validation logic into shared utility]
+    **Suggested Improvements Not Implemented:**
+    - [Optional follow-up work that wasn't implemented]
+    - [Technical debt or opportunities that require more discussion]
 
     🤖 Generated with [Claude Code](https://claude.com/claude-code)"
     ```
-12. **Report completion to user** with short summary:
+13. **Report completion to user** with short summary:
+    - Main PR number and status: "PR #<number> ready for merge - all checks green"
+    - Improvement PRs created (if any): "Also created PR #<number> for [improvement]"
     - High-level overview of what was accomplished
-    - PR number and status
     - Any non-obvious choices made that user should be aware of
     - Mention if unrelated tests were fixed
-    - Current state: "PR #<number> ready for merge - all checks green"
 
 ## Important Commands
 
