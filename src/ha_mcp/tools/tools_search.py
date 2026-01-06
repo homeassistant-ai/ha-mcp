@@ -362,12 +362,16 @@ def register_search_tools(mcp, client, **kwargs):
                     r for r in result["results"] if r.get("domain") == domain_filter
                 ]
                 result["results"] = filtered_results
-                result["total_matches"] = len(filtered_results)
+                # Keep original total_matches (across all domains) to avoid misleading count
+                # Add note to clarify that domain filtering was applied after limiting
                 result["domain_filter"] = domain_filter
-                # Mark as truncated if original search was truncated, as there may be more domain matches
-                result["is_truncated"] = original_was_truncated
-                if original_was_truncated:
-                    result["note"] = f"Results filtered by domain after limiting to {limit}. True total for domain may be higher."
+                # Mark as truncated since domain filtering after limit means we don't have the true domain total
+                result["is_truncated"] = True
+                result["note"] = (
+                    f"Domain filter '{domain_filter}' applied after limiting search to {limit} results. "
+                    f"Showing {len(filtered_results)} of potentially more matches in this domain. "
+                    f"total_matches ({original_total}) reflects all domains before filtering."
+                )
 
             # Ensure is_truncated field exists in result
             if "is_truncated" not in result:
