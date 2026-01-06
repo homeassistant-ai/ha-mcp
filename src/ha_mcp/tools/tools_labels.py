@@ -406,7 +406,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "entity_id": entity_id,
                     "labels": final_labels,
                     "entity_data": entity_entry,
-                    "message": f"Successfully added {len(labels)} label(s) to {entity_id}",
+                    "message": f"Successfully updated labels for {entity_id}. It now has {len(final_labels)} label(s).",
                 }
             else:
                 return {
@@ -444,8 +444,8 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Fetch current labels
             current_labels = await _get_entity_labels(entity_id)
 
-            # Remove specified labels
-            final_labels = [lbl for lbl in current_labels if lbl not in labels]
+            # Remove specified labels (convert to set for O(1) lookup)
+            final_labels = [lbl for lbl in current_labels if lbl not in set(labels)]
 
             # Update entity registry
             message: dict[str, Any] = {
@@ -463,7 +463,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "entity_id": entity_id,
                     "labels": final_labels,
                     "entity_data": entity_entry,
-                    "message": f"Successfully removed {len(labels)} label(s) from {entity_id}",
+                    "message": f"Successfully updated labels for {entity_id}. It now has {len(final_labels)} label(s).",
                 }
             else:
                 return {
