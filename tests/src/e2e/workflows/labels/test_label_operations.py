@@ -23,32 +23,42 @@ from ...utilities.assertions import (
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture
+async def test_entity_id(mcp_client) -> str:
+    """Find a single suitable entity for testing."""
+    search_result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "domain_filter": "light", "limit": 1},
+    )
+    search_data = parse_mcp_result(search_result)
+    results = search_data.get("data", search_data).get("results", [])
+    if not results:
+        pytest.skip("No light entities available for testing")
+    return results[0]["entity_id"]
+
+
+@pytest.fixture
+async def test_entity_ids(mcp_client) -> list[str]:
+    """Find multiple suitable entities for testing."""
+    search_result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "domain_filter": "light", "limit": 20},
+    )
+    search_data = parse_mcp_result(search_result)
+    results = search_data.get("data", search_data).get("results", [])
+    if len(results) < 3:
+        pytest.skip("Need at least 3 light entities for bulk testing")
+    return [r["entity_id"] for r in results[:3]]
+
+
 @pytest.mark.labels
 @pytest.mark.cleanup
 class TestLabelAddOperation:
     """Test label 'add' operation (append labels, preserve existing)."""
 
-    async def _find_test_entity(self, mcp_client) -> str:
-        """Find a suitable entity for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 10},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        return results[0].get("entity_id", "")
-
-    async def test_add_to_empty(self, mcp_client, cleanup_tracker):
+    async def test_add_to_empty(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Add labels to entity with no existing labels."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create test labels
         create_result_1 = await mcp_client.call_tool(
@@ -90,9 +100,9 @@ class TestLabelAddOperation:
         assert label2_id in data.get("labels", [])
         logger.info("Added second label, first label preserved ✅")
 
-    async def test_add_preserves_existing(self, mcp_client, cleanup_tracker):
+    async def test_add_preserves_existing(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Add operation preserves existing labels."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create labels
         labels = []
@@ -122,9 +132,9 @@ class TestLabelAddOperation:
         assert all(lbl in final_labels for lbl in labels)
         logger.info("Add operation preserved all existing labels ✅")
 
-    async def test_add_duplicate_idempotent(self, mcp_client, cleanup_tracker):
+    async def test_add_duplicate_idempotent(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Adding duplicate label is idempotent (no error, no duplicates)."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create label
         result = await mcp_client.call_tool(
@@ -156,27 +166,9 @@ class TestLabelAddOperation:
 class TestLabelRemoveOperation:
     """Test label 'remove' operation (subtract labels, preserve remaining)."""
 
-    async def _find_test_entity(self, mcp_client) -> str:
-        """Find a suitable entity for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 10},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        return results[0].get("entity_id", "")
-
-    async def test_remove_only_label(self, mcp_client, cleanup_tracker):
+    async def test_remove_only_label(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Remove the only label (clears all)."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create label
         result = await mcp_client.call_tool(
@@ -201,9 +193,9 @@ class TestLabelRemoveOperation:
         assert len(data.get("labels", [])) == 0
         logger.info("Removed only label, entity now has no labels ✅")
 
-    async def test_remove_preserves_others(self, mcp_client, cleanup_tracker):
+    async def test_remove_preserves_others(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Remove operation preserves non-specified labels."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create 3 labels
         labels = []
@@ -235,9 +227,9 @@ class TestLabelRemoveOperation:
         assert labels[2] in final_labels
         logger.info("Remove operation preserved other labels ✅")
 
-    async def test_remove_nonexistent_safe(self, mcp_client, cleanup_tracker):
+    async def test_remove_nonexistent_safe(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Removing non-existent label is safe (no error)."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create 2 labels
         labels = []
@@ -273,27 +265,9 @@ class TestLabelRemoveOperation:
 class TestLabelSetOperation:
     """Test label 'set' operation (replace all labels)."""
 
-    async def _find_test_entity(self, mcp_client) -> str:
-        """Find a suitable entity for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 10},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        return results[0].get("entity_id", "")
-
-    async def test_set_replaces_all(self, mcp_client, cleanup_tracker):
+    async def test_set_replaces_all(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Set operation replaces all existing labels."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create labels
         labels = []
@@ -326,9 +300,9 @@ class TestLabelSetOperation:
         assert labels[3] in final_labels
         logger.info("Set operation replaced all previous labels ✅")
 
-    async def test_set_empty_clears_all(self, mcp_client, cleanup_tracker):
+    async def test_set_empty_clears_all(self, mcp_client, cleanup_tracker, test_entity_id):
         """Test: Set with empty list clears all labels."""
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create and set labels
         labels = []
@@ -361,27 +335,9 @@ class TestLabelSetOperation:
 class TestBulkOperations:
     """Test bulk operations (multiple entities)."""
 
-    async def _find_test_entities(self, mcp_client, count: int = 3) -> list[str]:
-        """Find multiple suitable entities for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 20},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if len(results) < count:
-            pytest.skip(f"Need at least {count} light entities for bulk testing")
-
-        return [result.get("entity_id", "") for result in results[:count]]
-
-    async def test_bulk_parallel_add(self, mcp_client, cleanup_tracker):
+    async def test_bulk_parallel_add(self, mcp_client, cleanup_tracker, test_entity_ids):
         """Test: Bulk add operation in parallel mode."""
-        entities = await self._find_test_entities(mcp_client, 3)
+        entities = test_entity_ids
 
         # Create label
         result = await mcp_client.call_tool(
@@ -409,9 +365,9 @@ class TestBulkOperations:
         assert data.get("failed") == 0
         logger.info(f"Bulk parallel add succeeded for {len(entities)} entities ✅")
 
-    async def test_bulk_sequential_add(self, mcp_client, cleanup_tracker):
+    async def test_bulk_sequential_add(self, mcp_client, cleanup_tracker, test_entity_ids):
         """Test: Bulk add operation in sequential mode."""
-        entities = await self._find_test_entities(mcp_client, 3)
+        entities = test_entity_ids
 
         # Create label
         result = await mcp_client.call_tool(
@@ -438,9 +394,9 @@ class TestBulkOperations:
         assert data.get("successful") == 3
         logger.info(f"Bulk sequential add succeeded for {len(entities)} entities ✅")
 
-    async def test_bulk_partial_failure(self, mcp_client, cleanup_tracker):
+    async def test_bulk_partial_failure(self, mcp_client, cleanup_tracker, test_entity_ids):
         """Test: Bulk operation with some invalid entities (error isolation)."""
-        entities = await self._find_test_entities(mcp_client, 2)
+        entities = test_entity_ids[:2].copy()
 
         # Add invalid entity ID
         entities.append("light.nonexistent_entity_12345")
@@ -477,27 +433,9 @@ class TestBulkOperations:
 class TestRegressionIssue396:
     """Regression test for Issue #396: Entity registry corruption from rapid operations."""
 
-    async def _find_test_entity(self, mcp_client) -> str:
-        """Find a suitable entity for testing."""
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 10},
-        )
-        search_data = parse_mcp_result(search_result)
-
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        return results[0].get("entity_id", "")
-
-    async def test_rapid_operations_no_corruption(self, mcp_client, cleanup_tracker):
+    async def test_rapid_operations_no_corruption(self, mcp_client, cleanup_tracker, test_entity_id):
         """
-        Test: 15+ rapid label operations don't corrupt entity registry.
+        Test: 13+ rapid label operations don't corrupt entity registry.
 
         Issue #396 reported that 5+ rapid label operations would corrupt
         the entity registry, making the label UI inaccessible.
@@ -505,7 +443,7 @@ class TestRegressionIssue396:
         This test validates that the new implementation handles rapid
         operations correctly without corruption.
         """
-        entity_id = await self._find_test_entity(mcp_client)
+        entity_id = test_entity_id
 
         # Create test labels
         labels = []
@@ -517,9 +455,9 @@ class TestRegressionIssue396:
             cleanup_tracker.track("label", label_id)
             labels.append(label_id)
 
-        logger.info("Starting rapid operation test (15 operations)...")
+        logger.info("Starting rapid operation test (13 operations)...")
 
-        # Perform 15 rapid operations (add/remove/set cycle)
+        # Perform 13 rapid operations (add/remove/set cycle)
         operations = []
 
         # Cycle 1: Add all labels one by one
@@ -575,5 +513,5 @@ class TestRegressionIssue396:
         )
         assert_mcp_success(final_result, "final label modification")
 
-        logger.info("✅ Entity registry not corrupted after 15+ rapid operations")
+        logger.info("✅ Entity registry not corrupted after 13+ rapid operations")
         logger.info("✅ Issue #396 regression test PASSED")
