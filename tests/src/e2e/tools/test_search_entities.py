@@ -189,8 +189,10 @@ async def test_search_entities_limit_respected(mcp_client):
     assert len(data_limited.get("results", [])) == 2, "Expected exactly 2 results with limit=2"
     # total_matches should still show the actual count
     assert data_limited.get("total_matches") == total_lights
+    # is_truncated should be True since we limited the results
+    assert data_limited.get("is_truncated") is True, "Expected is_truncated=True when limit < total_matches"
 
-    logger.info(f"Limit correctly applied: 2 results of {total_lights} total")
+    logger.info(f"Limit correctly applied: 2 results of {total_lights} total, is_truncated={data_limited.get('is_truncated')}")
 
 
 @pytest.mark.asyncio
@@ -316,3 +318,47 @@ async def test_search_entities_fallback_fields_when_present(mcp_client):
         logger.info(f"Partial flag: {data['partial']}")
 
     logger.info("Fallback field types are correct")
+
+
+@pytest.mark.asyncio
+async def test_search_entities_truncation_indicator(mcp_client):
+    """Test that is_truncated field accurately indicates when results are truncated.
+
+    This test verifies the fix for the truncation indicator issue where
+    total_matches would incorrectly report the limited count instead of the
+    actual total number of matches.
+    """
+    logger.info("Testing truncation indicator")
+
+    # Search for a common term that should match many entities
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "sensor", "limit": 3},
+    )
+    raw_data = assert_mcp_success(result, "Search with small limit")
+    data = raw_data.get("data", raw_data)
+
+    # Verify is_truncated field exists
+    assert "is_truncated" in data, "Response must include is_truncated field"
+    assert isinstance(data["is_truncated"], bool), "is_truncated must be a boolean"
+
+    results_count = len(data.get("results", []))
+    total_matches = data.get("total_matches", 0)
+
+    # If total_matches > results count, is_truncated should be True
+    if total_matches > results_count:
+        assert data["is_truncated"] is True, \
+            f"Expected is_truncated=True when total_matches ({total_matches}) > results ({results_count})"
+        logger.info(f"Truncation correctly indicated: {results_count} of {total_matches} shown, is_truncated=True")
+    else:
+        # If all matches fit within limit, is_truncated should be False
+        assert data["is_truncated"] is False, \
+            f"Expected is_truncated=False when total_matches ({total_matches}) <= results ({results_count})"
+        logger.info(f"No truncation: {results_count} of {total_matches} shown, is_truncated=False")
+
+    # Also test that total_matches reports the actual total, not the limited count
+    # This should always be >= results_count
+    assert total_matches >= results_count, \
+        f"total_matches ({total_matches}) should be >= results count ({results_count})"
+
+    logger.info("Truncation indicator test passed")

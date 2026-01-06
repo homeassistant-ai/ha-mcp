@@ -40,7 +40,7 @@ class FuzzyEntitySearcher:
 
     def search_entities(
         self, entities: list[dict[str, Any]], query: str, limit: int = 10
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Search entities with fuzzy matching and intelligent scoring.
 
@@ -50,10 +50,10 @@ class FuzzyEntitySearcher:
             limit: Maximum number of results
 
         Returns:
-            List of matched entities with scores
+            Tuple of (limited results list, total match count)
         """
         if not query or not entities:
-            return []
+            return [], 0
 
         matches = []
         query_lower = query.lower().strip()
@@ -86,7 +86,8 @@ class FuzzyEntitySearcher:
 
         # Sort by score descending
         matches.sort(key=lambda x: x["score"], reverse=True)
-        return matches[:limit]
+        total_matches = len(matches)
+        return matches[:limit], total_matches
 
     def _calculate_entity_score(
         self, entity_id: str, friendly_name: str, domain: str, query: str
