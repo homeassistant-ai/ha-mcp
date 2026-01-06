@@ -670,26 +670,46 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
                 }
 
-            # Parse labels parameter using helper
-            try:
-                parsed_labels = parse_string_list_param(labels, "labels")
-                if parsed_labels is None:
-                    parsed_labels = []
-                # Allow empty list for set operation (clears labels)
-                if len(parsed_labels) == 0 and operation in ["add", "remove"]:
-                    # Empty list for add/remove is no-op but valid
-                    pass
-                # Deduplicate labels
-                parsed_labels = list(set(parsed_labels))
-            except ValueError as e:
+            # Parse labels parameter with backward compatibility for plain strings
+            if isinstance(labels, str):
+                # Try JSON parsing first (for JSON array strings)
+                try:
+                    parsed_labels = parse_string_list_param(labels, "labels")
+                    if parsed_labels is None:
+                        parsed_labels = []
+                except ValueError:
+                    # Plain string - wrap in list for backward compatibility
+                    parsed_labels = [labels]
+            elif isinstance(labels, list):
+                # Validate all items are strings
+                if not all(isinstance(item, str) for item in labels):
+                    return {
+                        "success": False,
+                        "error": "All labels must be strings",
+                        "suggestions": [
+                            "Provide labels as a string, list of strings, or JSON array",
+                            "Example: labels='label_id' or labels=['label1', 'label2']",
+                        ],
+                    }
+                parsed_labels = labels
+            elif labels is None:
+                parsed_labels = []
+            else:
                 return {
                     "success": False,
-                    "error": f"Invalid labels parameter: {str(e)}",
+                    "error": f"labels must be string or list, got {type(labels).__name__}",
                     "suggestions": [
                         "Provide labels as a string, list of strings, or JSON array",
                         "Example: labels='label_id' or labels=['label1', 'label2']",
                     ],
                 }
+
+            # Allow empty list for set operation (clears labels)
+            if len(parsed_labels) == 0 and operation in ["add", "remove"]:
+                # Empty list for add/remove is no-op but valid
+                pass
+            # Deduplicate labels
+            parsed_labels = list(set(parsed_labels))
 
             # Coerce parallel parameter
             parallel_bool = coerce_bool_param(parallel, "parallel", default=True)
