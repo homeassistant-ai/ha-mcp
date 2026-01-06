@@ -121,7 +121,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
 | **Dashboards** | `ha_config_list_dashboards`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
-| **Labels** | `ha_config_list_labels`, `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_assign_label` |
+| **Labels** | `ha_config_list_labels`, `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_list_zones`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
 | **Todo Lists** | `ha_list_todo_lists`, `ha_get_todo_items`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
