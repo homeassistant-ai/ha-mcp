@@ -321,7 +321,7 @@ def register_search_tools(mcp, client, **kwargs):
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit)
+                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
                 search_type = "fuzzy_search"
             except Exception as fuzzy_error:
                 logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
@@ -351,27 +351,9 @@ def register_search_tools(mcp, client, **kwargs):
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
-            # Apply domain filter if provided (for fuzzy search results)
-            if domain_filter and "results" in result and search_type == "fuzzy_search":
-                # Note: When filtering after fuzzy search, we can't know the true total count
-                # of domain-filtered matches because fuzzy search already limited results
-                original_total = result.get("total_matches", 0)
-                original_was_truncated = result.get("is_truncated", False)
-
-                filtered_results = [
-                    r for r in result["results"] if r.get("domain") == domain_filter
-                ]
-                result["results"] = filtered_results
-                # Keep original total_matches (across all domains) to avoid misleading count
-                # Add note to clarify that domain filtering was applied after limiting
+            # Add domain_filter to result if it was provided (for API consistency)
+            if domain_filter:
                 result["domain_filter"] = domain_filter
-                # Mark as truncated since domain filtering after limit means we don't have the true domain total
-                result["is_truncated"] = True
-                result["note"] = (
-                    f"Domain filter '{domain_filter}' applied after limiting search to {limit} results. "
-                    f"Showing {len(filtered_results)} of potentially more matches in this domain. "
-                    f"total_matches ({original_total}) reflects all domains before filtering."
-                )
 
             # Ensure is_truncated field exists in result
             if "is_truncated" not in result:

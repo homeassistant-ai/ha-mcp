@@ -2,6 +2,110 @@
 
 <!-- version list -->
 
+## [Unreleased]
+
+### BREAKING CHANGES
+
+- **Label Management Redesign** ([#396](https://github.com/homeassistant-ai/ha-mcp/issues/396))
+  - **Removed:** `ha_assign_label` tool
+  - **Added:** `ha_manage_entity_labels` tool with three operations:
+    - `add`: Append labels to existing labels (new functionality)
+    - `remove`: Remove specific labels, preserve others (new functionality)
+    - `set`: Replace all labels (same as old `ha_assign_label` behavior)
+  - **New:** Bulk operations support - pass list of entity_ids
+  - **Fixed:** Entity registry corruption from repeated operations
+
+**Migration Guide:**
+```python
+# Old way (ha_assign_label)
+ha_assign_label(entity_id="light.bedroom", labels=["label1", "label2"])
+
+# New way (same behavior with "set")
+ha_manage_entity_labels(entity_id="light.bedroom", operation="set", labels=["label1", "label2"])
+
+# New functionality - add labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="add", labels=["new_label"])
+
+# New functionality - remove labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="remove", labels=["old_label"])
+
+# New functionality - bulk operations
+ha_manage_entity_labels(
+    entity_id=["light.bedroom", "light.kitchen", "switch.porch"],
+    operation="add",
+    labels=["outdoor"],
+    parallel=True
+)
+```
+
+## v5.1.0 (2026-01-06)
+
+### Bug Fixes
+
+- Preserve 'conditions' (plural) in choose/if blocks (#388)
+  ([#388](https://github.com/homeassistant-ai/ha-mcp/pull/388),
+  [`89c082b`](https://github.com/homeassistant-ai/ha-mcp/commit/89c082b6aba1d92ebd4a5678a6d9de1f75d70830))
+
+- Resolve WebSocket race conditions and improve error handling (#378)
+  ([#378](https://github.com/homeassistant-ai/ha-mcp/pull/378),
+  [`521e3b0`](https://github.com/homeassistant-ai/ha-mcp/commit/521e3b01ff0108ed78a5be3b614e17fc50321c11))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#390) ([#390](https://github.com/homeassistant-ai/ha-mcp/pull/390),
+  [`b218dc8`](https://github.com/homeassistant-ai/ha-mcp/commit/b218dc853f2930ea88faaff15f4882b26c4eae2c))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`b62d25b`](https://github.com/homeassistant-ai/ha-mcp/commit/b62d25b7efad05d3c75b530260773ddd0a90d45b))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.2.1 to 44.2.2 (#372)
+  ([#372](https://github.com/homeassistant-ai/ha-mcp/pull/372),
+  [`6d7b085`](https://github.com/homeassistant-ai/ha-mcp/commit/6d7b08501a18a5170bd63d706e86ec6064733052))
+
+- **deps**: Bump renovatebot/github-action from 44.2.2 to 44.2.3 (#389)
+  ([#389](https://github.com/homeassistant-ai/ha-mcp/pull/389),
+  [`84102d2`](https://github.com/homeassistant-ai/ha-mcp/commit/84102d2515ff64ff90899c8abff2b9334d675dc2))
+
+### Documentation
+
+- Add PR execution philosophy and final reporting guidelines
+  ([`b6a5473`](https://github.com/homeassistant-ai/ha-mcp/commit/b6a547365ad03cf1518af56a757b780b2bfc880c))
+
+- Add sponsor badge, community section, and star history
+  ([`2fe299b`](https://github.com/homeassistant-ai/ha-mcp/commit/2fe299bb8815a08fd488489ab151454005b3c7d0))
+
+- Add workflow for implementing improvements in separate PRs
+  ([`dd6aafc`](https://github.com/homeassistant-ai/ha-mcp/commit/dd6aafc62055c9cd92fe71fa68929b2f6c00fbcc))
+
+- Change sponsor badge to blueviolet
+  ([`1a1102f`](https://github.com/homeassistant-ai/ha-mcp/commit/1a1102f8694d4127eeb7af6e9cbaaea419d36646))
+
+- Change sponsor emoji from heart to coffee
+  ([`8f026df`](https://github.com/homeassistant-ai/ha-mcp/commit/8f026dfedf76de7d3788a42ae444c0bb6de64fd2))
+
+- Clarify PR workflow with explicit comment checking
+  ([`d9d6b35`](https://github.com/homeassistant-ai/ha-mcp/commit/d9d6b354dec479d2c0e9a2f327442cd6c5f9d9d7))
+
+- Simplify ha_call_service docstring (117→34 lines) (#379)
+  ([#379](https://github.com/homeassistant-ai/ha-mcp/pull/379),
+  [`decdd92`](https://github.com/homeassistant-ai/ha-mcp/commit/decdd927e3bff0ae93c148070010949bec273513))
+
+- Update sponsor badge text and color
+  ([`939a09e`](https://github.com/homeassistant-ai/ha-mcp/commit/939a09eb67e7797d561090fe26a3db8279764b0d))
+
+### Features
+
+- Update issue-to-pr-resolver agent with PR execution philosophy
+  ([`075b64a`](https://github.com/homeassistant-ai/ha-mcp/commit/075b64aa25010e3482aeda2e7ccc0a13f1e166e1))
+
+- Update pr-checker agent with PR execution philosophy
+  ([`80bf518`](https://github.com/homeassistant-ai/ha-mcp/commit/80bf51896f4738f910ac68ab193e55bd19e1b393))
+
+
 ## v5.0.6 (2025-12-28)
 
 ### Bug Fixes

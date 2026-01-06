@@ -36,7 +36,7 @@ class SmartSearchTools:
         self.fuzzy_searcher = create_fuzzy_searcher(threshold=fuzzy_threshold)
 
     async def smart_entity_search(
-        self, query: str, limit: int = 10, include_attributes: bool = False
+        self, query: str, limit: int = 10, include_attributes: bool = False, domain_filter: str | None = None
     ) -> dict[str, Any]:
         """
         Advanced entity search with fuzzy matching and typo tolerance.
@@ -45,6 +45,7 @@ class SmartSearchTools:
             query: Search query (can be partial, with typos)
             limit: Maximum number of results
             include_attributes: Whether to include full entity attributes
+            domain_filter: Optional domain to filter entities before search (e.g., "light", "sensor")
 
         Returns:
             Dictionary with search results and metadata
@@ -52,6 +53,14 @@ class SmartSearchTools:
         try:
             # Get all entities
             entities = await self.client.get_states()
+
+            # Filter by domain BEFORE fuzzy search if domain_filter provided
+            # This ensures fuzzy search only looks at entities in the target domain
+            if domain_filter:
+                entities = [
+                    e for e in entities
+                    if e.get("entity_id", "").startswith(f"{domain_filter}.")
+                ]
 
             # Perform fuzzy search - returns (limited_results, total_count)
             matches, total_matches = self.fuzzy_searcher.search_entities(entities, query, limit)

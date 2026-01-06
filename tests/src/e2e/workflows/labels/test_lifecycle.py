@@ -223,9 +223,10 @@ class TestLabelLifecycle:
             # 2. ASSIGN: Assign label to entity
             logger.info(f"Assigning label {label_id} to entity {test_entity}")
             assign_result = await mcp_client.call_tool(
-                "ha_assign_label",
+                "ha_manage_entity_labels",
                 {
                     "entity_id": test_entity,
+                    "operation": "set",
                     "labels": [label_id],
                 },
             )
@@ -244,9 +245,10 @@ class TestLabelLifecycle:
             # 4. CLEAR: Remove labels from entity
             logger.info(f"Clearing labels from entity {test_entity}")
             clear_result = await mcp_client.call_tool(
-                "ha_assign_label",
+                "ha_manage_entity_labels",
                 {
                     "entity_id": test_entity,
+                    "operation": "set",
                     "labels": [],  # Empty list clears all labels
                 },
             )
@@ -299,9 +301,10 @@ class TestLabelLifecycle:
             # 2. ASSIGN: Assign all labels to entity
             logger.info(f"Assigning {len(created_label_ids)} labels to {test_entity}")
             assign_result = await mcp_client.call_tool(
-                "ha_assign_label",
+                "ha_manage_entity_labels",
                 {
                     "entity_id": test_entity,
+                    "operation": "set",
                     "labels": created_label_ids,
                 },
             )
@@ -320,9 +323,10 @@ class TestLabelLifecycle:
             subset_labels = created_label_ids[:2]  # First two labels only
             logger.info(f"Updating to subset of labels: {subset_labels}")
             update_result = await mcp_client.call_tool(
-                "ha_assign_label",
+                "ha_manage_entity_labels",
                 {
                     "entity_id": test_entity,
+                    "operation": "set",
                     "labels": subset_labels,
                 },
             )
@@ -345,9 +349,10 @@ class TestLabelLifecycle:
 
             # 4. CLEAR: Clear all labels
             await mcp_client.call_tool(
-                "ha_assign_label",
+                "ha_manage_entity_labels",
                 {
                     "entity_id": test_entity,
+                    "operation": "set",
                     "labels": [],
                 },
             )
@@ -400,9 +405,10 @@ class TestLabelValidation:
         logger.info("Testing assign to nonexistent entity...")
 
         assign_result = await mcp_client.call_tool(
-            "ha_assign_label",
+            "ha_manage_entity_labels",
             {
                 "entity_id": "light.nonexistent_entity_12345",
+                "operation": "set",
                 "labels": ["some_label"],
             },
         )
