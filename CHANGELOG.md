@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## [Unreleased]
+
+### BREAKING CHANGES
+
+- **Label Management Redesign** ([#396](https://github.com/homeassistant-ai/ha-mcp/issues/396))
+  - **Removed:** `ha_assign_label` tool
+  - **Added:** `ha_manage_entity_labels` tool with three operations:
+    - `add`: Append labels to existing labels (new functionality)
+    - `remove`: Remove specific labels, preserve others (new functionality)
+    - `set`: Replace all labels (same as old `ha_assign_label` behavior)
+  - **New:** Bulk operations support - pass list of entity_ids
+  - **Fixed:** Entity registry corruption from repeated operations
+
+**Migration Guide:**
+```python
+# Old way (ha_assign_label)
+ha_assign_label(entity_id="light.bedroom", labels=["label1", "label2"])
+
+# New way (same behavior with "set")
+ha_manage_entity_labels(entity_id="light.bedroom", operation="set", labels=["label1", "label2"])
+
+# New functionality - add labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="add", labels=["new_label"])
+
+# New functionality - remove labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="remove", labels=["old_label"])
+
+# New functionality - bulk operations
+ha_manage_entity_labels(
+    entity_id=["light.bedroom", "light.kitchen", "switch.porch"],
+    operation="add",
+    labels=["outdoor"],
+    parallel=True
+)
+```
+
 ## v5.1.0 (2026-01-06)
 
 ### Bug Fixes
