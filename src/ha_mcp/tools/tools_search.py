@@ -311,7 +311,7 @@ def register_search_tools(mcp, client, **kwargs):
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit)
+                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
                 search_type = "fuzzy_search"
             except Exception as fuzzy_error:
                 logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
@@ -341,13 +341,8 @@ def register_search_tools(mcp, client, **kwargs):
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
-            # Apply domain filter if provided (for fuzzy search results)
-            if domain_filter and "results" in result and search_type == "fuzzy_search":
-                filtered_results = [
-                    r for r in result["results"] if r.get("domain") == domain_filter
-                ]
-                result["results"] = filtered_results
-                result["total_matches"] = len(filtered_results)
+            # Add domain_filter to result if it was provided (for API consistency)
+            if domain_filter:
                 result["domain_filter"] = domain_filter
 
             # Group by domain if requested
