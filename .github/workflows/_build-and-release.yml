@@ -191,6 +191,7 @@ jobs:
           fi
 
           IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.draft')
+          echo "Release $TAG draft status before upload: $IS_DRAFT"
 
           # Upload all binaries
           gh release upload "$TAG" \
@@ -202,9 +203,16 @@ jobs:
 
           echo "✓ Uploaded binaries to $TAG"
 
+          # Re-check draft status after upload (in case it changed)
+          RELEASE_INFO_AFTER=$(gh api repos/${{ github.repository }}/releases/tags/$TAG 2>/dev/null || echo "")
+          IS_DRAFT_AFTER=$(echo "$RELEASE_INFO_AFTER" | jq -r '.draft')
+          echo "Release $TAG draft status after upload: $IS_DRAFT_AFTER"
+
           # If release is still draft, publish it
-          if [ "$IS_DRAFT" = "true" ]; then
+          if [ "$IS_DRAFT_AFTER" = "true" ]; then
             echo "Publishing draft release..."
             gh release edit "$TAG" --draft=false
             echo "✓ Published release $TAG"
+          else
+            echo "Release is already published, skipping publish step"
           fi
