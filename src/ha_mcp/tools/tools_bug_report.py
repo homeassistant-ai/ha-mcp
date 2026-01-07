@@ -90,12 +90,12 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 default=10,
                 ge=1,
-                le=100,
+                le=16,
                 description=(
                     "Number of tool calls made since the issue started. "
                     "This determines how many log entries to include. "
                     "Count how many ha_* tools were called from when the issue began. "
-                    "Default: 10 (increased for better context)"
+                    "Default: 10. Max: 16 (limited by 200-entry log buffer: 16*4*3=192)"
                 ),
             ),
         ] = 10,
@@ -216,7 +216,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Generate BOTH templates
         runtime_bug_template = _generate_runtime_bug_template(
-            diagnostic_info, log_summary, startup_log_summary, recent_logs
+            diagnostic_info, log_summary, startup_log_summary, recent_logs, startup_logs
         )
 
         agent_behavior_template = _generate_agent_behavior_template(
@@ -327,6 +327,7 @@ def _generate_runtime_bug_template(
     log_summary: str,
     startup_log_summary: str,
     recent_logs: list[dict[str, Any]],
+    startup_logs: list[dict[str, Any]],
 ) -> str:
     """
     Generate a runtime bug report template matching runtime_bug.md format.
@@ -340,9 +341,9 @@ def _generate_runtime_bug_template(
     error_messages = _extract_error_messages(recent_logs)
     error_section = "\n".join(error_messages) if error_messages else "<!-- No errors detected in recent logs -->"
 
-    # Show startup logs section only if they exist and are non-empty
+    # Show startup logs section only if they exist
     startup_section = ""
-    if startup_log_summary and startup_log_summary != "(No startup logs available)":
+    if startup_logs:
         startup_section = f"""
 ---
 
@@ -412,7 +413,7 @@ https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md
 ## 📊 Recent Tool Calls
 
 <details>
-<summary>Click to expand recent tool calls (auto-filled by ha_bug_report)</summary>
+<summary>Click to expand recent tool calls (auto-filled by ha_report_issue)</summary>
 
 ```
 {log_summary}
