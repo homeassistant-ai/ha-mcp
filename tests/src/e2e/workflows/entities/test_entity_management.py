@@ -7,7 +7,9 @@ import logging
 import pytest
 
 from tests.src.e2e.utilities.assertions import assert_mcp_success
-from tests.src.e2e.utilities.cleanup import TestEntityCleaner
+from tests.src.e2e.utilities.cleanup import (
+    TestEntityCleaner as EntityCleaner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,7 @@ class TestEntityManagement:
 
     async def test_set_entity_enabled_cycle(self, mcp_client, cleanup_tracker):
         """Test entity enable/disable cycle."""
-        cleaner = TestEntityCleaner(mcp_client)
+        cleaner = EntityCleaner(mcp_client)
 
         # Create test helper for entity
         create_result = await mcp_client.call_tool(
@@ -55,7 +57,7 @@ class TestEntityManagement:
 
     async def test_set_entity_enabled_string_bool(self, mcp_client, cleanup_tracker):
         """Test that enabled parameter accepts string booleans."""
-        cleaner = TestEntityCleaner(mcp_client)
+        cleaner = EntityCleaner(mcp_client)
 
         # Create test helper
         create_result = await mcp_client.call_tool(
