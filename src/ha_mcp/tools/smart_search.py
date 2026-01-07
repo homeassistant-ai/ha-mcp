@@ -62,8 +62,8 @@ class SmartSearchTools:
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
                 ]
 
-            # Perform fuzzy search
-            matches = self.fuzzy_searcher.search_entities(entities, query, limit)
+            # Perform fuzzy search - returns (limited_results, total_count)
+            matches, total_matches = self.fuzzy_searcher.search_entities(entities, query, limit)
 
             # Format results
             results = []
@@ -100,11 +100,12 @@ class SmartSearchTools:
             if not matches or (matches and matches[0]["score"] < 80):
                 suggestions = self.fuzzy_searcher.get_smart_suggestions(entities, query)
 
-            return {
+            response = {
                 "success": True,
                 "query": query,
-                "total_matches": len(matches),
+                "total_matches": total_matches,
                 "matches": results,  # Changed from 'results' to 'matches' for consistency
+                "is_truncated": total_matches > len(results),
                 "search_metadata": {
                     "fuzzy_threshold": self.settings.fuzzy_threshold,
                     "best_match_score": matches[0]["score"] if matches else 0,
@@ -117,6 +118,12 @@ class SmartSearchTools:
                     "Typo tolerant: 'lihgt' finds 'light' entities",
                 ],
             }
+
+            # Add hint if results are truncated
+            if response["is_truncated"]:
+                response["usage_tips"].insert(0, f"Showing {len(results)} of {total_matches} matches. Increase 'limit' parameter to see more.")
+
+            return response
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
