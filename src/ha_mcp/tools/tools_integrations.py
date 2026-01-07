@@ -1,14 +1,17 @@
 """
 Integration management tools for Home Assistant MCP server.
 
-This module provides tools to list and query Home Assistant integrations
-(config entries) via the REST API.
+This module provides tools to list, enable, disable, and delete Home Assistant
+integrations (config entries) via the REST and WebSocket APIs.
 """
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from .helpers import log_tool_usage
+from pydantic import Field
+
+from .helpers import exception_to_structured_error, log_tool_usage
+from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +130,128 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure your token has sufficient permissions",
                 ],
             }
+
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["integration"],
+            "title": "Set Integration Enabled",
+        }
+    )
+    @log_tool_usage
+    async def ha_set_integration_enabled(
+        entry_id: Annotated[str, Field(description="Config entry ID")],
+        enabled: Annotated[
+            bool | str, Field(description="True to enable, False to disable")
+        ],
+    ) -> dict[str, Any]:
+        """Enable/disable integration (config entry).
+
+        Use ha_list_integrations() to find entry IDs.
+        """
+        try:
+            enabled_bool = coerce_bool_param(enabled, "enabled")
+
+            message = {
+                "type": "config_entries/disable",
+                "entry_id": entry_id,
+                "disabled_by": None if enabled_bool else "user",
+            }
+
+            result = await client.send_websocket_message(message)
+
+            if not result.get("success"):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "error": f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
+                    "entry_id": entry_id,
+                }
+
+            # Get updated entry info
+            require_restart = result.get("result", {}).get("require_restart", False)
+
+            return {
+                "success": True,
+                "message": f"Integration {'enabled' if enabled_bool else 'disabled'} successfully",
+                "entry_id": entry_id,
+                "require_restart": require_restart,
+                "note": (
+                    "Integration has been loaded."
+                    if enabled_bool and not require_restart
+                    else "Integration has been unloaded."
+                    if not enabled_bool and not require_restart
+                    else "Home Assistant restart required for changes to take effect."
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to set integration enabled: {e}")
+            return exception_to_structured_error(e, context={"entry_id": entry_id})
+
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["integration"],
+            "title": "Delete Config Entry",
+        }
+    )
+    @log_tool_usage
+    async def ha_delete_config_entry(
+        entry_id: Annotated[str, Field(description="Config entry ID")],
+        confirm: Annotated[
+            bool | str, Field(description="Must be True to confirm deletion")
+        ] = False,
+    ) -> dict[str, Any]:
+        """Delete config entry permanently. Requires confirm=True.
+
+        Use ha_list_integrations() to find entry IDs.
+        """
+        try:
+            confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
+
+            if not confirm_bool:
+                return {
+                    "success": False,
+                    "error": "Deletion not confirmed. Set confirm=True to proceed.",
+                    "entry_id": entry_id,
+                    "warning": "This will permanently delete the config entry. This cannot be undone.",
+                }
+
+            message = {
+                "type": "config_entries/delete",
+                "entry_id": entry_id,
+            }
+
+            result = await client.send_websocket_message(message)
+
+            if not result.get("success"):
+                error_msg = result.get("error", {})
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                return {
+                    "success": False,
+                    "error": f"Failed to delete config entry: {error_msg}",
+                    "entry_id": entry_id,
+                }
+
+            # Get result info
+            require_restart = result.get("result", {}).get("require_restart", False)
+
+            return {
+                "success": True,
+                "message": "Config entry deleted successfully",
+                "entry_id": entry_id,
+                "require_restart": require_restart,
+                "note": (
+                    "The integration has been permanently removed."
+                    if not require_restart
+                    else "Home Assistant restart required to complete removal."
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to delete config entry: {e}")
+            return exception_to_structured_error(e, context={"entry_id": entry_id})
