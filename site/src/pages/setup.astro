@@ -1392,6 +1392,17 @@ mcpServers:
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
+      } else if (state.client.id === 'codex') {
+        // Codex CLI
+        if (isStdio) {
+          if (isDocker) {
+            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          } else {
+            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
+          }
+        } else {
+          config = `codex mcp add home-assistant --url ${mcpUrl}`;
+        }
       } else {
         // Claude Code
         if (isStdio) {
