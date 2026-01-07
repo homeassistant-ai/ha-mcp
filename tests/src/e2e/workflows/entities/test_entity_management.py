@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@pytest.mark.entity
+@pytest.mark.registry
 class TestEntityManagement:
     """Test entity enable/disable operations."""
 
