@@ -10,7 +10,6 @@ Comprehensive tests for ha_manage_entity_labels operations:
 Also includes regression test for Issue #396 (entity registry corruption).
 """
 
-import asyncio
 import logging
 
 import pytest
