@@ -633,6 +633,9 @@ class HomeAssistantClient:
         """
         Get config entry details.
 
+        Note: Home Assistant doesn't have a direct REST API endpoint for individual
+        config entries. This method lists all entries and filters by entry_id.
+
         Args:
             entry_id: Config entry ID
 
@@ -643,7 +646,23 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        return await self._request("GET", f"/config/config_entries/entry/{entry_id}")
+        # List all entries and filter by entry_id
+        entries = await self._request("GET", "/config/config_entries/entry")
+
+        if not isinstance(entries, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from config entries API",
+                status_code=500,
+            )
+
+        for entry in entries:
+            if entry.get("entry_id") == entry_id:
+                return entry
+
+        raise HomeAssistantAPIError(
+            f"Config entry not found: {entry_id}",
+            status_code=404,
+        )
 
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.

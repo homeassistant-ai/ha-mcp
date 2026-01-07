@@ -89,9 +89,12 @@ class TestEntityManagement:
 
     async def test_set_entity_enabled_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity."""
+        from tests.src.e2e.utilities.assertions import parse_mcp_result
+
         result = await mcp_client.call_tool(
             "ha_set_entity_enabled",
             {"entity_id": "sensor.nonexistent_entity", "enabled": True},
         )
         # Should fail - either through validation or API error
-        assert not result.get("success", False)
+        data = parse_mcp_result(result)
+        assert not data.get("success", False)
