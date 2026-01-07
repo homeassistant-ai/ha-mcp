@@ -7,11 +7,11 @@ assignees: julienld
 
 ---
 
-## 🚨 Use the `ha_bug_report` Tool First!
+## 🚨 Use the `ha_report_issue` Tool First!
 
-> **Ask your AI assistant:** *"I want to file a bug report"* or call `ha_bug_report()` directly.
+> **Ask your AI assistant:** *"I want to report a bug"* or *"This isn't working"*
 >
-> The tool auto-collects environment info, logs, and generates a ready-to-paste template that matches this format exactly.
+> The agent will call `ha_report_issue()` which auto-collects environment info, logs, and generates a ready-to-paste template.
 >
 > **Only fill this manually if** you cannot access the tool.
 
@@ -40,7 +40,7 @@ assignees: julienld
 
 ## 🔧 Environment
 
-<!-- IF YOU USED ha_bug_report: The tool already filled this section below. Paste it here. -->
+<!-- IF YOU USED ha_report_issue: The tool already filled this section. Paste it here. -->
 
 <!-- IF MANUAL: Fill these details -->
 - **ha-mcp Version:**
@@ -57,7 +57,7 @@ assignees: julienld
 
 ```
 <!-- Paste error messages here -->
-<!-- ha_bug_report pre-fills this from logs -->
+<!-- ha_report_issue pre-fills this from logs -->
 ```
 
 ---
@@ -65,11 +65,12 @@ assignees: julienld
 ## 📊 Recent Tool Calls
 
 <details>
-<summary>Click to expand recent tool calls (ha_bug_report auto-fills this)</summary>
+<summary>Click to expand recent tool calls (ha_report_issue auto-fills this)</summary>
 
 ```
 <!-- Tool call logs showing the sequence of operations -->
 <!-- Format: timestamp | tool_name | OK/FAIL | exec_time -->
+<!-- ha_report_issue automatically collects this -->
 ```
 
 </details>
@@ -83,7 +84,7 @@ assignees: julienld
 
 ```
 <!-- Only include if the bug relates to server startup -->
-<!-- ha_bug_report includes this when needed -->
+<!-- ha_report_issue includes this when needed -->
 ```
 
 </details>

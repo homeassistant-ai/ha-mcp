@@ -7,6 +7,16 @@ assignees: julienld
 
 ---
 
+## 💡 Use the `ha_report_issue` Tool!
+
+> **Ask your AI assistant:** *"You should have used a different tool"* or *"That was inefficient"*
+>
+> The agent will call `ha_report_issue()` which auto-collects tool call history and generates a template.
+>
+> The agent will automatically determine if this is agent behavior feedback vs a bug report.
+
+---
+
 ## 🤖 What Did the AI Agent Do?
 
 <!-- Describe what the AI agent did that could be improved -->
@@ -33,13 +43,18 @@ assignees: julienld
 
 ## 🔧 Tool Calls Made
 
-<!-- List the sequence of tools the agent called -->
-<!-- You can ask the agent: "Show me the recent tool calls" -->
-<!-- Format: -->
+<!-- If you used ha_report_issue, the tool call sequence is auto-filled below -->
 
-1. `ha_tool_name(params)` - Result: ...
-2. `ha_other_tool(params)` - Result: ...
-3. ...
+<details>
+<summary>Click to expand tool call sequence</summary>
+
+```
+<!-- Sequence of tools the agent called -->
+<!-- Format: timestamp | tool_name | OK/FAIL | exec_time -->
+<!-- ha_report_issue automatically collects this -->
+```
+
+</details>
 
 ---
 

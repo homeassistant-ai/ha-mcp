@@ -79,12 +79,12 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["system", "diagnostics"],
-            "title": "Bug Report Info",
+            "tags": ["system", "diagnostics", "feedback"],
+            "title": "Report Issue or Feedback",
         }
     )
     @log_tool_usage
-    async def ha_bug_report(
+    async def ha_report_issue(
         tool_call_count: Annotated[
             int,
             Field(
@@ -92,35 +92,46 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 le=100,
                 description=(
-                    "Number of tool calls made since the bug started. "
+                    "Number of tool calls made since the issue started. "
                     "This determines how many log entries to include. "
-                    "The AI agent should count how many ha_* tools it called "
-                    "from when the issue began. Default: 10 (increased for better context)"
+                    "Count how many ha_* tools were called from when the issue began. "
+                    "Default: 10 (increased for better context)"
                 ),
             ),
         ] = 10,
     ) -> dict[str, Any]:
         """
-        Collect diagnostic information for filing bug reports against ha-mcp.
+        Collect diagnostic information for filing issue reports or feedback.
+
+        This tool generates templates for TWO types of reports:
+        1. **Runtime Bug Report** - For ha-mcp errors, failures, unexpected behavior
+        2. **Agent Behavior Feedback** - For AI agent inefficiency, wrong tool usage
 
         **IMPORTANT FOR AI AGENTS:**
-        When creating a bug report, you MUST only report FACTS that you directly
-        observed during the conversation. Do NOT make assumptions or guesses.
-        - Report exact error messages you received
-        - Report exact tool names and parameters you used
-        - Report exact responses from tools
-        - Do NOT speculate about causes or solutions
-        - Do NOT fill in template sections you cannot answer from the conversation
+        You MUST analyze the conversation context to determine which template to present:
+
+        🐛 **Present RUNTIME BUG template if:**
+           - User reports an error, failure, or unexpected behavior
+           - A tool returned an error or incorrect result
+           - Something is broken or not working in ha-mcp
+
+        🤖 **Present AGENT BEHAVIOR template if:**
+           - User mentions YOU (the agent) used the wrong tool
+           - User suggests a more efficient workflow
+           - User reports YOUR inefficiency or mistakes
+           - User says you should have done something differently
+
+        **If unclear which type, ASK the user:**
+        "Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?"
 
         **WHEN TO USE THIS TOOL:**
-        Use this tool when the user says something like:
-        - "I want to file a bug for: <reason>"
-        - "This isn't working, I need to report this"
-        - "How do I report this issue?"
+        - "I want to file a bug/issue/report"
+        - "This isn't working"
+        - "You should have used [other tool]"
+        - "That was inefficient"
 
         **OUTPUT:**
-        Returns diagnostic info (auto-populated), recent logs, startup logs,
-        and a bug report template. All environment info is automatically filled.
+        Returns both templates. Choose the appropriate one based on context.
         """
         # Detect installation method and platform
         install_method = _detect_installation_method()
@@ -203,9 +214,13 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         formatted_report = "\n".join(report_lines)
 
-        # Bug report template for the AI to present to the user
-        bug_report_template = _generate_bug_report_template(
+        # Generate BOTH templates
+        runtime_bug_template = _generate_runtime_bug_template(
             diagnostic_info, log_summary, startup_log_summary, recent_logs
+        )
+
+        agent_behavior_template = _generate_agent_behavior_template(
+            diagnostic_info, log_summary, recent_logs
         )
 
         # Anonymization instructions
@@ -219,15 +234,24 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
             "formatted_report": formatted_report,
-            "bug_report_template": bug_report_template,
+            "runtime_bug_template": runtime_bug_template,
+            "agent_behavior_template": agent_behavior_template,
             "anonymization_guide": anonymization_guide,
-            "issue_url": "https://github.com/homeassistant-ai/ha-mcp/issues/new",
             "instructions": (
-                "Present the bug_report_template to the user. "
-                "The Environment section is already filled with accurate data. "
-                "Ask the user to describe the bug, what happened, and what they expected. "
-                "Remind them to follow the anonymization_guide to protect their privacy. "
-                "The user should copy the completed template and submit it at the issue_url."
+                "ANALYZE THE CONVERSATION to determine which template to present:\n\n"
+                "🐛 Present RUNTIME_BUG_TEMPLATE if:\n"
+                "   - User reports an error, failure, or unexpected behavior in ha-mcp\n"
+                "   - A tool returned an error or incorrect result\n"
+                "   - Something is broken or not working\n"
+                "   Submit at: https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md\n\n"
+                "🤖 Present AGENT_BEHAVIOR_TEMPLATE if:\n"
+                "   - User mentions YOU (the agent) used the wrong tool\n"
+                "   - User suggests YOU should have done something differently\n"
+                "   - User reports YOUR inefficiency or mistakes\n"
+                "   Submit at: https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md\n\n"
+                "If UNCLEAR which type, ASK: 'Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?'\n\n"
+                "Present the chosen template to the user. Ask them to fill in the description sections. "
+                "Remind them to follow the anonymization_guide to protect their privacy."
             ),
         }
 
@@ -298,14 +322,14 @@ def _extract_error_messages(logs: list[dict[str, Any]]) -> list[str]:
     return error_messages
 
 
-def _generate_bug_report_template(
+def _generate_runtime_bug_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
     startup_log_summary: str,
     recent_logs: list[dict[str, Any]],
 ) -> str:
     """
-    Generate a bug report template matching runtime_bug.md format.
+    Generate a runtime bug report template matching runtime_bug.md format.
 
     This template matches the GitHub issue template EXACTLY so users can
     copy-paste without format conflicts.
@@ -334,9 +358,9 @@ def _generate_bug_report_template(
 </details>
 """
 
-    return f"""## 🚨 Use the `ha_bug_report` Tool First!
+    return f"""## 🚨 Auto-Generated by `ha_report_issue` Tool
 
-> This template was auto-generated by the ha_bug_report tool.
+> This template was auto-generated by the ha_report_issue tool.
 > All environment info and logs below were collected automatically.
 
 **Submit this report at:**
@@ -410,6 +434,101 @@ https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md
 ---
 
 **Privacy reminder:** Please review and anonymize sensitive information (tokens, IPs, personal names) before submitting.
+"""
+
+
+def _generate_agent_behavior_template(
+    diagnostic_info: dict[str, Any],
+    log_summary: str,
+    recent_logs: list[dict[str, Any]],
+) -> str:
+    """
+    Generate an agent behavior feedback template matching agent_behavior_feedback.md format.
+
+    This template focuses on AI agent tool usage patterns and inefficiencies.
+    """
+    platform_info = diagnostic_info.get("platform", {})
+
+    return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
+
+> This template was auto-generated by the ha_report_issue tool.
+> Tool call history was collected automatically to help analyze agent behavior.
+
+**Submit this feedback at:**
+https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md
+
+---
+
+## 🤖 What Did the AI Agent Do?
+
+<!-- Describe what the AI agent did that could be improved -->
+<!-- Examples: -->
+<!-- - Used the wrong tool initially, then corrected itself -->
+<!-- - Provided invalid parameters to a tool -->
+<!-- - Made multiple unnecessary tool calls -->
+<!-- - Missed an obvious shortcut or better approach -->
+<!-- - Misinterpreted tool output -->
+
+
+## 🎯 What Should the Agent Have Done?
+
+<!-- Describe the more efficient or correct approach -->
+
+
+## 📝 Conversation Context
+
+<!-- Provide context about what you were trying to do -->
+<!-- Example: "I asked the agent to create an automation that..." -->
+
+
+---
+
+## 🔧 Tool Calls Made (Auto-Filled)
+
+<details>
+<summary>Click to expand tool call sequence</summary>
+
+```
+{log_summary}
+```
+
+</details>
+
+---
+
+## 💡 Suggested Improvement
+
+<!-- How could the agent be improved? Options: -->
+
+- [ ] **Tool documentation** - Tool description or examples need clarification
+- [ ] **Error messages** - Tool should return better guidance on failure
+- [ ] **Tool design** - Tool should accept different parameters or return more info
+- [ ] **Agent prompting** - System prompt should guide agent differently
+- [ ] **New tool needed** - Missing functionality requires a new tool
+- [ ] **Other** - Describe below
+
+**Details:**
+<!-- Explain your suggestion -->
+
+
+---
+
+## 📊 Environment (Optional)
+
+- **ha-mcp Version:** {diagnostic_info.get('ha_mcp_version', 'Unknown')}
+- **AI Client:** (Claude Desktop / Claude Code / Other)
+- **Home Assistant Version:** {diagnostic_info.get('home_assistant_version', 'Unknown')}
+
+---
+
+## 📎 Additional Context
+
+<!-- Screenshots, conversation logs, or other helpful info -->
+
+
+---
+
+**Note:** This is for improving AI agent behavior. For ha-mcp bugs (errors, crashes), use the Runtime Bug template instead.
 """
 
 
