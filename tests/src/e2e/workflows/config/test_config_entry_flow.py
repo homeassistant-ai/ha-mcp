@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success
+from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,8 @@ class TestConfigEntryFlow:
             "ha_get_config_entry", {"entry_id": "nonexistent_entry_id"}
         )
         # Should fail with 404 or similar error
-        assert not result.get("success", False)
+        data = parse_mcp_result(result)
+        assert not data.get("success", False)
 
     # Note: Actual ha_create_config_entry_helper tests are intentionally limited
     # because they require specific configuration for each helper type.
@@ -61,10 +62,11 @@ class TestConfigEntryFlow:
 
         # We expect this to fail (invalid config), but it proves tool exists
         # and validates the structure
-        assert "success" in result, "Tool should return a result with success field"
+        data = parse_mcp_result(result)
+        assert "success" in data, "Tool should return a result with success field"
 
         # If it succeeded unexpectedly, that's also fine - means empty config worked
         # If it failed, that's expected - we're just testing tool existence
         logger.info(
-            f"Tool response (expected to fail with invalid config): {result.get('success')}"
+            f"Tool response (expected to fail with invalid config): {data.get('success')}"
         )
