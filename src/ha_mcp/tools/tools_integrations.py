@@ -173,18 +173,17 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Get updated entry info
             require_restart = result.get("result", {}).get("require_restart", False)
 
+            if require_restart:
+                note = "Home Assistant restart required for changes to take effect."
+            else:
+                note = "Integration has been loaded." if enabled_bool else "Integration has been unloaded."
+
             return {
                 "success": True,
                 "message": f"Integration {'enabled' if enabled_bool else 'disabled'} successfully",
                 "entry_id": entry_id,
                 "require_restart": require_restart,
-                "note": (
-                    "Integration has been loaded."
-                    if enabled_bool and not require_restart
-                    else "Integration has been unloaded."
-                    if not enabled_bool and not require_restart
-                    else "Home Assistant restart required for changes to take effect."
-                ),
+                "note": note,
             }
 
         except Exception as e:
