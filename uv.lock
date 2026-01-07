@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'",
@@ -402,7 +402,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "5.0.6"
+version = "5.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
