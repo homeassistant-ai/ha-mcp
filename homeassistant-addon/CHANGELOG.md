@@ -2,6 +2,76 @@
 
 <!-- version list -->
 
+## v6.0.0 (2026-01-07)
+
+### Bug Fixes
+
+- Add truncation indicator to ha_search_entities (#393)
+  ([#393](https://github.com/homeassistant-ai/ha-mcp/pull/393),
+  [`cd7fde2`](https://github.com/homeassistant-ai/ha-mcp/commit/cd7fde2fa540e9385f7ad63eaea155b807b6bb6c))
+
+- Apply domain filter before fuzzy search, not after (#394)
+  ([#394](https://github.com/homeassistant-ai/ha-mcp/pull/394),
+  [`2cc7536`](https://github.com/homeassistant-ai/ha-mcp/commit/2cc7536eba26ac350444130a391df61478b8cce1))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`52ecfcb`](https://github.com/homeassistant-ai/ha-mcp/commit/52ecfcb548fabbd9f9185024ea7dec3de4c63c07))
+
+### Features
+
+- Add Codex CLI support to setup wizard (#387)
+  ([#387](https://github.com/homeassistant-ai/ha-mcp/pull/387),
+  [`fe1ca03`](https://github.com/homeassistant-ai/ha-mcp/commit/fe1ca034e884e6be5e753e6e8d7e07d9f973d541))
+
+- Redesign label management with add/remove/set operations (#397)
+  ([#397](https://github.com/homeassistant-ai/ha-mcp/pull/397),
+  [`0c46884`](https://github.com/homeassistant-ai/ha-mcp/commit/0c4688431168c5fdd69f2575cc76becf25105bda))
+
+### Testing
+
+- Add comprehensive E2E tests for label operations (#399)
+  ([#399](https://github.com/homeassistant-ai/ha-mcp/pull/399),
+  [`963b879`](https://github.com/homeassistant-ai/ha-mcp/commit/963b879e9ce5b5d42d92d2574b8582e2e2a2ffa0))
+
+
+## [Unreleased]
+
+### BREAKING CHANGES
+
+- **Label Management Redesign** ([#396](https://github.com/homeassistant-ai/ha-mcp/issues/396))
+  - **Removed:** `ha_assign_label` tool
+  - **Added:** `ha_manage_entity_labels` tool with three operations:
+    - `add`: Append labels to existing labels (new functionality)
+    - `remove`: Remove specific labels, preserve others (new functionality)
+    - `set`: Replace all labels (same as old `ha_assign_label` behavior)
+  - **New:** Bulk operations support - pass list of entity_ids
+  - **Fixed:** Entity registry corruption from repeated operations
+
+**Migration Guide:**
+```python
+# Old way (ha_assign_label)
+ha_assign_label(entity_id="light.bedroom", labels=["label1", "label2"])
+
+# New way (same behavior with "set")
+ha_manage_entity_labels(entity_id="light.bedroom", operation="set", labels=["label1", "label2"])
+
+# New functionality - add labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="add", labels=["new_label"])
+
+# New functionality - remove labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="remove", labels=["old_label"])
+
+# New functionality - bulk operations
+ha_manage_entity_labels(
+    entity_id=["light.bedroom", "light.kitchen", "switch.porch"],
+    operation="add",
+    labels=["outdoor"],
+    parallel=True
+)
+```
+
 ## v5.1.0 (2026-01-06)
 
 ### Bug Fixes
