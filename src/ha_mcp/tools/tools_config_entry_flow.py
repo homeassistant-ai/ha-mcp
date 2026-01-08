@@ -73,6 +73,13 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "data_schema": result.get("data_schema"),
                     "suggestion": "This helper may require manual configuration through the Home Assistant UI",
                 }
+            else:
+                # Unexpected flow result type
+                return {
+                    "success": False,
+                    "error": f"Unexpected flow result type: {result_type}",
+                    "details": result,
+                }
 
         return {
             "success": False,
@@ -98,9 +105,11 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """Create Config Entry Flow helper (template, group, utility_meter, etc.).
 
         Supports 15 helper types that use Config Entry Flow API.
-        Use ha_get_domain_docs(helper_type) for config schema.
+        Use ha_get_helper_schema(helper_type) to discover required config fields.
         """
         try:
+            flow_id = None  # Track flow_id for error context
+
             # Parse config if string
             if isinstance(config, str):
                 parsed_config = parse_json_param(config)
@@ -140,10 +149,15 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 return result
 
         except Exception as e:
-            logger.error(f"Error creating {helper_type} helper: {e}")
-            return exception_to_structured_error(
-                e, context={"helper_type": helper_type}
-            )
+            error_msg = f"Error creating {helper_type} helper"
+            if flow_id:
+                error_msg += f" (flow_id: {flow_id})"
+            logger.error(f"{error_msg}: {e}")
+
+            context = {"helper_type": helper_type}
+            if flow_id:
+                context["flow_id"] = flow_id
+            return exception_to_structured_error(e, context=context)
 
     @mcp.tool(
         annotations={
