@@ -149,6 +149,69 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         annotations={
             "readOnlyHint": True,
             "tags": ["config"],
+            "title": "Get Helper Schema",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_helper_schema(
+        helper_type: Annotated[SUPPORTED_HELPERS, Field(description="Helper type")],
+    ) -> dict[str, Any]:
+        """Get configuration schema for a helper type.
+
+        Returns the form fields and their types needed to create this helper.
+        Use before ha_create_config_entry_helper to understand required config.
+        """
+        try:
+            # Start flow but don't submit anything - just get the schema
+            flow_result = await client.start_config_flow(helper_type)
+
+            flow_type = flow_result.get("type")
+
+            # Handle different flow types
+            if flow_type == "form":
+                # Standard form with data_schema
+                return {
+                    "success": True,
+                    "helper_type": helper_type,
+                    "flow_type": "form",
+                    "step_id": flow_result.get("step_id"),
+                    "data_schema": flow_result.get("data_schema", []),
+                    "description_placeholders": flow_result.get(
+                        "description_placeholders", {}
+                    ),
+                    "errors": flow_result.get("errors", {}),
+                }
+
+            elif flow_type == "menu":
+                # Menu selection (e.g., group type selection)
+                return {
+                    "success": True,
+                    "helper_type": helper_type,
+                    "flow_type": "menu",
+                    "step_id": flow_result.get("step_id"),
+                    "menu_options": flow_result.get("menu_options", []),
+                    "description_placeholders": flow_result.get(
+                        "description_placeholders", {}
+                    ),
+                    "note": "This helper requires selecting from a menu first. Choose an option and submit to get the actual configuration schema.",
+                }
+
+            else:
+                # Unexpected flow type
+                return {
+                    "success": False,
+                    "error": f"Unexpected flow type: {flow_type}",
+                    "details": flow_result,
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting helper schema: {e}")
+            return exception_to_structured_error(e, context={"helper_type": helper_type})
+
+    @mcp.tool(
+        annotations={
+            "readOnlyHint": True,
+            "tags": ["config"],
             "title": "Get Config Entry",
         }
     )
