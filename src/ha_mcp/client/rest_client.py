@@ -585,6 +585,85 @@ class HomeAssistantClient:
                 )
             raise
 
+    async def start_config_flow(
+        self, handler: str, context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """
+        Start a config entry flow.
+
+        Args:
+            handler: Integration domain (e.g., "template", "group")
+            context: Optional context (e.g., {"source": "user"})
+
+        Returns:
+            Flow data with flow_id, step_id, data_schema
+
+        Raises:
+            HomeAssistantAPIError: If flow start fails
+        """
+        payload = {"handler": handler}
+        if context:
+            payload["context"] = context
+
+        logger.debug(f"Starting config flow for handler: {handler}")
+        return await self._request("POST", "/config/config_entries/flow", json=payload)
+
+    async def submit_config_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Submit data for a config flow step.
+
+        Args:
+            flow_id: Flow ID from start_config_flow or previous step
+            user_input: Form data for current step
+
+        Returns:
+            Flow result: type = "create_entry" | "form" | "abort"
+
+        Raises:
+            HomeAssistantAPIError: If flow submission fails
+        """
+        logger.debug(f"Submitting flow step for flow_id: {flow_id}")
+        return await self._request(
+            "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
+        )
+
+    async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
+        """
+        Get config entry details.
+
+        Note: Home Assistant doesn't have a direct REST API endpoint for individual
+        config entries. This method lists all entries and filters by entry_id.
+
+        Args:
+            entry_id: Config entry ID
+
+        Returns:
+            Full config entry data
+
+        Raises:
+            HomeAssistantAPIError: If entry not found or API error
+        """
+        logger.debug(f"Getting config entry: {entry_id}")
+        # List all entries and filter by entry_id
+        entries = await self._request("GET", "/config/config_entries/entry")
+
+        if not isinstance(entries, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from config entries API",
+                status_code=500,
+            )
+
+        for entry in entries:
+            if entry.get("entry_id") == entry_id:
+                return entry
+
+        raise HomeAssistantAPIError(
+            f"Config entry not found: {entry_id}",
+            status_code=404,
+        )
+
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
 
