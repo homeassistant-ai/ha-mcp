@@ -35,6 +35,10 @@ def _normalize_automation_config(
     (plural) is required by the HA schema and should NOT be normalized to
     'condition' (singular).
 
+    IMPORTANT: Inside compound condition blocks ('or', 'and', 'not'), the
+    'conditions' key (plural) is required and should NOT be normalized to
+    'condition' (singular).
+
     Args:
         config: Automation configuration (dict, list, or primitive)
         parent_key: The parent dictionary key (for context tracking)
@@ -43,7 +47,8 @@ def _normalize_automation_config(
 
     Returns:
         Normalized configuration with singular field names at root level,
-        but preserving 'conditions' (plural) inside choose/if blocks
+        but preserving 'conditions' (plural) inside choose/if blocks and
+        compound condition blocks (or/and/not)
     """
     # Handle lists - recursively process each item
     if isinstance(config, list):
@@ -61,8 +66,15 @@ def _normalize_automation_config(
     # Process dictionary
     normalized = config.copy()
 
+    # Check if this dict is a compound condition block (or/and/not)
+    # that needs its nested 'conditions' key preserved
+    is_compound_condition_block = (
+        isinstance(normalized, dict)
+        and normalized.get("condition") in ("or", "and", "not")
+    )
+
     # Map plural field names to singular (HA API format)
-    # EXCEPT 'conditions' when inside choose/if blocks
+    # EXCEPT 'conditions' when inside choose/if blocks OR in compound condition blocks
     field_mappings = {
         "triggers": "trigger",
         "actions": "action",
@@ -71,7 +83,8 @@ def _normalize_automation_config(
     }
 
     # Only add 'conditions' mapping if NOT inside a choose/if option
-    if not in_choose_or_if:
+    # AND NOT a compound condition block (or/and/not)
+    if not in_choose_or_if and not is_compound_condition_block:
         field_mappings["conditions"] = "condition"
 
     # Apply field mapping to current level
@@ -83,7 +96,6 @@ def _normalize_automation_config(
             del normalized[plural]
 
     # Recursively process all values in the dictionary
-    # Note: Don't pass in_choose_or_if flag down - it only applies to direct children
     for key, value in normalized.items():
         normalized[key] = _normalize_automation_config(value, key)
 

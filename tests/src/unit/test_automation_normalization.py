@@ -219,3 +219,187 @@ class TestAutomationNormalization:
         # Verify 'conditions' is normalized to 'condition' inside the sequence
         assert "condition" in action_in_sequence
         assert "conditions" not in action_in_sequence
+
+    def test_preserve_conditions_in_or_blocks(self):
+        """Test that 'conditions' (plural) is preserved inside 'or' condition blocks."""
+        config = {
+            "trigger": [{"platform": "state"}],
+            "condition": [
+                {
+                    "condition": "or",
+                    "conditions": [
+                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                        {"condition": "state", "entity_id": "light.test2", "state": "on"},
+                    ],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Root level should have singular form
+        assert "condition" in result
+        assert "conditions" not in result
+
+        # Inside 'or' block, 'conditions' should remain plural
+        or_condition = result["condition"][0]
+        assert or_condition["condition"] == "or"
+        assert "conditions" in or_condition
+        assert len(or_condition["conditions"]) == 2
+
+    def test_preserve_conditions_in_and_blocks(self):
+        """Test that 'conditions' (plural) is preserved inside 'and' condition blocks."""
+        config = {
+            "trigger": [{"platform": "state"}],
+            "condition": [
+                {
+                    "condition": "and",
+                    "conditions": [
+                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                        {"condition": "numeric_state", "entity_id": "sensor.temp", "above": 20},
+                    ],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Inside 'and' block, 'conditions' should remain plural
+        and_condition = result["condition"][0]
+        assert and_condition["condition"] == "and"
+        assert "conditions" in and_condition
+        assert len(and_condition["conditions"]) == 2
+
+    def test_preserve_conditions_in_not_blocks(self):
+        """Test that 'conditions' (plural) is preserved inside 'not' condition blocks."""
+        config = {
+            "trigger": [{"platform": "state"}],
+            "condition": [
+                {
+                    "condition": "not",
+                    "conditions": [{"condition": "state", "entity_id": "light.test", "state": "on"}],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Inside 'not' block, 'conditions' should remain plural
+        not_condition = result["condition"][0]
+        assert not_condition["condition"] == "not"
+        assert "conditions" in not_condition
+        assert len(not_condition["conditions"]) == 1
+
+    def test_nested_compound_conditions(self):
+        """Test deeply nested compound conditions (or inside and, etc.)."""
+        config = {
+            "trigger": [{"platform": "state"}],
+            "conditions": [
+                {
+                    "condition": "and",
+                    "conditions": [
+                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                        {
+                            "condition": "or",
+                            "conditions": [
+                                {"condition": "state", "entity_id": "light.test2", "state": "on"},
+                                {"condition": "state", "entity_id": "light.test3", "state": "on"},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Root level: conditions -> condition
+        assert "condition" in result
+        assert "conditions" not in result
+
+        # First level: 'and' block should preserve 'conditions'
+        and_condition = result["condition"][0]
+        assert and_condition["condition"] == "and"
+        assert "conditions" in and_condition
+        assert len(and_condition["conditions"]) == 2
+
+        # Second level: nested 'or' block should preserve 'conditions'
+        or_condition = and_condition["conditions"][1]
+        assert or_condition["condition"] == "or"
+        assert "conditions" in or_condition
+        assert len(or_condition["conditions"]) == 2
+
+    def test_compound_conditions_in_choose_block(self):
+        """Test compound conditions inside choose block conditions."""
+        config = {
+            "trigger": [{"platform": "state"}],
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [
+                                {"condition": "trigger", "id": "vehicle_ignition_on"},
+                                {
+                                    "condition": "or",
+                                    "conditions": [
+                                        {
+                                            "condition": "state",
+                                            "entity_id": "device_tracker.vehicle",
+                                            "state": "home",
+                                        },
+                                        {
+                                            "condition": "state",
+                                            "entity_id": "binary_sensor.garage",
+                                            "state": "on",
+                                        },
+                                    ],
+                                },
+                            ],
+                            "sequence": [{"service": "light.turn_on"}],
+                        }
+                    ]
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Verify choose block preserves 'conditions' at top level
+        choose_option = result["action"][0]["choose"][0]
+        assert "conditions" in choose_option
+        assert len(choose_option["conditions"]) == 2
+
+        # Verify nested 'or' block preserves 'conditions'
+        or_condition = choose_option["conditions"][1]
+        assert or_condition["condition"] == "or"
+        assert "conditions" in or_condition
+        assert len(or_condition["conditions"]) == 2
+
+    def test_root_level_plural_normalization_with_compound_conditions(self):
+        """Test that root level 'conditions' is normalized even with compound conditions."""
+        config = {
+            "triggers": [{"platform": "state"}],
+            "conditions": [
+                {
+                    "condition": "or",
+                    "conditions": [
+                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                    ],
+                }
+            ],
+            "actions": [{"service": "light.turn_on"}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Root level should be normalized to singular
+        assert "trigger" in result
+        assert "condition" in result
+        assert "action" in result
+        assert "triggers" not in result
+        assert "conditions" not in result
+        assert "actions" not in result
+
+        # Inside compound condition, 'conditions' should be preserved
+        or_condition = result["condition"][0]
+        assert "conditions" in or_condition
