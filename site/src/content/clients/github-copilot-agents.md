@@ -68,7 +68,7 @@ Create `.vscode/mcp.json` in your repository root:
 }
 ```
 
-### SSE Configuration (Network/Remote)
+#### SSE Configuration (Network/Remote)
 
 ```json
 {
@@ -80,6 +80,56 @@ Create `.vscode/mcp.json` in your repository root:
   }
 }
 ```
+
+### Personal Configuration (VS Code settings.json)
+
+For personal configuration in VS Code settings.json, wrap the entire configuration in an `"mcp"` key:
+
+#### stdio Configuration (Local)
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "home-assistant": {
+        "command": "uvx",
+        "args": ["ha-mcp@latest"],
+        "env": {
+          "HOMEASSISTANT_URL": "{{HOMEASSISTANT_URL}}",
+          "HOMEASSISTANT_TOKEN": "{{HOMEASSISTANT_TOKEN}}"
+        }
+      }
+    }
+  }
+}
+```
+
+#### SSE Configuration (Network/Remote)
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "home-assistant": {
+        "url": "{{MCP_SERVER_URL}}",
+        "transport": "sse"
+      }
+    }
+  }
+}
+```
+
+### Repository Admin Configuration (GitHub UI)
+
+Repository administrators can configure MCP servers directly in GitHub:
+
+1. Navigate to your repository on GitHub
+2. Go to **Settings** → **Copilot** → **Coding agent**
+3. Scroll to **MCP configuration** section
+4. Add the MCP server configuration in JSON format (same as `.vscode/mcp.json`)
+5. Save the configuration
+
+This configuration applies to all users with Copilot access to the repository.
 
 ## Setup Steps
 
