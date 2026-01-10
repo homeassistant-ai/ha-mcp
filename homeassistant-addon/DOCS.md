@@ -137,7 +137,7 @@ When you first start Cloudflared:
    https://xyz.cloudflare.com/argotunnel?...
    ```
 
-2. **Open the URL in your browser** and log in with your Cloudflare account
+2. **Open the URL in your browser**, log in with your Cloudflare account, and select a website to authorize the tunnel
 
 3. **After authentication**, the logs will show your tunnel URL:
    - Named tunnel: `https://ha-mcp-<random>.cfargotunnel.com`
