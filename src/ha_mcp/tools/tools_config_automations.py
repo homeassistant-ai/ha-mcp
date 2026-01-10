@@ -68,10 +68,7 @@ def _normalize_automation_config(
 
     # Check if this dict is a compound condition block (or/and/not)
     # that needs its nested 'conditions' key preserved
-    is_compound_condition_block = (
-        isinstance(normalized, dict)
-        and normalized.get("condition") in ("or", "and", "not")
-    )
+    is_compound_condition_block = normalized.get("condition") in ("or", "and", "not")
 
     # Map plural field names to singular (HA API format)
     # EXCEPT 'conditions' when inside choose/if blocks OR in compound condition blocks
