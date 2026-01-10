@@ -110,32 +110,44 @@ For secure remote access without port forwarding, use the **Cloudflared add-on**
 
 #### Configure Cloudflared
 
+**Note:** The Cloudflared add-on requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
+
 Add to Cloudflared add-on configuration:
 
 ```yaml
 additional_hosts:
-  - hostname: ha-mcp  # Quick tunnel mode (generates temporary URL)
+  - hostname: ha-mcp  # Named tunnel (requires Cloudflare account)
     service: http://localhost:9583
 ```
 
-Or with a custom domain:
+Or with a custom domain (requires DNS setup in Cloudflare):
 ```yaml
 additional_hosts:
   - hostname: ha-mcp.yourdomain.com
     service: http://localhost:9583
 ```
 
-#### Get Your Public URL
+#### Authenticate and Get Your Public URL
 
-After starting Cloudflared, check its logs for your tunnel URL:
-- Quick tunnel: `https://random-name.trycloudflare.com`
-- Custom domain: `https://ha-mcp.yourdomain.com`
+When you first start Cloudflared:
+
+1. **Check the add-on logs** for an authentication URL like:
+   ```
+   Please open the following URL and log in with your Cloudflare account:
+   https://xyz.cloudflare.com/argotunnel?...
+   ```
+
+2. **Open the URL in your browser** and log in with your Cloudflare account
+
+3. **After authentication**, the logs will show your tunnel URL:
+   - Named tunnel: `https://ha-mcp-<random>.cfargotunnel.com`
+   - Custom domain: `https://ha-mcp.yourdomain.com` (if DNS configured)
 
 #### Use Your MCP Server
 
 Combine the Cloudflare tunnel URL with your secret path:
 ```
-https://random-name.trycloudflare.com/private_zctpwlX7ZkIAr7oqdfLPxw
+https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 ```
 
 **Benefits:**
@@ -143,6 +155,8 @@ https://random-name.trycloudflare.com/private_zctpwlX7ZkIAr7oqdfLPxw
 - Automatic HTTPS encryption
 - Optional Cloudflare Zero Trust authentication
 - Centrally managed with other Home Assistant services
+
+**Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
 
 See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md) for advanced configuration.
 
