@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v6.1.0 (2026-01-10)
+
+### Bug Fixes
+
+- Preserve nested conditions in or/and/not compound condition blocks (#409)
+  ([#409](https://github.com/homeassistant-ai/ha-mcp/pull/409),
+  [`c92a375`](https://github.com/homeassistant-ai/ha-mcp/commit/c92a3754dfad80465ddbabfdee05cd7385409ae2))
+
+- **ci**: Add debug output and re-check draft status before publishing (#400)
+  ([#400](https://github.com/homeassistant-ai/ha-mcp/pull/400),
+  [`fc66001`](https://github.com/homeassistant-ai/ha-mcp/commit/fc6600173c44daf9d3625af53729a94ab25db797))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`cee9cd9`](https://github.com/homeassistant-ai/ha-mcp/commit/cee9cd92a80e0044f31696439b163893120b0c67))
+
+### Documentation
+
+- Add @cj-elevate to contributors for PR #355
+  ([`bba1c89`](https://github.com/homeassistant-ai/ha-mcp/commit/bba1c89db94b93c54ebd121b185aa38e2cce8853))
+
+- Fix Cloudflared add-on Quick Tunnel documentation inaccuracy (#407)
+  ([#407](https://github.com/homeassistant-ai/ha-mcp/pull/407),
+  [`8e8f1af`](https://github.com/homeassistant-ai/ha-mcp/commit/8e8f1af4ea7d09a3efdeba9d0c94c32f8edeed68))
+
+- Move @cj-elevate to end of contributors list
+  ([`7b452ed`](https://github.com/homeassistant-ai/ha-mcp/commit/7b452ede8dff8fa59839ba065e1ba84c0af627fb))
+
+### Features
+
+- Harmonize config entry tools and add Flow API support (#403)
+  ([#403](https://github.com/homeassistant-ai/ha-mcp/pull/403),
+  [`071a8ef`](https://github.com/homeassistant-ai/ha-mcp/commit/071a8efc734b8771fa98e413173977a9d0915442))
+
+- Improve bug report clarity and add agent behavior feedback (#401)
+  ([#401](https://github.com/homeassistant-ai/ha-mcp/pull/401),
+  [`bbcba45`](https://github.com/homeassistant-ai/ha-mcp/commit/bbcba45a200fb8a1dfdc4983643d7c4fe0bcb41e))
+
+
 ## v6.0.0 (2026-01-07)
 
 ### Bug Fixes
