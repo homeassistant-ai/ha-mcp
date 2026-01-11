@@ -127,6 +127,14 @@ def main() -> int:
 
     # Import and run MCP server directly
     try:
+        try:
+            from importlib.metadata import version
+
+            pkg_version = version("ha-mcp")
+            log_info(f"📦 ha-mcp package version: {pkg_version}")
+        except Exception:
+            log_info("📦 ha-mcp package version: unknown")
+
         log_info("Importing ha_mcp module...")
         from ha_mcp.__main__ import mcp
 
