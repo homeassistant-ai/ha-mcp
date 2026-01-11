@@ -111,6 +111,45 @@ def main() -> int:
     log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
     log_info("Authentication configured via Supervisor token")
 
+    # Debug: Test Supervisor API connectivity
+    try:
+        import asyncio
+
+        import httpx
+
+        async def debug_supervisor() -> None:
+            url = os.environ["HOMEASSISTANT_URL"]
+            token = os.environ["HOMEASSISTANT_TOKEN"]
+            log_info(f"DEBUG: Testing Supervisor API at {url}")
+
+            async with httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {token}"}
+            ) as client:
+                # Test 1: GET / (Core root via proxy)
+                # Note: http://supervisor/core might redirect or return 404/401 depending on path
+                try:
+                    target = f"{url}/api/"
+                    resp = await client.get(target)
+                    log_info(f"DEBUG: GET {target} -> {resp.status_code}")
+                except Exception as e:
+                    log_error(f"DEBUG: GET {target} failed: {e}")
+
+                # Test 2: DELETE /api/config/automation/config/test_delete_debug
+                # This mimics the failing call
+                target = f"{url}/api/config/automation/config/test_delete_debug"
+                log_info(f"DEBUG: Attempting DELETE {target}")
+                try:
+                    resp = await client.delete(target)
+                    log_info(
+                        f"DEBUG: DELETE result -> {resp.status_code} {resp.text[:200]}"
+                    )
+                except Exception as e:
+                    log_error(f"DEBUG: DELETE failed: {e}")
+
+        asyncio.run(debug_supervisor())
+    except Exception as e:
+        log_error(f"DEBUG setup failed: {e}")
+
     # Fixed port (internal container port)
     port = 9583
 
