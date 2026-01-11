@@ -11,7 +11,7 @@ init: false
 startup: application
 boot: manual
 hassio_api: true
-hassio_role: default
+hassio_role: homeassistant
 homeassistant_api: true
 host_network: true
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
