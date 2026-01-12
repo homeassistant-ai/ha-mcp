@@ -138,6 +138,31 @@ class TestToolAnnotations:
         assert read_only_count >= 20, f"Only {read_only_count} read-only tools, expected at least 20"
         assert destructive_count >= 20, f"Only {destructive_count} destructive tools, expected at least 20"
 
+    def test_total_tool_count_limit(self):
+        """Ensure total tool count doesn't exceed Antigravity's 100 tool limit.
+
+        Antigravity (and potentially other MCP clients) has a hard limit of 100 tools.
+        This test ensures we stay at or below that limit when feature flags are disabled.
+
+        Note: This counts tools with @mcp.tool decorator. Tools behind feature flags
+        (like HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION) are not counted when disabled.
+        """
+        tools = get_all_tools()
+        tool_count = len(tools)
+
+        # Hard limit: 100 tools maximum
+        assert tool_count <= 100, (
+            f"Tool count ({tool_count}) exceeds Antigravity's 100 tool limit!\n"
+            f"Tools found: {tool_count}\n"
+            f"Limit: 100\n"
+            f"Over by: {tool_count - 100}\n\n"
+            f"To fix this, consider:\n"
+            f"1. Consolidating duplicate or similar tools (e.g., get/list patterns)\n"
+            f"2. Moving specialized tools behind feature flags\n"
+            f"3. Removing rarely-used tools\n"
+            f"\nSee issue #420 for context."
+        )
+
     def test_read_only_tools_are_actually_read_only(self):
         """Tools with readOnlyHint should have read-only names (get, list, search, etc)."""
         tools = get_all_tools()
