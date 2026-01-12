@@ -2,6 +2,49 @@
 
 <!-- version list -->
 
+## v6.2.0 (2026-01-12)
+
+### Bug Fixes
+
+- Pin numpy to 2.3.x for CPU compatibility (#410)
+  ([#410](https://github.com/homeassistant-ai/ha-mcp/pull/410),
+  [`b415a22`](https://github.com/homeassistant-ai/ha-mcp/commit/b415a2246a4ad903b867e3781067c9b5fa4586f1))
+
+- **addon-dev**: Set hassio_role to admin (retry) (#417)
+  ([#417](https://github.com/homeassistant-ai/ha-mcp/pull/417),
+  [`78a19d4`](https://github.com/homeassistant-ai/ha-mcp/commit/78a19d449297fafd36956d00d8fa9206170aa9d4))
+
+- **addon-dev**: Set hassio_role to homeassistant to allow DELETE operations (#416)
+  ([#416](https://github.com/homeassistant-ai/ha-mcp/pull/416),
+  [`3bca5d2`](https://github.com/homeassistant-ai/ha-mcp/commit/3bca5d20c01728384be26928172921ec8b27a99a))
+
+- **client**: Ensure REST API paths are correctly resolved relative to /api/ (#418)
+  ([#418](https://github.com/homeassistant-ai/ha-mcp/pull/418),
+  [`6f40808`](https://github.com/homeassistant-ai/ha-mcp/commit/6f4080829da4d53c09fa75c381e6d9fb71aa985a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`d575f09`](https://github.com/homeassistant-ai/ha-mcp/commit/d575f0956c9b6483d048178786f35e93eac20a6a))
+
+### Features
+
+- Consolidate duplicate tools (108 → 105 tools) (#423)
+  ([#423](https://github.com/homeassistant-ai/ha-mcp/pull/423),
+  [`79f3c1e`](https://github.com/homeassistant-ai/ha-mcp/commit/79f3c1e569162bc3ecc87e885655840a37f0278e))
+
+- **addon**: Log package version on startup (#419)
+  ([#419](https://github.com/homeassistant-ai/ha-mcp/pull/419),
+  [`2929f40`](https://github.com/homeassistant-ai/ha-mcp/commit/2929f40475332408b881e741c61939048c748c1b))
+
+- **debug**: Add verbose logging and connection test for add-on (#421)
+  ([#421](https://github.com/homeassistant-ai/ha-mcp/pull/421),
+  [`881ca6f`](https://github.com/homeassistant-ai/ha-mcp/commit/881ca6f3c06b63f2965db16639b099f74238d494))
+
+- **debug**: Test direct connection to Core
+  ([`02d7f61`](https://github.com/homeassistant-ai/ha-mcp/commit/02d7f612a9f21a74d0e91a6849eda077505823ee))
+
+
 ## v6.1.0 (2026-01-10)
 
 ### Bug Fixes
