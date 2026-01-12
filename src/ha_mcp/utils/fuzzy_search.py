@@ -298,11 +298,7 @@ def create_fuzzy_searcher(threshold: int = 60) -> FuzzyEntitySearcher:
 
 def calculate_ratio(query: str, value: str) -> int:
     """Return the similarity ratio (0-100) using SequenceMatcher."""
-    if not query and not value:
-        return 100
-    if not query or not value:
-        return 0
-    return int(SequenceMatcher(None, query, value).ratio() * 100)
+    return int(SequenceMatcher(None, query, value, autojunk=False).ratio() * 100)
 
 
 def calculate_partial_ratio(query: str, value: str) -> int:
