@@ -18,6 +18,42 @@ logger = logging.getLogger(__name__)
 def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant blueprint management tools."""
 
+    def _format_blueprint_list(blueprints_data: dict[str, Any], domain: str) -> dict[str, Any]:
+        """Format blueprint data into list response structure.
+
+        Args:
+            blueprints_data: Raw blueprint data from WebSocket API
+            domain: Blueprint domain (automation or script)
+
+        Returns:
+            Formatted response with blueprints list, count, and domain
+        """
+        blueprints = []
+        for bp_path, metadata in blueprints_data.items():
+            blueprint_info = {
+                "path": bp_path,
+                "domain": domain,
+                "name": metadata.get("name", bp_path.split("/")[-1].replace(".yaml", "")),
+            }
+
+            # Add optional metadata if available
+            if "metadata" in metadata:
+                meta = metadata["metadata"]
+                blueprint_info.update({
+                    "description": meta.get("description"),
+                    "source_url": meta.get("source_url"),
+                    "author": meta.get("author"),
+                })
+
+            blueprints.append(blueprint_info)
+
+        return {
+            "success": True,
+            "domain": domain,
+            "count": len(blueprints),
+            "blueprints": blueprints,
+        }
+
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "Get Blueprint"})
     @log_tool_usage
     async def ha_get_blueprint(
@@ -84,31 +120,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # If no path provided, return list of all blueprints
             if path is None:
-                blueprints = []
-                for bp_path, metadata in blueprints_data.items():
-                    blueprint_info = {
-                        "path": bp_path,
-                        "domain": domain,
-                        "name": metadata.get("name", bp_path.split("/")[-1].replace(".yaml", "")),
-                    }
-
-                    # Add optional metadata if available
-                    if "metadata" in metadata:
-                        meta = metadata["metadata"]
-                        blueprint_info.update({
-                            "description": meta.get("description"),
-                            "source_url": meta.get("source_url"),
-                            "author": meta.get("author"),
-                        })
-
-                    blueprints.append(blueprint_info)
-
-                return {
-                    "success": True,
-                    "domain": domain,
-                    "count": len(blueprints),
-                    "blueprints": blueprints,
-                }
+                return _format_blueprint_list(blueprints_data, domain)
 
             # Path provided - get specific blueprint details
             if path not in blueprints_data:
