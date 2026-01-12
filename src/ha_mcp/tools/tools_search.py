@@ -449,7 +449,8 @@ def register_search_tools(mcp, client, **kwargs):
         )
         result = cast(dict[str, Any], result)
 
-        # Include system info in the overview
+        # Include comprehensive system info in the overview
+        # This replaces the deprecated ha_get_system_info and ha_get_system_version tools
         try:
             config = await client.get_config()
             result["system_info"] = {
@@ -464,6 +465,15 @@ def register_search_tools(mcp, client, **kwargs):
                 "latitude": config.get("latitude"),
                 "longitude": config.get("longitude"),
                 "elevation": config.get("elevation"),
+                "config_dir": config.get("config_dir"),
+                "allowlist_external_dirs": config.get("allowlist_external_dirs", []),
+                "allowlist_external_urls": config.get("allowlist_external_urls", []),
+                "components": config.get("components", []),
+                "components_loaded": len(config.get("components", [])),
+                "state": config.get("state"),
+                "safe_mode": config.get("safe_mode", False),
+                "internal_url": config.get("internal_url"),
+                "external_url": config.get("external_url"),
             }
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")

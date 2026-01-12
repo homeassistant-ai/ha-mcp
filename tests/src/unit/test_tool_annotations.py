@@ -138,6 +138,42 @@ class TestToolAnnotations:
         assert read_only_count >= 20, f"Only {read_only_count} read-only tools, expected at least 20"
         assert destructive_count >= 20, f"Only {destructive_count} destructive tools, expected at least 20"
 
+    def test_total_tool_count_limit(self):
+        """Ensure total tool count doesn't exceed reasonable limits.
+
+        This test counts all @mcp.tool decorators in the codebase. The actual
+        registered tool count may be lower due to feature flags.
+
+        Current state (as of PR #423):
+        - Decorated tools in code: 105
+        - Registered tools at runtime: 100 (5 behind feature flags)
+        - Antigravity limit: 100 tools maximum
+
+        The limit is set to 105 to match the current codebase. If you need to add
+        more tools, you MUST first consolidate existing ones or move tools behind
+        feature flags to keep the runtime count at or below 100.
+        """
+        tools = get_all_tools()
+        tool_count = len(tools)
+
+        # Limit matches current decorated tool count
+        # Runtime count is lower (100) due to feature flags
+        MAX_TOOLS = 105
+
+        assert tool_count <= MAX_TOOLS, (
+            f"Tool count ({tool_count}) exceeds limit ({MAX_TOOLS})!\n"
+            f"Tools found: {tool_count}\n"
+            f"Limit: {MAX_TOOLS}\n"
+            f"Over by: {tool_count - MAX_TOOLS}\n\n"
+            f"Note: Antigravity has a 100 tool limit at runtime.\n"
+            f"Current registered tools: ~100 (some behind feature flags)\n\n"
+            f"To fix this, you MUST:\n"
+            f"1. Consolidate duplicate or similar tools (e.g., get/list patterns)\n"
+            f"2. Move specialized tools behind feature flags\n"
+            f"3. Remove rarely-used tools\n"
+            f"\nSee issue #420 for context."
+        )
+
     def test_read_only_tools_are_actually_read_only(self):
         """Tools with readOnlyHint should have read-only names (get, list, search, etc)."""
         tools = get_all_tools()

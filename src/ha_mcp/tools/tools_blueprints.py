@@ -18,105 +18,53 @@ logger = logging.getLogger(__name__)
 def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant blueprint management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "List Blueprints"})
-    @log_tool_usage
-    async def ha_list_blueprints(
-        domain: Annotated[
-            str,
-            Field(
-                description="Blueprint domain: 'automation' or 'script'",
-                default="automation",
-            ),
-        ] = "automation",
-    ) -> dict[str, Any]:
+    def _format_blueprint_list(blueprints_data: dict[str, Any], domain: str) -> dict[str, Any]:
+        """Format blueprint data into list response structure.
+
+        Args:
+            blueprints_data: Raw blueprint data from WebSocket API
+            domain: Blueprint domain (automation or script)
+
+        Returns:
+            Formatted response with blueprints list, count, and domain
         """
-        List installed blueprints for a specific domain.
-
-        Returns all blueprints available in Home Assistant for the specified domain,
-        including their paths and metadata.
-
-        EXAMPLES:
-        - List automation blueprints: ha_list_blueprints("automation")
-        - List script blueprints: ha_list_blueprints("script")
-
-        RETURNS:
-        - List of blueprints with path, name, and domain information
-        - Each blueprint includes its relative path for use with ha_get_blueprint
-        """
-        try:
-            # Validate domain
-            valid_domains = ["automation", "script"]
-            if domain not in valid_domains:
-                return {
-                    "success": False,
-                    "error": f"Invalid domain '{domain}'. Must be one of: {', '.join(valid_domains)}",
-                    "valid_domains": valid_domains,
-                }
-
-            # Send WebSocket command to list blueprints
-            response = await client.send_websocket_message(
-                {"type": "blueprint/list", "domain": domain}
-            )
-
-            if not response.get("success"):
-                return {
-                    "success": False,
-                    "error": response.get("error", "Failed to list blueprints"),
-                    "domain": domain,
-                }
-
-            # Process the blueprint list
-            blueprints_data = response.get("result", {})
-
-            # Convert to a more usable format
-            blueprints = []
-            for path, metadata in blueprints_data.items():
-                blueprint_info = {
-                    "path": path,
-                    "domain": domain,
-                    "name": metadata.get("name", path.split("/")[-1].replace(".yaml", "")),
-                }
-
-                # Add optional metadata if available
-                if "metadata" in metadata:
-                    meta = metadata["metadata"]
-                    blueprint_info.update({
-                        "description": meta.get("description"),
-                        "source_url": meta.get("source_url"),
-                        "author": meta.get("author"),
-                    })
-
-                blueprints.append(blueprint_info)
-
-            return {
-                "success": True,
+        blueprints = []
+        for bp_path, metadata in blueprints_data.items():
+            blueprint_info = {
+                "path": bp_path,
                 "domain": domain,
-                "count": len(blueprints),
-                "blueprints": blueprints,
+                "name": metadata.get("name", bp_path.split("/")[-1].replace(".yaml", "")),
             }
 
-        except Exception as e:
-            logger.error(f"Error listing blueprints: {e}")
-            return {
-                "success": False,
-                "domain": domain,
-                "error": str(e),
-                "suggestions": [
-                    "Verify Home Assistant connection",
-                    "Check if blueprint integration is enabled",
-                    f"Use domain 'automation' or 'script' (got '{domain}')",
-                ],
-            }
+            # Add optional metadata if available
+            if "metadata" in metadata:
+                meta = metadata["metadata"]
+                blueprint_info.update({
+                    "description": meta.get("description"),
+                    "source_url": meta.get("source_url"),
+                    "author": meta.get("author"),
+                })
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "Get Blueprint Details"})
+            blueprints.append(blueprint_info)
+
+        return {
+            "success": True,
+            "domain": domain,
+            "count": len(blueprints),
+            "blueprints": blueprints,
+        }
+
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "Get Blueprint"})
     @log_tool_usage
     async def ha_get_blueprint(
         path: Annotated[
-            str,
+            str | None,
             Field(
-                description="Blueprint path (e.g., 'homeassistant/motion_light.yaml' or 'custom/my_blueprint.yaml')"
+                description="Blueprint path to get details for (e.g., 'homeassistant/motion_light.yaml'). "
+                "If omitted, lists all blueprints in the domain.",
+                default=None,
             ),
-        ],
+        ] = None,
         domain: Annotated[
             str,
             Field(
@@ -126,17 +74,22 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = "automation",
     ) -> dict[str, Any]:
         """
-        Get detailed information about a specific blueprint.
+        Get blueprint information - list all blueprints or get details for a specific one.
 
-        Retrieves the full blueprint configuration including inputs, triggers,
-        conditions, and actions. Use this to understand what a blueprint does
-        and what inputs it requires.
+        Without a path: Lists all installed blueprints for the specified domain.
+        With a path: Retrieves full blueprint configuration including inputs, triggers,
+        conditions, and actions.
 
         EXAMPLES:
-        - Get automation blueprint: ha_get_blueprint("homeassistant/motion_light.yaml", "automation")
-        - Get script blueprint: ha_get_blueprint("custom/backup_script.yaml", "script")
+        - List all automation blueprints: ha_get_blueprint(domain="automation")
+        - List script blueprints: ha_get_blueprint(domain="script")
+        - Get specific blueprint: ha_get_blueprint(path="homeassistant/motion_light.yaml", domain="automation")
 
-        RETURNS:
+        RETURNS (when listing):
+        - List of blueprints with path, name, and domain information
+        - Count of blueprints found
+
+        RETURNS (when getting specific blueprint):
         - Blueprint metadata (name, description, author, source_url)
         - Input definitions with selectors and defaults
         - Blueprint configuration (triggers, conditions, actions for automations; sequence for scripts)
@@ -151,7 +104,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "valid_domains": valid_domains,
                 }
 
-            # First, list blueprints to check if path exists
+            # Get list of blueprints
             list_response = await client.send_websocket_message(
                 {"type": "blueprint/list", "domain": domain}
             )
@@ -159,14 +112,17 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not list_response.get("success"):
                 return {
                     "success": False,
-                    "error": "Failed to query blueprints",
-                    "path": path,
+                    "error": list_response.get("error", "Failed to query blueprints"),
                     "domain": domain,
                 }
 
             blueprints_data = list_response.get("result", {})
 
-            # Check if blueprint exists
+            # If no path provided, return list of all blueprints
+            if path is None:
+                return _format_blueprint_list(blueprints_data, domain)
+
+            # Path provided - get specific blueprint details
             if path not in blueprints_data:
                 available_paths = list(blueprints_data.keys())[:10]
                 return {
@@ -176,7 +132,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "domain": domain,
                     "available_blueprints": available_paths,
                     "suggestions": [
-                        "Use ha_list_blueprints() to see available blueprints",
+                        "Use ha_get_blueprint() without path to see all available blueprints",
                         "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
                     ],
                 }
@@ -223,7 +179,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": str(e),
                 "suggestions": [
                     "Verify the blueprint path is correct",
-                    "Use ha_list_blueprints() to find available blueprints",
+                    "Use ha_get_blueprint() without path to see available blueprints",
                     "Check Home Assistant connection",
                 ],
             }
@@ -284,7 +240,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ]
 
                 if "already exists" in str(error_msg).lower():
-                    suggestions.insert(0, "Blueprint already exists - use ha_list_blueprints() to see installed blueprints")
+                    suggestions.insert(0, "Blueprint already exists - use ha_get_blueprint() to see installed blueprints")
 
                 return {
                     "success": False,
@@ -305,7 +261,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "name": result_data.get("blueprint", {}).get("name"),
                     "description": result_data.get("blueprint", {}).get("description"),
                 },
-                "message": "Blueprint imported successfully. Use ha_list_blueprints() to see all installed blueprints.",
+                "message": "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints.",
             }
 
         except Exception as e:

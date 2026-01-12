@@ -8,7 +8,7 @@ Tests for system management MCP tools:
 - ha_check_config: Configuration validation
 - ha_restart: Home Assistant restart (with safety measures)
 - ha_reload_core: Reload specific configuration components
-- ha_get_system_info: Get system information
+- ha_get_overview: Get system information and entity overview
 - ha_get_system_health: Get system health data
 
 Note: ha_restart is tested carefully to avoid disrupting the test environment.
@@ -269,43 +269,47 @@ class TestSystemTools:
         logger.info("Reload all test completed successfully")
 
     @pytest.mark.asyncio
-    async def test_get_system_info(self, mcp_client):
+    async def test_get_system_overview(self, mcp_client):
         """
-        Test: Get Home Assistant system information.
+        Test: Get Home Assistant system overview (replaces ha_get_system_info).
 
         This test verifies that we can retrieve comprehensive
-        system information from Home Assistant.
+        system information from Home Assistant via ha_get_overview.
         """
-        logger.info("Testing get system info...")
+        logger.info("Testing get system overview...")
 
-        result = await mcp_client.call_tool("ha_get_system_info", {})
+        result = await mcp_client.call_tool("ha_get_overview", {})
         data = parse_mcp_result(result)
 
-        logger.info(f"System info result keys: {list(data.keys())}")
+        logger.info(f"System overview result keys: {list(data.keys())}")
 
         # Verify successful response
-        assert data.get("success") is True, f"Get system info failed: {data.get('error')}"
+        assert data.get("success") is True, f"Get overview failed: {data.get('error')}"
 
-        # Verify expected fields
+        # Verify system_info field exists
+        assert "system_info" in data, "Missing 'system_info' field"
+        system_info = data["system_info"]
+
+        # Verify expected fields in system_info
         expected_fields = [
             "version",
             "location_name",
             "time_zone",
             "components",
-            "component_count",
+            "components_loaded",
         ]
 
         for field in expected_fields:
-            assert field in data, f"Missing expected field: {field}"
+            assert field in system_info, f"Missing expected field in system_info: {field}"
 
         # Log key information
-        logger.info(f"Home Assistant version: {data.get('version')}")
-        logger.info(f"Location: {data.get('location_name')}")
-        logger.info(f"Timezone: {data.get('time_zone')}")
-        logger.info(f"Components loaded: {data.get('component_count')}")
+        logger.info(f"Home Assistant version: {system_info.get('version')}")
+        logger.info(f"Location: {system_info.get('location_name')}")
+        logger.info(f"Timezone: {system_info.get('time_zone')}")
+        logger.info(f"Components loaded: {system_info.get('components_loaded')}")
 
         # Verify components list is non-empty
-        components = data.get("components", [])
+        components = system_info.get("components", [])
         assert len(components) > 0, "Should have at least some components loaded"
 
         # Verify some essential components are present
@@ -314,7 +318,7 @@ class TestSystemTools:
             if component not in components:
                 logger.warning(f"Expected component '{component}' not found")
 
-        logger.info("Get system info test completed successfully")
+        logger.info("Get system overview test completed successfully")
 
     @pytest.mark.asyncio
     async def test_get_system_health(self, mcp_client):
@@ -416,8 +420,8 @@ class TestSystemToolsIntegration:
         """
         logger.info("Testing comprehensive system overview...")
 
-        # Get system info
-        info_result = await mcp_client.call_tool("ha_get_system_info", {})
+        # Get system overview
+        info_result = await mcp_client.call_tool("ha_get_overview", {})
         info_data = parse_mcp_result(info_result)
 
         # Get system health (may not be available in test environment)
@@ -429,19 +433,22 @@ class TestSystemToolsIntegration:
         config_data = parse_mcp_result(config_result)
 
         # Verify essential tools returned successfully
-        assert info_data.get("success") is True, "System info should succeed"
+        assert info_data.get("success") is True, "System overview should succeed"
         assert config_data.get("success") is True, "Config check should succeed"
         # Health data might not be available in test containers - don't require it
         health_available = health_data.get("success") is True
+
+        # Extract system_info from overview
+        system_info = info_data.get("system_info", {})
 
         # Log comprehensive overview
         logger.info("=" * 60)
         logger.info("SYSTEM OVERVIEW")
         logger.info("=" * 60)
-        logger.info(f"Version: {info_data.get('version')}")
-        logger.info(f"Location: {info_data.get('location_name')}")
-        logger.info(f"Timezone: {info_data.get('time_zone')}")
-        logger.info(f"Components: {info_data.get('component_count')}")
+        logger.info(f"Version: {system_info.get('version')}")
+        logger.info(f"Location: {system_info.get('location_name')}")
+        logger.info(f"Timezone: {system_info.get('time_zone')}")
+        logger.info(f"Components: {system_info.get('components_loaded')}")
         logger.info(f"Config Status: {config_data.get('result')}")
         if health_available:
             logger.info(f"Health Components: {health_data.get('component_count')}")
