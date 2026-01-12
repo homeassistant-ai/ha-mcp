@@ -134,7 +134,7 @@ def main() -> int:
                 except Exception as e:
                     log_error(f"DEBUG: GET {target} failed: {e}")
 
-                # Test 2: DELETE http://supervisor/core/api/config/automation/config/test_delete_debug
+                # Test 2: DELETE /api/config/automation/config/test_delete_debug
                 # This mimics the failing call
                 target = f"{url}/api/config/automation/config/test_delete_debug"
                 log_info(f"DEBUG: Attempting DELETE {target}")
@@ -145,18 +145,6 @@ def main() -> int:
                     )
                 except Exception as e:
                     log_error(f"DEBUG: DELETE failed: {e}")
-
-                # Test 3: Direct connection to Core (bypassing proxy)
-                # Since host_network is true, localhost:8123 should work
-                target = "http://localhost:8123/api/config/automation/config/test_delete_debug"
-                log_info(f"DEBUG: Attempting direct DELETE {target}")
-                try:
-                    resp = await client.delete(target)
-                    log_info(
-                        f"DEBUG: Direct DELETE result -> {resp.status_code} {resp.text[:200]}"
-                    )
-                except Exception as e:
-                    log_error(f"DEBUG: Direct DELETE failed: {e}")
 
         asyncio.run(debug_supervisor())
     except Exception as e:
