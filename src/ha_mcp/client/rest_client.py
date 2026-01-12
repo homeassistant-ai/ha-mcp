@@ -121,13 +121,8 @@ class HomeAssistantClient:
         # Ensure endpoint doesn't start with a slash to properly join with base_url
         endpoint = endpoint.lstrip("/")
 
-        logger.info(f"API Request: {method} {endpoint} (Base: {self.httpx_client.base_url})")
-
         try:
             response = await self.httpx_client.request(method, endpoint, **kwargs)
-            logger.info(f"API Response: {response.status_code} {response.url}")
-
-            # Handle authentication errors
 
             # Handle authentication errors
             if response.status_code == 401:
