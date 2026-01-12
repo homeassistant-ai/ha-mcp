@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'",
@@ -402,12 +402,13 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "6.1.0"
+version = "6.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "jq", marker = "sys_platform != 'win32'" },
+    { name = "numpy", marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "textdistance" },
@@ -438,6 +439,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.11.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jq", marker = "sys_platform != 'win32'", specifier = ">=1.8.0" },
+    { name = "numpy", marker = "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'", specifier = ">=2.3.0,<2.4.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "textdistance", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'arm64'", specifier = ">=4.6.0" },
@@ -1525,7 +1527,7 @@ wheels = [
 
 [[package]]
 name = "testcontainers"
-version = "4.13.3"
+version = "4.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docker" },
@@ -1534,9 +1536,9 @@ dependencies = [
     { name = "urllib3" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/b3/c272537f3ea2f312555efeb86398cc382cd07b740d5f3c730918c36e64e1/testcontainers-4.13.3.tar.gz", hash = "sha256:9d82a7052c9a53c58b69e1dc31da8e7a715e8b3ec1c4df5027561b47e2efe646", size = 79064, upload-time = "2025-11-14T05:08:47.584Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/5a/d24f5c7ef787fc152b1e4e4cfb84ef9364dbf165b3c7f7817e2f2583f749/testcontainers-4.14.0.tar.gz", hash = "sha256:3b2d4fa487af23024f00fcaa2d1cf4a5c6ad0c22e638a49799813cb49b3176c7", size = 79885, upload-time = "2026-01-07T23:35:22.825Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/27/c2f24b19dafa197c514abe70eda69bc031c5152c6b1f1e5b20099e2ceedd/testcontainers-4.13.3-py3-none-any.whl", hash = "sha256:063278c4805ffa6dd85e56648a9da3036939e6c0ac1001e851c9276b19b05970", size = 124784, upload-time = "2025-11-14T05:08:46.053Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/c4/53efc88d890d7dd38337424a83bbff32007d9d3390a79a4b53bfddaa64e8/testcontainers-4.14.0-py3-none-any.whl", hash = "sha256:64e79b6b1e6d2b9b9e125539d35056caab4be739f7b7158c816d717f3596fa59", size = 125385, upload-time = "2026-01-07T23:35:21.343Z" },
 ]
 
 [[package]]
