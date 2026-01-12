@@ -2,8 +2,7 @@
 Blueprint Management E2E Tests
 
 Tests the blueprint management tools:
-- ha_list_blueprints - List installed blueprints
-- ha_get_blueprint - Get blueprint details
+- ha_get_blueprint - List blueprints (no path) or get details (with path)
 - ha_import_blueprint - Import blueprint from URL
 
 Note: Tests are designed to work with both Docker test environment (localhost:8124)
@@ -30,12 +29,12 @@ class TestBlueprintManagement:
 
         Validates that we can list automation blueprints from Home Assistant.
         """
-        logger.info("Testing ha_list_blueprints for automation domain...")
+        logger.info("Testing ha_get_blueprint (list mode) for automation domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # List automation blueprints
+            # List automation blueprints (path=None lists all)
             result = await mcp.call_tool_success(
-                "ha_list_blueprints",
+                "ha_get_blueprint",
                 {"domain": "automation"},
             )
 
@@ -56,7 +55,7 @@ class TestBlueprintManagement:
                 assert "name" in first_blueprint, "Blueprint should have 'name'"
                 logger.info(f"First blueprint: {first_blueprint.get('name')} ({first_blueprint.get('path')})")
 
-            logger.info("ha_list_blueprints for automation domain succeeded")
+            logger.info("ha_get_blueprint (list mode) for automation domain succeeded")
 
     async def test_list_script_blueprints(self, mcp_client):
         """
@@ -64,12 +63,12 @@ class TestBlueprintManagement:
 
         Validates that we can list script blueprints from Home Assistant.
         """
-        logger.info("Testing ha_list_blueprints for script domain...")
+        logger.info("Testing ha_get_blueprint (list mode) for script domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # List script blueprints
+            # List script blueprints (path=None lists all)
             result = await mcp.call_tool_success(
-                "ha_list_blueprints",
+                "ha_get_blueprint",
                 {"domain": "script"},
             )
 
@@ -81,7 +80,7 @@ class TestBlueprintManagement:
             blueprints = result.get("blueprints", [])
             logger.info(f"Found {len(blueprints)} script blueprints")
 
-            logger.info("ha_list_blueprints for script domain succeeded")
+            logger.info("ha_get_blueprint (list mode) for script domain succeeded")
 
     async def test_list_blueprints_invalid_domain(self, mcp_client):
         """
@@ -89,19 +88,19 @@ class TestBlueprintManagement:
 
         Validates proper error handling for invalid domain parameter.
         """
-        logger.info("Testing ha_list_blueprints with invalid domain...")
+        logger.info("Testing ha_get_blueprint with invalid domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try to list blueprints with invalid domain
             result = await mcp.call_tool_failure(
-                "ha_list_blueprints",
+                "ha_get_blueprint",
                 {"domain": "invalid_domain"},
                 expected_error="Invalid domain",
             )
 
             # Verify error response includes valid domains
             assert "valid_domains" in result, "Error response should include valid domains"
-            logger.info("ha_list_blueprints properly rejects invalid domain")
+            logger.info("ha_get_blueprint properly rejects invalid domain")
 
     async def test_get_blueprint_details(self, mcp_client):
         """
@@ -115,7 +114,7 @@ class TestBlueprintManagement:
         async with MCPAssertions(mcp_client) as mcp:
             # First, list available blueprints
             list_result = await mcp.call_tool_success(
-                "ha_list_blueprints",
+                "ha_get_blueprint",
                 {"domain": "automation"},
             )
 
@@ -250,7 +249,7 @@ async def test_blueprint_discovery_workflow(mcp_client):
         # Step 1: List automation blueprints
         logger.info("Step 1: List automation blueprints...")
         list_result = await mcp.call_tool_success(
-            "ha_list_blueprints",
+            "ha_get_blueprint",
             {"domain": "automation"},
         )
 
@@ -260,7 +259,7 @@ async def test_blueprint_discovery_workflow(mcp_client):
         # Step 2: List script blueprints
         logger.info("Step 2: List script blueprints...")
         script_result = await mcp.call_tool_success(
-            "ha_list_blueprints",
+            "ha_get_blueprint",
             {"domain": "script"},
         )
 
@@ -305,7 +304,7 @@ async def test_blueprint_search_integration(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # List blueprints
         result = await mcp.call_tool_success(
-            "ha_list_blueprints",
+            "ha_get_blueprint",
             {"domain": "automation"},
         )
 
@@ -333,7 +332,7 @@ async def test_blueprint_automation_lifecycle(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # Step 1: List available blueprints
         list_result = await mcp.call_tool_success(
-            "ha_list_blueprints",
+            "ha_get_blueprint",
             {"domain": "automation"},
         )
 
@@ -424,7 +423,7 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # List available blueprints
         list_result = await mcp.call_tool_success(
-            "ha_list_blueprints",
+            "ha_get_blueprint",
             {"domain": "automation"},
         )
 

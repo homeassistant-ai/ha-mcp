@@ -304,50 +304,6 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Info"})
-    @log_tool_usage
-    async def ha_get_system_info() -> dict[str, Any]:
-        """
-        Get Home Assistant system information.
-
-        Returns version, location settings, timezone, loaded components, and configuration paths.
-        """
-        try:
-            config = await client.get_config()
-
-            # Extract relevant system information
-            system_info = {
-                "success": True,
-                "version": config.get("version"),
-                "location_name": config.get("location_name"),
-                "time_zone": config.get("time_zone"),
-                "unit_system": config.get("unit_system", {}),
-                "latitude": config.get("latitude"),
-                "longitude": config.get("longitude"),
-                "elevation": config.get("elevation"),
-                "currency": config.get("currency"),
-                "country": config.get("country"),
-                "language": config.get("language"),
-                "config_dir": config.get("config_dir"),
-                "allowlist_external_dirs": config.get("allowlist_external_dirs", []),
-                "allowlist_external_urls": config.get("allowlist_external_urls", []),
-                "components": config.get("components", []),
-                "component_count": len(config.get("components", [])),
-                "state": config.get("state"),
-                "safe_mode": config.get("safe_mode", False),
-                "internal_url": config.get("internal_url"),
-                "external_url": config.get("external_url"),
-            }
-
-            return system_info
-
-        except Exception as e:
-            logger.error(f"Failed to get system info: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get system info: {str(e)}",
-            }
-
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Health"})
     @log_tool_usage
     async def ha_get_system_health() -> dict[str, Any]:
@@ -396,7 +352,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Failed to get system health: {str(e)}",
                 "suggestions": [
                     "System health may not be available in all HA installations",
-                    "Try ha_get_system_info() for basic system information",
+                    "Try ha_get_overview() for basic system information",
                 ],
             }
         finally:
