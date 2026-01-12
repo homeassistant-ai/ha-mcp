@@ -76,9 +76,8 @@ class HomeAssistantClient:
             self.timeout = timeout if timeout is not None else 30  # Default timeout
 
         # Create HTTP client with authentication headers
-        # Add trailing slash to base_url to ensure relative paths are joined correctly
         self.httpx_client = httpx.AsyncClient(
-            base_url=f"{self.base_url}/api/",
+            base_url=f"{self.base_url}/api",
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
@@ -118,9 +117,6 @@ class HomeAssistantClient:
             HomeAssistantAuthError: Authentication failed
             HomeAssistantAPIError: API error
         """
-        # Ensure endpoint doesn't start with a slash to properly join with base_url
-        endpoint = endpoint.lstrip("/")
-
         try:
             response = await self.httpx_client.request(method, endpoint, **kwargs)
 
