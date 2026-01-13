@@ -17,7 +17,7 @@
 {#- Strip trailing PR reference like "(#123)" since we add our own link -#}
 {%- set raw_summary = commit.descriptions[0] -%}
 {%- if commit.linked_merge_request and raw_summary.endswith('(' ~ commit.linked_merge_request ~ ')') -%}
-{%- set raw_summary = raw_summary[:-( commit.linked_merge_request | length + 3)] | trim -%}
+{%- set raw_summary = raw_summary[:-( commit.linked_merge_request | length + 2)] | trim -%}
 {%- endif -%}
 {%- set summary = cap_first(raw_summary) -%}
 {%- if commit.scope and commit.scope != 'internal' -%}
@@ -36,7 +36,7 @@
 {#- Check if commit is internal -#}
 {%- macro is_internal(commit, type_) -%}
 {%- set internal_scopes = ['internal', 'debug', 'addon-dev', 'ci', 'deps', 'deps-dev'] -%}
-{%- set internal_types = ['chore', 'ci', 'test', 'refactor', 'build', 'style', 'continuous integration'] -%}
+{%- set internal_types = ['chore', 'chores', 'ci', 'test', 'testing', 'build', 'style', 'continuous integration'] -%}
 {%- if commit.scope and commit.scope | lower in internal_scopes -%}
 true
 {%- elif commit.scope and 'internal' in commit.scope | lower -%}
@@ -55,7 +55,7 @@ false
 Added
 {%- elif t in ['fix', 'bug fixes'] -%}
 Fixed
-{%- elif t in ['perf', 'performance'] -%}
+{%- elif t in ['perf', 'performance', 'refactor'] -%}
 Changed
 {%- elif t in ['docs', 'documentation'] -%}
 Changed
@@ -93,9 +93,22 @@ Removed
 {%- endfor -%}
 {%- endfor -%}
 
+{#- Standard Keep a Changelog categories -#}
+{%- set standard_categories = ['Breaking Changes', 'Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'] -%}
+
 {#- Render user-facing changes in Keep a Changelog order -#}
-{%- for category in ['Breaking Changes', 'Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'] -%}
+{%- for category in standard_categories -%}
 {%- if category in user_facing and user_facing[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in user_facing[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+{#- Render any remaining categories not in standard list -#}
+{%- for category in user_facing.keys() | sort -%}
+{%- if category not in standard_categories and user_facing[category] | length > 0 %}
 
 ### {{ category }}
 {% for commit in user_facing[category] %}
@@ -119,8 +132,18 @@ Removed
 ---
 <details>
 <summary>Internal Changes</summary>
-{% for category in ['Breaking Changes', 'Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'] -%}
+{% for category in standard_categories -%}
 {%- if category in internal_by_cat and internal_by_cat[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in internal_by_cat[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+{#- Render any remaining internal categories not in standard list -#}
+{%- for category in internal_by_cat.keys() | sort -%}
+{%- if category not in standard_categories and internal_by_cat[category] | length > 0 %}
 
 ### {{ category }}
 {% for commit in internal_by_cat[category] %}

@@ -200,15 +200,15 @@ remove_dist = false
 commit_parser = "angular"
 commit_parser_options = { major_tags = ["BREAKING", "!"], minor_tags = ["feat"], patch_tags = ["fix", "perf", "refactor"] }
 
-# Exclude commits from changelog entirely
-exclude_commit_patterns = [
-    "^.*\\(site\\).*$",           # Commits with (site) scope
-    "^chore.*Sync changelog.*$",  # Changelog sync commits
-]
-
 # Changelog configuration
 [tool.semantic_release.changelog]
 template_dir = "templates"
+exclude_commit_patterns = [
+    "^.*\\(site\\).*$",           # Commits with (site) scope
+    '''chore\(addon\): [Ss]ync changelog.*''',  # Changelog sync commits
+]
+
+[tool.semantic_release.changelog.default_templates]
 changelog_file = "CHANGELOG.md"
 
 # Version scheme
