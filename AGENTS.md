@@ -531,12 +531,20 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
 
-| Prefix | Bump |
-|--------|------|
-| `fix:`, `perf:`, `refactor:` | Patch |
-| `feat:` | Minor |
-| `feat!:` or `BREAKING CHANGE:` | Major |
-| `chore:`, `docs:`, `test:` | No release |
+| Prefix | Bump | Changelog |
+|--------|------|-----------|
+| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
+| `feat:` | Minor | User-facing |
+| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
+| `chore:`, `ci:`, `test:` | No release | Internal |
+| `docs:` | No release | User-facing |
+| `*:(internal)` | Same as type | Internal |
+
+**Use `(internal)` scope** for changes that aren't user-facing:
+```bash
+feat(internal): Log package version on startup  # Internal, not in user changelog
+feat: Add dark mode                             # User-facing
+```
 
 | Channel | When Updated |
 |---------|--------------|
