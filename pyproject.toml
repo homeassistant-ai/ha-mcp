@@ -31,6 +31,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "truststore>=0.10.0",
     "websockets>=12.0",
+    "cryptography>=45.0.7",
 ]
 
 [project.urls]
@@ -44,6 +45,7 @@ ha-mcp-smoke-test = "ha_mcp.smoke_test:main"
 hamcp-test-env = "tests.test_env_manager:main"
 ha-mcp-web = "ha_mcp.__main__:main_web"
 ha-mcp-sse = "ha_mcp.__main__:main_sse"
+ha-mcp-oauth = "ha_mcp.__main__:main_oauth"
 
 [tool.setuptools]
 package-dir = {"" = "src", "tests" = "tests"}

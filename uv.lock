@@ -405,6 +405,7 @@ name = "ha-mcp"
 version = "6.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "jq", marker = "sys_platform != 'win32'" },
@@ -433,6 +434,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=45.0.7" },
     { name = "fastmcp", specifier = ">=2.11.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jq", marker = "sys_platform != 'win32'", specifier = ">=1.8.0" },
