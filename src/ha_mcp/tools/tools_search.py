@@ -51,11 +51,14 @@ async def _exact_match_search(
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
+    total_matches = len(results)
+    limited_results = results[:limit]
     return {
         "success": True,
         "query": query,
-        "total_matches": len(results),
-        "results": results[:limit],
+        "total_matches": total_matches,
+        "results": limited_results,
+        "is_truncated": total_matches > len(limited_results),
         "search_type": "exact_match",
     }
 
@@ -90,12 +93,15 @@ async def _partial_results_search(
             "match_type": "partial_listing",
         })
 
+    total_matches = len(results)
+    limited_results = results[:limit]
     return {
         "success": True,
         "partial": True,
         "query": query,
-        "total_matches": len(results),
-        "results": results[:limit],
+        "total_matches": total_matches,
+        "results": limited_results,
+        "is_truncated": total_matches > len(limited_results),
         "search_type": "partial_listing",
     }
 
@@ -176,7 +182,7 @@ def register_search_tools(mcp, client, **kwargs):
                             }
                         )
 
-                    matches = fuzzy_searcher.search_entities(
+                    matches, total_matches = fuzzy_searcher.search_entities(
                         entities_for_search, query, limit
                     )
 
@@ -208,8 +214,9 @@ def register_search_tools(mcp, client, **kwargs):
                             "success": True,
                             "query": query,
                             "area_filter": area_filter,
-                            "total_matches": len(results),
+                            "total_matches": total_matches,
                             "results": results,
+                            "is_truncated": total_matches > len(results),
                             "by_domain": by_domain,
                             "search_type": "area_filtered_query",
                         }
@@ -219,8 +226,9 @@ def register_search_tools(mcp, client, **kwargs):
                             "success": True,
                             "query": query,
                             "area_filter": area_filter,
-                            "total_matches": len(results),
+                            "total_matches": total_matches,
                             "results": results,
+                            "is_truncated": total_matches > len(results),
                             "search_type": "area_filtered_query",
                         }
                         return await add_timezone_metadata(client, search_data)
@@ -285,13 +293,15 @@ def register_search_tools(mcp, client, **kwargs):
                         "match_type": "domain_listing",
                     })
 
+                total_filtered = len(filtered_entities)
                 # Build response data (avoid duplication by conditionally adding by_domain)
                 domain_list_data = {
                     "success": True,
                     "query": query,
                     "domain_filter": domain_filter,
-                    "total_matches": len(filtered_entities),
+                    "total_matches": total_filtered,
                     "results": results,
+                    "is_truncated": total_filtered > len(results),
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
@@ -311,7 +321,7 @@ def register_search_tools(mcp, client, **kwargs):
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit)
+                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
                 search_type = "fuzzy_search"
             except Exception as fuzzy_error:
                 logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
@@ -341,14 +351,14 @@ def register_search_tools(mcp, client, **kwargs):
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
-            # Apply domain filter if provided (for fuzzy search results)
-            if domain_filter and "results" in result and search_type == "fuzzy_search":
-                filtered_results = [
-                    r for r in result["results"] if r.get("domain") == domain_filter
-                ]
-                result["results"] = filtered_results
-                result["total_matches"] = len(filtered_results)
+            # Add domain_filter to result if it was provided (for API consistency)
+            if domain_filter:
                 result["domain_filter"] = domain_filter
+
+            # Ensure is_truncated field exists in result
+            if "is_truncated" not in result:
+                # For backward compatibility, calculate if not present
+                result["is_truncated"] = result.get("total_matches", 0) > len(result.get("results", []))
 
             # Group by domain if requested
             if group_by_domain_bool and "results" in result:
@@ -439,7 +449,8 @@ def register_search_tools(mcp, client, **kwargs):
         )
         result = cast(dict[str, Any], result)
 
-        # Include system info in the overview
+        # Include comprehensive system info in the overview
+        # This replaces the deprecated ha_get_system_info and ha_get_system_version tools
         try:
             config = await client.get_config()
             result["system_info"] = {
@@ -454,6 +465,15 @@ def register_search_tools(mcp, client, **kwargs):
                 "latitude": config.get("latitude"),
                 "longitude": config.get("longitude"),
                 "elevation": config.get("elevation"),
+                "config_dir": config.get("config_dir"),
+                "allowlist_external_dirs": config.get("allowlist_external_dirs", []),
+                "allowlist_external_urls": config.get("allowlist_external_urls", []),
+                "components": config.get("components", []),
+                "components_loaded": len(config.get("components", [])),
+                "state": config.get("state"),
+                "safe_mode": config.get("safe_mode", False),
+                "internal_url": config.get("internal_url"),
+                "external_url": config.get("external_url"),
             }
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")

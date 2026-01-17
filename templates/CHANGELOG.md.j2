@@ -1,0 +1,165 @@
+{#
+    Changelog template with two-tier structure:
+    - User-facing changes (Added, Fixed, Changed, etc.) at top
+    - Internal changes in collapsible section
+#}
+{%- set insertion_flag = ctx.changelog_insertion_flag -%}
+{%- set releases = ctx.history.released.values() | list -%}
+
+{#- Capitalize first letter only -#}
+{%- macro cap_first(text) -%}
+{{ text[0] | upper }}{{ text[1:] }}
+{%- endmacro -%}
+
+{#- Macro to format commit with links -#}
+{%- macro format_commit(commit) -%}
+{%- if commit.error is undefined -%}
+{#- Strip trailing PR reference like "(#123)" since we add our own link -#}
+{%- set raw_summary = commit.descriptions[0] -%}
+{%- if commit.linked_merge_request and raw_summary.endswith('(' ~ commit.linked_merge_request ~ ')') -%}
+{%- set raw_summary = raw_summary[:-( commit.linked_merge_request | length + 2)] | trim -%}
+{%- endif -%}
+{%- set summary = cap_first(raw_summary) -%}
+{%- if commit.scope and commit.scope != 'internal' -%}
+**{{ commit.scope }}**: {{ summary }}
+{%- else -%}
+{{ summary }}
+{%- endif -%}
+{%- if commit.linked_merge_request %}
+  ([{{ commit.linked_merge_request }}](https://github.com/{{ ctx.repo_owner }}/{{ ctx.repo_name }}/pull/{{ commit.linked_merge_request | replace('#', '') }}))
+{%- else %}
+  ([`{{ commit.short_hash }}`](https://github.com/{{ ctx.repo_owner }}/{{ ctx.repo_name }}/commit/{{ commit.hexsha }}))
+{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- Check if commit is internal -#}
+{%- macro is_internal(commit, type_) -%}
+{%- set internal_scopes = ['internal', 'debug', 'addon-dev', 'ci', 'deps', 'deps-dev'] -%}
+{%- set internal_types = ['chore', 'chores', 'ci', 'test', 'testing', 'build', 'style', 'continuous integration'] -%}
+{%- if commit.scope and commit.scope | lower in internal_scopes -%}
+true
+{%- elif commit.scope and 'internal' in commit.scope | lower -%}
+true
+{%- elif type_ | lower in internal_types -%}
+true
+{%- else -%}
+false
+{%- endif -%}
+{%- endmacro -%}
+
+{#- Map type to Keep a Changelog category -#}
+{%- macro get_category(type_) -%}
+{%- set t = type_ | lower -%}
+{%- if t in ['feature', 'feat', 'features'] -%}
+Added
+{%- elif t in ['fix', 'bug fixes'] -%}
+Fixed
+{%- elif t in ['perf', 'performance', 'refactor'] -%}
+Changed
+{%- elif t in ['docs', 'documentation'] -%}
+Changed
+{%- elif t == 'breaking' -%}
+Breaking Changes
+{%- elif t == 'security' -%}
+Security
+{%- elif t in ['deprecate', 'deprecated'] -%}
+Deprecated
+{%- elif t in ['remove', 'removed'] -%}
+Removed
+{%- else -%}
+{{ type_ | title }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- Render a single release -#}
+{%- macro render_release(release) -%}
+## {{ release.version.as_semver_tag() }} ({{ release.tagged_date.strftime("%Y-%m-%d") }})
+
+{%- set user_facing = {} -%}
+{%- set internal = {} -%}
+
+{#- Separate user-facing and internal commits -#}
+{%- for type_, commits in release.elements.items() -%}
+{%- for commit in commits -%}
+{%- if commit.error is undefined -%}
+{%- if is_internal(commit, type_) | trim == 'true' -%}
+{%- set _ = internal.setdefault(type_, []).append(commit) -%}
+{%- else -%}
+{%- set cat = get_category(type_) | trim -%}
+{%- set _ = user_facing.setdefault(cat, []).append(commit) -%}
+{%- endif -%}
+{%- endif -%}
+{%- endfor -%}
+{%- endfor -%}
+
+{#- Standard Keep a Changelog categories -#}
+{%- set standard_categories = ['Breaking Changes', 'Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'] -%}
+
+{#- Render user-facing changes in Keep a Changelog order -#}
+{%- for category in standard_categories -%}
+{%- if category in user_facing and user_facing[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in user_facing[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+{#- Render any remaining categories not in standard list -#}
+{%- for category in user_facing.keys() | sort -%}
+{%- if category not in standard_categories and user_facing[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in user_facing[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+
+{#- Render internal changes in collapsible section -#}
+{%- set has_internal = internal.keys() | list | length > 0 -%}
+{%- if has_internal %}
+{#- Regroup internal by category for consistent naming -#}
+{%- set internal_by_cat = {} -%}
+{%- for type_, commits in internal.items() -%}
+{%- set cat = get_category(type_) | trim -%}
+{%- for commit in commits -%}
+{%- set _ = internal_by_cat.setdefault(cat, []).append(commit) -%}
+{%- endfor -%}
+{%- endfor %}
+
+---
+<details>
+<summary>Internal Changes</summary>
+{% for category in standard_categories -%}
+{%- if category in internal_by_cat and internal_by_cat[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in internal_by_cat[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+{#- Render any remaining internal categories not in standard list -#}
+{%- for category in internal_by_cat.keys() | sort -%}
+{%- if category not in standard_categories and internal_by_cat[category] | length > 0 %}
+
+### {{ category }}
+{% for commit in internal_by_cat[category] %}
+- {{ format_commit(commit) }}
+{%- endfor %}
+{%- endif -%}
+{%- endfor %}
+</details>
+{%- endif %}
+{%- endmacro -%}
+
+{#- Main template -#}
+# CHANGELOG
+
+{{ insertion_flag }}
+{% for release in releases %}
+
+{{ render_release(release) }}
+{% endfor %}

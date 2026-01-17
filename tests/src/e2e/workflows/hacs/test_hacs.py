@@ -45,14 +45,22 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
     """
     error = data.get("error", "")
     error_code = data.get("error_code", "")
+    error_str = str(error).lower()
+
+    # Handle nested error dict structure
+    if isinstance(error, dict):
+        error_code = error.get("code", error_code)
+        error_str = str(error.get("message", "")).lower()
 
     unavailable_indicators = [
         (error_code == "HACS_NOT_AVAILABLE", "HACS not available"),
         (error_code == "HACS_DISABLED", f"HACS disabled: {data.get('disabled_reason', 'unknown')}"),
-        ("not found" in str(error).lower(), "Command not found"),
-        ("unknown command" in str(error).lower(), "Unknown command"),
-        ("disabled" in str(error).lower(), "HACS disabled"),
-        ("401" in str(error), "GitHub authentication failed"),
+        ((error_code == "INTERNAL_ERROR" and "rate" in error_str) or ("rate" in error_str and "limit" in error_str), "GitHub rate limit"),
+        (error_code == "INTERNAL_ERROR" and "github" in error_str, "GitHub access issue"),
+        ("not found" in error_str, "Command not found"),
+        ("unknown command" in error_str, "Unknown command"),
+        ("disabled" in error_str, "HACS disabled"),
+        ("401" in error_str, "GitHub authentication failed"),
     ]
 
     for condition, reason in unavailable_indicators:

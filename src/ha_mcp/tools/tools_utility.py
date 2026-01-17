@@ -189,10 +189,25 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return await add_timezone_metadata(client, logbook_data)
 
         except Exception as e:
+            error_str = str(e)
+            suggestions = []
+
+            # Detect 500 errors (server crash from heavy query)
+            if "500" in error_str:
+                suggestions = [
+                    "The query returned too many results causing a server error (500).",
+                    "This often happens with very active entities or long time periods.",
+                    "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
+                    "Add a specific 'entity_id' filter to narrow down results",
+                    "If debugging an automation, filter by that automation's entity_id",
+                    "Use ha_bug_report tool to check Home Assistant logs for crash details",
+                ]
+
             error_data = {
                 "success": False,
-                "error": f"Failed to retrieve logbook: {str(e)}",
+                "error": f"Failed to retrieve logbook: {error_str}",
                 "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
+                "suggestions": suggestions if suggestions else None,
             }
             return await add_timezone_metadata(client, error_data)
 
@@ -389,17 +404,32 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
         except Exception as e:
+            error_str = str(e)
+            suggestions = [
+                "Check Home Assistant WebSocket connection",
+                "Verify template syntax is valid Jinja2",
+                "Try a simpler template to test basic functionality",
+                "Check if referenced entities exist",
+                "Ensure template doesn't exceed timeout limit",
+            ]
+
+            # Add specific suggestions for 403 errors
+            if "403" in error_str and "Forbidden" in error_str:
+                suggestions = [
+                    "The request was blocked (403 Forbidden) - this may be caused by:",
+                    "  • Reverse proxy security rules (Apache, Nginx, Traefik)",
+                    "  • Rate limiting from multiple simultaneous requests",
+                    "  • Complex template triggering security filters",
+                    "Try simplifying the template (remove newlines, reduce complexity)",
+                    "Break complex templates into multiple simpler calls",
+                    "Use ha_bug_report tool to check Home Assistant logs for details",
+                ] + suggestions
+
             return {
                 "success": False,
                 "template": template,
-                "error": f"Template evaluation failed: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant WebSocket connection",
-                    "Verify template syntax is valid Jinja2",
-                    "Try a simpler template to test basic functionality",
-                    "Check if referenced entities exist",
-                    "Ensure template doesn't exceed timeout limit",
-                ],
+                "error": f"Template evaluation failed: {error_str}",
+                "suggestions": suggestions,
             }
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Domain Docs"})

@@ -2,6 +2,241 @@
 
 <!-- version list -->
 
+## v6.2.0 (2026-01-12)
+
+### Bug Fixes
+
+- Pin numpy to 2.3.x for CPU compatibility (#410)
+  ([#410](https://github.com/homeassistant-ai/ha-mcp/pull/410),
+  [`b415a22`](https://github.com/homeassistant-ai/ha-mcp/commit/b415a2246a4ad903b867e3781067c9b5fa4586f1))
+
+- **addon-dev**: Set hassio_role to admin (retry) (#417)
+  ([#417](https://github.com/homeassistant-ai/ha-mcp/pull/417),
+  [`78a19d4`](https://github.com/homeassistant-ai/ha-mcp/commit/78a19d449297fafd36956d00d8fa9206170aa9d4))
+
+- **addon-dev**: Set hassio_role to homeassistant to allow DELETE operations (#416)
+  ([#416](https://github.com/homeassistant-ai/ha-mcp/pull/416),
+  [`3bca5d2`](https://github.com/homeassistant-ai/ha-mcp/commit/3bca5d20c01728384be26928172921ec8b27a99a))
+
+- **client**: Ensure REST API paths are correctly resolved relative to /api/ (#418)
+  ([#418](https://github.com/homeassistant-ai/ha-mcp/pull/418),
+  [`6f40808`](https://github.com/homeassistant-ai/ha-mcp/commit/6f4080829da4d53c09fa75c381e6d9fb71aa985a))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`d575f09`](https://github.com/homeassistant-ai/ha-mcp/commit/d575f0956c9b6483d048178786f35e93eac20a6a))
+
+### Features
+
+- Consolidate duplicate tools (108 → 105 tools) (#423)
+  ([#423](https://github.com/homeassistant-ai/ha-mcp/pull/423),
+  [`79f3c1e`](https://github.com/homeassistant-ai/ha-mcp/commit/79f3c1e569162bc3ecc87e885655840a37f0278e))
+
+- **addon**: Log package version on startup (#419)
+  ([#419](https://github.com/homeassistant-ai/ha-mcp/pull/419),
+  [`2929f40`](https://github.com/homeassistant-ai/ha-mcp/commit/2929f40475332408b881e741c61939048c748c1b))
+
+- **debug**: Add verbose logging and connection test for add-on (#421)
+  ([#421](https://github.com/homeassistant-ai/ha-mcp/pull/421),
+  [`881ca6f`](https://github.com/homeassistant-ai/ha-mcp/commit/881ca6f3c06b63f2965db16639b099f74238d494))
+
+- **debug**: Test direct connection to Core
+  ([`02d7f61`](https://github.com/homeassistant-ai/ha-mcp/commit/02d7f612a9f21a74d0e91a6849eda077505823ee))
+
+
+## v6.1.0 (2026-01-10)
+
+### Bug Fixes
+
+- Preserve nested conditions in or/and/not compound condition blocks (#409)
+  ([#409](https://github.com/homeassistant-ai/ha-mcp/pull/409),
+  [`c92a375`](https://github.com/homeassistant-ai/ha-mcp/commit/c92a3754dfad80465ddbabfdee05cd7385409ae2))
+
+- **ci**: Add debug output and re-check draft status before publishing (#400)
+  ([#400](https://github.com/homeassistant-ai/ha-mcp/pull/400),
+  [`fc66001`](https://github.com/homeassistant-ai/ha-mcp/commit/fc6600173c44daf9d3625af53729a94ab25db797))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`cee9cd9`](https://github.com/homeassistant-ai/ha-mcp/commit/cee9cd92a80e0044f31696439b163893120b0c67))
+
+### Documentation
+
+- Add @cj-elevate to contributors for PR #355
+  ([`bba1c89`](https://github.com/homeassistant-ai/ha-mcp/commit/bba1c89db94b93c54ebd121b185aa38e2cce8853))
+
+- Fix Cloudflared add-on Quick Tunnel documentation inaccuracy (#407)
+  ([#407](https://github.com/homeassistant-ai/ha-mcp/pull/407),
+  [`8e8f1af`](https://github.com/homeassistant-ai/ha-mcp/commit/8e8f1af4ea7d09a3efdeba9d0c94c32f8edeed68))
+
+- Move @cj-elevate to end of contributors list
+  ([`7b452ed`](https://github.com/homeassistant-ai/ha-mcp/commit/7b452ede8dff8fa59839ba065e1ba84c0af627fb))
+
+### Features
+
+- Harmonize config entry tools and add Flow API support (#403)
+  ([#403](https://github.com/homeassistant-ai/ha-mcp/pull/403),
+  [`071a8ef`](https://github.com/homeassistant-ai/ha-mcp/commit/071a8efc734b8771fa98e413173977a9d0915442))
+
+- Improve bug report clarity and add agent behavior feedback (#401)
+  ([#401](https://github.com/homeassistant-ai/ha-mcp/pull/401),
+  [`bbcba45`](https://github.com/homeassistant-ai/ha-mcp/commit/bbcba45a200fb8a1dfdc4983643d7c4fe0bcb41e))
+
+
+## v6.0.0 (2026-01-07)
+
+### Bug Fixes
+
+- Add truncation indicator to ha_search_entities (#393)
+  ([#393](https://github.com/homeassistant-ai/ha-mcp/pull/393),
+  [`cd7fde2`](https://github.com/homeassistant-ai/ha-mcp/commit/cd7fde2fa540e9385f7ad63eaea155b807b6bb6c))
+
+- Apply domain filter before fuzzy search, not after (#394)
+  ([#394](https://github.com/homeassistant-ai/ha-mcp/pull/394),
+  [`2cc7536`](https://github.com/homeassistant-ai/ha-mcp/commit/2cc7536eba26ac350444130a391df61478b8cce1))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`52ecfcb`](https://github.com/homeassistant-ai/ha-mcp/commit/52ecfcb548fabbd9f9185024ea7dec3de4c63c07))
+
+### Features
+
+- Add Codex CLI support to setup wizard (#387)
+  ([#387](https://github.com/homeassistant-ai/ha-mcp/pull/387),
+  [`fe1ca03`](https://github.com/homeassistant-ai/ha-mcp/commit/fe1ca034e884e6be5e753e6e8d7e07d9f973d541))
+
+- Redesign label management with add/remove/set operations (#397)
+  ([#397](https://github.com/homeassistant-ai/ha-mcp/pull/397),
+  [`0c46884`](https://github.com/homeassistant-ai/ha-mcp/commit/0c4688431168c5fdd69f2575cc76becf25105bda))
+
+### Testing
+
+- Add comprehensive E2E tests for label operations (#399)
+  ([#399](https://github.com/homeassistant-ai/ha-mcp/pull/399),
+  [`963b879`](https://github.com/homeassistant-ai/ha-mcp/commit/963b879e9ce5b5d42d92d2574b8582e2e2a2ffa0))
+
+
+## [Unreleased]
+
+### BREAKING CHANGES
+
+- **Label Management Redesign** ([#396](https://github.com/homeassistant-ai/ha-mcp/issues/396))
+  - **Removed:** `ha_assign_label` tool
+  - **Added:** `ha_manage_entity_labels` tool with three operations:
+    - `add`: Append labels to existing labels (new functionality)
+    - `remove`: Remove specific labels, preserve others (new functionality)
+    - `set`: Replace all labels (same as old `ha_assign_label` behavior)
+  - **New:** Bulk operations support - pass list of entity_ids
+  - **Fixed:** Entity registry corruption from repeated operations
+
+**Migration Guide:**
+```python
+# Old way (ha_assign_label)
+ha_assign_label(entity_id="light.bedroom", labels=["label1", "label2"])
+
+# New way (same behavior with "set")
+ha_manage_entity_labels(entity_id="light.bedroom", operation="set", labels=["label1", "label2"])
+
+# New functionality - add labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="add", labels=["new_label"])
+
+# New functionality - remove labels
+ha_manage_entity_labels(entity_id="light.bedroom", operation="remove", labels=["old_label"])
+
+# New functionality - bulk operations
+ha_manage_entity_labels(
+    entity_id=["light.bedroom", "light.kitchen", "switch.porch"],
+    operation="add",
+    labels=["outdoor"],
+    parallel=True
+)
+```
+
+## v5.1.0 (2026-01-06)
+
+### Bug Fixes
+
+- Preserve 'conditions' (plural) in choose/if blocks (#388)
+  ([#388](https://github.com/homeassistant-ai/ha-mcp/pull/388),
+  [`89c082b`](https://github.com/homeassistant-ai/ha-mcp/commit/89c082b6aba1d92ebd4a5678a6d9de1f75d70830))
+
+- Resolve WebSocket race conditions and improve error handling (#378)
+  ([#378](https://github.com/homeassistant-ai/ha-mcp/pull/378),
+  [`521e3b0`](https://github.com/homeassistant-ai/ha-mcp/commit/521e3b01ff0108ed78a5be3b614e17fc50321c11))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv (#390) ([#390](https://github.com/homeassistant-ai/ha-mcp/pull/390),
+  [`b218dc8`](https://github.com/homeassistant-ai/ha-mcp/commit/b218dc853f2930ea88faaff15f4882b26c4eae2c))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`b62d25b`](https://github.com/homeassistant-ai/ha-mcp/commit/b62d25b7efad05d3c75b530260773ddd0a90d45b))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.2.1 to 44.2.2 (#372)
+  ([#372](https://github.com/homeassistant-ai/ha-mcp/pull/372),
+  [`6d7b085`](https://github.com/homeassistant-ai/ha-mcp/commit/6d7b08501a18a5170bd63d706e86ec6064733052))
+
+- **deps**: Bump renovatebot/github-action from 44.2.2 to 44.2.3 (#389)
+  ([#389](https://github.com/homeassistant-ai/ha-mcp/pull/389),
+  [`84102d2`](https://github.com/homeassistant-ai/ha-mcp/commit/84102d2515ff64ff90899c8abff2b9334d675dc2))
+
+### Documentation
+
+- Add PR execution philosophy and final reporting guidelines
+  ([`b6a5473`](https://github.com/homeassistant-ai/ha-mcp/commit/b6a547365ad03cf1518af56a757b780b2bfc880c))
+
+- Add sponsor badge, community section, and star history
+  ([`2fe299b`](https://github.com/homeassistant-ai/ha-mcp/commit/2fe299bb8815a08fd488489ab151454005b3c7d0))
+
+- Add workflow for implementing improvements in separate PRs
+  ([`dd6aafc`](https://github.com/homeassistant-ai/ha-mcp/commit/dd6aafc62055c9cd92fe71fa68929b2f6c00fbcc))
+
+- Change sponsor badge to blueviolet
+  ([`1a1102f`](https://github.com/homeassistant-ai/ha-mcp/commit/1a1102f8694d4127eeb7af6e9cbaaea419d36646))
+
+- Change sponsor emoji from heart to coffee
+  ([`8f026df`](https://github.com/homeassistant-ai/ha-mcp/commit/8f026dfedf76de7d3788a42ae444c0bb6de64fd2))
+
+- Clarify PR workflow with explicit comment checking
+  ([`d9d6b35`](https://github.com/homeassistant-ai/ha-mcp/commit/d9d6b354dec479d2c0e9a2f327442cd6c5f9d9d7))
+
+- Simplify ha_call_service docstring (117→34 lines) (#379)
+  ([#379](https://github.com/homeassistant-ai/ha-mcp/pull/379),
+  [`decdd92`](https://github.com/homeassistant-ai/ha-mcp/commit/decdd927e3bff0ae93c148070010949bec273513))
+
+- Update sponsor badge text and color
+  ([`939a09e`](https://github.com/homeassistant-ai/ha-mcp/commit/939a09eb67e7797d561090fe26a3db8279764b0d))
+
+### Features
+
+- Update issue-to-pr-resolver agent with PR execution philosophy
+  ([`075b64a`](https://github.com/homeassistant-ai/ha-mcp/commit/075b64aa25010e3482aeda2e7ccc0a13f1e166e1))
+
+- Update pr-checker agent with PR execution philosophy
+  ([`80bf518`](https://github.com/homeassistant-ai/ha-mcp/commit/80bf51896f4738f910ac68ab193e55bd19e1b393))
+
+
+## v5.0.6 (2025-12-28)
+
+### Bug Fixes
+
+- Exclude jq dependency on all Windows platforms (#371)
+  ([#371](https://github.com/homeassistant-ai/ha-mcp/pull/371),
+  [`f80c76a`](https://github.com/homeassistant-ai/ha-mcp/commit/f80c76a7ab5f50088432812a61857cde4ecef497))
+
+### Chores
+
+- **addon**: Sync changelog for Home Assistant add-on [skip ci]
+  ([`7751dd4`](https://github.com/homeassistant-ai/ha-mcp/commit/7751dd418d276496415834ed57615adf2401ec18))
+
+
 ## v5.0.5 (2025-12-24)
 
 ### Bug Fixes

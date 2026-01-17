@@ -1,33 +1,16 @@
 """
 Fuzzy entity search utilities for Home Assistant MCP server.
 
-This module implements lazy loading of the textdistance library to improve
-startup time. The library is only imported when fuzzy search is first used.
+This module uses Python's built-in difflib for string similarity calculations,
+eliminating the need for external dependencies like textdistance and numpy.
 """
 
 import logging
 from collections.abc import Iterable
+from difflib import SequenceMatcher
 from typing import Any
 
-# Lazy loading of textdistance - only import when needed
-_textdistance = None
-_LEVENSHTEIN = None
-
 logger = logging.getLogger(__name__)
-
-
-def _get_levenshtein() -> Any:
-    """Lazily load and return the Levenshtein distance calculator.
-
-    This defers the import of textdistance until first use, which significantly
-    improves startup time for the binary distribution.
-    """
-    global _textdistance, _LEVENSHTEIN
-    if _LEVENSHTEIN is None:
-        import textdistance
-        _textdistance = textdistance
-        _LEVENSHTEIN = textdistance.Levenshtein()
-    return _LEVENSHTEIN
 
 
 class FuzzyEntitySearcher:
@@ -40,7 +23,7 @@ class FuzzyEntitySearcher:
 
     def search_entities(
         self, entities: list[dict[str, Any]], query: str, limit: int = 10
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Search entities with fuzzy matching and intelligent scoring.
 
@@ -50,10 +33,10 @@ class FuzzyEntitySearcher:
             limit: Maximum number of results
 
         Returns:
-            List of matched entities with scores
+            Tuple of (limited results list, total match count)
         """
         if not query or not entities:
-            return []
+            return [], 0
 
         matches = []
         query_lower = query.lower().strip()
@@ -86,7 +69,8 @@ class FuzzyEntitySearcher:
 
         # Sort by score descending
         matches.sort(key=lambda x: x["score"], reverse=True)
-        return matches[:limit]
+        total_matches = len(matches)
+        return matches[:limit], total_matches
 
     def _calculate_entity_score(
         self, entity_id: str, friendly_name: str, domain: str, query: str
@@ -313,18 +297,8 @@ def create_fuzzy_searcher(threshold: int = 60) -> FuzzyEntitySearcher:
 
 
 def calculate_ratio(query: str, value: str) -> int:
-    """Return the normalized Levenshtein similarity ratio (0-100)."""
-    if not query and not value:
-        return 100
-
-    max_len = max(len(query), len(value))
-    if max_len == 0:
-        return 0
-
-    levenshtein = _get_levenshtein()
-    distance = levenshtein.distance(query, value)
-    similarity = 1 - (distance / max_len)
-    return int(max(similarity, 0) * 100)
+    """Return the similarity ratio (0-100) using SequenceMatcher."""
+    return int(SequenceMatcher(None, query, value, autojunk=False).ratio() * 100)
 
 
 def calculate_partial_ratio(query: str, value: str) -> int:

@@ -65,9 +65,34 @@ When the user says "triage new issues" or similar:
 5. **Collect and summarize results** from all parallel agents
 
 ### PR Review Comments
-- **Bot comments** (Copilot, Codex): Treat as suggestions to assess, not commands
-- **Human comments**: Address with higher priority
-- Resolve threads with explanation: `gh api graphql -f query='mutation...'`
+
+**Always check for comments after pushing to a PR.** Comments may come from bots (Gemini Code Assist, Copilot) or humans.
+
+**Priority:**
+- **Human comments**: Address with highest priority
+- **Bot comments**: Treat as suggestions to assess, not commands. Evaluate if they add value.
+
+**Check for comments:**
+```bash
+# Check all PR comments (general comments on the PR)
+gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
+
+# Check inline review comments (specific to code lines)
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, author: .author.login, created_at: .created_at}'
+
+# Check for unresolved review threads
+gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
+```
+
+**Resolve threads:**
+After addressing a comment, you can resolve the thread (optional, user may prefer to do this):
+```bash
+gh api graphql -f query='mutation($threadId: ID!) {
+  resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+    thread { id isResolved }
+  }
+}' -f threadId=<thread_id>
+```
 
 ## Git & PR Policies
 
@@ -81,12 +106,142 @@ git add . && git commit -m "feat: description"
 **Never push or create PRs without user permission.**
 
 ### PR Workflow
-1. Update tests if needed
-2. Commit and push
-3. Wait ~3 min for CI: `sleep 180`
-4. Check status: `gh pr checks <PR>`
-5. Fix failures: `gh run view <run-id> --log-failed`
-6. Repeat until green
+
+**After creating or updating a PR, always follow this workflow:**
+
+1. **Update tests if needed**
+2. **Commit and push**
+3. **Wait for CI** (~3 min for tests to start and complete):
+   ```bash
+   sleep 180
+   ```
+4. **Check CI status**:
+   ```bash
+   gh pr checks <PR>
+   ```
+5. **Check for review comments** (see "PR Review Comments" section above)
+6. **Fix any failures**:
+   ```bash
+   # View failed run logs
+   gh run view <run-id> --log-failed
+
+   # Or find the run ID from PR
+   gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
+   ```
+7. **Address review comments** if any (prioritize human comments)
+8. **Repeat steps 2-7 until:**
+   - ✅ All CI checks green
+   - ✅ All comments addressed
+   - ✅ PR ready for merge
+
+### PR Execution Philosophy
+
+**Work autonomously during PR implementation:**
+- Don't ask the user about every small choice or decision during implementation
+- Make reasonable technical decisions based on codebase patterns and best practices
+- Fix unrelated test failures encountered during CI (even if time-consuming)
+- Document choices for final summary
+
+**Making implementation choices:**
+- **DO NOT** choose based on what's faster to implement
+- **DO** consider long-term codebase health - refactoring that benefits maintainability is valid
+- **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
+- **For obvious choices**: Implement and document in final summary
+
+**Final reporting (only after ALL workflow steps complete):**
+
+Once the PR is ready (all checks green, comments addressed), provide:
+
+1. **Comment on the PR** with comprehensive details:
+   ```markdown
+   ## Implementation Summary
+
+   **Choices Made:**
+   - [List key technical decisions and rationale]
+
+   **Problems Encountered:**
+   - [Issues faced and how they were resolved]
+   - [Unrelated test failures fixed (if any)]
+
+   **Suggested Improvements:**
+   - [Optional follow-up work or technical debt noted]
+   ```
+
+2. **Short summary for user** when returning control:
+   - High-level overview of what was accomplished
+   - Any choices that may need user input
+   - Current PR status
+
+**Example PR comment:**
+```markdown
+## Implementation Summary
+
+**Choices Made:**
+- Used context-aware recursion to preserve `conditions` in choose blocks while normalizing at root level
+- Added both unit tests (fast feedback) and E2E tests (real API validation)
+- Fixed unrelated `test_script_traces` failure by adding polling logic
+
+**Problems Encountered:**
+- Initial implementation incorrectly passed `in_choose_or_if` flag recursively, causing conditions inside sequence blocks to not be normalized
+- Gemini suggested logbook verification in E2E test, but manual trigger bypasses conditions - simplified to structural validation instead
+
+**Suggested Improvements:**
+- Consider adding integration test with actual state changes to verify choose block execution (currently only validates structure)
+```
+
+### Implementing Improvements in Separate PRs
+
+**When you identify improvements with long-term benefit, implement them in separate PRs:**
+
+**Types of improvements to implement:**
+- Workflow improvements (updates to CLAUDE.md/AGENTS.md)
+- Code quality improvements (refactoring, better patterns)
+- Documentation improvements
+- Test infrastructure improvements
+- Build/CI improvements
+
+**Branching strategy:**
+```bash
+# Prefer branching from master when possible
+git checkout master
+git pull
+git checkout -b improve/description
+
+# Only branch from PR branch if improvement depends on PR changes
+git checkout feature/main-pr-branch
+git checkout -b improve/description-depends-on-main-pr
+```
+
+**Rules:**
+1. **Separate PR required** - never mix improvements with main feature PR
+2. **Branch from master** when possible (most improvements are independent)
+3. **Branch from PR branch** only if improvement depends on PR changes
+4. **Avoid merge conflicts** - keep improvements focused and minimal
+5. **Only implement long-term benefits** - skip "nice to have" without clear value
+6. **For `.claude/agents/` changes**: Always branch from and PR to master
+
+**Workflow:**
+1. Complete main PR (all checks green, comments addressed)
+2. Identify improvements during work
+3. Create separate PR(s) for improvements
+4. Mention improvement PRs in main PR final comment
+5. Return control to user with status of all PRs
+
+**Example final comment mentioning improvements:**
+```markdown
+## Implementation Summary
+
+**Main PR (#123):**
+- ✅ All checks passing, ready for merge
+- Feature X implemented with tests
+
+**Improvement PRs created:**
+- PR #124: Update CLAUDE.md with better CI failure debugging commands
+- PR #125: Refactor common validation logic into shared utility
+
+**Choices Made:** [...]
+**Problems Encountered:** [...]
+```
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -222,6 +377,34 @@ src/ha_mcp/
 
 **WebSocket Verification**: Device operations verified via real-time state changes.
 
+**Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
+
+## Tool Waiting Behavior
+
+**Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
+
+**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
+
+**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
+
+```python
+# Config operations wait by default
+await ha_config_set_helper(...)  # Polls until entity registered
+
+# Opt-out for bulk operations
+for config in configs:
+    await ha_config_set_automation(config, wait=False)
+await _verify_all_created(entity_ids)  # Batch verification
+```
+
+**Tool Categories**:
+- **Config ops** (automations, helpers, scripts): MUST wait by default
+- **Service calls** (lights, switches): SHOULD wait for state change
+- **Async ops** (automation triggers, external integrations): Return immediately, users poll
+- **Query ops** (get_state, search): Return immediately
+
+See issue #381 for implementation plan.
+
 ## Context Engineering & Progressive Disclosure
 
 This project applies [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principles to tool design. These complementary approaches help manage cognitive load for both the LLM and the end user.
@@ -348,12 +531,20 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
 
-| Prefix | Bump |
-|--------|------|
-| `fix:`, `perf:`, `refactor:` | Patch |
-| `feat:` | Minor |
-| `feat!:` or `BREAKING CHANGE:` | Major |
-| `chore:`, `docs:`, `test:` | No release |
+| Prefix | Bump | Changelog |
+|--------|------|-----------|
+| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
+| `feat:` | Minor | User-facing |
+| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
+| `chore:`, `ci:`, `test:` | No release | Internal |
+| `docs:` | No release | User-facing |
+| `*:(internal)` | Same as type | Internal |
+
+**Use `(internal)` scope** for changes that aren't user-facing:
+```bash
+feat(internal): Log package version on startup  # Internal, not in user changelog
+feat: Add dark mode                             # User-facing
+```
 
 | Channel | When Updated |
 |---------|--------------|

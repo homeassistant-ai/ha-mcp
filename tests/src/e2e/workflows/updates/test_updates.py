@@ -4,7 +4,7 @@ End-to-End tests for Home Assistant Update Management tools.
 This test suite validates the update management tools including:
 - ha_list_updates: List all available updates
 - ha_get_release_notes: Get release notes for an update
-- ha_get_system_version: Get system version and info
+- ha_get_overview: Get system version and info (includes entity overview)
 
 Tests are designed for Docker Home Assistant test environment.
 """
@@ -142,27 +142,32 @@ class TestUpdateManagement:
             )
             logger.info("Skipped updates test passed")
 
-    async def test_get_system_version(self, mcp_client):
+    async def test_get_system_overview(self, mcp_client):
         """
-        Test: Get system version and configuration info.
+        Test: Get system version and configuration info via ha_get_overview.
 
-        Validates that ha_get_system_version returns expected system information.
+        Validates that ha_get_overview returns expected system information
+        (replaces ha_get_system_version).
         """
-        logger.info("Testing system version retrieval...")
+        logger.info("Testing system overview retrieval...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # Call ha_get_system_version
+            # Call ha_get_overview
             result = await mcp.call_tool_success(
-                "ha_get_system_version",
+                "ha_get_overview",
                 {},
             )
 
             # Verify response structure
             assert result.get("success") is True, f"Expected success=True: {result}"
 
-            # Required fields
-            assert "version" in result, f"Missing 'version' field: {result}"
-            version = result.get("version")
+            # Verify system_info field exists
+            assert "system_info" in result, f"Missing 'system_info' field: {result}"
+            system_info = result["system_info"]
+
+            # Required fields in system_info
+            assert "version" in system_info, f"Missing 'version' field: {system_info}"
+            version = system_info.get("version")
             assert version is not None, "Version should not be None"
             assert isinstance(
                 version, str
@@ -176,19 +181,19 @@ class TestUpdateManagement:
 
             logger.info(f"Home Assistant version: {version}")
 
-            # Other expected fields
+            # Other expected fields in system_info
             optional_fields = [
                 "location_name",
-                "timezone",
+                "time_zone",
                 "config_dir",
                 "components_loaded",
             ]
             for field in optional_fields:
-                if field in result:
-                    logger.info(f"  {field}: {result[field]}")
+                if field in system_info:
+                    logger.info(f"  {field}: {system_info[field]}")
 
             # components_loaded should be a positive integer
-            components = result.get("components_loaded")
+            components = system_info.get("components_loaded")
             if components is not None:
                 assert (
                     isinstance(components, int) and components > 0
@@ -341,22 +346,26 @@ class TestUpdateToolsEdgeCases:
         logger.info("Testing system version field presence...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            result = await mcp.call_tool_success("ha_get_system_version", {})
+            result = await mcp.call_tool_success("ha_get_overview", {})
 
-            # Core required fields
-            required_fields = ["success", "version"]
+            # Verify system_info exists
+            assert "system_info" in result, "Missing system_info field"
+            system_info = result["system_info"]
+
+            # Core required fields in system_info
+            required_fields = ["version"]
             for field in required_fields:
                 assert (
-                    field in result
-                ), f"Required field '{field}' missing from result: {result.keys()}"
+                    field in system_info
+                ), f"Required field '{field}' missing from system_info: {system_info.keys()}"
 
             # Common optional fields that should usually be present
             common_fields = [
                 "location_name",
-                "timezone",
+                "time_zone",
                 "components_loaded",
             ]
-            present_fields = [f for f in common_fields if f in result]
+            present_fields = [f for f in common_fields if f in system_info]
             logger.info(f"Present optional fields: {present_fields}")
 
             # At least some optional fields should be present
@@ -437,7 +446,7 @@ async def test_update_tools_discovery(mcp_client):
     expected_tools = [
         "ha_list_updates",
         "ha_get_release_notes",
-        "ha_get_system_version",
+        "ha_get_overview",  # Replaces ha_get_system_version
     ]
 
     for tool_name in expected_tools:

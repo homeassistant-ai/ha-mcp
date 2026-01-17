@@ -16,6 +16,11 @@ import pytest
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    wait_for_automation,
+)
+from ...utilities.wait_helpers import (
+    wait_for_entity_state,
+    wait_for_logbook_entry,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,22 +184,12 @@ class TestAutomationLifecycle:
         logger.info(f"✅ Created automation: {automation_entity}")
 
         # 3. VERIFY: Automation exists and is configured correctly
-        # Add a delay to allow Home Assistant to register the new automation
-        await asyncio.sleep(3)
-
+        # Wait for Home Assistant to register the new automation
         logger.info("🔍 Verifying automation configuration...")
-        get_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
-        )
-
-        get_data = assert_mcp_success(get_result, "automation retrieval")
-
-        # Validate automation configuration
-        config = get_data.get("config", {})
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
         if not config:
             raise AssertionError(
-                f"No configuration returned for automation {automation_entity}"
+                f"Automation {automation_entity} not found after creation"
             )
 
         # Check essential fields
@@ -226,29 +221,15 @@ class TestAutomationLifecycle:
 
         # 5. VERIFY: Check that automation ran (via logbook)
         logger.info("📋 Checking automation execution in logbook...")
-        await asyncio.sleep(3)  # Give time for automation to execute and log
-
         try:
-            logbook_result = await mcp_client.call_tool(
-                "ha_get_logbook", {"hours_back": 1}
+            automation_logged = await wait_for_logbook_entry(
+                mcp_client, automation_name, timeout=10, poll_interval=1.0
             )
-            logbook_data = parse_mcp_result(logbook_result)
-
-            if logbook_data.get("success"):
-                entries = logbook_data.get("entries", [])
-                # Look for automation execution in logbook
-                automation_ran = any(
-                    automation_name.lower() in str(entry).lower()
-                    or automation_entity.lower() in str(entry).lower()
-                    for entry in entries
-                )
-                logger.info(f"📋 Automation execution logged: {automation_ran}")
+            if automation_logged:
+                logger.info("📋 Automation execution verified in logbook")
             else:
-                logger.debug(
-                    f"Could not verify automation execution via logbook: {logbook_data.get('error', 'Unknown error')}"
-                )
                 logger.info(
-                    "📋 Logbook verification skipped - automation trigger was successful"
+                    "📋 Logbook verification timeout - automation trigger was successful"
                 )
         except Exception as e:
             logger.warning(f"Logbook verification failed: {e} - continuing with test")
@@ -277,18 +258,7 @@ class TestAutomationLifecycle:
 
         # 7. VERIFY: Update was applied
         logger.info("🔍 Verifying automation update...")
-        await asyncio.sleep(2)  # Allow time for update to propagate
-
-        verify_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
-        )
-
-        verify_data = assert_mcp_success(
-            verify_result, "automation update verification"
-        )
-
-        config = verify_data.get("config", {})
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
         if not config:
             raise AssertionError(
                 f"No configuration returned after update for automation {automation_entity}"
@@ -327,8 +297,16 @@ class TestAutomationLifecycle:
 
         # 9. VERIFY: Automation is gone
         logger.info("🔍 Verifying automation deletion...")
-        await asyncio.sleep(2)  # Allow time for deletion to propagate
+        # Poll to ensure deletion propagated (wait_for_automation returns None if not found)
+        config = await wait_for_automation(mcp_client, automation_entity, timeout=5)
 
+        # If still found, that's a problem
+        if config is not None:
+            raise AssertionError(
+                f"Automation {automation_entity} still exists after deletion: {config}"
+            )
+
+        # Double-check with direct call for error message verification
         final_check = await mcp_client.call_tool(
             "ha_config_get_automation",
             { "identifier": automation_entity}
@@ -384,16 +362,12 @@ class TestAutomationLifecycle:
         )
         cleanup_tracker.track("automation", automation_entity)
 
-        # Verify automation starts disabled
-        await asyncio.sleep(2)
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        # Wait for automation to be registered and verify it starts in disabled state
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "off", timeout=20
         )
-        state_data = assert_mcp_success(state_result, "automation state check")
-
-        initial_state = state_data.get("data", {}).get("state")
-        assert initial_state == "off", (
-            f"Automation should start disabled, but state is: {initial_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach initial state 'off' within timeout"
         )
         logger.info("✅ Automation correctly starts in disabled state")
 
@@ -409,17 +383,13 @@ class TestAutomationLifecycle:
         )
 
         enable_data = assert_mcp_success(enable_result, "automation enable")
-        await asyncio.sleep(2)
 
         # Verify automation is now enabled
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "on", timeout=20
         )
-        state_data = assert_mcp_success(state_result, "automation enabled state check")
-
-        enabled_state = state_data.get("data", {}).get("state")
-        assert enabled_state == "on", (
-            f"Automation should be enabled, but state is: {enabled_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach enabled state 'on' within timeout"
         )
         logger.info("✅ Automation successfully enabled")
 
@@ -435,17 +405,13 @@ class TestAutomationLifecycle:
         )
 
         disable_data = assert_mcp_success(disable_result, "automation disable")
-        await asyncio.sleep(2)
 
         # Verify automation is now disabled
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": automation_entity}
+        state_reached = await wait_for_entity_state(
+            mcp_client, automation_entity, "off", timeout=20
         )
-        state_data = assert_mcp_success(state_result, "automation disabled state check")
-
-        disabled_state = state_data.get("data", {}).get("state")
-        assert disabled_state == "off", (
-            f"Automation should be disabled, but state is: {disabled_state}"
+        assert state_reached, (
+            f"Automation {automation_entity} did not reach disabled state 'off' within timeout"
         )
         logger.info("✅ Automation successfully disabled")
 
@@ -867,3 +833,172 @@ async def test_automation_search_and_discovery(mcp_client):
         logger.info(f"🔍 Pattern '{pattern}' search: {len(results)} results")
 
     logger.info("✅ Automation search and discovery tests completed")
+
+
+
+@pytest.mark.automation
+async def test_automation_with_choose_block(mcp_client):
+    """
+    Test automation with choose blocks to verify conditions (plural) is preserved.
+
+    This test ensures that the normalization bug is fixed where 'conditions'
+    was incorrectly being converted to 'condition' inside choose blocks,
+    causing API validation failures.
+    """
+    logger.info("🧪 Testing automation with choose block...")
+
+    # Find a test light entity
+    search_result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "domain_filter": "light", "limit": 5},
+    )
+    search_data = parse_mcp_result(search_result)
+    
+    # Handle nested data structure
+    if "data" in search_data:
+        entities = search_data.get("data", {}).get("results", [])
+    else:
+        entities = search_data.get("results", [])
+    
+    assert len(entities) > 0, "No light entities found for testing"
+    light_entity = entities[0]["entity_id"]
+    logger.info(f"🔦 Using test light: {light_entity}")
+
+    automation_id = "test_choose_block_normalization"
+
+    # Create automation with choose block that has conditions (plural)
+    config = {
+        "alias": "Test Choose Block Normalization",
+        "description": "Test that choose block conditions (plural) are preserved",
+        "triggers": [  # Using plural to test normalization
+            {
+                "platform": "state",
+                "entity_id": light_entity,
+                "to": "on",
+                "id": "light_on",
+            },
+            {
+                "platform": "state",
+                "entity_id": light_entity,
+                "to": "off",
+                "id": "light_off",
+            },
+        ],
+        "actions": [  # Using plural to test normalization
+            {
+                "choose": [
+                    {
+                        "conditions": [  # MUST remain plural in choose blocks
+                            {
+                                "condition": "trigger",
+                                "id": "light_on",
+                            }
+                        ],
+                        "sequences": [  # Test sequence normalization too
+                            {
+                                "service": "persistent_notification.create",
+                                "data": {
+                                    "title": "Choose Test",
+                                    "message": "Light turned on",
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "conditions": [  # MUST remain plural
+                            {
+                                "condition": "trigger",
+                                "id": "light_off",
+                            }
+                        ],
+                        "sequence": [  # Test singular form too
+                            {
+                                "service": "persistent_notification.create",
+                                "data": {
+                                    "title": "Choose Test",
+                                    "message": "Light turned off",
+                                },
+                            }
+                        ],
+                    },
+                ],
+                "default": [
+                    {
+                        "service": "persistent_notification.create",
+                        "data": {
+                            "title": "Choose Test",
+                            "message": "Default action",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    # Create the automation - THIS IS THE KEY TEST
+    # If normalization is broken, this will fail with:
+    # "extra keys not allowed @ data['actions'][0]['choose'][0]['condition']"
+    logger.info("📝 Creating automation with choose block...")
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_automation",
+        {
+            "identifier": automation_id,
+            "config": config,
+        },
+    )
+
+    assert_mcp_success(create_result)
+    logger.info("✅ Automation with choose block created successfully")
+
+    # Wait for automation to be registered
+    await wait_for_automation(mcp_client, automation_id)
+
+    # Retrieve the automation to verify structure
+    get_result = await mcp_client.call_tool(
+        "ha_config_get_automation",
+        {"identifier": automation_id},
+    )
+
+    automation_data = parse_mcp_result(get_result)
+    logger.info("📥 Retrieved automation configuration")
+
+    # Extract config from response
+    config_data = automation_data.get("config", automation_data)
+
+    # Verify the automation has the correct structure
+    assert "trigger" in config_data or "triggers" in config_data, (
+        "Automation should have triggers"
+    )
+
+    actions = config_data.get("action", config_data.get("actions", []))
+    assert len(actions) > 0, "Automation should have actions"
+    
+    choose_action = actions[0]
+    assert "choose" in choose_action, "First action should be a choose block"
+    assert len(choose_action["choose"]) == 2, "Choose should have 2 options"
+
+    # Verify that conditions are preserved in choose options
+    for i, option in enumerate(choose_action["choose"]):
+        # The key could be 'conditions' or 'condition' depending on HA version
+        # But our normalization should have sent 'conditions' to the API
+        has_conditions = "conditions" in option or "condition" in option
+        assert has_conditions, (
+            f"Choose option {i} should have conditions defined"
+        )
+        logger.info(f"✅ Choose option {i} has condition key: {list(option.keys())}")
+
+    # The fact that we successfully created and retrieved the automation
+    # with choose blocks proves the normalization fix works.
+    # Execution testing would require more complex setup (triggering actual
+    # entity state changes) which is beyond the scope of this normalization test.
+    logger.info("✅ Choose block normalization verified - automation API accepted the config")
+
+    # Clean up
+    logger.info("🧹 Cleaning up test automation...")
+    delete_result = await mcp_client.call_tool(
+        "ha_config_remove_automation",
+        {"identifier": automation_id},
+    )
+    assert_mcp_success(delete_result)
+
+    logger.info("✅ Choose block normalization test completed successfully")

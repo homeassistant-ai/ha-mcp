@@ -28,7 +28,6 @@ def main() -> int:
         ("fastmcp", "FastMCP framework"),
         ("httpx", "HTTP client"),
         ("pydantic", "Data validation"),
-        ("textdistance", "Fuzzy search"),
         ("click", "CLI framework"),
         ("websockets", "WebSocket support"),
     ]

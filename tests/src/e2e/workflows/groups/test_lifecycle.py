@@ -13,7 +13,6 @@ Each test uses real Home Assistant API calls via the MCP server to ensure
 production-level functionality and compatibility.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -82,7 +81,6 @@ class TestGroupLifecycle:
             logger.info(f"Created group: group.{object_id}")
 
             # 2. LIST: Verify group appears in list
-            await asyncio.sleep(0.5)  # Allow time for registration
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             group_found = False
@@ -124,7 +122,6 @@ class TestGroupLifecycle:
             logger.info("Group name updated successfully")
 
             # 4. VERIFY UPDATE: Check updated values in list
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             for group in list_data.get("groups", []):
@@ -143,7 +140,6 @@ class TestGroupLifecycle:
             logger.info("Group deleted successfully")
 
             # 6. VERIFY DELETE: Group should not appear in list
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             for group in list_data.get("groups", []):
@@ -185,7 +181,6 @@ class TestGroupLifecycle:
             logger.info("Added entity to group")
 
             # Verify entity was added
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
             for group in list_data.get("groups", []):
                 if group.get("object_id") == object_id:
@@ -210,7 +205,6 @@ class TestGroupLifecycle:
             logger.info("Removed entity from group")
 
             # Verify entity was removed
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
             for group in list_data.get("groups", []):
                 if group.get("object_id") == object_id:
@@ -265,7 +259,6 @@ class TestGroupLifecycle:
             logger.info("all_on parameter was sent to service")
 
             # Verify group appears in list
-            await asyncio.sleep(1.0)  # Give HA time to update state
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             group_found = False
@@ -397,7 +390,6 @@ class TestGroupLifecycle:
             logger.info("Replaced entities")
 
             # Verify replacement
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             for group in list_data.get("groups", []):
@@ -467,12 +459,10 @@ class TestGroupLifecycle:
                 created_object_ids.append(object_id)
                 cleanup_tracker.track("group", object_id)
                 logger.info(f"Created: {group_config['name']} (id: {object_id})")
-                await asyncio.sleep(0.3)
 
             logger.info(f"Created {len(created_object_ids)} groups")
 
             # Verify all groups exist
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
             object_ids_in_list = [g.get("object_id") for g in list_data.get("groups", [])]
 
@@ -491,7 +481,6 @@ class TestGroupLifecycle:
                         "icon": "mdi:star",  # Update all to same icon
                     },
                 )
-                await asyncio.sleep(0.3)
             logger.info("All groups updated")
 
             # Delete all groups
@@ -500,11 +489,9 @@ class TestGroupLifecycle:
                     "ha_config_remove_group",
                     {"object_id": object_id},
                 )
-                await asyncio.sleep(0.3)
             logger.info("All groups deleted")
 
             # Verify all deleted
-            await asyncio.sleep(0.5)
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
             object_ids_in_list = [g.get("object_id") for g in list_data.get("groups", [])]
 
