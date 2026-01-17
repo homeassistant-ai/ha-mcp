@@ -167,6 +167,17 @@ class TestUsageLoggerRingBuffer:
         assert entries[0]["error_message"] == "Entity not found"
 
 
+class TestUsageLoggerDefaults:
+    """Test UsageLogger default behavior."""
+    
+    def test_default_log_path(self):
+        """Test that default log path is in user home directory."""
+        logger = UsageLogger()
+        assert str(logger.log_file_path).startswith(str(Path.home()))
+        assert ".ha-mcp" in str(logger.log_file_path)
+        logger.shutdown()
+
+
 class TestUsageLoggerConstants:
     """Test constants are properly defined."""
 
