@@ -108,15 +108,22 @@ class UsageLogger:
 
     def __init__(
         self,
-        log_file_path: str = "logs/mcp_usage.jsonl",
+        log_file_path: str | None = None,
         ring_buffer_size: int = DEFAULT_RING_BUFFER_SIZE,
     ):
         self._enabled = True
-        self.log_file_path = Path(log_file_path)
+        
+        if log_file_path:
+            self.log_file_path = Path(log_file_path)
+        else:
+            # Use user's home directory by default to avoid read-only filesystem errors
+            # when running via uvx/npx which might have read-only CWD
+            self.log_file_path = Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            # Directory creation failed (e.g., read-only filesystem when running via uvx)
+            # Directory creation failed (e.g., read-only filesystem)
             # Disable logging silently to avoid disrupting the MCP server
             self._enabled = False
 
