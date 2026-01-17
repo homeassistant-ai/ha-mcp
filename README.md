@@ -178,7 +178,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **[@julienld](https://github.com/julienld)** — Project maintainer & core contributor.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
-- **[@sergeykad](https://github.com/sergeykad)** — Dashboard card-level CRUD operations.
+- **[@sergeykad](https://github.com/sergeykad)** — Dashboard card-level CRUD operations, better changelogs and removed the dependency to textdistance/numpy.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
 
