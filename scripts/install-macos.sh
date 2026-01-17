@@ -121,7 +121,7 @@ if 'mcpServers' not in config:
 # Add/update Home Assistant config (using full path for Claude Desktop compatibility)
 config['mcpServers']['Home Assistant'] = {
     "command": uvx_path,
-    "args": ["ha-mcp@latest"],
+    "args": ["--refresh", "ha-mcp@latest"],
     "env": {
         "HOMEASSISTANT_URL": demo_url,
         "HOMEASSISTANT_TOKEN": demo_token
@@ -140,7 +140,7 @@ else
   "mcpServers": {
     "Home Assistant": {
       "command": "$UVX_PATH",
-      "args": ["ha-mcp@latest"],
+      "args": ["--refresh", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "$DEMO_URL",
         "HOMEASSISTANT_TOKEN": "$DEMO_TOKEN"
@@ -157,7 +157,7 @@ printf "\n"
 # Step 3: Pre-download dependencies
 printf "${YELLOW}Step 3: Pre-downloading ha-mcp...${NC}\n"
 printf "  This speeds up Claude Desktop startup...\n"
-"$UVX_PATH" ha-mcp@latest --version > /dev/null 2>&1 || true
+"$UVX_PATH" --refresh ha-mcp@latest --version > /dev/null 2>&1 || true
 printf "${GREEN}  Dependencies cached${NC}\n"
 printf "\n"
 
