@@ -195,14 +195,16 @@ remove_dist = false
 commit_parser = "angular"
 commit_parser_options = { major_tags = ["BREAKING", "!"], minor_tags = ["feat"], patch_tags = ["fix", "perf", "refactor"] }
 
-# Exclude commits that only touch the static site
+# Changelog configuration
+[tool.semantic_release.changelog]
+template_dir = "templates"
 exclude_commit_patterns = [
-    "^.*\\(site\\).*$",  # Exclude commits with (site) scope
+    "^.*\\(site\\).*$",           # Commits with (site) scope
+    '''chore\(addon\): [Ss]ync changelog.*''',  # Changelog sync commits
 ]
 
-# Changelog configuration
-changelog_sections = "feature,fix,breaking,documentation,performance"
-changelog_components = "feat,fix,docs,style,refactor,perf,test,chore"
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"
 
 # Version scheme
 major_on_zero = true
