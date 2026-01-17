@@ -63,7 +63,6 @@ packages_to_collect = [
     'sse_starlette',
     'starlette',
     'uvicorn',
-    'textdistance',
     'annotated_types',
     'typing_extensions',
 ]
