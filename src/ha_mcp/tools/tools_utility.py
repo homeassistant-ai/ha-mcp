@@ -25,7 +25,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_LOGBOOK_LIMIT = 50
     MAX_LOGBOOK_LIMIT = 500
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Logbook Entries"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["history"],
+            "title": "Get Logbook Entries",
+        }
+    )
     @log_tool_usage
     async def ha_get_logbook(
         hours_back: int | str = 1,
@@ -160,7 +167,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
                 "total_entries": total_entries,
-                "returned_entries": len(paginated_entries) if isinstance(paginated_entries, list) else 1,
+                "returned_entries": len(paginated_entries)
+                if isinstance(paginated_entries, list)
+                else 1,
                 "limit": effective_limit,
                 "offset": offset_int,
                 "has_more": has_more,
@@ -173,7 +182,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 param_parts = [
                     f"hours_back={hours_back_int}",
                     f"limit={effective_limit}",
-                    f"offset={next_offset}"
+                    f"offset={next_offset}",
                 ]
                 if entity_id:
                     param_parts.append(f"entity_id={entity_id}")
@@ -211,7 +220,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["docs"], "title": "Evaluate Template"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["docs"],
+            "title": "Evaluate Template",
+        }
+    )
     @log_tool_usage
     async def ha_eval_template(
         template: str, timeout: int = 3, report_errors: bool | str = True
@@ -344,7 +360,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
         """
         # Coerce boolean parameter that may come as string from XML-style calls
-        report_errors_bool = coerce_bool_param(report_errors, "report_errors", default=True) or True
+        report_errors_bool = (
+            coerce_bool_param(report_errors, "report_errors", default=True) or True
+        )
 
         try:
             # Generate unique ID for the template evaluation request
@@ -497,4 +515,63 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "domain": domain,
                 "status": "error",
                 "suggestion": "Check your internet connection and try again",
+            }
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["docs", "guide", "automation", "helper", "script"],
+            "title": "Get Native Solutions Guide",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_native_solutions_guide() -> dict[str, Any]:
+        """
+        Get guide for preferring native Home Assistant solutions over Jinja2 templates.
+
+        **IMPORTANT:** Always consult this guide before using templates in automations,
+        helpers, or scripts. Templates should be a LAST RESORT, not the default.
+
+        Covers:
+        - Part 1: Automations - Native conditions, triggers, and actions vs template versions
+        - Part 2: Helpers - Built-in helper types (min_max, group, input_*) vs template sensors
+        - Part 3: Scripts - Native choose/repeat/if actions vs template-based logic
+        - Part 4: Quick decision guide and common mistakes to avoid
+
+        Use this guide BEFORE creating any template-based configuration.
+
+        EXAMPLES:
+        - Get full guide: ha_get_native_solutions_guide()
+
+        Related tools:
+        - ha_get_domain_docs("automation") - Full automation documentation
+        - ha_config_set_automation - Create automations
+        - ha_config_set_helper - Create helpers
+        - ha_config_set_script - Create scripts
+        """
+        try:
+            from pathlib import Path
+
+            # Get resources directory (same level as tools/)
+            resources_dir = Path(__file__).parent.parent / "resources"
+            guide_path = resources_dir / "native_solutions_guide.md"
+            guide_content = guide_path.read_text()
+            return {
+                "success": True,
+                "action": "get_guide",
+                "guide": guide_content,
+                "format": "markdown",
+                "message": "Review this guide before using templates. Native solutions are preferred.",
+            }
+        except Exception as e:
+            logger.error(f"Error reading native solutions guide: {e}")
+            return {
+                "success": False,
+                "action": "get_guide",
+                "error": str(e),
+                "suggestions": [
+                    "Ensure native_solutions_guide.md exists in resources directory",
+                    "Key principle: Always prefer native HA features over Jinja2 templates",
+                ],
             }

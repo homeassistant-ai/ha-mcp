@@ -21,7 +21,14 @@ logger = logging.getLogger(__name__)
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["helper"], "title": "List Helpers"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["helper"],
+            "title": "List Helpers",
+        }
+    )
     @log_tool_usage
     async def ha_config_list_helpers(
         helper_type: Annotated[
@@ -112,7 +119,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["helper"], "title": "Create or Update Helper"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["helper"],
+            "title": "Create or Update Helper",
+        }
+    )
     @log_tool_usage
     async def ha_config_set_helper(
         helper_type: Annotated[
@@ -171,7 +184,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         step: Annotated[
             float | None,
-            Field(description="Step/increment value for input_number or counter", default=None),
+            Field(
+                description="Step/increment value for input_number or counter",
+                default=None,
+            ),
         ] = None,
         unit_of_measurement: Annotated[
             str | None,
@@ -353,6 +369,16 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
 
+        PREFER BUILT-IN HELPERS OVER TEMPLATE SENSORS:
+        Before creating a template sensor, check if a built-in helper/integration exists:
+        - Use `min_max` integration (type: mean/min/max/sum) instead of template for combining sensors
+        - Use `group` instead of template binary sensor for any/all logic
+        - Use `counter` instead of template with math for counting
+        - Use `input_number` instead of template for storing values
+        - Use `schedule` instead of template with weekday checks
+
+        For full guidance: ha_get_native_solutions_guide()
+
         For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
         try:
@@ -374,7 +400,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
 
                 # Build create message based on helper type
-                message: dict[str, Any] = {"type": f"{helper_type}/create", "name": name}
+                message: dict[str, Any] = {
+                    "type": f"{helper_type}/create",
+                    "name": name,
+                }
 
                 # Icon supported by most helpers except person and tag
                 if icon and helper_type not in ("person", "tag"):
@@ -470,7 +499,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 elif helper_type == "counter":
                     # Counter parameters: initial, minimum, maximum, step, restore
                     if initial is not None:
-                        message["initial"] = int(initial) if isinstance(initial, str) else initial
+                        message["initial"] = (
+                            int(initial) if isinstance(initial, str) else initial
+                        )
                     if min_value is not None:
                         message["minimum"] = int(min_value)
                     if max_value is not None:
@@ -677,7 +708,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["helper"], "title": "Remove Helper"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "tags": ["helper"],
+            "title": "Remove Helper",
+        }
+    )
     @log_tool_usage
     async def ha_config_remove_helper(
         helper_type: Annotated[
@@ -762,17 +800,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
                 try:
-                    registry_result = await client.send_websocket_message(
-                        registry_msg
-                    )
+                    registry_result = await client.send_websocket_message(registry_msg)
 
                     if registry_result.get("success"):
                         entity_entry = registry_result.get("result", {})
                         unique_id = entity_entry.get("unique_id")
                         if unique_id:
-                            logger.info(
-                                f"Found unique_id: {unique_id} for {entity_id}"
-                            )
+                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                             break
 
                     # If registry lookup failed but we haven't exhausted retries, wait and try again
@@ -784,9 +818,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         await asyncio.sleep(wait_time)
 
                 except Exception as e:
-                    logger.warning(
-                        f"Registry lookup attempt {attempt + 1} failed: {e}"
-                    )
+                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                     if attempt < max_retries - 1:
                         wait_time = 0.5 * (2**attempt)
                         await asyncio.sleep(wait_time)
@@ -803,9 +835,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"{helper_type}_id": helper_id,
                 }
 
-                logger.info(
-                    f"Sending fallback WebSocket delete message: {delete_msg}"
-                )
+                logger.info(f"Sending fallback WebSocket delete message: {delete_msg}")
                 result = await client.send_websocket_message(delete_msg)
 
                 if result.get("success"):
