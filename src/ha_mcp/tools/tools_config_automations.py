@@ -375,8 +375,6 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
         - Use `choose` action instead of template-based service names
 
-        For full guidance: ha_get_native_solutions_guide()
-
         TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
         CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel

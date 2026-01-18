@@ -164,8 +164,6 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
         - Use native action variables instead of complex template calculations
 
-        For full guidance: ha_get_native_solutions_guide()
-
         For detailed script configuration help, use: ha_get_domain_docs("script")
 
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced

@@ -377,8 +377,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Use `input_number` instead of template for storing values
         - Use `schedule` instead of template with weekday checks
 
-        For full guidance: ha_get_native_solutions_guide()
-
         For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
         try:
