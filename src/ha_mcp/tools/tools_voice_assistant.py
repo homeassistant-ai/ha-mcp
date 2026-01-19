@@ -318,6 +318,11 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                     if settings.get(asst):
                         summary[asst] += 1
 
+            # Build filters_applied dict
+            filters_applied: dict[str, Any] = {}
+            if assistant:
+                filters_applied["assistant"] = assistant
+
             return {
                 "success": True,
                 "exposed_entities": filtered,
@@ -328,7 +333,7 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                     if not assistant
                     else {assistant: summary.get(assistant, 0)}
                 ),
-                "assistant_filter": assistant,
+                "filters_applied": filters_applied,
             }
 
         except Exception as e:

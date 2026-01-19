@@ -534,7 +534,7 @@ class TestHaListExposedEntities:
         result = await tool(assistant="conversation")
 
         assert result["success"] is True
-        assert result["assistant_filter"] == "conversation"
+        assert result["filters_applied"]["assistant"] == "conversation"
         # Only entities exposed to conversation should be in filtered results
         assert "light.living_room" in result["exposed_entities"]
         assert "light.bedroom" not in result["exposed_entities"]
