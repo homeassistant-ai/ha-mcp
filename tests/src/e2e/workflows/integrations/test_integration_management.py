@@ -22,7 +22,7 @@ class TestIntegrationManagement:
     async def test_set_integration_enabled_cycle(self, mcp_client):
         """Test full enable/disable/re-enable cycle."""
         # Find suitable integration (supports_unload=True)
-        list_result = await mcp_client.call_tool("ha_list_integrations", {})
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(list_result, "List integrations")
 
         # Find test integration
@@ -46,7 +46,7 @@ class TestIntegrationManagement:
 
         # Verify disabled
         list_result = await mcp_client.call_tool(
-            "ha_list_integrations", {"query": test_entry["domain"]}
+            "ha_get_integration", {"query": test_entry["domain"]}
         )
         data = assert_mcp_success(list_result, "List after disable")
         entry = next(e for e in data["entries"] if e["entry_id"] == entry_id)
@@ -60,7 +60,7 @@ class TestIntegrationManagement:
 
         # Verify re-enabled
         list_result = await mcp_client.call_tool(
-            "ha_list_integrations", {"query": test_entry["domain"]}
+            "ha_get_integration", {"query": test_entry["domain"]}
         )
         data = assert_mcp_success(list_result, "List after enable")
         entry = next(e for e in data["entries"] if e["entry_id"] == entry_id)
@@ -71,7 +71,7 @@ class TestIntegrationManagement:
     async def test_set_integration_enabled_string_bool(self, mcp_client):
         """Test that enabled parameter accepts string booleans."""
         # Find suitable integration
-        list_result = await mcp_client.call_tool("ha_list_integrations", {})
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(list_result, "List integrations")
 
         test_entry = None

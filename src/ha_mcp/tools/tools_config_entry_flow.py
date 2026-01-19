@@ -221,25 +221,3 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         except Exception as e:
             logger.error(f"Error getting helper schema: {e}")
             return exception_to_structured_error(e, context={"helper_type": helper_type})
-
-    @mcp.tool(
-        annotations={
-            "readOnlyHint": True,
-            "tags": ["config"],
-            "title": "Get Config Entry",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_config_entry(
-        entry_id: Annotated[str, Field(description="Config entry ID")],
-    ) -> dict[str, Any]:
-        """Get config entry details.
-
-        Use ha_list_integrations() to find entry IDs.
-        """
-        try:
-            result = await client.get_config_entry(entry_id)
-            return {"success": True, "entry": result}
-        except Exception as e:
-            logger.error(f"Error getting config entry: {e}")
-            return exception_to_structured_error(e, context={"entry_id": entry_id})

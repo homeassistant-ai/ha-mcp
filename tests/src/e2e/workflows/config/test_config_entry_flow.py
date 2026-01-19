@@ -20,7 +20,7 @@ class TestConfigEntryFlow:
     async def test_get_config_entry(self, mcp_client):
         """Test getting config entry details."""
         # Get any entry first
-        list_result = await mcp_client.call_tool("ha_list_integrations", {})
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(list_result, "List integrations")
 
         if not data.get("entries"):

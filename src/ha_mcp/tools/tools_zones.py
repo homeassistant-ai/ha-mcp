@@ -18,19 +18,32 @@ logger = logging.getLogger(__name__)
 def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant zone configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["zone"], "title": "List Zones"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["zone"], "title": "Get Zone"})
     @log_tool_usage
-    async def ha_list_zones() -> dict[str, Any]:
+    async def ha_get_zone(
+        zone_id: Annotated[
+            str | None,
+            Field(
+                description="Zone ID to get details for (from ha_get_zone() list). "
+                "If omitted, lists all zones.",
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """
-        List all Home Assistant zones with their coordinates and radius.
+        Get zone information - list all zones or get details for a specific one.
 
-        Returns complete configuration for all zones including:
+        Without a zone_id: Lists all Home Assistant zones with their coordinates and radius.
+        With a zone_id: Returns detailed configuration for a specific zone.
+
+        ZONE PROPERTIES:
         - ID, name, icon
         - Latitude, longitude, radius
         - Passive mode setting
 
         EXAMPLES:
-        - List all zones: ha_list_zones()
+        - List all zones: ha_get_zone()
+        - Get specific zone: ha_get_zone(zone_id="abc123")
 
         **NOTE:** This returns storage-based zones (created via UI/API), not YAML-defined zones.
         The 'home' zone is typically defined in YAML and may not appear in this list.
@@ -42,25 +55,47 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             result = await client.send_websocket_message(message)
 
-            if result.get("success"):
-                zones = result.get("result", [])
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Failed to get zones: {result.get('error', 'Unknown error')}",
+                }
+
+            zones = result.get("result", [])
+
+            # If no zone_id provided, return list of all zones
+            if zone_id is None:
                 return {
                     "success": True,
                     "count": len(zones),
                     "zones": zones,
                     "message": f"Found {len(zones)} zone(s)",
                 }
-            else:
+
+            # Find specific zone by ID
+            zone = next((z for z in zones if z.get("id") == zone_id), None)
+
+            if zone is None:
+                available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
                 return {
                     "success": False,
-                    "error": f"Failed to list zones: {result.get('error', 'Unknown error')}",
+                    "error": f"Zone not found: {zone_id}",
+                    "zone_id": zone_id,
+                    "available_zone_ids": available_ids,
+                    "suggestion": "Use ha_get_zone() without zone_id to see all available zones",
                 }
 
+            return {
+                "success": True,
+                "zone_id": zone_id,
+                "zone": zone,
+            }
+
         except Exception as e:
-            logger.error(f"Error listing zones: {e}")
+            logger.error(f"Error getting zones: {e}")
             return {
                 "success": False,
-                "error": f"Failed to list zones: {str(e)}",
+                "error": f"Failed to get zones: {str(e)}",
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
@@ -184,7 +219,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_update_zone(
         zone_id: Annotated[
             str,
-            Field(description="Zone ID to update (from ha_list_zones)"),
+            Field(description="Zone ID to update (from ha_get_zone)"),
         ],
         name: Annotated[
             str | None,
@@ -222,7 +257,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Update zone location: ha_update_zone("abc123", latitude=40.7128, longitude=-74.0060)
         - Update multiple fields: ha_update_zone("abc123", name="Gym", radius=75, icon="mdi:dumbbell")
 
-        **TIP:** Use ha_list_zones() to get the zone_id for the zone you want to update.
+        **TIP:** Use ha_get_zone() to get the zone_id for the zone you want to update.
         """
         try:
             # Validate that at least one field is being updated
@@ -293,7 +328,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "zone_id": zone_id,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify zone_id exists using ha_list_zones()",
+                    "Verify zone_id exists using ha_get_zone()",
                     "Ensure values are valid",
                 ],
             }
@@ -303,7 +338,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_delete_zone(
         zone_id: Annotated[
             str,
-            Field(description="Zone ID to delete (from ha_list_zones)"),
+            Field(description="Zone ID to delete (from ha_get_zone)"),
         ],
     ) -> dict[str, Any]:
         """
@@ -313,7 +348,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Delete zone: ha_delete_zone("abc123")
 
         **WARNING:** Deleting a zone that is used in automations may cause those automations to fail.
-        Use ha_list_zones() to get the zone_id for the zone you want to delete.
+        Use ha_get_zone() to get the zone_id for the zone you want to delete.
 
         **NOTE:** The 'home' zone cannot be deleted as it is typically defined in configuration.yaml.
         """
@@ -346,7 +381,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "zone_id": zone_id,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify zone_id exists using ha_list_zones()",
+                    "Verify zone_id exists using ha_get_zone()",
                     "Ensure zone is not the 'home' zone (YAML-defined)",
                 ],
             }
