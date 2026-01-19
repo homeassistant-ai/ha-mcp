@@ -201,6 +201,38 @@ source ~/.zshrc
 2. **Check the connector URL in Claude.ai** ends with `/mcp`
 3. **Try removing and re-adding the connector**
 
+### Understanding the ports (HA vs ha-mcp)
+
+There are **two different services** with different ports:
+
+| Service | Default Port | Purpose |
+|---------|--------------|---------|
+| **Home Assistant** | 8123 | HA web UI and REST API |
+| **ha-mcp server** | 8086 (Docker/uvx) or 9583 (add-on) | MCP server for AI clients |
+
+- In the **OAuth consent form**, you enter your **Home Assistant URL** (port 8123)
+- In **Claude.ai connector settings**, you enter the **ha-mcp server URL** (via HTTPS tunnel)
+
+### Can I use OAuth with the Home Assistant add-on?
+
+**Not currently.** The ha-mcp Home Assistant add-on runs in token mode only, using the Supervisor API for authentication.
+
+**Workaround for HAOS users:**
+Run ha-mcp OAuth mode via Docker alongside your existing setup:
+
+```bash
+# Via SSH or Terminal add-on on HAOS
+docker run -d --name ha-mcp-oauth \
+  --network host \
+  -e MCP_BASE_URL=https://your-cloudflare-tunnel.com \
+  -e OAUTH_ENCRYPTION_KEY=your-key \
+  -e MCP_PORT=8086 \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-oauth
+```
+
+Then configure your Cloudflare tunnel to route to `localhost:8086` for OAuth mode.
+
 ---
 
 ## Configuration Options

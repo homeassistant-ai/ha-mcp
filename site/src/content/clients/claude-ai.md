@@ -103,6 +103,36 @@ cloudflared tunnel --url http://localhost:8086
 9. Click **Authorize**
 10. You're connected!
 
+### Understanding the Ports
+
+When using OAuth, there are **two different services** with different ports:
+
+| Service | Default Port | What You Enter |
+|---------|--------------|----------------|
+| **Home Assistant** | 8123 | In the OAuth consent form (your HA URL) |
+| **ha-mcp server** | 8086 | In Claude.ai connector settings (via HTTPS tunnel) |
+
+The consent form asks for your **Home Assistant URL** (port 8123) - this is where ha-mcp makes API calls to control your smart home. The ha-mcp server itself runs on port 8086 (or custom).
+
+### Home Assistant Add-on Note
+
+> **Important:** The ha-mcp Home Assistant add-on does **not currently support OAuth mode**. The add-on runs in token mode using the Supervisor API for authentication.
+>
+> **To use OAuth with HAOS**, run ha-mcp via Docker alongside your existing setup:
+>
+> ```bash
+> # SSH into your HAOS or use Terminal add-on
+> docker run -d --name ha-mcp-oauth \
+>   --network host \
+>   -e MCP_BASE_URL=https://your-cloudflare-tunnel.com \
+>   -e OAUTH_ENCRYPTION_KEY=your-key \
+>   -e MCP_PORT=8086 \
+>   ghcr.io/homeassistant-ai/ha-mcp:latest \
+>   ha-mcp-oauth
+> ```
+>
+> Then configure your Cloudflare tunnel to route to `localhost:8086`.
+
 ---
 
 ## Option 2: Pre-configured Token Mode
