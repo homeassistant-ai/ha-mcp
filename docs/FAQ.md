@@ -217,21 +217,15 @@ There are **two different services** with different ports:
 
 **Not currently.** The ha-mcp Home Assistant add-on runs in token mode only, using the Supervisor API for authentication.
 
-**Workaround for HAOS users:**
-Run ha-mcp OAuth mode via Docker alongside your existing setup:
+**Important:** HAOS does not allow running custom Docker containers directly - there's no `docker` CLI access. To use OAuth mode with HAOS, you need to run ha-mcp on a separate device:
 
-```bash
-# Via SSH or Terminal add-on on HAOS
-docker run -d --name ha-mcp-oauth \
-  --network host \
-  -e MCP_BASE_URL=https://your-cloudflare-tunnel.com \
-  -e OAUTH_ENCRYPTION_KEY=your-key \
-  -e MCP_PORT=8086 \
-  ghcr.io/homeassistant-ai/ha-mcp:latest \
-  ha-mcp-oauth
-```
+**Alternatives for HAOS users:**
 
-Then configure your Cloudflare tunnel to route to `localhost:8086` for OAuth mode.
+1. **Separate device on your network** - Run ha-mcp OAuth on a Raspberry Pi, NAS, or always-on PC that has Docker installed
+2. **Cloud/VPS** - Deploy ha-mcp OAuth on a cloud server with HTTPS
+3. **Switch to HA Container** - If you use [Home Assistant Container](https://www.home-assistant.io/installation/linux#docker-compose) instead of HAOS, you have full Docker access
+
+In all cases, the ha-mcp OAuth server needs network access to your Home Assistant instance to validate credentials.
 
 ---
 
