@@ -181,6 +181,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@sergeykad](https://github.com/sergeykad)** — Dashboard card-level CRUD operations, better changelogs and removed the dependency to textdistance/numpy.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
+- **[@kingpanther13](https://github.com/kingpanther13)** — Native solutions guidance to reduce template overuse.
+- **[@Raygooo](https://github.com/Raygooo)** — SOCKS proxy support.
 
 ---
 

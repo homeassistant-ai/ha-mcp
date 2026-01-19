@@ -19,7 +19,14 @@ logger = logging.getLogger(__name__)
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant script configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["script"], "title": "Get Script Config"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["script"],
+            "title": "Get Script Config",
+        }
+    )
     @log_tool_usage
     async def ha_config_get_script(
         script_id: Annotated[
@@ -59,7 +66,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["script"], "title": "Create or Update Script"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["script"],
+            "title": "Create or Update Script",
+        }
+    )
     @log_tool_usage
     async def ha_config_set_script(
         script_id: Annotated[
@@ -143,6 +156,14 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "alias": "Updated Morning Routine"
         })
 
+        PREFER NATIVE ACTIONS OVER TEMPLATES:
+        Before using template-based logic in scripts, check if native actions exist:
+        - Use `choose` action instead of template-based service names
+        - Use `if/then/else` action instead of template conditions
+        - Use `repeat` action with `for_each` instead of template loops
+        - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
+        - Use native action variables instead of complex template calculations
+
         For detailed script configuration help, use: ha_get_domain_docs("script")
 
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
@@ -198,7 +219,14 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["script"], "title": "Remove Script"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "tags": ["script"],
+            "title": "Remove Script",
+        }
+    )
     @log_tool_usage
     async def ha_config_remove_script(
         script_id: Annotated[

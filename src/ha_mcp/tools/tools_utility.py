@@ -25,7 +25,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_LOGBOOK_LIMIT = 50
     MAX_LOGBOOK_LIMIT = 500
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Logbook Entries"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["history"],
+            "title": "Get Logbook Entries",
+        }
+    )
     @log_tool_usage
     async def ha_get_logbook(
         hours_back: int | str = 1,
@@ -160,7 +167,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
                 "total_entries": total_entries,
-                "returned_entries": len(paginated_entries) if isinstance(paginated_entries, list) else 1,
+                "returned_entries": len(paginated_entries)
+                if isinstance(paginated_entries, list)
+                else 1,
                 "limit": effective_limit,
                 "offset": offset_int,
                 "has_more": has_more,
@@ -173,7 +182,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 param_parts = [
                     f"hours_back={hours_back_int}",
                     f"limit={effective_limit}",
-                    f"offset={next_offset}"
+                    f"offset={next_offset}",
                 ]
                 if entity_id:
                     param_parts.append(f"entity_id={entity_id}")
@@ -211,7 +220,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             return await add_timezone_metadata(client, error_data)
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["docs"], "title": "Evaluate Template"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["docs"],
+            "title": "Evaluate Template",
+        }
+    )
     @log_tool_usage
     async def ha_eval_template(
         template: str, timeout: int = 3, report_errors: bool | str = True
@@ -344,7 +360,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
         """
         # Coerce boolean parameter that may come as string from XML-style calls
-        report_errors_bool = coerce_bool_param(report_errors, "report_errors", default=True) or True
+        report_errors_bool = (
+            coerce_bool_param(report_errors, "report_errors", default=True) or True
+        )
 
         try:
             # Generate unique ID for the template evaluation request
