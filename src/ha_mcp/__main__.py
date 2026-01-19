@@ -334,6 +334,22 @@ def main() -> None:
     # Configure logging before server creation
     from ha_mcp.config import get_settings
     settings = get_settings()
+
+    # In standard mode (not OAuth), validate that real credentials are provided
+    # The config has defaults for OAuth mode, but standard mode requires real values
+    missing_vars = []
+    if settings.homeassistant_url == "http://oauth-mode":
+        missing_vars.append("  - HOMEASSISTANT_URL")
+    if settings.homeassistant_token == "oauth-mode-token":
+        missing_vars.append("  - HOMEASSISTANT_TOKEN")
+
+    if missing_vars:
+        print(
+            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
         format='%(asctime)s %(name)s %(levelname)s: %(message)s'
@@ -483,6 +499,21 @@ def main_web() -> None:
     # Configure logging before server creation
     from ha_mcp.config import get_settings
     settings = get_settings()
+
+    # Validate credentials (required in non-OAuth HTTP mode)
+    missing_vars = []
+    if settings.homeassistant_url == "http://oauth-mode":
+        missing_vars.append("  - HOMEASSISTANT_URL")
+    if settings.homeassistant_token == "oauth-mode-token":
+        missing_vars.append("  - HOMEASSISTANT_TOKEN")
+
+    if missing_vars:
+        print(
+            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
         format='%(asctime)s %(name)s %(levelname)s: %(message)s'
@@ -503,6 +534,21 @@ def main_sse() -> None:
     # Configure logging before server creation
     from ha_mcp.config import get_settings
     settings = get_settings()
+
+    # Validate credentials (required in non-OAuth SSE mode)
+    missing_vars = []
+    if settings.homeassistant_url == "http://oauth-mode":
+        missing_vars.append("  - HOMEASSISTANT_URL")
+    if settings.homeassistant_token == "oauth-mode-token":
+        missing_vars.append("  - HOMEASSISTANT_TOKEN")
+
+    if missing_vars:
+        print(
+            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
         format='%(asctime)s %(name)s %(levelname)s: %(message)s'
