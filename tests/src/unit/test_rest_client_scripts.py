@@ -59,11 +59,13 @@ class TestDeleteScriptConfig:
         assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_delete_script_yaml_mode_405(self, mock_client):
-        """405 error should raise HomeAssistantAPIError with helpful YAML message.
+    async def test_delete_script_405_addon_proxy_limitation(self, mock_client):
+        """405 error should raise HomeAssistantAPIError with helpful message.
 
-        This tests the fix for issue #261 where YAML-mode scripts cannot be
-        deleted via the API and return 405 Method Not Allowed.
+        This tests the fix for issues #261 and #414 where scripts cannot be
+        deleted via the API due to:
+        1. HA Supervisor addon proxy blocking DELETE method
+        2. YAML-mode scripts that cannot be deleted via API
         """
         mock_client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
@@ -73,19 +75,26 @@ class TestDeleteScriptConfig:
         )
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_script_config("yaml_defined_script")
+            await mock_client.delete_script_config("test_script")
 
         error = exc_info.value
         assert error.status_code == 405
 
-        # Verify the error message is helpful and mentions YAML
+        # Verify the error message is helpful
         error_message = str(error)
-        assert "yaml" in error_message.lower()
-        assert "cannot be deleted" in error_message.lower() or "cannot delete" in error_message.lower()
-        assert "configuration" in error_message.lower()
+        assert "cannot delete" in error_message.lower()
 
-        # Verify it mentions UI-created scripts as the alternative
-        assert "ui" in error_message.lower()
+        # Verify it mentions the addon proxy limitation
+        assert "add-on" in error_message.lower()
+        assert "supervisor" in error_message.lower()
+
+        # Verify it mentions YAML as a possible cause
+        assert "yaml" in error_message.lower()
+
+        # Verify it provides workarounds
+        assert "workaround" in error_message.lower()
+        assert "pip" in error_message.lower() or "docker" in error_message.lower()
+        assert "delete_" in error_message.lower()  # Prefix suggestion
 
     @pytest.mark.asyncio
     async def test_delete_script_other_error_propagates(self, mock_client):
