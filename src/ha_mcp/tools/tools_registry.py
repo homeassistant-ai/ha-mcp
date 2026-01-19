@@ -373,7 +373,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Parse preserve_voice_exposure (default True)
         should_preserve_exposure = coerce_bool_param(
             preserve_voice_exposure, "preserve_voice_exposure", default=True
-        ) or True  # Ensure non-None for type checker
+        )
+        assert should_preserve_exposure is not None  # default=True guarantees non-None
         # Delegate to internal implementation
         return await _rename_entity_internal(
             entity_id=entity_id,
@@ -990,7 +991,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Parse preserve_voice_exposure (default True)
             should_preserve_exposure = coerce_bool_param(
                 preserve_voice_exposure, "preserve_voice_exposure", default=True
-            ) or True  # Ensure non-None for type checker
+            )
+            assert should_preserve_exposure is not None  # default=True guarantees non-None
 
             results: dict[str, Any] = {
                 "entity_rename": None,
