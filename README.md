@@ -119,23 +119,23 @@ Spend less time configuring, more time enjoying your smart home.
 | **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_list_dashboards`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
+| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
-| **Labels** | `ha_config_list_labels`, `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
-| **Zones** | `ha_list_zones`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
+| **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
+| **Zones** | `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
-| **Todo Lists** | `ha_list_todo_lists`, `ha_get_todo_items`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
+| **Todo Lists** | `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event` |
 | **Blueprints** | `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint` |
-| **Device Registry** | `ha_list_devices`, `ha_get_device`, `ha_update_device`, `ha_remove_device`, `ha_rename_entity` |
+| **Device Registry** | `ha_get_device`, `ha_update_device`, `ha_remove_device`, `ha_rename_entity` |
 | **ZHA & Integrations** | `ha_get_zha_devices`, `ha_get_entity_integration_source` |
-| **Add-ons** | `ha_list_addons`, `ha_list_available_addons` |
+| **Add-ons** | `ha_get_addon` |
 | **Camera** | `ha_get_camera_image` |
 | **History & Statistics** | `ha_get_history`, `ha_get_statistics` |
 | **Automation Traces** | `ha_get_automation_traces` |
-| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_list_updates`, `ha_get_release_notes`, `ha_get_system_version` |
+| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates` |
 | **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
-| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_list_integrations` |
+| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_get_integration` |
 
 </details>
 

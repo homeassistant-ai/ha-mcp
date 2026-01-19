@@ -86,7 +86,7 @@ class TestLabelLifecycle:
         try:
             # 1. LIST: Get initial label count
             logger.info("Listing initial labels...")
-            list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+            list_result = await mcp_client.call_tool("ha_config_get_label", {})
             list_data = assert_mcp_success(list_result, "list labels")
             initial_count = list_data.get("count", 0)
             logger.info(f"Initial label count: {initial_count}")
@@ -111,7 +111,7 @@ class TestLabelLifecycle:
             logger.info(f"Created label with ID: {label_id}")
 
             # 3. LIST: Verify label was created
-            list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+            list_result = await mcp_client.call_tool("ha_config_get_label", {})
             list_data = assert_mcp_success(list_result, "list labels after create")
             new_count = list_data.get("count", 0)
             assert new_count == initial_count + 1, (
@@ -146,7 +146,7 @@ class TestLabelLifecycle:
             logger.info("Label updated successfully")
 
             # 5. VERIFY: Check update was applied
-            list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+            list_result = await mcp_client.call_tool("ha_config_get_label", {})
             list_data = assert_mcp_success(list_result, "list labels after update")
             labels = list_data.get("labels", [])
             our_label = next(
@@ -170,7 +170,7 @@ class TestLabelLifecycle:
             logger.info("Label deleted successfully")
 
             # 7. VERIFY: Label is gone
-            list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+            list_result = await mcp_client.call_tool("ha_config_get_label", {})
             list_data = assert_mcp_success(list_result, "list labels after delete")
             final_count = list_data.get("count", 0)
             assert final_count == initial_count, (
@@ -482,7 +482,7 @@ async def test_label_list_empty_state(mcp_client):
     """
     logger.info("Testing label list...")
 
-    list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+    list_result = await mcp_client.call_tool("ha_config_get_label", {})
     list_data = assert_mcp_success(list_result, "list labels")
 
     # Check structure

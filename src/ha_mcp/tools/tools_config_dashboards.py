@@ -271,50 +271,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             "idempotentHint": True,
             "readOnlyHint": True,
             "tags": ["dashboard"],
-            "title": "List Dashboards",
-        }
-    )
-    @log_tool_usage
-    async def ha_config_list_dashboards() -> dict[str, Any]:
-        """
-        List all Home Assistant storage-mode dashboards.
-
-        Returns metadata for all custom dashboards including url_path, title,
-        icon, admin requirements, and sidebar visibility.
-
-        Note: Only shows storage-mode dashboards. YAML-mode dashboards
-        (defined in configuration.yaml) are not included.
-
-        EXAMPLES:
-        - List dashboards: ha_config_list_dashboards()
-        """
-        try:
-            result = await client.send_websocket_message(
-                {"type": "lovelace/dashboards/list"}
-            )
-            if isinstance(result, dict) and "result" in result:
-                dashboards = result["result"]
-            elif isinstance(result, list):
-                dashboards = result
-            else:
-                dashboards = []
-
-            return {
-                "success": True,
-                "action": "list",
-                "dashboards": dashboards,
-                "count": len(dashboards),
-            }
-        except Exception as e:
-            logger.error(f"Error listing dashboards: {e}")
-            return {"success": False, "action": "list", "error": str(e)}
-
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "tags": ["dashboard"],
-            "title": "Get Dashboard Config",
+            "title": "Get Dashboard",
         }
     )
     @log_tool_usage
@@ -323,29 +280,62 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             str | None,
             Field(
                 description="Dashboard URL path (e.g., 'lovelace-home'). "
-                "Use None or empty string for default dashboard."
+                "Use 'default' for default dashboard. "
+                "If omitted with list_only=True, lists all dashboards."
             ),
         ] = None,
+        list_only: Annotated[
+            bool,
+            Field(
+                description="If True, list all dashboards instead of getting config. "
+                "When True, url_path is ignored.",
+            ),
+        ] = False,
         force_reload: Annotated[
             bool, Field(description="Force reload from storage (bypass cache)")
         ] = False,
     ) -> dict[str, Any]:
         """
-        Get complete dashboard configuration including all views and cards.
+        Get dashboard info - list all dashboards or get config for a specific one.
 
-        Returns the full Lovelace dashboard configuration.
+        Without url_path (or with list_only=True): Lists all storage-mode dashboards
+        with metadata including url_path, title, icon, admin requirements.
+
+        With url_path: Returns the full Lovelace dashboard configuration
+        including all views and cards.
 
         EXAMPLES:
-        - Get default dashboard: ha_config_get_dashboard()
-        - Get custom dashboard: ha_config_get_dashboard("lovelace-mobile")
-        - Force reload: ha_config_get_dashboard("lovelace-home", force_reload=True)
+        - List all dashboards: ha_config_get_dashboard(list_only=True)
+        - Get default dashboard: ha_config_get_dashboard(url_path="default")
+        - Get custom dashboard: ha_config_get_dashboard(url_path="lovelace-mobile")
+        - Force reload: ha_config_get_dashboard(url_path="lovelace-home", force_reload=True)
 
-        Note: url_path=None retrieves the default dashboard configuration.
+        Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
         try:
-            # Build WebSocket message
+            # List mode
+            if list_only:
+                result = await client.send_websocket_message(
+                    {"type": "lovelace/dashboards/list"}
+                )
+                if isinstance(result, dict) and "result" in result:
+                    dashboards = result["result"]
+                elif isinstance(result, list):
+                    dashboards = result
+                else:
+                    dashboards = []
+
+                return {
+                    "success": True,
+                    "action": "list",
+                    "dashboards": dashboards,
+                    "count": len(dashboards),
+                }
+
+            # Get mode - build WebSocket message
             data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
-            if url_path:
+            # Handle "default" as special value for default dashboard
+            if url_path and url_path != "default":
                 data["url_path"] = url_path
 
             response = await client.send_websocket_message(data)
@@ -361,9 +351,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "url_path": url_path,
                     "error": str(error_msg),
                     "suggestions": [
-                        "Verify dashboard exists using ha_config_list_dashboards()",
+                        "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                         "Check if you have permission to access this dashboard",
-                        "Use None for default dashboard",
+                        "Use url_path='default' for default dashboard",
                     ],
                 }
 
@@ -395,16 +385,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             return result
         except Exception as e:
-            logger.error(f"Error getting dashboard config: {e}")
+            logger.error(f"Error getting dashboard: {e}")
             return {
                 "success": False,
-                "action": "get",
+                "action": "get" if not list_only else "list",
                 "url_path": url_path,
                 "error": str(e),
                 "suggestions": [
-                    "Verify dashboard exists using ha_config_list_dashboards()",
+                    "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Check if you have permission to access this dashboard",
-                    "Use None for default dashboard",
+                    "Use url_path='default' for default dashboard",
                 ],
             }
 
@@ -645,7 +635,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         "suggestions": [
                             "jq_transform requires an existing dashboard",
                             "Use 'config' parameter to create a new dashboard",
-                            "Verify dashboard exists with ha_config_list_dashboards()",
+                            "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
                         ],
                     }
 
@@ -985,7 +975,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "dashboard_id": dashboard_id,
                     "error": str(error_msg),
                     "suggestions": [
-                        "Verify dashboard ID exists using ha_config_list_dashboards()",
+                        "Verify dashboard ID exists using ha_config_get_dashboard(list_only=True)",
                         "Check that you have admin permissions",
                     ],
                 }
@@ -1014,7 +1004,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "dashboard_id": dashboard_id,
                 "error": str(e),
                 "suggestions": [
-                    "Verify dashboard ID exists using ha_config_list_dashboards()",
+                    "Verify dashboard ID exists using ha_config_get_dashboard(list_only=True)",
                     "Check that you have admin permissions",
                 ],
             }
@@ -1081,7 +1071,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "suggestions": [
                         "Verify dashboard exists and is storage-mode",
                         "Check that you have admin permissions",
-                        "Use ha_config_list_dashboards() to see available dashboards",
+                        "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                         "Cannot delete YAML-mode or default dashboard",
                     ],
                 }
@@ -1118,7 +1108,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "suggestions": [
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
-                    "Use ha_config_list_dashboards() to see available dashboards",
+                    "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Cannot delete YAML-mode or default dashboard",
                 ],
             }
@@ -1434,7 +1424,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "url_path": url_path,
                     "error": f"Failed to get dashboard: {error_msg}",
                     "suggestions": [
-                        "Verify dashboard exists with ha_config_list_dashboards()",
+                        "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
                         "Check HA connection",
                     ],
                 }
@@ -1506,7 +1496,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "error_type": type(e).__name__,
                 "suggestions": [
                     "Check HA connection",
-                    "Verify dashboard with ha_config_list_dashboards()",
+                    "Verify dashboard with ha_config_get_dashboard(list_only=True)",
                 ],
             }
 
