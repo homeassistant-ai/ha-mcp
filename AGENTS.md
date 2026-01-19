@@ -287,6 +287,71 @@ When hotfix PR merges, `hotfix-release.yml` runs:
 
 The `stable` tag is updated AFTER the changelog sync, ensuring it points to the exact release commit, not subsequent maintenance commits.
 
+### Boy Scout Rule
+
+**Principle**: "Always leave the code cleaner than you found it." — Robert C. Martin, *Clean Code*
+
+This principle guides incremental quality improvements during implementation work. The goal is continuous, low-risk enhancement without introducing regressions.
+
+**Where this principle applies most strongly:**
+
+1. **Tool descriptions** - Always improve clarity, accuracy, and usefulness when touching tool docstrings
+2. **Tests** - See testing guidelines below
+
+**For production code (non-test, non-docs):**
+
+Balance improvement against regression risk. Consider:
+- Code complexity and brittleness
+- Test coverage for the affected area
+- Scope of your current work
+- Impact of potential bugs
+
+**Testing guidelines:**
+
+| Scenario | Action |
+|----------|--------|
+| **No tests exist for code you're touching** | Add tests for the specific behavior you're implementing/fixing, without refactoring existing code |
+| **Tests exist but coverage is low** | Add tests for gaps if you're already working in that area |
+| **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
+| **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
+
+**Examples:**
+
+```python
+# GOOD: Adding test for new behavior without refactoring
+def test_new_automation_trigger():
+    # Test the specific feature you added
+    pass
+
+# GOOD: Improving tool description clarity
+"""
+Create a helper entity in Home Assistant.
+
+OLD: "Make helper with config"
+NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified configuration.
+     Use ha_get_domain_docs('input_boolean') for schema details."
+"""
+
+# BAD: Large refactor while implementing a feature
+# Instead: Open issue #XYZ "Refactor helper creation logic" and stay focused on your feature
+
+# GOOD: Low-risk quality improvement
+# Renaming a confusing variable while fixing a bug in that function
+
+# BAD: High-risk refactor
+# Extracting shared logic into new abstractions while fixing a bug
+# Instead: Fix the bug, then open an issue to track the refactor opportunity
+```
+
+**When to open an issue instead:**
+
+- Refactoring would touch many files
+- Unclear how to improve without breaking changes
+- Improvement requires design decisions
+- Would significantly expand PR scope
+
+**Remember**: Small, continuous improvements beat large, risky refactors. Better tests, clearer docs, and obvious code wins compound over time.
+
 ## CI/CD Workflows
 
 | Workflow | Trigger | Purpose |
