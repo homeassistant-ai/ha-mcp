@@ -148,6 +148,8 @@ If code doesn't exist in stable, use regular `fix/` branch from master.
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
+from typing import Any
+
 def register_<domain>_tools(mcp, client, **kwargs):
     @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
@@ -215,9 +217,10 @@ When asked to "triage issues":
 ### Commit Conventions
 | Prefix | Bump | Changelog |
 |--------|------|-----------|
-| `fix:` | Patch | User-facing |
+| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
 | `feat:` | Minor | User-facing |
-| `feat!:` | Major | User-facing |
+| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
+| `docs:` | None | User-facing |
 | `chore:`, `ci:`, `test:` | None | Internal |
 | `*:(internal)` | Same as type | Internal only |
 
