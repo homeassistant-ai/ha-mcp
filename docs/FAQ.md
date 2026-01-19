@@ -46,6 +46,8 @@ Built-in = operate devices. ha-mcp = administer your system.
 - Local/LAN access only
 - Claude Desktop or other local clients
 
+> **Note:** Both methods provide **identical API permissions**. OAuth is about *how* you authenticate, not *what* you can do. The underlying Home Assistant REST API access is the same. If you encounter API errors (like 405 Method Not Allowed), switching auth methods won't help - the issue is with the HA API itself, not the authentication.
+
 ---
 
 ## Try Without Your Own Home Assistant
