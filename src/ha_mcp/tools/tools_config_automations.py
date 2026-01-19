@@ -176,7 +176,14 @@ def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["automation"], "title": "Get Automation Config"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["automation"],
+            "title": "Get Automation Config",
+        }
+    )
     @log_tool_usage
     async def ha_config_get_automation(
         identifier: Annotated[
@@ -241,7 +248,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ]
             return error_response
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["automation"], "title": "Create or Update Automation"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["automation"],
+            "title": "Create or Update Automation",
+        }
+    )
     @log_tool_usage
     async def ha_config_set_automation(
         config: Annotated[
@@ -354,6 +367,14 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             }
         })
 
+        PREFER NATIVE SOLUTIONS OVER TEMPLATES:
+        Before using template triggers/conditions/actions, check if a native option exists:
+        - Use `condition: state` with `state: [list]` instead of template for multiple states
+        - Use `condition: state` with `attribute:` instead of template for attribute checks
+        - Use `condition: numeric_state` instead of template for number comparisons
+        - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
+        - Use `choose` action instead of template-based service names
+
         TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
         CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
@@ -409,9 +430,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     missing_fields=missing_fields,
                 )
 
-            result = await client.upsert_automation_config(
-                config_dict, identifier
-            )
+            result = await client.upsert_automation_config(config_dict, identifier)
             return {
                 "success": True,
                 **result,
@@ -435,7 +454,14 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ]
             return error_response
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["automation"], "title": "Remove Automation"})
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "tags": ["automation"],
+            "title": "Remove Automation",
+        }
+    )
     @log_tool_usage
     async def ha_config_remove_automation(
         identifier: Annotated[
