@@ -519,24 +519,31 @@ class DeviceControlTools:
             return str(entity_id), str(action), None
 
         try:
+            # Validate all operations first (centralized validation)
+            valid_operations: list[tuple[int, dict[str, Any], str, str]] = []
+            for i, op in enumerate(operations):
+                entity_id, action, error = validate_operation(op, i)
+                if error:
+                    skipped_operations.append(
+                        {
+                            "index": i,
+                            "operation": op,
+                            "error": error,
+                            "success": False,
+                        }
+                    )
+                else:
+                    # Store (index, original_op, entity_id, action) for execution
+                    valid_operations.append((i, op, entity_id, action))  # type: ignore[arg-type]
+
+            # Execute only valid operations
             if parallel:
-                # Validate and prepare all operations first
+                # Build tasks for parallel execution
                 tasks = []
-                for i, op in enumerate(operations):
-                    entity_id, action, error = validate_operation(op, i)
-                    if error:
-                        skipped_operations.append(
-                            {
-                                "index": i,
-                                "operation": op,
-                                "error": error,
-                                "success": False,
-                            }
-                        )
-                        continue
+                for _i, op, entity_id, action in valid_operations:
                     task = self.control_device_smart(
-                        entity_id=entity_id,  # type: ignore[arg-type]
-                        action=action,  # type: ignore[arg-type]
+                        entity_id=entity_id,
+                        action=action,
                         parameters=op.get("parameters"),
                         timeout_seconds=op.get("timeout_seconds", 10),
                         validate_first=op.get("validate_first", True),
@@ -561,22 +568,11 @@ class DeviceControlTools:
                                 operation_ids.append(result["operation_id"])
 
             else:
-                # Execute operations sequentially
-                for i, op in enumerate(operations):
-                    entity_id, action, error = validate_operation(op, i)
-                    if error:
-                        skipped_operations.append(
-                            {
-                                "index": i,
-                                "operation": op,
-                                "error": error,
-                                "success": False,
-                            }
-                        )
-                        continue
+                # Execute valid operations sequentially
+                for _i, op, entity_id, action in valid_operations:
                     result = await self.control_device_smart(
-                        entity_id=entity_id,  # type: ignore[arg-type]
-                        action=action,  # type: ignore[arg-type]
+                        entity_id=entity_id,
+                        action=action,
                         parameters=op.get("parameters"),
                         timeout_seconds=op.get("timeout_seconds", 10),
                         validate_first=op.get("validate_first", True),
