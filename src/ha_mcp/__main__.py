@@ -144,29 +144,16 @@ def _check_stdin_available() -> bool:
 
     try:
         fd = sys.stdin.fileno()
-    except (ValueError, OSError):
-        # fileno() can raise if stdin is not a real file
-        return False
-
-    try:
         mode = os.fstat(fd).st_mode
-    except (OSError, ValueError):
+    except (ValueError, OSError):
+        # fileno() or fstat() can raise if stdin is not a real file
         return False
 
-    # Terminal/tty is always valid for interactive use
-    if os.isatty(fd):
+    # Allow TTYs, pipes (how MCP clients communicate), and regular files (testing)
+    if os.isatty(fd) or stat.S_ISFIFO(mode) or stat.S_ISREG(mode):
         return True
 
-    # Pipes (FIFOs) are valid - this is how MCP clients communicate
-    if stat.S_ISFIFO(mode):
-        return True
-
-    # Regular files are valid (for testing/scripting)
-    if stat.S_ISREG(mode):
-        return True
-
-    # Character devices that aren't ttys (like /dev/null) are problematic
-    # Docker without -i connects stdin to /dev/null which causes immediate EOF
+    # Block character devices that aren't TTYs (like /dev/null in Docker without -i)
     if stat.S_ISCHR(mode):
         return False
 
