@@ -142,6 +142,24 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
+## 🧪 Dev Channel
+
+Want to test the latest changes before they hit stable? Dev releases (`.devN`) are published on every push to master.
+
+```bash
+# Install dev version
+pip install ha-mcp --pre
+# or with uv
+uv pip install ha-mcp --pre
+
+# Switch back to stable
+pip install ha-mcp
+```
+
+Dev releases contain the newest features and fixes not yet in the weekly stable release (Tuesdays 10:00 UTC).
+
+---
+
 ## 🤝 Contributing
 
 For development setup, testing instructions, and contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
