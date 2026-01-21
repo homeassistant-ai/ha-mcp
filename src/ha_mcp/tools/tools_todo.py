@@ -22,94 +22,50 @@ logger = logging.getLogger(__name__)
 def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant todo list management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["todo"], "title": "List Todo Lists"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["todo"], "title": "Get Todo"})
     @log_tool_usage
-    async def ha_list_todo_lists() -> dict[str, Any]:
-        """
-        List all todo list entities in Home Assistant.
-
-        Returns all entities in the 'todo' domain, including shopping lists
-        and any other todo-type integrations.
-
-        Each todo list entity includes:
-        - entity_id: The unique identifier (e.g., 'todo.shopping_list')
-        - friendly_name: Human-readable name
-        - state: Number of incomplete items or current status
-
-        EXAMPLES:
-        - List all todo lists: ha_list_todo_lists()
-
-        USE CASES:
-        - "What todo lists do I have?"
-        - "Show me my shopping lists"
-        - "Find my grocery list"
-        """
-        try:
-            # Get all states and filter by todo domain
-            states = await client.get_states()
-
-            todo_lists = []
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                if entity_id.startswith("todo."):
-                    todo_lists.append({
-                        "entity_id": entity_id,
-                        "friendly_name": state.get("attributes", {}).get(
-                            "friendly_name", entity_id
-                        ),
-                        "state": state.get("state"),
-                        "icon": state.get("attributes", {}).get("icon"),
-                        "supported_features": state.get("attributes", {}).get(
-                            "supported_features"
-                        ),
-                    })
-
-            return {
-                "success": True,
-                "count": len(todo_lists),
-                "todo_lists": todo_lists,
-                "message": f"Found {len(todo_lists)} todo list(s)",
-            }
-
-        except Exception as e:
-            logger.error(f"Error listing todo lists: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list todo lists: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify todo integration is enabled",
-                ],
-            }
-
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["todo"], "title": "Get Todo Items"})
-    @log_tool_usage
-    async def ha_get_todo_items(
+    async def ha_get_todo(
         entity_id: Annotated[
-            str,
+            str | None,
             Field(
-                description="Todo list entity ID (e.g., 'todo.shopping_list')"
+                description="Todo list entity ID (e.g., 'todo.shopping_list'). "
+                "If omitted, lists all todo list entities.",
+                default=None,
             ),
-        ],
+        ] = None,
         status: Annotated[
             Literal["needs_action", "completed"] | None,
             Field(
-                description="Filter by status: 'needs_action' for incomplete items, 'completed' for done items. None returns all items.",
+                description="Filter items by status: 'needs_action' for incomplete, 'completed' for done. "
+                "Only applies when entity_id is provided.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        Get items from a Home Assistant todo list.
+        Get todo lists or items - list all todo lists or get items from a specific list.
 
-        Retrieves all items from the specified todo list, optionally filtered by status.
+        Without an entity_id: Lists all todo list entities in Home Assistant.
+        With an entity_id: Gets items from that specific todo list, optionally filtered by status.
 
-        STATUS VALUES:
+        **LISTING TODO LISTS (entity_id omitted):**
+        Returns all entities in the 'todo' domain, including shopping lists
+        and any other todo-type integrations.
+
+        Each todo list includes:
+        - entity_id: The unique identifier (e.g., 'todo.shopping_list')
+        - friendly_name: Human-readable name
+        - state: Number of incomplete items or current status
+
+        **GETTING TODO ITEMS (entity_id provided):**
+        Retrieves items from the specified todo list.
+
+        Status filter values:
         - needs_action: Items that still need to be done
         - completed: Items that have been marked as done
         - None (default): Returns all items regardless of status
 
-        ITEM PROPERTIES:
+        Item properties:
         - uid: Unique identifier for the item
         - summary: The item text/description
         - status: Current status (needs_action or completed)
@@ -117,22 +73,53 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - due: Optional due date (if supported)
 
         EXAMPLES:
-        - Get all items: ha_get_todo_items("todo.shopping_list")
-        - Get incomplete items: ha_get_todo_items("todo.shopping_list", status="needs_action")
-        - Get completed items: ha_get_todo_items("todo.shopping_list", status="completed")
+        - List all todo lists: ha_get_todo()
+        - Get all items: ha_get_todo("todo.shopping_list")
+        - Get incomplete items: ha_get_todo("todo.shopping_list", status="needs_action")
+        - Get completed items: ha_get_todo("todo.shopping_list", status="completed")
 
         USE CASES:
+        - "What todo lists do I have?"
         - "Show me my shopping list"
         - "What's on my todo list?"
         - "Show completed items"
         """
         try:
+            # List mode - no entity_id provided
+            if entity_id is None:
+                # Get all states and filter by todo domain
+                states = await client.get_states()
+
+                todo_lists = []
+                for state in states:
+                    eid = state.get("entity_id", "")
+                    if eid.startswith("todo."):
+                        todo_lists.append({
+                            "entity_id": eid,
+                            "friendly_name": state.get("attributes", {}).get(
+                                "friendly_name", eid
+                            ),
+                            "state": state.get("state"),
+                            "icon": state.get("attributes", {}).get("icon"),
+                            "supported_features": state.get("attributes", {}).get(
+                                "supported_features"
+                            ),
+                        })
+
+                return {
+                    "success": True,
+                    "count": len(todo_lists),
+                    "todo_lists": todo_lists,
+                    "message": f"Found {len(todo_lists)} todo list(s)",
+                }
+
+            # Get items mode - entity_id provided
             # Validate entity_id format
             if not entity_id.startswith("todo."):
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_list_todo_lists() to find valid todo list entity IDs",
+                    "suggestion": "Use ha_get_todo() without entity_id to find valid todo list entity IDs",
                 }
 
             # Use WebSocket to get todo items
@@ -165,23 +152,33 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": f"Failed to get todo items: {error}",
                     "entity_id": entity_id,
                     "suggestions": [
-                        "Verify the entity_id exists using ha_list_todo_lists()",
+                        "Verify the entity_id exists using ha_get_todo()",
                         "Check Home Assistant WebSocket connection",
                     ],
                 }
 
         except Exception as e:
-            logger.error(f"Error getting todo items: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get todo items: {str(e)}",
-                "entity_id": entity_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify entity_id is correct",
-                    "Use ha_list_todo_lists() to find valid todo lists",
-                ],
-            }
+            logger.error(f"Error in ha_get_todo: {e}")
+            if entity_id:
+                return {
+                    "success": False,
+                    "error": f"Failed to get todo items: {str(e)}",
+                    "entity_id": entity_id,
+                    "suggestions": [
+                        "Check Home Assistant connection",
+                        "Verify entity_id is correct",
+                        "Use ha_get_todo() to find valid todo lists",
+                    ],
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to list todo lists: {str(e)}",
+                    "suggestions": [
+                        "Check Home Assistant connection",
+                        "Verify todo integration is enabled",
+                    ],
+                }
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Add Todo Item"})
     @log_tool_usage
@@ -249,7 +246,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_list_todo_lists() to find valid todo list entity IDs",
+                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
                 }
 
             # Build service data
@@ -288,7 +285,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
                 "item": summary,
                 "suggestions": [
-                    "Verify the entity_id exists using ha_list_todo_lists()",
+                    "Verify the entity_id exists using ha_get_todo()",
                     "Check if the todo list supports adding items",
                     "Some todo lists may not support description or due dates",
                 ],
@@ -381,7 +378,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_list_todo_lists() to find valid todo list entity IDs",
+                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
                 }
 
             # Validate at least one update field is provided
@@ -498,7 +495,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_list_todo_lists() to find valid todo list entity IDs",
+                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
                 }
 
             # Build service data

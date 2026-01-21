@@ -43,9 +43,9 @@ class TestHaExposeEntity:
 
     @pytest.fixture
     def list_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_list_exposed_entities function."""
+        """Register tools and return the ha_get_entity_exposure function."""
         register_voice_assistant_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_list_exposed_entities"]
+        return self.registered_tools["ha_get_entity_exposure"]
 
     @pytest.fixture
     def get_exposure_tool(self, mock_mcp, mock_client):
@@ -460,7 +460,7 @@ class TestHaExposeEntity:
 
 
 class TestHaListExposedEntities:
-    """Test ha_list_exposed_entities tool validation logic."""
+    """Test ha_get_entity_exposure tool validation logic."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -486,9 +486,9 @@ class TestHaListExposedEntities:
 
     @pytest.fixture
     def list_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_list_exposed_entities function."""
+        """Register tools and return the ha_get_entity_exposure function."""
         register_voice_assistant_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_list_exposed_entities"]
+        return self.registered_tools["ha_get_entity_exposure"]
 
     @pytest.mark.asyncio
     async def test_list_all_entities_success(self, mock_mcp, mock_client):
@@ -505,7 +505,7 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool()
 
@@ -529,7 +529,7 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool(assistant="conversation")
 
@@ -564,18 +564,20 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool(entity_id="light.living_room")
 
         assert result["success"] is True
-        assert result["filters_applied"]["entity_id"] == "light.living_room"
-        assert "light.living_room" in result["exposed_entities"]
-        assert "light.bedroom" not in result["exposed_entities"]
+        assert result["entity_id"] == "light.living_room"
+        # When entity_id is provided, returns exposed_to dict showing status per assistant
+        assert result["exposed_to"]["conversation"] is True
+        assert result["is_exposed_anywhere"] is True
+        assert result["has_custom_settings"] is True
 
     @pytest.mark.asyncio
     async def test_filter_by_nonexistent_entity_id(self, mock_mcp, mock_client):
-        """Filter by nonexistent entity_id should return empty."""
+        """Filter by nonexistent entity_id should return defaults."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": True,
@@ -587,13 +589,16 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool(entity_id="light.nonexistent")
 
         assert result["success"] is True
-        assert result["count"] == 0
-        assert result["exposed_entities"] == {}
+        assert result["entity_id"] == "light.nonexistent"
+        assert result["is_exposed_anywhere"] is False
+        assert result["has_custom_settings"] is False
+        # Note field should be present when entity has no custom settings
+        assert result["note"] is not None
 
     @pytest.mark.asyncio
     async def test_summary_counts_per_assistant(self, mock_mcp, mock_client):
@@ -611,7 +616,7 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool()
 
@@ -630,7 +635,7 @@ class TestHaListExposedEntities:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool()
 
@@ -644,7 +649,7 @@ class TestHaListExposedEntities:
             side_effect=Exception("Network error")
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         result = await tool()
 
@@ -896,7 +901,7 @@ class TestWebSocketMessageFormat:
             }
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_list_exposed_entities"]
+        tool = self.registered_tools["ha_get_entity_exposure"]
 
         await tool()
 

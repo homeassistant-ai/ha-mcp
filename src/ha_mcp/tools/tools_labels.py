@@ -20,24 +20,30 @@ logger = logging.getLogger(__name__)
 def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant label management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["label"], "title": "List Labels"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["label"], "title": "Get Label"})
     @log_tool_usage
-    async def ha_config_list_labels() -> dict[str, Any]:
+    async def ha_config_get_label(
+        label_id: Annotated[
+            str | None,
+            Field(
+                description="ID of the label to retrieve. If omitted, lists all labels.",
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """
-        List all Home Assistant labels with their configurations.
+        Get label info - list all labels or get a specific one by ID.
 
-        Returns complete configuration for all labels including:
-        - ID (label_id)
-        - Name
-        - Color (optional)
-        - Icon (optional)
-        - Description (optional)
+        Without a label_id: Lists all Home Assistant labels with their configurations.
+        With a label_id: Returns configuration for that specific label.
 
-        Labels are a flexible tagging system in Home Assistant that can be used
-        to categorize and organize entities, devices, and areas.
+        LABEL PROPERTIES:
+        - ID (label_id), Name
+        - Color (optional), Icon (optional), Description (optional)
 
         EXAMPLES:
-        - List all labels: ha_config_list_labels()
+        - List all labels: ha_config_get_label()
+        - Get specific label: ha_config_get_label("my_label_id")
 
         Use ha_config_set_label() to create or update labels.
         Use ha_manage_entity_labels() to manage label assignments for entities.
@@ -49,97 +55,55 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             result = await client.send_websocket_message(message)
 
-            if result.get("success"):
-                labels = result.get("result", [])
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "error": f"Failed to get labels: {result.get('error', 'Unknown error')}",
+                    "label_id": label_id,
+                }
+
+            labels = result.get("result", [])
+
+            # List mode - return all labels
+            if label_id is None:
                 return {
                     "success": True,
                     "count": len(labels),
                     "labels": labels,
                     "message": f"Found {len(labels)} label(s)",
                 }
-            else:
+
+            # Get mode - find specific label
+            label = next(
+                (lbl for lbl in labels if lbl.get("label_id") == label_id), None
+            )
+
+            if label:
                 return {
-                    "success": False,
-                    "error": f"Failed to list labels: {result.get('error', 'Unknown error')}",
-                }
-
-        except Exception as e:
-            logger.error(f"Error listing labels: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list labels: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            }
-
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["label"], "title": "Get Label Details"})
-    @log_tool_usage
-    async def ha_config_get_label(
-        label_id: Annotated[
-            str,
-            Field(description="ID of the label to retrieve"),
-        ],
-    ) -> dict[str, Any]:
-        """
-        Get a specific Home Assistant label by ID.
-
-        Returns complete configuration for a single label including:
-        - ID (label_id)
-        - Name
-        - Color (optional)
-        - Icon (optional)
-        - Description (optional)
-
-        EXAMPLES:
-        - Get label: ha_config_get_label("my_label_id")
-
-        Use ha_config_list_labels() to find available label IDs.
-        """
-        try:
-            # Get all labels and find the one we want
-            message: dict[str, Any] = {
-                "type": "config/label_registry/list",
-            }
-
-            result = await client.send_websocket_message(message)
-
-            if result.get("success"):
-                labels = result.get("result", [])
-                label = next(
-                    (lbl for lbl in labels if lbl.get("label_id") == label_id), None
-                )
-
-                if label:
-                    return {
-                        "success": True,
-                        "label": label,
-                        "message": f"Found label: {label.get('name', label_id)}",
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Label not found: {label_id}",
-                        "label_id": label_id,
-                    }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to get label: {result.get('error', 'Unknown error')}",
+                    "success": True,
                     "label_id": label_id,
+                    "label": label,
+                    "message": f"Found label: {label.get('name', label_id)}",
+                }
+            else:
+                available_ids = [lbl.get("label_id") for lbl in labels[:10]]
+                return {
+                    "success": False,
+                    "error": f"Label not found: {label_id}",
+                    "label_id": label_id,
+                    "available_label_ids": available_ids,
+                    "suggestion": "Use ha_config_get_label() without label_id to see all labels",
                 }
 
         except Exception as e:
-            logger.error(f"Error getting label: {e}")
+            logger.error(f"Error getting labels: {e}")
             return {
                 "success": False,
-                "error": f"Failed to get label: {str(e)}",
+                "error": f"Failed to get labels: {str(e)}",
                 "label_id": label_id,
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
-                    "Use ha_config_list_labels() to find valid label IDs",
                 ],
             }
 
@@ -242,7 +206,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify the label name is valid",
-                    "For updates, verify the label_id exists using ha_config_list_labels()",
+                    "For updates, verify the label_id exists using ha_config_get_label()",
                 ],
             }
 
@@ -263,7 +227,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         EXAMPLES:
         - Delete label: ha_config_remove_label("my_label_id")
 
-        Use ha_config_list_labels() to find label IDs.
+        Use ha_config_get_label() to find label IDs.
 
         **WARNING:** Deleting a label will remove it from all assigned entities.
         This action cannot be undone.
@@ -297,7 +261,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "label_id": label_id,
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify the label_id exists using ha_config_list_labels()",
+                    "Verify the label_id exists using ha_config_get_label()",
                 ],
             }
 
@@ -629,7 +593,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Bulk add: ha_manage_entity_labels(["light.bedroom", "light.kitchen"], "add", "evening")
         - Bulk parallel: ha_manage_entity_labels(["light.1", "light.2", "light.3"], "set", ["outdoor"], parallel=True)
 
-        Use ha_config_list_labels() to find available label IDs.
+        Use ha_config_get_label() to find available label IDs.
         Use ha_search_entities() to find entity IDs.
 
         **OPERATION DETAILS:**
@@ -744,6 +708,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Verify entity_id exists using ha_search_entities()",
-                    "Verify label IDs exist using ha_config_list_labels()",
+                    "Verify label IDs exist using ha_config_get_label()",
                 ],
             }

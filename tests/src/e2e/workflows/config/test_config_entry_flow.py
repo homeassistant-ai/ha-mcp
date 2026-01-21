@@ -20,7 +20,7 @@ class TestConfigEntryFlow:
     async def test_get_config_entry(self, mcp_client):
         """Test getting config entry details."""
         # Get any entry first
-        list_result = await mcp_client.call_tool("ha_list_integrations", {})
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(list_result, "List integrations")
 
         if not data.get("entries"):
@@ -30,7 +30,7 @@ class TestConfigEntryFlow:
         logger.info(f"Testing get_config_entry with: {entry_id}")
 
         result = await mcp_client.call_tool(
-            "ha_get_config_entry", {"entry_id": entry_id}
+            "ha_get_integration", {"entry_id": entry_id}
         )
         data = assert_mcp_success(result, "Get config entry")
         assert "entry" in data, "Result should include entry data"
@@ -38,7 +38,7 @@ class TestConfigEntryFlow:
     async def test_get_config_entry_nonexistent(self, mcp_client):
         """Test error handling for non-existent config entry."""
         result = await mcp_client.call_tool(
-            "ha_get_config_entry", {"entry_id": "nonexistent_entry_id"}
+            "ha_get_integration", {"entry_id": "nonexistent_entry_id"}
         )
         # Should fail with 404 or similar error
         data = parse_mcp_result(result)

@@ -1,7 +1,7 @@
 """
 Integration Listing E2E Tests
 
-Tests the ha_list_integrations tool for listing and filtering
+Tests the ha_get_integration tool for listing and filtering
 Home Assistant config entries (integrations).
 
 Note: Tests are designed to work with the Docker test environment.
@@ -33,9 +33,9 @@ class TestListIntegrations:
         This test validates that we can retrieve all configured integrations
         from Home Assistant.
         """
-        logger.info("Testing ha_list_integrations without filters...")
+        logger.info("Testing ha_get_integration without filters...")
 
-        result = await mcp_client.call_tool("ha_list_integrations", {})
+        result = await mcp_client.call_tool("ha_get_integration", {})
 
         data = assert_mcp_success(result, "list all integrations")
 
@@ -95,10 +95,10 @@ class TestListIntegrations:
         This test validates searching integrations using fuzzy keyword matching.
         We first get all integrations to find a valid domain to search for.
         """
-        logger.info("Testing ha_list_integrations with query search...")
+        logger.info("Testing ha_get_integration with query search...")
 
         # First, get all integrations to find a valid domain
-        all_result = await mcp_client.call_tool("ha_list_integrations", {})
+        all_result = await mcp_client.call_tool("ha_get_integration", {})
         all_data = assert_mcp_success(all_result, "get all integrations")
 
         if all_data["total"] == 0:
@@ -111,7 +111,7 @@ class TestListIntegrations:
 
         # Now search by that domain
         search_result = await mcp_client.call_tool(
-            "ha_list_integrations", {"query": test_domain}
+            "ha_get_integration", {"query": test_domain}
         )
 
         search_data = assert_mcp_success(search_result, f"search by query {test_domain}")
@@ -142,10 +142,10 @@ class TestListIntegrations:
 
         This should return empty results, not an error.
         """
-        logger.info("Testing ha_list_integrations with nonexistent query...")
+        logger.info("Testing ha_get_integration with nonexistent query...")
 
         result = await mcp_client.call_tool(
-            "ha_list_integrations", {"query": "nonexistent_integration_xyz_12345"}
+            "ha_get_integration", {"query": "nonexistent_integration_xyz_12345"}
         )
 
         data = assert_mcp_success(result, "search by nonexistent query")
@@ -166,7 +166,7 @@ class TestListIntegrations:
         """
         logger.info("Testing integration state information...")
 
-        result = await mcp_client.call_tool("ha_list_integrations", {})
+        result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(result, "get integrations for state check")
 
         state_summary = data["state_summary"]
@@ -193,7 +193,7 @@ class TestListIntegrations:
         """
         logger.info("Testing detailed entry information...")
 
-        result = await mcp_client.call_tool("ha_list_integrations", {})
+        result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(result, "get integrations for detail check")
 
         if data["total"] == 0:
@@ -245,7 +245,7 @@ async def test_integration_discovery(mcp_client):
     """
     logger.info("Testing basic integration discovery...")
 
-    result = await mcp_client.call_tool("ha_list_integrations", {})
+    result = await mcp_client.call_tool("ha_get_integration", {})
     data = assert_mcp_success(result, "integration discovery")
 
     assert "entries" in data, "Response should contain entries"

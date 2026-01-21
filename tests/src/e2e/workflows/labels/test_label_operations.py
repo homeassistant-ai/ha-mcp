@@ -496,7 +496,7 @@ class TestRegressionIssue396:
 
         # Verify entity registry is still accessible (not corrupted)
         # 1. Can still list labels
-        list_result = await mcp_client.call_tool("ha_config_list_labels", {})
+        list_result = await mcp_client.call_tool("ha_config_get_label", {})
         assert_mcp_success(list_result, "list labels after rapid operations")
 
         # 2. Can still get entity state

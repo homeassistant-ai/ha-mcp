@@ -3,7 +3,7 @@ Voice Assistant Exposure E2E Tests
 
 Tests for voice assistant exposure tools:
 - ha_expose_entity - Expose/hide entities from voice assistants
-- ha_list_exposed_entities - List entity exposure status
+- ha_get_entity_exposure - List entity exposure status
 - ha_get_entity_exposure - Get specific entity exposure
 
 Note: These tests may have limited functionality in test environments
@@ -31,9 +31,9 @@ class TestVoiceAssistantExposure:
 
         This is a read-only operation that should always succeed.
         """
-        logger.info("Testing ha_list_exposed_entities")
+        logger.info("Testing ha_get_entity_exposure")
 
-        result = await mcp_client.call_tool("ha_list_exposed_entities", {})
+        result = await mcp_client.call_tool("ha_get_entity_exposure", {})
 
         data = parse_mcp_result(result)
         assert data.get("success"), f"Failed to list exposed entities: {data}"
@@ -52,10 +52,10 @@ class TestVoiceAssistantExposure:
         """
         Test: Filter exposed entities by specific assistant
         """
-        logger.info("Testing ha_list_exposed_entities with assistant filter")
+        logger.info("Testing ha_get_entity_exposure with assistant filter")
 
         result = await mcp_client.call_tool(
-            "ha_list_exposed_entities",
+            "ha_get_entity_exposure",
             {"assistant": "conversation"},
         )
 
@@ -74,10 +74,10 @@ class TestVoiceAssistantExposure:
         """
         Test: Invalid assistant name should fail
         """
-        logger.info("Testing ha_list_exposed_entities with invalid assistant")
+        logger.info("Testing ha_get_entity_exposure with invalid assistant")
 
         result = await mcp_client.call_tool(
-            "ha_list_exposed_entities",
+            "ha_get_entity_exposure",
             {"assistant": "invalid_assistant"},
         )
 
@@ -304,7 +304,7 @@ async def test_voice_exposure_basic(mcp_client):
     """
     logger.info("Running basic voice exposure test")
 
-    result = await mcp_client.call_tool("ha_list_exposed_entities", {})
+    result = await mcp_client.call_tool("ha_get_entity_exposure", {})
     data = parse_mcp_result(result)
 
     assert data.get("success"), f"Failed: {data}"

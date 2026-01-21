@@ -263,86 +263,81 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> Non
         **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "List Installed Add-ons"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "Get Add-ons"})
     @log_tool_usage
-    async def ha_list_addons(
+    async def ha_get_addon(
+        source: Annotated[
+            str | None,
+            Field(
+                description="Add-on source: 'installed' (default) for currently installed add-ons, "
+                "'available' for add-ons in the store that can be installed.",
+                default=None,
+            ),
+        ] = None,
         include_stats: Annotated[
             bool,
             Field(
-                description="Include CPU/memory usage statistics for each add-on",
+                description="Include CPU/memory usage statistics (only for source='installed')",
                 default=False,
             ),
         ] = False,
-    ) -> dict[str, Any]:
-        """
-        List installed Home Assistant add-ons.
-
-        Returns add-ons with version, state (started/stopped), and update availability.
-        Optionally includes CPU/memory usage statistics.
-
-        **Note:** This tool only works with Home Assistant OS or Supervised installations.
-
-        **Response includes:**
-        - Add-on name, slug, description
-        - Current version and state
-        - Whether an update is available
-        - Repository the add-on came from
-        - Optional: CPU/memory usage stats
-
-        **Example Usage:**
-        - List all add-ons: ha_list_addons()
-        - List with resource usage: ha_list_addons(include_stats=True)
-
-        **Use Cases:**
-        - Check which add-ons are installed and running
-        - Monitor add-on health and resource usage
-        - Find add-ons with available updates
-        """
-        return await list_addons(client, include_stats)
-
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "List Available Add-ons"})
-    @log_tool_usage
-    async def ha_list_available_addons(
         repository: Annotated[
             str | None,
             Field(
-                description="Filter by repository slug (e.g., 'core', 'community')",
+                description="Filter by repository slug, e.g., 'core', 'community' (only for source='available')",
                 default=None,
             ),
         ] = None,
         query: Annotated[
             str | None,
             Field(
-                description="Search filter for add-on names/descriptions",
+                description="Search filter for add-on names/descriptions (only for source='available')",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        List add-ons available in the Home Assistant add-on store.
+        Get Home Assistant add-ons - list installed or available from store.
 
-        Returns add-ons from official and custom repositories that can be installed.
+        This tool retrieves add-on information based on the source parameter:
+        - source='installed' (default): Lists currently installed add-ons
+        - source='available': Lists add-ons available in the add-on store
 
         **Note:** This tool only works with Home Assistant OS or Supervised installations.
 
-        **Response includes:**
-        - List of configured repositories
-        - Available add-ons with name, slug, description, version
-        - Installation status for each add-on
-        - Summary statistics
+        **INSTALLED ADD-ONS (source='installed'):**
+        Returns add-ons with version, state (started/stopped), and update availability.
+        - include_stats: Optionally include CPU/memory usage statistics
 
-        **Parameters:**
-        - repository: Filter results to a specific repository
+        **AVAILABLE ADD-ONS (source='available'):**
+        Returns add-ons from official and custom repositories that can be installed.
+        - repository: Filter by repository slug (e.g., 'core', 'community')
         - query: Search by name or description (case-insensitive)
 
         **Example Usage:**
-        - List all available add-ons: ha_list_available_addons()
-        - Search for MQTT: ha_list_available_addons(query="mqtt")
-        - List official add-ons: ha_list_available_addons(repository="core")
+        - List installed add-ons: ha_get_addon()
+        - List with resource usage: ha_get_addon(include_stats=True)
+        - List available add-ons: ha_get_addon(source="available")
+        - Search for MQTT: ha_get_addon(source="available", query="mqtt")
+        - List official add-ons: ha_get_addon(source="available", repository="core")
 
         **Use Cases:**
+        - Check which add-ons are installed and running
+        - Monitor add-on health and resource usage
+        - Find add-ons with available updates
         - Find add-ons to recommend for user's needs
         - Check if a specific add-on is available
-        - Explore add-on store contents
         """
-        return await list_available_addons(client, repository, query)
+        # Default to installed if not specified
+        effective_source = (source or "installed").lower()
+
+        if effective_source == "available":
+            return await list_available_addons(client, repository, query)
+        elif effective_source == "installed":
+            return await list_addons(client, include_stats)
+        else:
+            return {
+                "success": False,
+                "error": f"Invalid source: {source}. Must be 'installed' or 'available'.",
+                "valid_sources": ["installed", "available"],
+            }

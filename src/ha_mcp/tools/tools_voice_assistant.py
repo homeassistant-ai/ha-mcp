@@ -200,11 +200,19 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "List Exposed Entities",
+            "title": "Get Entity Exposure",
         }
     )
     @log_tool_usage
-    async def ha_list_exposed_entities(
+    async def ha_get_entity_exposure(
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description="Entity ID to check exposure settings for. "
+                "If omitted, lists all entities with exposure settings.",
+                default=None,
+            ),
+        ] = None,
         assistant: Annotated[
             str | None,
             Field(
@@ -215,27 +223,28 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                 default=None,
             ),
         ] = None,
-        entity_id: Annotated[
-            str | None,
-            Field(
-                description="Filter to show exposure for a specific entity",
-                default=None,
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """
-        List entities and their exposure status to voice assistants.
+        Get entity exposure settings - list all or get settings for a specific entity.
 
-        Returns which entities are exposed to which voice assistants
-        (Alexa, Google Assistant, Assist).
+        Without an entity_id: Lists all entities and their exposure status to
+        voice assistants (Alexa, Google Assistant, Assist).
+
+        With an entity_id: Returns which voice assistants the specific entity
+        is exposed to.
 
         EXAMPLES:
-        - List all exposures: ha_list_exposed_entities()
-        - Filter by assistant: ha_list_exposed_entities(assistant="cloud.alexa")
-        - Check specific entity: ha_list_exposed_entities(entity_id="light.kitchen")
+        - List all exposures: ha_get_entity_exposure()
+        - Filter by assistant: ha_get_entity_exposure(assistant="cloud.alexa")
+        - Get specific entity: ha_get_entity_exposure(entity_id="light.living_room")
 
-        RESPONSE FORMAT:
-        Returns a dict mapping entity_ids to their exposure status per assistant.
+        RETURNS (when listing):
+        - exposed_entities: Dict mapping entity_ids to their exposure status
+        - summary: Count of entities exposed to each assistant
+
+        RETURNS (when getting specific entity):
+        - exposed_to: Dict of assistant -> True/False for each assistant
+        - is_exposed_anywhere: True if exposed to at least one assistant
         """
         try:
             # Validate assistant filter if provided
@@ -250,53 +259,7 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
 
             result = await client.send_websocket_message(message)
 
-            if result.get("success"):
-                exposed_entities = result.get("result", {}).get("exposed_entities", {})
-
-                # Apply filters
-                filtered = exposed_entities
-                if entity_id:
-                    if entity_id in exposed_entities:
-                        filtered = {entity_id: exposed_entities[entity_id]}
-                    else:
-                        # Entity not in exposure list - might mean default exposure
-                        filtered = {}
-
-                if assistant:
-                    # Filter to only show entities exposed to this assistant
-                    filtered = {
-                        eid: settings
-                        for eid, settings in filtered.items()
-                        if settings.get(assistant)
-                    }
-
-                # Build summary
-                summary = {
-                    "conversation": 0,
-                    "cloud.alexa": 0,
-                    "cloud.google_assistant": 0,
-                }
-                for settings in filtered.values():
-                    for asst in KNOWN_ASSISTANTS:
-                        if settings.get(asst):
-                            summary[asst] += 1
-
-                return {
-                    "success": True,
-                    "exposed_entities": filtered,
-                    "count": len(filtered),
-                    "total_entities_with_settings": len(exposed_entities),
-                    "summary": (
-                        summary
-                        if not assistant
-                        else {assistant: summary.get(assistant, 0)}
-                    ),
-                    "filters_applied": {
-                        "assistant": assistant,
-                        "entity_id": entity_id,
-                    },
-                }
-            else:
+            if not result.get("success"):
                 error = result.get("error", {})
                 error_msg = (
                     error.get("message", str(error))
@@ -305,49 +268,14 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                 )
                 return {
                     "success": False,
-                    "error": f"Failed to list exposed entities: {error_msg}",
+                    "error": f"Failed to get exposure settings: {error_msg}",
+                    "entity_id": entity_id,
                 }
 
-        except Exception as e:
-            logger.error(f"Error listing exposed entities: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list exposed entities: {str(e)}",
-            }
+            exposed_entities = result.get("result", {}).get("exposed_entities", {})
 
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity Exposure Settings",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_entity_exposure(
-        entity_id: Annotated[
-            str,
-            Field(description="Entity ID to check exposure settings for"),
-        ],
-    ) -> dict[str, Any]:
-        """
-        Get the voice assistant exposure settings for a specific entity.
-
-        Returns which voice assistants the entity is exposed to.
-
-        EXAMPLE:
-        - ha_get_entity_exposure("light.living_room")
-
-        RESPONSE:
-        - exposed_to: Dict of assistant -> True/False for each assistant
-        - is_exposed_anywhere: True if exposed to at least one assistant
-        """
-        try:
-            message: dict[str, Any] = {"type": "homeassistant/expose_entity/list"}
-
-            result = await client.send_websocket_message(message)
-
-            if result.get("success"):
-                exposed_entities = result.get("result", {}).get("exposed_entities", {})
+            # If entity_id provided, return specific entity exposure
+            if entity_id is not None:
                 entity_settings = exposed_entities.get(entity_id, {})
 
                 # Check if entity is exposed to any assistant
@@ -368,18 +296,45 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                         else None
                     ),
                 }
-            else:
-                error = result.get("error", {})
-                error_msg = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
-                return {
-                    "success": False,
-                    "error": f"Failed to get exposure settings: {error_msg}",
-                    "entity_id": entity_id,
+
+            # List mode - return all exposed entities with optional assistant filter
+            filtered = exposed_entities
+            if assistant:
+                # Filter to only show entities exposed to this assistant
+                filtered = {
+                    eid: settings
+                    for eid, settings in filtered.items()
+                    if settings.get(assistant)
                 }
+
+            # Build summary
+            summary = {
+                "conversation": 0,
+                "cloud.alexa": 0,
+                "cloud.google_assistant": 0,
+            }
+            for settings in filtered.values():
+                for asst in KNOWN_ASSISTANTS:
+                    if settings.get(asst):
+                        summary[asst] += 1
+
+            # Build filters_applied dict
+            filters_applied: dict[str, Any] = {}
+            if assistant:
+                filters_applied["assistant"] = assistant
+
+            return {
+                "success": True,
+                "exposed_entities": filtered,
+                "count": len(filtered),
+                "total_entities_with_settings": len(exposed_entities),
+                "summary": (
+                    summary
+                    if not assistant
+                    else {assistant: summary.get(assistant, 0)}
+                ),
+                "filters_applied": filters_applied,
+            }
 
         except Exception as e:
             logger.error(f"Error getting entity exposure: {e}")
