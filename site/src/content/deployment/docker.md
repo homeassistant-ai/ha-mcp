@@ -2,7 +2,7 @@
 name: Docker
 description: Run ha-mcp in a container
 icon: docker
-forConnections: ['local', 'network']
+forConnections: ['local', 'network', 'remote']
 order: 2
 ---
 
@@ -76,6 +76,65 @@ docker rm ha-mcp
 docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 ```
 
+## For Remote Access (OAuth Mode)
+
+OAuth mode enables **secure, multi-user authentication** via a consent form. Ideal for Claude.ai and other remote clients.
+
+```bash
+docker run -d --name ha-mcp-oauth \
+  -p 8086:8086 \
+  -e MCP_BASE_URL=https://your-public-url.com \
+  -e OAUTH_ENCRYPTION_KEY=your-32-byte-base64-key \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-oauth
+```
+
+Server URL: `https://your-public-url.com/mcp`
+
+### OAuth Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MCP_BASE_URL` | Public HTTPS URL (required for OAuth) | `http://localhost:8086` |
+| `MCP_PORT` | Server port | `8086` |
+| `MCP_SECRET_PATH` | Endpoint path | `/mcp` |
+| `OAUTH_ENCRYPTION_KEY` | Token encryption key | Auto-generated |
+| `LOG_LEVEL` | Logging verbosity | `INFO` |
+
+> **Note:** In OAuth mode, `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are NOT required. Users provide their credentials via the consent form.
+
+### Generate Encryption Key
+
+For production, generate a persistent encryption key:
+
+```bash
+# Generate key
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Example output: gAAAAABn...
+```
+
+Without a persistent key, all user sessions are invalidated when the container restarts.
+
+### OAuth with Cloudflare Tunnel
+
+Expose OAuth server with HTTPS:
+
+```bash
+# Start ha-mcp in OAuth mode
+docker run -d --name ha-mcp-oauth \
+  -p 8086:8086 \
+  -e MCP_BASE_URL=https://ha-mcp.yourdomain.com \
+  -e OAUTH_ENCRYPTION_KEY=your-key \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-oauth
+
+# Start Cloudflare tunnel
+cloudflared tunnel --url http://localhost:8086
+```
+
+---
+
 ## Custom SSL Certificates
 
 If your Home Assistant is behind a reverse proxy with self-signed certificates, you need to provide a CA bundle that includes both your custom CA and the standard root CAs.
@@ -100,10 +159,22 @@ docker run -d --name ha-mcp \
   ha-mcp-web
 ```
 
+---
+
+## Server Mode Comparison
+
+| Mode | Command | Use Case | Auth Method |
+|------|---------|----------|-------------|
+| **stdio** | (default) | Claude Desktop, local clients | Pre-configured token |
+| **ha-mcp-web** | HTTP server | LAN clients, single user | Pre-configured token |
+| **ha-mcp-oauth** | OAuth HTTP server | Claude.ai, multi-user | OAuth consent form |
+| **ha-mcp-sse** | SSE server | Legacy SSE clients | Pre-configured token |
+
 ## Requirements
 
 - Docker or Docker Desktop installed
 - Network access to Home Assistant
+- For OAuth mode: HTTPS endpoint (use Cloudflare Tunnel or similar)
 
 ## Troubleshooting
 

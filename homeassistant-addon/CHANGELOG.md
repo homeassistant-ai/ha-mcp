@@ -3,6 +3,39 @@
 <!-- version list -->
 
 
+## v6.3.1 (2026-01-20)
+
+### Changed
+
+- Add @kingpanther13 and @Raygooo to contributors
+  ([`590d0b7`](https://github.com/homeassistant-ai/ha-mcp/commit/590d0b78b3d4b04a260b26bf738e51d97c91b6cf))
+- **agents**: Add "Leave the Campground Cleaner" principle
+  ([`e11d766`](https://github.com/homeassistant-ai/ha-mcp/commit/e11d766b68d63fce34cf5d97a31074526369930f))
+
+### Fixed
+
+- Add socks support to httpx dependency
+  ([#450](https://github.com/homeassistant-ai/ha-mcp/pull/450))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- **ci**: Robust release publishing logic
+  ([#444](https://github.com/homeassistant-ai/ha-mcp/pull/444))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv
+  ([#454](https://github.com/homeassistant-ai/ha-mcp/pull/454))
+- **deps**: Bump diff and astro in /site
+  ([#441](https://github.com/homeassistant-ai/ha-mcp/pull/441))
+</details>
+
+
 ## v6.3.0 (2026-01-17)
 
 ### Added

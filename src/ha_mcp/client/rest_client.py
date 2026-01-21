@@ -577,6 +577,26 @@ class HomeAssistantClient:
                 "result": response.get("result", "ok"),
                 "operation": "deleted",
             }
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                raise HomeAssistantAPIError(
+                    f"Automation not found: {identifier} (unique_id: {unique_id})",
+                    status_code=404,
+                )
+            elif e.status_code == 405:
+                raise HomeAssistantAPIError(
+                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked. "
+                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
+                    f"the Supervisor ingress proxy only allows GET and POST requests. "
+                    f"WORKAROUNDS: "
+                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
+                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
+                    f"(3) As a fallback, disable the automation and rename it with a 'DELETE_' prefix "
+                    f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
+                    f"via the Home Assistant UI (Settings > Automations & Scenes).",
+                    status_code=405,
+                )
+            raise
         except Exception as e:
             if "404" in str(e):
                 raise HomeAssistantAPIError(
@@ -875,10 +895,17 @@ class HomeAssistantClient:
                 )
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
-                    f"Cannot delete script '{script_id}': This script is defined in YAML configuration files "
-                    f"(e.g., scripts.yaml or configuration.yaml) and cannot be deleted via the API. "
-                    f"Only UI-created scripts can be deleted through this method. "
-                    f"To remove YAML-defined scripts, edit the configuration file directly.",
+                    f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked. "
+                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
+                    f"the Supervisor ingress proxy only allows GET and POST requests. "
+                    f"It may also occur if the script is defined in YAML configuration files. "
+                    f"WORKAROUNDS: "
+                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
+                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
+                    f"(3) If the script is YAML-defined, edit the configuration file directly. "
+                    f"(4) As a fallback, disable the script and rename it with a 'DELETE_' prefix "
+                    f"(e.g., 'DELETE_{script_id}') so you can identify and manually delete it later "
+                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scripts).",
                     status_code=405,
                 )
             raise
