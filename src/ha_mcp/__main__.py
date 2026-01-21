@@ -7,6 +7,7 @@ import asyncio  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import signal  # noqa: E402
+import stat  # noqa: E402
 import sys  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -33,14 +34,14 @@ class OAuthProxyClient:
         token = get_access_token()
 
         if not token:
-            logger.warning("⚠️ No access token in context")
+            logger.warning("No access token in context")
             raise RuntimeError("No OAuth token in request context")
 
         # Extract HA credentials from token claims
         claims = token.claims
 
         if not claims or "ha_url" not in claims or "ha_token" not in claims:
-            logger.error(f"⚠️ No HA credentials in token claims: {claims}")
+            logger.error(f"No HA credentials in token claims: {claims}")
             raise RuntimeError("No Home Assistant credentials in OAuth token claims")
 
         ha_url = claims["ha_url"]
@@ -53,7 +54,7 @@ class OAuthProxyClient:
                 base_url=ha_url,
                 token=ha_token,
             )
-            logger.info(f"✅ Created OAuth client for {ha_url}")
+            logger.info(f"Created OAuth client for {ha_url}")
 
         return self._oauth_clients[client_key]
 
@@ -69,6 +70,33 @@ SHUTDOWN_TIMEOUT_SECONDS = 2.0
 # Global shutdown state
 _shutdown_event: asyncio.Event | None = None
 _shutdown_in_progress = False
+
+# Stdin error message for Docker without -i flag
+_STDIN_ERROR_MESSAGE = """
+==============================================================================
+                    Home Assistant MCP Server - Stdin Not Available
+==============================================================================
+
+The MCP server requires an interactive stdin for stdio transport mode.
+
+This typically happens when running Docker without the -i flag:
+  docker run ghcr.io/homeassistant-ai/ha-mcp:latest  # stdin is closed
+
+To fix this, use one of the following options:
+
+  1. Add the -i flag to enable interactive stdin:
+     docker run -i -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+       ghcr.io/homeassistant-ai/ha-mcp:latest
+
+  2. Use HTTP mode instead (recommended for servers/automation):
+     docker run -d -p 8086:8086 -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+       ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
+
+For more information, see:
+  https://github.com/homeassistant-ai/ha-mcp#-docker
+
+==============================================================================
+"""
 
 # Configuration error message template
 _CONFIG_ERROR_MESSAGE = """
@@ -99,6 +127,51 @@ For detailed setup instructions, see:
 
 ==============================================================================
 """
+
+
+def _check_stdin_available() -> bool:
+    """Check if stdin is available for reading.
+
+    Returns True if stdin is usable (terminal, pipe, or file).
+    Returns False if stdin is closed or not readable (e.g., Docker without -i).
+
+    When Docker runs without the -i flag, stdin is connected to /dev/null,
+    which immediately returns EOF. This causes the stdio transport to exit.
+    """
+    # Check if stdin is closed
+    if sys.stdin is None or sys.stdin.closed:
+        return False
+
+    try:
+        fd = sys.stdin.fileno()
+    except (ValueError, OSError):
+        # fileno() can raise if stdin is not a real file
+        return False
+
+    try:
+        mode = os.fstat(fd).st_mode
+    except (OSError, ValueError):
+        return False
+
+    # Terminal/tty is always valid for interactive use
+    if os.isatty(fd):
+        return True
+
+    # Pipes (FIFOs) are valid - this is how MCP clients communicate
+    if stat.S_ISFIFO(mode):
+        return True
+
+    # Regular files are valid (for testing/scripting)
+    if stat.S_ISREG(mode):
+        return True
+
+    # Character devices that aren't ttys (like /dev/null) are problematic
+    # Docker without -i connects stdin to /dev/null which causes immediate EOF
+    if stat.S_ISCHR(mode):
+        return False
+
+    # Unknown type - allow it and let the server handle any issues
+    return True
 
 
 def _handle_config_error(error: Exception) -> None:
@@ -330,6 +403,11 @@ def main() -> None:
         from ha_mcp.smoke_test import main as smoke_test_main
 
         sys.exit(smoke_test_main())
+
+    # Check if stdin is available (fails in Docker without -i flag)
+    if not _check_stdin_available():
+        print(_STDIN_ERROR_MESSAGE, file=sys.stderr)
+        sys.exit(1)
 
     # Configure logging before server creation
     from ha_mcp.config import get_settings
@@ -583,7 +661,7 @@ def main_oauth() -> None:
     # Also configure all ha_mcp loggers
     for logger_name in ['ha_mcp', 'ha_mcp.auth', 'ha_mcp.auth.provider']:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
-    logger.info(f"✅ OAuth mode logging configured at {log_level} level")
+    logger.info(f"OAuth mode logging configured at {log_level} level")
 
     port = int(os.getenv("MCP_PORT", "8086"))
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
@@ -633,7 +711,7 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     server = HomeAssistantSmartMCPServer(client=proxy_client)
     mcp = server.mcp
 
-    logger.info("✅ Server created with OAuthProxyClient")
+    logger.info("Server created with OAuthProxyClient")
 
     # Add OAuth authentication to the MCP server
     mcp.auth = auth_provider
