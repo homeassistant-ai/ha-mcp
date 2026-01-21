@@ -241,8 +241,6 @@ class TestInputNumberCRUD:
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created input_number: {entity_id}")
 
-        # Wait for entity to be registered (existence only, not specific state)
-        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
@@ -336,8 +334,6 @@ class TestInputSelectCRUD:
         cleanup_tracker.track("input_select", entity_id)
         logger.info(f"Created input_select: {entity_id}")
 
-        # Wait for entity to be registered (existence only, not specific state)
-        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
@@ -424,8 +420,6 @@ class TestInputTextCRUD:
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created input_text: {entity_id}")
 
-        # Wait for entity to be registered (existence only, not specific state)
-        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
