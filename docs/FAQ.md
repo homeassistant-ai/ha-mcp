@@ -26,6 +26,28 @@ You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://ho
 
 Built-in = operate devices. ha-mcp = administer your system.
 
+### What's the difference between OAuth and token-based authentication?
+
+| Feature | Token-Based | OAuth 2.1 |
+|---------|-------------|-----------|
+| **Setup** | Configure token in server environment | Users enter credentials via consent form |
+| **Best for** | Single user, local clients (Claude Desktop) | Multi-user, remote clients (Claude.ai) |
+| **Credentials stored** | In server config | Encrypted in user's session token |
+| **Server command** | `ha-mcp` or `ha-mcp-web` | `ha-mcp-oauth` |
+| **HTTPS required** | No (but recommended) | Yes (for production) |
+
+**When to use OAuth:**
+- Hosting ha-mcp for multiple users
+- Using Claude.ai (web) as your client
+- Exposing ha-mcp over the internet
+
+**When to use token-based:**
+- Single-user setup
+- Local/LAN access only
+- Claude Desktop or other local clients
+
+> **Note:** Both methods provide **identical API permissions**. OAuth is about *how* you authenticate, not *what* you can do. The underlying Home Assistant REST API access is the same. If you encounter API errors (like 405 Method Not Allowed), switching auth methods won't help - the issue is with the HA API itself, not the authentication.
+
 ---
 
 ## Try Without Your Own Home Assistant
@@ -129,15 +151,107 @@ source ~/.zshrc
 
 ---
 
+## OAuth Troubleshooting
+
+### OAuth consent form not loading
+
+1. **Check MCP_BASE_URL** - Must be set to your public HTTPS URL
+2. **Verify HTTPS** - OAuth requires HTTPS in production
+3. **Check tunnel** - Ensure Cloudflare Tunnel or similar is running
+
+### "Invalid credentials" on consent form
+
+1. **Verify Home Assistant URL:**
+   - Include protocol: `http://` or `https://`
+   - Include port if not default: `:8123`
+   - Don't include trailing slash
+   - Example: `http://homeassistant.local:8123`
+
+2. **Verify Long-Lived Access Token:**
+   - Generate a fresh token in HA → Profile → Security → Long-lived access tokens
+   - Copy the full token (it's long!)
+   - Token is validated against HA's `/api/config` endpoint
+
+3. **Check network connectivity:**
+   - The ha-mcp server must be able to reach your Home Assistant
+   - If using Docker, ensure HA is accessible from the container
+
+### OAuth session expired / logged out unexpectedly
+
+1. **Check OAUTH_ENCRYPTION_KEY:**
+   - If not set, tokens are invalidated on server restart
+   - Generate a persistent key:
+     ```bash
+     python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+     ```
+   - Add to your environment: `OAUTH_ENCRYPTION_KEY=your-generated-key`
+
+2. **Token expiration times:**
+   - Access tokens: 1 hour (auto-refresh)
+   - Refresh tokens: 7 days
+   - Re-authenticate if refresh token expires
+
+### OAuth redirect loop or "invalid_grant" error
+
+1. **Clear browser cookies** for your ha-mcp domain
+2. **Check MCP_BASE_URL matches your actual URL** (including https://)
+3. **Verify no URL path mismatch** between MCP_BASE_URL and tunnel config
+
+### Claude.ai shows "401 Unauthorized"
+
+1. **Ensure you're using OAuth mode:** Server should run `ha-mcp-oauth`
+2. **Check the connector URL in Claude.ai** ends with `/mcp`
+3. **Try removing and re-adding the connector**
+
+### Understanding the ports (HA vs ha-mcp)
+
+There are **two different services** with different ports:
+
+| Service | Default Port | Purpose |
+|---------|--------------|---------|
+| **Home Assistant** | 8123 | HA web UI and REST API |
+| **ha-mcp server** | 8086 (Docker/uvx) or 9583 (add-on) | MCP server for AI clients |
+
+- In the **OAuth consent form**, you enter your **Home Assistant URL** (port 8123)
+- In **Claude.ai connector settings**, you enter the **ha-mcp server URL** (via HTTPS tunnel)
+
+### Can I use OAuth with the Home Assistant add-on?
+
+**Not currently.** The ha-mcp Home Assistant add-on runs in token mode only, using the Supervisor API for authentication.
+
+**Important:** HAOS does not allow running custom Docker containers directly - there's no `docker` CLI access. To use OAuth mode with HAOS, you need to run ha-mcp on a separate device:
+
+**Alternatives for HAOS users:**
+
+1. **Separate device on your network** - Run ha-mcp OAuth on a Raspberry Pi, NAS, or always-on PC that has Docker installed
+2. **Cloud/VPS** - Deploy ha-mcp OAuth on a cloud server with HTTPS
+3. **Switch to HA Container** - If you use [Home Assistant Container](https://www.home-assistant.io/installation/linux#docker-compose) instead of HAOS, you have full Docker access
+
+In all cases, the ha-mcp OAuth server needs network access to your Home Assistant instance to validate credentials.
+
+---
+
 ## Configuration Options
 
-### Environment Variables
+### Environment Variables (Token Mode)
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
 | `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+
+### Environment Variables (OAuth Mode)
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `MCP_BASE_URL` | Public HTTPS URL of your server | `http://localhost:8086` | Yes (production) |
+| `MCP_PORT` | Server port | `8086` | No |
+| `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` | No |
+| `OAUTH_ENCRYPTION_KEY` | 32-byte base64 key for token encryption | Auto-generated | Recommended |
+| `LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | `INFO` | No |
+
+> **Note:** In OAuth mode, `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are NOT required - users provide credentials via the consent form.
 
 ### Backup Hint Modes
 

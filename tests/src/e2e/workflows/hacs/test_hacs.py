@@ -553,6 +553,13 @@ class TestMcpToolsInstallation:
         """
         logger.info("Testing ha_install_mcp_tools (without restart)...")
 
+        # Before installation, verify HACS is available and ready
+        result_info = await mcp_client.call_tool("ha_hacs_info", {})
+        info_data = extract_hacs_data(result_info)
+        unavailable, reason = is_hacs_unavailable(info_data)
+        if unavailable:
+            pytest.skip(f"HACS not available or not ready: {reason}")
+
         result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
         data = extract_hacs_data(result)
 
@@ -595,6 +602,13 @@ class TestMcpToolsInstallation:
         """
         logger.info("Testing ha_install_mcp_tools idempotency...")
 
+        # Before installation, verify HACS is available and ready
+        result_info = await mcp_client.call_tool("ha_hacs_info", {})
+        info_data = extract_hacs_data(result_info)
+        unavailable, reason = is_hacs_unavailable(info_data)
+        if unavailable:
+            pytest.skip(f"HACS not available or not ready: {reason}")
+
         # First install
         result1 = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
         data1 = extract_hacs_data(result1)
@@ -624,6 +638,13 @@ class TestMcpToolsInstallation:
         After installing, the component should appear in the HACS repository list.
         """
         logger.info("Testing ha_mcp_tools appears in HACS list...")
+
+        # Before installation, verify HACS is available and ready
+        result_info = await mcp_client.call_tool("ha_hacs_info", {})
+        info_data = extract_hacs_data(result_info)
+        unavailable, reason = is_hacs_unavailable(info_data)
+        if unavailable:
+            pytest.skip(f"HACS not available or not ready: {reason}")
 
         # First ensure it's installed
         install_result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
