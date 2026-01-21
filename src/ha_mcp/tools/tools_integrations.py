@@ -19,24 +19,65 @@ logger = logging.getLogger(__name__)
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["integration"], "title": "List Integrations"})
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["integration"], "title": "Get Integration"})
     @log_tool_usage
-    async def ha_list_integrations(
-        query: str | None = None,
+    async def ha_get_integration(
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description="Config entry ID to get details for. "
+                "If omitted, lists all integrations.",
+                default=None,
+            ),
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(
+                description="When listing, fuzzy search by domain or title.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
-        List configured Home Assistant integrations (config entries).
+        Get integration (config entry) information - list all or get a specific one.
 
-        Returns integration details including domain, title, state, and capabilities.
-        Use the optional query parameter to fuzzy search by domain or title.
+        Without an entry_id: Lists all configured integrations with optional fuzzy search.
+        With an entry_id: Returns detailed information about a specific config entry.
 
-        States: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
+        EXAMPLES:
+        - List all integrations: ha_get_integration()
+        - Search integrations: ha_get_integration(query="zigbee")
+        - Get specific entry: ha_get_integration(entry_id="abc123")
+
+        STATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
+
+        RETURNS (when listing):
+        - entries: List of integrations with domain, title, state, capabilities
+        - state_summary: Count of entries in each state
+
+        RETURNS (when getting specific entry):
+        - entry: Full config entry details
         """
         try:
+            # If entry_id provided, get specific config entry
+            if entry_id is not None:
+                try:
+                    result = await client.get_config_entry(entry_id)
+                    return {"success": True, "entry_id": entry_id, "entry": result}
+                except Exception as e:
+                    error_msg = str(e)
+                    if "404" in error_msg or "not found" in error_msg.lower():
+                        return {
+                            "success": False,
+                            "error": f"Config entry not found: {entry_id}",
+                            "entry_id": entry_id,
+                            "suggestion": "Use ha_get_integration() without entry_id to see all config entries",
+                        }
+                    raise
+
+            # List mode - get all config entries
             # Use REST API endpoint for config entries
-            # Note: Using _request() directly as there's no public wrapper method
-            # for the config_entries endpoint in the client API
             response = await client._request(
                 "GET", "/config/config_entries/entry"
             )
@@ -120,10 +161,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
         except Exception as e:
-            logger.error(f"Failed to list integrations: {e}")
+            logger.error(f"Failed to get integrations: {e}")
             return {
                 "success": False,
-                "error": f"Failed to list integrations: {str(e)}",
+                "error": f"Failed to get integrations: {str(e)}",
                 "suggestions": [
                     "Verify Home Assistant connection is working",
                     "Check that the API is accessible",
@@ -147,7 +188,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Enable/disable integration (config entry).
 
-        Use ha_list_integrations() to find entry IDs.
+        Use ha_get_integration() to find entry IDs.
         """
         try:
             enabled_bool = coerce_bool_param(enabled, "enabled")
@@ -206,7 +247,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Delete config entry permanently. Requires confirm=True.
 
-        Use ha_list_integrations() to find entry IDs.
+        Use ha_get_integration() to find entry IDs.
         """
         try:
             confirm_bool = coerce_bool_param(confirm, "confirm", default=False)

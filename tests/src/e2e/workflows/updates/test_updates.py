@@ -2,8 +2,7 @@
 End-to-End tests for Home Assistant Update Management tools.
 
 This test suite validates the update management tools including:
-- ha_list_updates: List all available updates
-- ha_get_release_notes: Get release notes for an update
+- ha_get_updates: List all updates or get details for a specific update (consolidated tool)
 - ha_get_overview: Get system version and info (includes entity overview)
 
 Tests are designed for Docker Home Assistant test environment.
@@ -29,15 +28,15 @@ class TestUpdateManagement:
         """
         Test: Basic listing of available updates.
 
-        Validates that ha_list_updates returns the expected structure
+        Validates that ha_get_updates returns the expected structure
         even when no updates are available (test environment typically up-to-date).
         """
         logger.info("Testing basic update listing...")
 
         async with MCPAssertions(mcp_client) as mcp:
-            # Call ha_list_updates
+            # Call ha_get_updates
             result = await mcp.call_tool_success(
-                "ha_list_updates",
+                "ha_get_updates",
                 {"include_skipped": False},
             )
 
@@ -114,13 +113,13 @@ class TestUpdateManagement:
         async with MCPAssertions(mcp_client) as mcp:
             # Call with include_skipped=True
             result_with_skipped = await mcp.call_tool_success(
-                "ha_list_updates",
+                "ha_get_updates",
                 {"include_skipped": True},
             )
 
             # Call without skipped (default)
             result_without_skipped = await mcp.call_tool_success(
-                "ha_list_updates",
+                "ha_get_updates",
                 {"include_skipped": False},
             )
 
@@ -201,18 +200,18 @@ class TestUpdateManagement:
 
             logger.info("System version test passed")
 
-    async def test_get_release_notes_invalid_entity(self, mcp_client):
+    async def test_get_updates_invalid_entity(self, mcp_client):
         """
-        Test: Get release notes with invalid entity ID.
+        Test: Get update details with invalid entity ID.
 
-        Validates that ha_get_release_notes handles invalid entity IDs gracefully.
+        Validates that ha_get_updates handles invalid entity IDs gracefully.
         """
-        logger.info("Testing release notes with invalid entity...")
+        logger.info("Testing update details with invalid entity...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Test with non-existent entity
             await mcp.call_tool_failure(
-                "ha_get_release_notes",
+                "ha_get_updates",
                 {"entity_id": "update.nonexistent_entity_xyz"},
                 expected_error="not found",
             )
@@ -220,25 +219,25 @@ class TestUpdateManagement:
 
             # Test with invalid format (not starting with "update.")
             await mcp.call_tool_failure(
-                "ha_get_release_notes",
+                "ha_get_updates",
                 {"entity_id": "light.invalid_entity"},
                 expected_error="Invalid entity_id format",
             )
             logger.info("Invalid format test passed")
 
-    async def test_get_release_notes_for_update(self, mcp_client):
+    async def test_get_update_details(self, mcp_client):
         """
-        Test: Get release notes for an actual update entity.
+        Test: Get detailed info for an actual update entity.
 
         This test first lists updates to find available update entities,
-        then attempts to get release notes for them.
+        then attempts to get details (including release notes) for them.
         """
-        logger.info("Testing release notes for actual update entities...")
+        logger.info("Testing update details for actual update entities...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # First, list all update entities
             list_result = await mcp.call_tool_success(
-                "ha_list_updates",
+                "ha_get_updates",
                 {"include_skipped": True},
             )
 
@@ -270,11 +269,11 @@ class TestUpdateManagement:
                 logger.info("Could not find update entity to test, skipping")
                 return
 
-            logger.info(f"Testing release notes for: {entity_id}")
+            logger.info(f"Testing update details for: {entity_id}")
 
-            # Get release notes for this entity
+            # Get details for this entity (consolidated ha_get_updates with entity_id)
             result = await mcp.call_tool_success(
-                "ha_get_release_notes",
+                "ha_get_updates",
                 {"entity_id": entity_id},
             )
 
@@ -283,11 +282,11 @@ class TestUpdateManagement:
             assert (
                 result.get("entity_id") == entity_id
             ), f"Entity ID mismatch: {result.get('entity_id')} != {entity_id}"
-            assert "version" in result, f"Missing 'version' field: {result}"
+            assert "latest_version" in result, f"Missing 'latest_version' field: {result}"
 
             # release_notes may be None if not available
             release_notes = result.get("release_notes")
-            source = result.get("source")
+            source = result.get("release_notes_source")
 
             if release_notes:
                 logger.info(f"Got release notes from source: {source}")
@@ -299,10 +298,10 @@ class TestUpdateManagement:
             else:
                 logger.info(
                     f"No release notes available for {entity_id}: "
-                    f"{result.get('message', 'No message')}"
+                    f"{result.get('release_notes_hint', 'No hint')}"
                 )
 
-            logger.info("Release notes test passed")
+            logger.info("Update details test passed")
 
 
 @pytest.mark.updates
@@ -319,8 +318,8 @@ class TestUpdateToolsEdgeCases:
 
         async with MCPAssertions(mcp_client) as mcp:
             # Make two calls
-            result1 = await mcp.call_tool_success("ha_list_updates", {})
-            result2 = await mcp.call_tool_success("ha_list_updates", {})
+            result1 = await mcp.call_tool_success("ha_get_updates", {})
+            result2 = await mcp.call_tool_success("ha_get_updates", {})
 
             # Both should have same structure
             assert result1.get("success") == result2.get("success")
@@ -385,7 +384,7 @@ class TestUpdateToolsEdgeCases:
 
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
-                "ha_list_updates", {"include_skipped": True}
+                "ha_get_updates", {"include_skipped": True}
             )
 
             updates = result.get("updates", [])
@@ -443,10 +442,10 @@ async def test_update_tools_discovery(mcp_client):
     tool_names = [tool.name for tool in tool_list]
 
     # Check that update tools are registered
+    # Note: ha_get_release_notes is now consolidated into ha_get_updates
     expected_tools = [
-        "ha_list_updates",
-        "ha_get_release_notes",
-        "ha_get_overview",  # Replaces ha_get_system_version
+        "ha_get_updates",  # Handles both list and get-by-entity_id modes
+        "ha_get_overview",  # System info and version
     ]
 
     for tool_name in expected_tools:

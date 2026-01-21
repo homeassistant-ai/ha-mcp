@@ -291,19 +291,19 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - **Scripts**: `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`
 - **Automations**: `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`
 - **Groups**: `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group`
-- **Dashboards**: `ha_config_list_dashboards`, `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`
+- **Dashboards**: `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`
 - **Areas & Floors**: `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor`
-- **Labels**: `ha_config_list_labels`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels`
-- **Zones**: `ha_list_zones`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`
+- **Labels**: `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels`
+- **Zones**: `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`
 
 ### Todo & Calendar
-- **Todo Lists**: `ha_list_todo_lists`, `ha_get_todo_items`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item`
+- **Todo Lists**: `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item`
 - **Calendar**: `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event`
 
 ### Device Control
 - `ha_bulk_control` - Multi-device control with verification
 - `ha_get_operation_status` - Check operation status
-- `ha_list_devices`, `ha_get_device`, `ha_update_device`, `ha_remove_device`
+- `ha_get_device`, `ha_update_device`, `ha_remove_device`
 - `ha_rename_entity` - Rename entity ID
 
 ### History & Monitoring
@@ -317,13 +317,12 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - `ha_get_entity_integration_source` - Get integration source for any entity
 
 ### Add-ons (Supervisor only)
-- `ha_list_addons` - List installed add-ons
-- `ha_list_available_addons` - List available add-ons from repositories
+- `ha_get_addon` - List installed or available add-ons (source="installed" or "available")
 
 ### System & Updates
 - `ha_check_config`, `ha_restart`, `ha_reload_core`
 - `ha_get_system_info`, `ha_get_system_health`
-- `ha_list_updates`, `ha_get_release_notes`, `ha_get_system_version`
+- `ha_get_updates` - List updates or get details for a specific update entity
 
 ### Blueprints
 - `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint`
@@ -336,7 +335,7 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - `ha_get_logbook` - Historical events
 - `ha_eval_template` - Evaluate Jinja2 templates
 - `ha_get_domain_docs` - Domain documentation
-- `ha_list_integrations` - List installed integrations
+- `ha_get_integration` - List or get integration info
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 

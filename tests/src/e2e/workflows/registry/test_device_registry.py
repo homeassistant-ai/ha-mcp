@@ -2,7 +2,7 @@
 Device Registry E2E Tests
 
 Tests for the device registry management tools:
-- ha_list_devices: List all devices with optional filtering
+- ha_get_device: List all devices with optional filtering
 - ha_get_device: Get device details including entities
 - ha_update_device: Update device properties (name, area, disabled, labels)
 - ha_remove_device: Remove orphaned devices
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.registry
 class TestDeviceList:
-    """Test ha_list_devices functionality."""
+    """Test ha_get_device functionality."""
 
     async def test_list_all_devices(self, mcp_client):
         """
@@ -36,7 +36,7 @@ class TestDeviceList:
         """
         logger.info("Testing device list - all devices")
 
-        list_result = await mcp_client.call_tool("ha_list_devices", {})
+        list_result = await mcp_client.call_tool("ha_get_device", {})
         list_data = parse_mcp_result(list_result)
 
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
@@ -70,7 +70,7 @@ class TestDeviceList:
         logger.info("Testing device list - filter by area")
 
         # First, get all devices to find an area
-        all_result = await mcp_client.call_tool("ha_list_devices", {})
+        all_result = await mcp_client.call_tool("ha_get_device", {})
         all_data = parse_mcp_result(all_result)
         assert all_data.get("success"), f"Failed to list all devices: {all_data}"
 
@@ -89,7 +89,7 @@ class TestDeviceList:
 
         # Filter by area
         filter_result = await mcp_client.call_tool(
-            "ha_list_devices",
+            "ha_get_device",
             {"area_id": area_id},
         )
         filter_data = parse_mcp_result(filter_result)
@@ -112,7 +112,7 @@ class TestDeviceList:
         logger.info("Testing device list - filter by manufacturer")
 
         # First, get all devices to find a manufacturer
-        all_result = await mcp_client.call_tool("ha_list_devices", {})
+        all_result = await mcp_client.call_tool("ha_get_device", {})
         all_data = parse_mcp_result(all_result)
         assert all_data.get("success"), f"Failed to list all devices: {all_data}"
 
@@ -131,7 +131,7 @@ class TestDeviceList:
 
         # Filter by manufacturer (partial match)
         filter_result = await mcp_client.call_tool(
-            "ha_list_devices",
+            "ha_get_device",
             {"manufacturer": manufacturer[:5]},  # Partial match
         )
         filter_data = parse_mcp_result(filter_result)
@@ -160,7 +160,7 @@ class TestDeviceGet:
         logger.info("Testing get device details")
 
         # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_list_devices", {})
+        list_result = await mcp_client.call_tool("ha_get_device", {})
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
@@ -235,7 +235,7 @@ class TestDeviceUpdate:
         logger.info("Testing device name update")
 
         # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_list_devices", {})
+        list_result = await mcp_client.call_tool("ha_get_device", {})
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
@@ -296,7 +296,7 @@ class TestDeviceUpdate:
         logger.info("Testing device labels update")
 
         # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_list_devices", {})
+        list_result = await mcp_client.call_tool("ha_get_device", {})
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
@@ -357,7 +357,7 @@ class TestDeviceUpdate:
         logger.info("Testing device update with no changes")
 
         # First, get a device ID
-        list_result = await mcp_client.call_tool("ha_list_devices", {})
+        list_result = await mcp_client.call_tool("ha_get_device", {})
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
@@ -435,7 +435,7 @@ async def test_device_registry_workflow(mcp_client):
     logger.info("Running basic device registry workflow test")
 
     # 1. List devices
-    list_result = await mcp_client.call_tool("ha_list_devices", {})
+    list_result = await mcp_client.call_tool("ha_get_device", {})
     list_data = parse_mcp_result(list_result)
     assert list_data.get("success"), f"Failed to list devices: {list_data}"
     logger.info(f"Listed {list_data['count']} devices")
@@ -471,7 +471,7 @@ async def test_device_entity_independence(mcp_client):
     logger.info("Testing device/entity naming independence")
 
     # Get a device with entities
-    list_result = await mcp_client.call_tool("ha_list_devices", {})
+    list_result = await mcp_client.call_tool("ha_get_device", {})
     list_data = parse_mcp_result(list_result)
     assert list_data.get("success"), f"Failed to list devices: {list_data}"
 

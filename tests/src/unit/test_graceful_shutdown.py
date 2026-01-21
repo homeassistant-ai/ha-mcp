@@ -187,7 +187,7 @@ class TestGracefulShutdownIntegration:
         # Create a mock MCP that runs forever
         mock_mcp = MagicMock()
 
-        async def mock_run_async():
+        async def mock_run_async(show_banner=True):
             await asyncio.sleep(100)  # Simulate long-running server
 
         mock_mcp.run_async = mock_run_async
@@ -229,7 +229,7 @@ class TestGracefulShutdownIntegration:
 
         mock_mcp = MagicMock()
 
-        async def mock_run_async():
+        async def mock_run_async(show_banner=True):
             await asyncio.sleep(100)
 
         mock_mcp.run_async = mock_run_async
@@ -303,7 +303,7 @@ class TestHTTPEntryPoints:
 
         transport_used = None
 
-        def mock_run_http(transport):
+        def mock_run_http(transport, default_port=8086):
             nonlocal transport_used
             transport_used = transport
             raise SystemExit(0)
@@ -312,9 +312,14 @@ class TestHTTPEntryPoints:
         main_module._shutdown_in_progress = False
         main_module._shutdown_event = None
 
-        with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
-            with pytest.raises(SystemExit):
-                main_module.main_web()
+        # Provide credentials to pass validation
+        with patch.dict(os.environ, {
+            "HOMEASSISTANT_URL": "http://test.local:8123",
+            "HOMEASSISTANT_TOKEN": "test_token"
+        }):
+            with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
+                with pytest.raises(SystemExit):
+                    main_module.main_web()
 
         assert transport_used == "streamable-http"
 
@@ -324,7 +329,7 @@ class TestHTTPEntryPoints:
 
         transport_used = None
 
-        def mock_run_http(transport):
+        def mock_run_http(transport, default_port=8087):
             nonlocal transport_used
             transport_used = transport
             raise SystemExit(0)
@@ -333,9 +338,14 @@ class TestHTTPEntryPoints:
         main_module._shutdown_in_progress = False
         main_module._shutdown_event = None
 
-        with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
-            with pytest.raises(SystemExit):
-                main_module.main_sse()
+        # Provide credentials to pass validation
+        with patch.dict(os.environ, {
+            "HOMEASSISTANT_URL": "http://test.local:8123",
+            "HOMEASSISTANT_TOKEN": "test_token"
+        }):
+            with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
+                with pytest.raises(SystemExit):
+                    main_module.main_sse()
 
         assert transport_used == "sse"
 

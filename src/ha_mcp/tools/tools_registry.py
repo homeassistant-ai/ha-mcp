@@ -291,7 +291,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": f"Failed to update device: {error_msg}",
                     "device_id": device_id,
                     "suggestions": [
-                        "Verify the device_id exists using ha_list_devices()",
+                        "Verify the device_id exists using ha_get_device()",
                         "Check that area_id exists if specified",
                     ],
                 }
@@ -374,6 +374,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         should_preserve_exposure = coerce_bool_param(
             preserve_voice_exposure, "preserve_voice_exposure", default=True
         )
+        assert should_preserve_exposure is not None  # default=True guarantees non-None
         # Delegate to internal implementation
         return await _rename_entity_internal(
             entity_id=entity_id,
@@ -387,12 +388,33 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["system"],
-            "title": "List Devices",
+            "tags": ["system", "zigbee"],
+            "title": "Get Device",
         }
     )
     @log_tool_usage
-    async def ha_list_devices(
+    async def ha_get_device(
+        device_id: Annotated[
+            str | None,
+            Field(
+                description="Device ID to retrieve details for. If omitted, lists devices.",
+                default=None,
+            ),
+        ] = None,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description="Entity ID to find the associated device for (e.g., 'light.living_room')",
+                default=None,
+            ),
+        ] = None,
+        integration: Annotated[
+            str | None,
+            Field(
+                description="Filter devices by integration: 'zha', 'zigbee2mqtt', 'mqtt', 'hue', etc.",
+                default=None,
+            ),
+        ] = None,
         area_id: Annotated[
             str | None,
             Field(
@@ -409,154 +431,31 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        List all devices in the Home Assistant device registry.
+        Get device information - list all devices or get details for a specific one.
 
-        Returns a list of all registered devices with their properties.
-        Optionally filter by area or manufacturer.
+        Without device_id/entity_id: Lists all devices with optional filters.
+        With device_id or entity_id: Returns detailed info for that specific device.
 
-        Device information includes:
-        - device_id: Unique identifier for the device
-        - name: Display name (name_by_user if set, otherwise default name)
-        - manufacturer, model, sw_version: Device identification
-        - area_id: Assigned area/room
-        - disabled_by: Whether device is disabled and by whom
-        - labels: Assigned labels
-
-        EXAMPLES:
-        - List all devices: ha_list_devices()
-        - Filter by area: ha_list_devices(area_id="living_room")
-        - Filter by manufacturer: ha_list_devices(manufacturer="Philips")
-        """
-        try:
-            message: dict[str, Any] = {"type": "config/device_registry/list"}
-
-            result = await client.send_websocket_message(message)
-
-            if result.get("success"):
-                devices = result.get("result", [])
-
-                # Apply filters if specified
-                filtered_devices = devices
-                if area_id:
-                    filtered_devices = [
-                        d for d in filtered_devices if d.get("area_id") == area_id
-                    ]
-                if manufacturer:
-                    manufacturer_lower = manufacturer.lower()
-                    filtered_devices = [
-                        d
-                        for d in filtered_devices
-                        if manufacturer_lower in (d.get("manufacturer") or "").lower()
-                    ]
-
-                # Simplify device data for output
-                device_list = []
-                for device in filtered_devices:
-                    device_info = {
-                        "device_id": device.get("id"),
-                        "name": device.get("name_by_user") or device.get("name"),
-                        "manufacturer": device.get("manufacturer"),
-                        "model": device.get("model"),
-                        "sw_version": device.get("sw_version"),
-                        "area_id": device.get("area_id"),
-                        "disabled_by": device.get("disabled_by"),
-                        "labels": device.get("labels", []),
-                    }
-                    device_list.append(device_info)
-
-                filters_applied = []
-                if area_id:
-                    filters_applied.append(f"area_id={area_id}")
-                if manufacturer:
-                    filters_applied.append(f"manufacturer={manufacturer}")
-
-                return {
-                    "success": True,
-                    "count": len(device_list),
-                    "total_devices": len(devices),
-                    "devices": device_list,
-                    "filters": filters_applied if filters_applied else None,
-                    "message": f"Found {len(device_list)} device(s)"
-                    + (
-                        f" (filtered from {len(devices)} total)"
-                        if filters_applied
-                        else ""
-                    ),
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list devices: {result.get('error', 'Unknown error')}",
-                }
-
-        except Exception as e:
-            logger.error(f"Error listing devices: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list devices: {str(e)}",
-            }
-
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "tags": ["system", "zigbee"],
-            "title": "Get Device Details",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_device(
-        device_id: Annotated[
-            str | None,
-            Field(
-                description="Device ID to retrieve details for",
-                default=None,
-            ),
-        ] = None,
-        entity_id: Annotated[
-            str | None,
-            Field(
-                description="Entity ID to find the associated device for (e.g., 'light.living_room')",
-                default=None,
-            ),
-        ] = None,
-        integration: Annotated[
-            str | None,
-            Field(
-                description="Filter/list devices by integration: 'zha', 'zigbee2mqtt', 'mqtt', 'hue', etc.",
-                default=None,
-            ),
-        ] = None,
-        area_id: Annotated[
-            str | None,
-            Field(
-                description="Filter devices by area ID (e.g., 'living_room')",
-                default=None,
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Get device information including integration source, IEEE address, and friendly name.
+        **List all devices:**
+        - All devices: ha_get_device()
+        - By area: ha_get_device(area_id="living_room")
+        - By manufacturer: ha_get_device(manufacturer="Philips")
+        - By integration: ha_get_device(integration="zigbee2mqtt")
+        - Combined filters: ha_get_device(integration="zha", area_id="kitchen")
 
         **Single device lookup:**
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
-        **List devices by filter:**
-        - All Zigbee2MQTT devices: ha_get_device(integration="zigbee2mqtt")
-        - All ZHA devices: ha_get_device(integration="zha")
-        - ZHA devices in kitchen: ha_get_device(integration="zha", area_id="kitchen")
-
         **Zigbee automation tips:**
         - ZHA triggers: Use `ieee_address` for zha_event triggers
         - Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)
 
-        **Returns:**
-        - device_id, name, manufacturer, model
-        - integration_type: 'zha', 'zigbee2mqtt', 'mqtt', etc.
-        - ieee_address: For ZHA/Z2M devices (use in automation triggers)
-        - friendly_name: Z2M friendly name (use in MQTT topics)
-        - entities: Associated entity IDs
+        **Returns (list mode):**
+        - List of devices with device_id, name, manufacturer, model, area_id
+
+        **Returns (single device):**
+        - Full device details including integration_type, ieee_address, entities
         """
         try:
             # Get device registry
@@ -689,7 +588,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     return {
                         "success": False,
                         "error": f"Device not found: {device_id}",
-                        "suggestion": "Use ha_list_devices() to find valid device IDs",
+                        "suggestion": "Use ha_get_device() to find valid device IDs",
                     }
 
                 device_info = get_device_info(device)
@@ -716,51 +615,74 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "queried_entity_id": entity_id,
                 }
 
-            # List mode - must have at least integration filter
-            if not integration:
-                return {
-                    "success": False,
-                    "error": "Either device_id, entity_id, or integration filter is required",
-                    "suggestion": "Use ha_get_device(integration='zigbee2mqtt') to list Z2M devices, or provide device_id/entity_id for single lookup",
-                }
-
-            # Filter devices by integration and area
+            # List mode - filter devices by any combination of filters
             matched_devices = []
-            integration_lower = integration.lower()
+            integration_lower = integration.lower() if integration else None
+            manufacturer_lower = manufacturer.lower() if manufacturer else None
 
             for device in all_devices:
                 # Apply area filter
                 if area_id and device.get("area_id") != area_id:
                     continue
 
+                # Apply manufacturer filter
+                if manufacturer_lower:
+                    device_manufacturer = (device.get("manufacturer") or "").lower()
+                    if manufacturer_lower not in device_manufacturer:
+                        continue
+
                 device_info = get_device_info(device)
 
-                # Match integration
-                if (
-                    integration_lower == "zigbee2mqtt"
-                    and device_info["integration_type"] == "zigbee2mqtt"
-                ):
-                    device_info["entities"] = device_to_entities.get(
-                        device.get("id"), []
-                    )
-                    matched_devices.append(device_info)
-                elif (
-                    integration_lower == "zha"
-                    and device_info["integration_type"] == "zha"
-                ):
-                    device_info["entities"] = device_to_entities.get(
-                        device.get("id"), []
-                    )
-                    matched_devices.append(device_info)
-                elif integration_lower in device_info.get("integration_sources", []):
-                    device_info["entities"] = device_to_entities.get(
-                        device.get("id"), []
-                    )
-                    matched_devices.append(device_info)
+                # Apply integration filter if specified
+                if integration_lower:
+                    # Match integration
+                    if (
+                        integration_lower == "zigbee2mqtt"
+                        and device_info["integration_type"] != "zigbee2mqtt"
+                    ):
+                        continue
+                    elif (
+                        integration_lower == "zha"
+                        and device_info["integration_type"] != "zha"
+                    ):
+                        continue
+                    elif (
+                        integration_lower not in ["zigbee2mqtt", "zha"]
+                        and integration_lower not in device_info.get("integration_sources", [])
+                    ):
+                        continue
+
+                device_info["entities"] = device_to_entities.get(
+                    device.get("id"), []
+                )
+                matched_devices.append(device_info)
+
+            # Build result
+            result: dict[str, Any] = {
+                "success": True,
+                "count": len(matched_devices),
+                "total_devices": len(all_devices),
+                "devices": matched_devices,
+            }
+
+            # Add filter info
+            filters_applied = []
+            if integration:
+                result["integration_filter"] = integration
+                filters_applied.append(f"integration={integration}")
+            if area_id:
+                result["area_filter"] = area_id
+                filters_applied.append(f"area_id={area_id}")
+            if manufacturer:
+                result["manufacturer_filter"] = manufacturer
+                filters_applied.append(f"manufacturer={manufacturer}")
+
+            if filters_applied:
+                result["filters"] = filters_applied
 
             # Find bridge device for Z2M
-            bridge_info = None
             if integration_lower == "zigbee2mqtt":
+                bridge_info = None
                 for d in matched_devices:
                     if (
                         d.get("via_device_id") is None
@@ -772,19 +694,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "ieee_address": d.get("ieee_address"),
                         }
                         break
-
-            result: dict[str, Any] = {
-                "success": True,
-                "count": len(matched_devices),
-                "integration_filter": integration,
-                "area_filter": area_id,
-                "devices": matched_devices,
-            }
-
-            if bridge_info:
-                result["bridge"] = bridge_info
-
-            if integration_lower == "zigbee2mqtt":
+                if bridge_info:
+                    result["bridge"] = bridge_info
                 result["usage_hint"] = (
                     "Use 'friendly_name' for MQTT topics: zigbee2mqtt/{friendly_name}/action"
                 )
@@ -934,7 +845,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Device not found: {device_id}",
-                    "suggestion": "Use ha_list_devices() to find valid device IDs",
+                    "suggestion": "Use ha_get_device() to find valid device IDs",
                 }
 
             config_entries = device.get("config_entries", [])
@@ -1081,6 +992,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             should_preserve_exposure = coerce_bool_param(
                 preserve_voice_exposure, "preserve_voice_exposure", default=True
             )
+            assert should_preserve_exposure is not None  # default=True guarantees non-None
 
             results: dict[str, Any] = {
                 "entity_rename": None,

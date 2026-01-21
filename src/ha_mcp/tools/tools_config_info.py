@@ -181,10 +181,9 @@ good_night:
                 "Dashboard configuration is stored in the HA database, not YAML files."
             )
             info["tools"] = [
-                "ha_config_list_dashboards - List all dashboards",
-                "ha_config_get_dashboard - Get dashboard configuration",
-                "ha_config_create_dashboard - Create new dashboard",
-                "ha_config_update_dashboard - Update dashboard",
+                "ha_config_get_dashboard(list_only=True) - List all dashboards",
+                "ha_config_get_dashboard(url_path=...) - Get dashboard configuration",
+                "ha_config_set_dashboard - Create/update dashboard",
                 "ha_config_delete_dashboard - Delete dashboard",
             ]
             info["note"] = (
@@ -199,7 +198,7 @@ good_night:
                 "accessible via ha-mcp."
             )
             info["recommendations"] = [
-                "Use ha_list_integrations to see installed integrations",
+                "Use ha_get_integration() to see installed integrations",
                 "Generate YAML snippets for manual addition to configuration.yaml",
                 "Direct users to Settings > Devices & Services in HA UI",
                 "Provide documentation links for specific integrations",

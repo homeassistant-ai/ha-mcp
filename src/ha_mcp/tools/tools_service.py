@@ -149,7 +149,8 @@ def register_service_tools(mcp, client, **kwargs):
     ) -> dict[str, Any]:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
         # Coerce boolean parameter that may come as string from XML-style calls
-        parallel_bool = coerce_bool_param(parallel, "parallel", default=True) or True
+        parallel_bool = coerce_bool_param(parallel, "parallel", default=True)
+        assert parallel_bool is not None  # default=True guarantees non-None
 
         # Parse JSON operations if provided as string
         try:

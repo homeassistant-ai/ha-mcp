@@ -24,10 +24,10 @@ class TestLabelCRUD:
 
     async def test_list_labels(self, mcp_client):
         """Test listing all labels."""
-        logger.info("Testing ha_config_list_labels")
+        logger.info("Testing ha_config_get_label")
 
         result = await mcp_client.call_tool(
-            "ha_config_list_labels",
+            "ha_config_get_label",
             {},
         )
 
@@ -488,7 +488,7 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     # List and verify all exist
     list_result = await mcp_client.call_tool(
-        "ha_config_list_labels",
+        "ha_config_get_label",
         {},
     )
     list_data = assert_mcp_success(list_result, "List labels")
@@ -508,7 +508,7 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     # Verify deletions
     list_result = await mcp_client.call_tool(
-        "ha_config_list_labels",
+        "ha_config_get_label",
         {},
     )
     list_data = assert_mcp_success(list_result, "List after deletion")

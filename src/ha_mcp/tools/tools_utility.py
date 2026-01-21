@@ -360,9 +360,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
         """
         # Coerce boolean parameter that may come as string from XML-style calls
-        report_errors_bool = (
-            coerce_bool_param(report_errors, "report_errors", default=True) or True
+        report_errors_bool = coerce_bool_param(
+            report_errors, "report_errors", default=True
         )
+        assert report_errors_bool is not None  # default=True guarantees non-None
 
         try:
             # Generate unique ID for the template evaluation request
