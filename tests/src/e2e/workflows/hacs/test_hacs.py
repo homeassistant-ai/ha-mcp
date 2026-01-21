@@ -544,6 +544,26 @@ class TestMcpToolsInstallation:
     - Network access to GitHub
     """
 
+    @pytest.fixture(autouse=True)
+    async def check_hacs_available(self, mcp_client):
+        """Pre-flight check: verify HACS is available before attempting install operations.
+
+        This prevents flaky test failures when HACS is rate-limited or temporarily unavailable.
+        """
+        logger.info("Pre-flight check: verifying HACS availability...")
+        result = await mcp_client.call_tool("ha_hacs_info", {})
+        data = extract_hacs_data(result)
+
+        unavailable, reason = is_hacs_unavailable(data)
+        if unavailable:
+            pytest.skip(f"HACS not available for install tests: {reason}")
+
+        if not data.get("success"):
+            error = data.get("error", "Unknown error")
+            pytest.skip(f"HACS not ready: {error}")
+
+        logger.info(f"Pre-flight check passed: HACS v{data.get('version')} is available")
+
     async def test_install_mcp_tools_basic(self, mcp_client):
         """
         Test: Install ha_mcp_tools via HACS (without restart)
