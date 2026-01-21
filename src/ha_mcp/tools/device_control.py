@@ -486,44 +486,97 @@ class DeviceControlTools:
         if not operations:
             return {"success": False, "error": "No operations provided", "results": []}
 
-        results = []
-        operation_ids = []
+        results: list[dict[str, Any]] = []
+        operation_ids: list[str] = []
+        skipped_operations: list[dict[str, Any]] = []
+
+        def validate_operation(
+            op: Any, index: int
+        ) -> tuple[str | None, str | None, str | None]:
+            """Validate operation and return (entity_id, action, error) tuple."""
+            if not isinstance(op, dict):
+                error = f"Operation at index {index} is not a dict: {type(op).__name__}"
+                logger.warning(f"Bulk control: {error}")
+                return None, None, error
+
+            entity_id = op.get("entity_id")
+            action = op.get("action")
+
+            missing_fields = []
+            if not entity_id:
+                missing_fields.append("entity_id")
+            if not action:
+                missing_fields.append("action")
+
+            if missing_fields:
+                error = (
+                    f"Operation at index {index} missing required fields: "
+                    f"{', '.join(missing_fields)}"
+                )
+                logger.warning(f"Bulk control: {error}")
+                return None, None, error
+
+            return str(entity_id), str(action), None
 
         try:
             if parallel:
-                # Execute all operations in parallel
+                # Validate and prepare all operations first
                 tasks = []
-                for op in operations:
-                    entity_id = op.get("entity_id")
-                    action = op.get("action")
-                    if not entity_id or not action:
+                for i, op in enumerate(operations):
+                    entity_id, action, error = validate_operation(op, i)
+                    if error:
+                        skipped_operations.append(
+                            {
+                                "index": i,
+                                "operation": op,
+                                "error": error,
+                                "success": False,
+                            }
+                        )
                         continue
                     task = self.control_device_smart(
-                        entity_id=str(entity_id),
-                        action=str(action),
+                        entity_id=entity_id,  # type: ignore[arg-type]
+                        action=action,  # type: ignore[arg-type]
                         parameters=op.get("parameters"),
                         timeout_seconds=op.get("timeout_seconds", 10),
                         validate_first=op.get("validate_first", True),
                     )
                     tasks.append(task)
 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                if tasks:
+                    task_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Extract operation IDs
-                for result in results:
-                    if isinstance(result, dict) and "operation_id" in result:
-                        operation_ids.append(result["operation_id"])
+                    # Process results and extract operation IDs
+                    for result in task_results:
+                        if isinstance(result, Exception):
+                            results.append(
+                                {
+                                    "success": False,
+                                    "error": f"Exception during execution: {result!s}",
+                                }
+                            )
+                        elif isinstance(result, dict):
+                            results.append(result)
+                            if "operation_id" in result:
+                                operation_ids.append(result["operation_id"])
 
             else:
                 # Execute operations sequentially
-                for op in operations:
-                    entity_id = op.get("entity_id")
-                    action = op.get("action")
-                    if not entity_id or not action:
+                for i, op in enumerate(operations):
+                    entity_id, action, error = validate_operation(op, i)
+                    if error:
+                        skipped_operations.append(
+                            {
+                                "index": i,
+                                "operation": op,
+                                "error": error,
+                                "success": False,
+                            }
+                        )
                         continue
                     result = await self.control_device_smart(
-                        entity_id=str(entity_id),
-                        action=str(action),
+                        entity_id=entity_id,  # type: ignore[arg-type]
+                        action=action,  # type: ignore[arg-type]
                         parameters=op.get("parameters"),
                         timeout_seconds=op.get("timeout_seconds", 10),
                         validate_first=op.get("validate_first", True),
@@ -533,22 +586,28 @@ class DeviceControlTools:
                     if "operation_id" in result:
                         operation_ids.append(result["operation_id"])
 
-            # Count successes and failures
+            # Count successes and failures from executed operations
             successful = len(
                 [r for r in results if isinstance(r, dict) and r.get("command_sent")]
             )
-            failed = len(results) - successful
+            executed_failed = len(results) - successful
+            # Total failed includes both execution failures and skipped operations
+            total_failed = executed_failed + len(skipped_operations)
 
-            return {
+            response: dict[str, Any] = {
                 "total_operations": len(operations),
                 "successful_commands": successful,
-                "failed_commands": failed,
+                "failed_commands": total_failed,
+                "skipped_operations": len(skipped_operations),
                 "execution_mode": "parallel" if parallel else "sequential",
                 "operation_ids": operation_ids,
                 "results": results,
                 "follow_up": (
                     {
-                        "message": f"Use get_bulk_operation_status() to check all {len(operation_ids)} operations",
+                        "message": (
+                            f"Use get_bulk_operation_status() to check all "
+                            f"{len(operation_ids)} operations"
+                        ),
                         "operation_ids": operation_ids,
                     }
                     if operation_ids
@@ -556,11 +615,23 @@ class DeviceControlTools:
                 ),
             }
 
+            # Include skipped operation details if any were skipped
+            if skipped_operations:
+                response["skipped_details"] = skipped_operations
+                response["suggestions"] = [
+                    "Some operations were skipped due to validation errors",
+                    "Each operation requires 'entity_id' and 'action' fields",
+                    "Check skipped_details for specific errors",
+                    "Example format: {'entity_id': 'light.living_room', 'action': 'on'}",
+                ]
+
+            return response
+
         except Exception as e:
             logger.error(f"Error in bulk_device_control: {e}")
             return {
                 "success": False,
-                "error": f"Bulk operation failed: {str(e)}",
+                "error": f"Bulk operation failed: {e!s}",
                 "results": results,
             }
 
