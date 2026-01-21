@@ -7,7 +7,6 @@ Tests the complete lifecycle of input_* helpers including:
 - Type-specific parameter validation
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -242,19 +241,9 @@ class TestInputNumberCRUD:
         cleanup_tracker.track("input_number", entity_id)
         logger.info(f"Created input_number: {entity_id}")
 
-        # Give HA a moment to process entity registration before polling
-
-
-        await asyncio.sleep(5)
-
-
-
         # Wait for entity to be registered (existence only, not specific state)
-
-
+        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
-
-
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
@@ -347,19 +336,9 @@ class TestInputSelectCRUD:
         cleanup_tracker.track("input_select", entity_id)
         logger.info(f"Created input_select: {entity_id}")
 
-        # Give HA a moment to process entity registration before polling
-
-
-        await asyncio.sleep(5)
-
-
-
         # Wait for entity to be registered (existence only, not specific state)
-
-
+        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
-
-
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # VERIFY via state
@@ -445,19 +424,9 @@ class TestInputTextCRUD:
         cleanup_tracker.track("input_text", entity_id)
         logger.info(f"Created input_text: {entity_id}")
 
-        # Give HA a moment to process entity registration before polling
-
-
-        await asyncio.sleep(5)
-
-
-
         # Wait for entity to be registered (existence only, not specific state)
-
-
+        # The wait_for_entity_registration function already polls with appropriate timeout
         entity_ready = await wait_for_entity_registration(mcp_client, entity_id)
-
-
         assert entity_ready, f"Entity {entity_id} not registered within timeout"
 
         # DELETE
@@ -853,7 +822,7 @@ class TestTimerCRUD:
             mcp_client, entity_id, "idle", timeout=10
         )
         assert state_reached, f"Timer {entity_id} not registered in idle state within timeout"
-        logger.info(f"Timer initial state: idle")
+        logger.info("Timer initial state: idle")
 
         # START timer
         start_result = await mcp_client.call_tool(
