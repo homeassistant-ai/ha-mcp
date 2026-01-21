@@ -404,17 +404,13 @@ def main() -> None:
 
         sys.exit(smoke_test_main())
 
-    # Check if stdin is available (fails in Docker without -i flag)
-    if not _check_stdin_available():
-        print(_STDIN_ERROR_MESSAGE, file=sys.stderr)
-        sys.exit(1)
-
     # Configure logging before server creation
     from ha_mcp.config import get_settings
     settings = get_settings()
 
     # In standard mode (not OAuth), validate that real credentials are provided
     # The config has defaults for OAuth mode, but standard mode requires real values
+    # Check config FIRST so users see helpful config errors before stdin errors
     missing_vars = []
     if settings.homeassistant_url == "http://oauth-mode":
         missing_vars.append("  - HOMEASSISTANT_URL")
@@ -426,6 +422,12 @@ def main() -> None:
             _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
             file=sys.stderr,
         )
+        sys.exit(1)
+
+    # Check if stdin is available (fails in Docker without -i flag)
+    # This check comes after config validation so users see config errors first
+    if not _check_stdin_available():
+        print(_STDIN_ERROR_MESSAGE, file=sys.stderr)
         sys.exit(1)
 
     logging.basicConfig(
