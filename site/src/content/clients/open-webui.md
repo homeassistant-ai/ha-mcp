@@ -99,7 +99,9 @@ If you're using Ollama and tools aren't working:
 ### "Connection Refused" or Network Errors
 
 1. **Verify the URL is correct** - See [Finding Your MCP URL](#finding-your-mcp-url) above
-2. **Check Docker networking** - If both Open WebUI and ha-mcp are in Docker, use appropriate hostnames
+2. **Check Docker networking**:
+   - **ha-mcp on host, Open WebUI in Docker**: Use `http://host.docker.internal:8086/mcp`
+   - **Both in Docker on same network**: Use container names (e.g., `http://ha-mcp:8086/mcp`)
 3. **Firewall/port issues** - Ensure port 8086 (default) is accessible
 
 ### Tools Appear But Model Doesn't Use Them
@@ -115,7 +117,7 @@ If you're using Ollama and tools aren't working:
 | Using "External Tools" instead of Admin Panel | Go to **Admin Panel** → **Settings** → **Tools** |
 | Using stdio MCP server URL | ha-mcp must be running in HTTP mode (`ha-mcp-web`) |
 | Expecting small local models to work | Start with API models to verify setup, then test local |
-| Wrong Docker network address | Use `host.docker.internal` when both services are in Docker |
+| Wrong Docker network address | Use `host.docker.internal` for host access, or container names on a shared Docker network |
 
 ## Notes
 
