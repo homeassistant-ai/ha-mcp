@@ -38,13 +38,15 @@ uvx --prerelease=allow ha-mcp
 **Config changes required:** None. The same `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` environment variables work with dev releases.
 
 **Switch back to stable:**
+
+To reliably switch to the latest stable version, it's best to uninstall and then reinstall the package.
+
 ```bash
 # With pip
-pip install ha-mcp
+pip uninstall ha-mcp -y && pip install ha-mcp
 
 # With uv
-uv pip install ha-mcp
-```
+uv pip uninstall ha-mcp && uv pip install ha-mcp
 
 ### Docker
 
