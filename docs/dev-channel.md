@@ -76,9 +76,11 @@ docker run -d -p 8086:8086 \
 ```
 
 **Switch back to stable:**
+
+Pull the `latest` image, then stop your `dev` container and start a new one using the `latest` tag.
+
 ```bash
 docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
-```
 
 ### Home Assistant Add-on
 
