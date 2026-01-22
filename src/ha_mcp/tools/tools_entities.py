@@ -80,11 +80,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "destructiveHint": True,
             "idempotentHint": True,
             "tags": ["entity"],
-            "title": "Update Entity",
+            "title": "Set Entity",
         }
     )
     @log_tool_usage
-    async def ha_update_entity(
+    async def ha_set_entity(
         entity_id: Annotated[
             str, Field(description="Entity ID to update (e.g., 'sensor.temperature')")
         ],
@@ -109,17 +109,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
-        disabled_by: Annotated[
-            str | None,
+        enabled: Annotated[
+            bool | str | None,
             Field(
-                description="Set to 'user' to disable the entity, or None/empty string to enable it.",
+                description="True to enable the entity, False to disable it.",
                 default=None,
             ),
         ] = None,
-        hidden_by: Annotated[
-            str | None,
+        hidden: Annotated[
+            bool | str | None,
             Field(
-                description="Set to 'user' to hide the entity from UI, or None/empty string to unhide.",
+                description="True to hide the entity from UI, False to show it.",
                 default=None,
             ),
         ] = None,
@@ -130,41 +130,33 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
-        labels: Annotated[
-            str | list[str] | None,
-            Field(
-                description="List of labels to assign to the entity (replaces existing labels).",
-                default=None,
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """Update entity properties in the entity registry.
 
         Allows modifying entity metadata such as area assignment, display name,
-        icon, enabled/disabled state, visibility, aliases, and labels.
+        icon, enabled/disabled state, visibility, and aliases.
 
         Use ha_search_entities() or ha_get_device() to find entity IDs.
+        Use ha_manage_entity_labels() to manage entity labels.
 
         PARAMETERS:
         - area_id: Assigns entity to an area/room. Use '' to remove from area.
         - name: Custom display name. Use '' to revert to default name.
         - icon: Custom icon (e.g., 'mdi:lightbulb'). Use '' to revert to default.
-        - disabled_by: Set to 'user' to disable, or '' to enable.
-        - hidden_by: Set to 'user' to hide from UI, or '' to unhide.
+        - enabled: True to enable, False to disable.
+        - hidden: True to hide from UI, False to show.
         - aliases: Voice assistant aliases (e.g., ["living room light", "main light"]).
-        - labels: Labels for organization (e.g., ["important", "sensor"]).
 
         EXAMPLES:
-        - Assign to area: ha_update_entity("sensor.temp", area_id="living_room")
-        - Rename: ha_update_entity("sensor.temp", name="Living Room Temperature")
-        - Change icon: ha_update_entity("sensor.temp", icon="mdi:thermometer")
-        - Disable: ha_update_entity("sensor.temp", disabled_by="user")
-        - Enable: ha_update_entity("sensor.temp", disabled_by="")
-        - Hide: ha_update_entity("sensor.temp", hidden_by="user")
-        - Unhide: ha_update_entity("sensor.temp", hidden_by="")
-        - Set aliases: ha_update_entity("light.lamp", aliases=["bedroom light", "lamp"])
-        - Set labels: ha_update_entity("sensor.temp", labels=["climate", "important"])
-        - Clear area: ha_update_entity("sensor.temp", area_id="")
+        - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
+        - Rename: ha_set_entity("sensor.temp", name="Living Room Temperature")
+        - Change icon: ha_set_entity("sensor.temp", icon="mdi:thermometer")
+        - Disable: ha_set_entity("sensor.temp", enabled=False)
+        - Enable: ha_set_entity("sensor.temp", enabled=True)
+        - Hide: ha_set_entity("sensor.temp", hidden=True)
+        - Show: ha_set_entity("sensor.temp", hidden=False)
+        - Set aliases: ha_set_entity("light.lamp", aliases=["bedroom light", "lamp"])
+        - Clear area: ha_set_entity("sensor.temp", area_id="")
 
         NOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.
         """
@@ -176,13 +168,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parsed_aliases = parse_string_list_param(aliases, "aliases")
                 except ValueError as e:
                     return {"success": False, "error": f"Invalid aliases parameter: {e}"}
-
-            parsed_labels = None
-            if labels is not None:
-                try:
-                    parsed_labels = parse_string_list_param(labels, "labels")
-                except ValueError as e:
-                    return {"success": False, "error": f"Invalid labels parameter: {e}"}
 
             # Build update message
             message: dict[str, Any] = {
@@ -209,33 +194,27 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 message["icon"] = icon if icon else None
                 updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
 
-            if disabled_by is not None:
-                # Empty string means enable (set to None in API)
-                message["disabled_by"] = disabled_by if disabled_by else None
-                updates_made.append(
-                    f"disabled_by='{disabled_by}'" if disabled_by else "enabled"
-                )
+            if enabled is not None:
+                # Convert boolean to API format: True=enable (None), False=disable ("user")
+                enabled_bool = coerce_bool_param(enabled, "enabled")
+                message["disabled_by"] = None if enabled_bool else "user"
+                updates_made.append("enabled" if enabled_bool else "disabled")
 
-            if hidden_by is not None:
-                # Empty string means unhide (set to None in API)
-                message["hidden_by"] = hidden_by if hidden_by else None
-                updates_made.append(
-                    f"hidden_by='{hidden_by}'" if hidden_by else "unhidden"
-                )
+            if hidden is not None:
+                # Convert boolean to API format: True=hide ("user"), False=show (None)
+                hidden_bool = coerce_bool_param(hidden, "hidden")
+                message["hidden_by"] = "user" if hidden_bool else None
+                updates_made.append("hidden" if hidden_bool else "visible")
 
             if parsed_aliases is not None:
                 message["aliases"] = parsed_aliases
                 updates_made.append(f"aliases={parsed_aliases}")
 
-            if parsed_labels is not None:
-                message["labels"] = parsed_labels
-                updates_made.append(f"labels={parsed_labels}")
-
             if not updates_made:
                 return {
                     "success": False,
                     "error": "No updates specified",
-                    "suggestion": "Provide at least one of: area_id, name, icon, disabled_by, hidden_by, aliases, or labels",
+                    "suggestion": "Provide at least one of: area_id, name, icon, enabled, hidden, or aliases",
                 }
 
             logger.info(f"Updating entity {entity_id}: {', '.join(updates_made)}")

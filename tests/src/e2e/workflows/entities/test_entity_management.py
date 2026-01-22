@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success
+from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
 from tests.src.e2e.utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
@@ -89,8 +89,6 @@ class TestEntityManagement:
 
     async def test_set_entity_enabled_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity."""
-        from tests.src.e2e.utilities.assertions import parse_mcp_result
-
         result = await mcp_client.call_tool(
             "ha_set_entity_enabled",
             {"entity_id": "sensor.nonexistent_entity", "enabled": True},
@@ -99,8 +97,8 @@ class TestEntityManagement:
         data = parse_mcp_result(result)
         assert not data.get("success", False)
 
-    async def test_update_entity_assign_area(self, mcp_client, cleanup_tracker):
-        """Test assigning an entity to an area using ha_update_entity."""
+    async def test_set_entity_assign_area(self, mcp_client, cleanup_tracker):
+        """Test assigning an entity to an area using ha_set_entity."""
         cleaner = EntityCleaner(mcp_client)
 
         # Create test helper for entity
@@ -108,7 +106,7 @@ class TestEntityManagement:
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
-                "name": "E2E Update Entity Area Test",
+                "name": "E2E Set Entity Area Test",
                 "icon": "mdi:test-tube",
             },
         )
@@ -131,7 +129,7 @@ class TestEntityManagement:
 
         # Assign entity to area
         update_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {"entity_id": entity_id, "area_id": area_id},
         )
         update_data = assert_mcp_success(update_result, "Assign entity to area")
@@ -145,7 +143,7 @@ class TestEntityManagement:
         await cleaner.cleanup_all()
         await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
 
-    async def test_update_entity_clear_area(self, mcp_client, cleanup_tracker):
+    async def test_set_entity_clear_area(self, mcp_client, cleanup_tracker):
         """Test clearing area assignment using empty string."""
         cleaner = EntityCleaner(mcp_client)
 
@@ -173,13 +171,13 @@ class TestEntityManagement:
 
         # Assign entity to area first
         await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {"entity_id": entity_id, "area_id": area_id},
         )
 
         # Clear area using empty string
         clear_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {"entity_id": entity_id, "area_id": ""},
         )
         clear_data = assert_mcp_success(clear_result, "Clear entity area")
@@ -193,7 +191,7 @@ class TestEntityManagement:
         await cleaner.cleanup_all()
         await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
 
-    async def test_update_entity_name_and_icon(self, mcp_client, cleanup_tracker):
+    async def test_set_entity_name_and_icon(self, mcp_client, cleanup_tracker):
         """Test updating entity name and icon."""
         cleaner = EntityCleaner(mcp_client)
 
@@ -212,7 +210,7 @@ class TestEntityManagement:
 
         # Update name and icon
         update_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {
                 "entity_id": entity_id,
                 "name": "Custom Display Name",
@@ -233,7 +231,7 @@ class TestEntityManagement:
 
         # Clear name and icon using empty strings
         clear_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {"entity_id": entity_id, "name": "", "icon": ""},
         )
         clear_data = assert_mcp_success(clear_result, "Clear name and icon")
@@ -247,12 +245,10 @@ class TestEntityManagement:
         # Cleanup
         await cleaner.cleanup_all()
 
-    async def test_update_entity_nonexistent(self, mcp_client):
-        """Test error handling for non-existent entity in ha_update_entity."""
-        from tests.src.e2e.utilities.assertions import parse_mcp_result
-
+    async def test_set_entity_nonexistent(self, mcp_client):
+        """Test error handling for non-existent entity in ha_set_entity."""
         result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {"entity_id": "sensor.nonexistent_entity_xyz", "name": "Test Name"},
         )
         data = parse_mcp_result(result)
@@ -260,8 +256,8 @@ class TestEntityManagement:
 
         logger.info("Non-existent entity error handling verified")
 
-    async def test_update_entity_aliases_and_labels(self, mcp_client, cleanup_tracker):
-        """Test setting aliases and labels as string lists."""
+    async def test_set_entity_aliases(self, mcp_client, cleanup_tracker):
+        """Test setting aliases as string lists."""
         cleaner = EntityCleaner(mcp_client)
 
         # Create test helper
@@ -269,7 +265,7 @@ class TestEntityManagement:
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
-                "name": "E2E Aliases Labels Test",
+                "name": "E2E Aliases Test",
                 "icon": "mdi:test-tube",
             },
         )
@@ -277,59 +273,49 @@ class TestEntityManagement:
         entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
-        # Set aliases and labels
+        # Set aliases
         aliases = ["test alias one", "test alias two"]
-        labels_list = ["test_label", "important"]
 
         update_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {
                 "entity_id": entity_id,
                 "aliases": aliases,
-                "labels": labels_list,
             },
         )
-        update_data = assert_mcp_success(update_result, "Set aliases and labels")
+        update_data = assert_mcp_success(update_result, "Set aliases")
 
         entity_entry = update_data.get("entity_entry", {})
         returned_aliases = entity_entry.get("aliases", [])
-        returned_labels = entity_entry.get("labels", [])
 
-        for alias in aliases:
-            assert alias in returned_aliases, f"Alias '{alias}' not found in {returned_aliases}"
-
-        for label in labels_list:
-            assert label in returned_labels, f"Label '{label}' not found in {returned_labels}"
+        assert set(aliases) == set(returned_aliases), (
+            f"Aliases mismatch: expected {aliases}, got {returned_aliases}"
+        )
 
         logger.info(f"Aliases set: {returned_aliases}")
-        logger.info(f"Labels set: {returned_labels}")
 
-        # Test clearing aliases and labels with empty lists
+        # Test clearing aliases with empty list
         clear_result = await mcp_client.call_tool(
-            "ha_update_entity",
+            "ha_set_entity",
             {
                 "entity_id": entity_id,
                 "aliases": [],
-                "labels": [],
             },
         )
-        clear_data = assert_mcp_success(clear_result, "Clear aliases and labels")
+        clear_data = assert_mcp_success(clear_result, "Clear aliases")
 
         cleared_entry = clear_data.get("entity_entry", {})
         assert len(cleared_entry.get("aliases", [])) == 0, (
             f"Aliases not cleared: {cleared_entry}"
         )
-        assert len(cleared_entry.get("labels", [])) == 0, (
-            f"Labels not cleared: {cleared_entry}"
-        )
 
-        logger.info("Aliases and labels cleared successfully")
+        logger.info("Aliases cleared successfully")
 
         # Cleanup
         await cleaner.cleanup_all()
 
-    async def test_update_entity_disabled_by(self, mcp_client, cleanup_tracker):
-        """Test disabling and enabling entity via disabled_by parameter."""
+    async def test_set_entity_enabled(self, mcp_client, cleanup_tracker):
+        """Test disabling and enabling entity via enabled parameter."""
         cleaner = EntityCleaner(mcp_client)
 
         # Create test helper
@@ -345,35 +331,35 @@ class TestEntityManagement:
         entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
-        # Disable entity using disabled_by='user'
+        # Disable entity using enabled=False
         disable_result = await mcp_client.call_tool(
-            "ha_update_entity",
-            {"entity_id": entity_id, "disabled_by": "user"},
+            "ha_set_entity",
+            {"entity_id": entity_id, "enabled": False},
         )
         disable_data = assert_mcp_success(disable_result, "Disable entity")
         assert disable_data.get("entity_entry", {}).get("disabled_by") == "user", (
             f"Entity not disabled: {disable_data}"
         )
 
-        logger.info("Entity disabled via disabled_by='user'")
+        logger.info("Entity disabled via enabled=False")
 
-        # Re-enable entity using disabled_by=''
+        # Re-enable entity using enabled=True
         enable_result = await mcp_client.call_tool(
-            "ha_update_entity",
-            {"entity_id": entity_id, "disabled_by": ""},
+            "ha_set_entity",
+            {"entity_id": entity_id, "enabled": True},
         )
         enable_data = assert_mcp_success(enable_result, "Enable entity")
         assert enable_data.get("entity_entry", {}).get("disabled_by") is None, (
             f"Entity not enabled: {enable_data}"
         )
 
-        logger.info("Entity enabled via disabled_by=''")
+        logger.info("Entity enabled via enabled=True")
 
         # Cleanup
         await cleaner.cleanup_all()
 
-    async def test_update_entity_hidden_by(self, mcp_client, cleanup_tracker):
-        """Test hiding and unhiding entity via hidden_by parameter."""
+    async def test_set_entity_hidden(self, mcp_client, cleanup_tracker):
+        """Test hiding and unhiding entity via hidden parameter."""
         cleaner = EntityCleaner(mcp_client)
 
         # Create test helper
@@ -389,29 +375,29 @@ class TestEntityManagement:
         entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
-        # Hide entity using hidden_by='user'
+        # Hide entity using hidden=True
         hide_result = await mcp_client.call_tool(
-            "ha_update_entity",
-            {"entity_id": entity_id, "hidden_by": "user"},
+            "ha_set_entity",
+            {"entity_id": entity_id, "hidden": True},
         )
         hide_data = assert_mcp_success(hide_result, "Hide entity")
         assert hide_data.get("entity_entry", {}).get("hidden_by") == "user", (
             f"Entity not hidden: {hide_data}"
         )
 
-        logger.info("Entity hidden via hidden_by='user'")
+        logger.info("Entity hidden via hidden=True")
 
-        # Unhide entity using hidden_by=''
+        # Unhide entity using hidden=False
         unhide_result = await mcp_client.call_tool(
-            "ha_update_entity",
-            {"entity_id": entity_id, "hidden_by": ""},
+            "ha_set_entity",
+            {"entity_id": entity_id, "hidden": False},
         )
         unhide_data = assert_mcp_success(unhide_result, "Unhide entity")
         assert unhide_data.get("entity_entry", {}).get("hidden_by") is None, (
             f"Entity not unhidden: {unhide_data}"
         )
 
-        logger.info("Entity unhidden via hidden_by=''")
+        logger.info("Entity unhidden via hidden=False")
 
         # Cleanup
         await cleaner.cleanup_all()
