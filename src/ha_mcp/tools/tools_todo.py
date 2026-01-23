@@ -119,7 +119,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_get_todo() without entity_id to find valid todo list entity IDs",
+                    "suggestions": ["Use ha_get_todo() without entity_id to find valid todo list entity IDs"],
                 }
 
             # Use WebSocket to get todo items
@@ -246,7 +246,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
+                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
                 }
 
             # Build service data
@@ -351,7 +351,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Update descriptions and due dates
 
         IDENTIFYING ITEMS:
-        - Use the item's UID (from ha_get_todo_items)
+        - Use the item's UID (from ha_get_todo)
         - Or use the exact item summary/name text
 
         STATUS VALUES:
@@ -378,7 +378,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
+                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
                 }
 
             # Validate at least one update field is provided
@@ -386,7 +386,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
-                    "suggestion": "Specify what to update, e.g., status='completed' to mark item done",
+                    "suggestions": ["Specify what to update, e.g., status='completed' to mark item done"],
                 }
 
             # Build service data
@@ -446,7 +446,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
                 "item": item,
                 "suggestions": [
-                    "Verify the item exists using ha_get_todo_items()",
+                    "Verify the item exists using ha_get_todo()",
                     "Check if you're using the correct item name or UID",
                     "Some todo lists may not support all update operations",
                 ],
@@ -474,7 +474,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Permanently deletes an item from the specified todo list.
 
         IDENTIFYING ITEMS:
-        - Use the item's UID (from ha_get_todo_items)
+        - Use the item's UID (from ha_get_todo)
         - Or use the exact item summary/name text
 
         EXAMPLES:
@@ -495,7 +495,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestion": "Use ha_get_todo() to find valid todo list entity IDs",
+                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
                 }
 
             # Build service data
@@ -523,7 +523,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
                 "item": item,
                 "suggestions": [
-                    "Verify the item exists using ha_get_todo_items()",
+                    "Verify the item exists using ha_get_todo()",
                     "Check if you're using the correct item name or UID",
                     "Make sure the item hasn't already been removed",
                 ],
