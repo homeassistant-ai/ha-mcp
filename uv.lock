@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = "==3.13.*"
 resolution-markers = [
     "platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64'",
@@ -443,7 +443,7 @@ dev = [
 requires-dist = [
     { name = "cryptography", specifier = ">=45.0.7" },
     { name = "fastmcp", specifier = ">=2.11.0" },
-    { name = "httpx", extras = ["socks"], specifier = ">=0.27.0" },
+    { name = "httpx", extras = ["socks"], specifier = ">=0.27.0,<1.0" },
     { name = "jq", marker = "sys_platform != 'win32'", specifier = ">=1.8.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
