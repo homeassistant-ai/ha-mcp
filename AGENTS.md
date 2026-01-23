@@ -94,6 +94,8 @@ After creating/updating a PR:
 - Work autonomously — don't ask about every small decision
 - Make reasonable technical decisions based on codebase patterns
 - Fix unrelated test failures encountered during CI
+- **DO NOT** choose based on what's faster to implement
+- **DO** consider long-term codebase health — refactoring that benefits maintainability is valid
 - **For non-obvious choices**: create 2 PRs with different approaches, let user choose
 - **Final report**: summarize choices made, problems encountered, suggested improvements
 
@@ -223,6 +225,55 @@ When asked to "triage issues":
 | `docs:` | None | User-facing |
 | `chore:`, `ci:`, `test:` | None | Internal |
 | `*:(internal)` | Same as type | Internal only |
+
+---
+
+## Home Assistant Add-on
+
+**Required files:** `repository.yaml` (root), `homeassistant-addon/config.yaml` (must match `pyproject.toml` version)
+
+**Docs**: https://developers.home-assistant.io/docs/add-ons
+
+---
+
+## API Research
+
+Search HA Core without cloning (500MB+ repo):
+```bash
+# Search for patterns
+gh search code "use_blueprint" --repo home-assistant/core path:tests --json path --limit 10
+
+# Fetch file contents (base64 encoded)
+gh api /repos/home-assistant/core/contents/homeassistant/components/automation/config.py \
+  --jq '.content' | base64 -d > /tmp/ha_config.py
+```
+
+---
+
+## Test Patterns
+
+**FastMCP validates required params at schema level.** Don't test for missing required params:
+```python
+# BAD: Fails at schema validation
+await mcp.call_tool("ha_config_get_script", {})
+
+# GOOD: Test with valid params but invalid data
+await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
+```
+
+**HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
+
+---
+
+## Custom Agents
+
+Located in `.claude/agents/`:
+
+| Agent | Purpose |
+|-------|---------|
+| `triage` | Triage issues, assess complexity, update labels |
+| `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
+| `pr-checker` | Review PR comments, resolve threads, monitor CI |
 
 ---
 
