@@ -446,184 +446,50 @@ src/ha_mcp/
 
 ## Writing MCP Tools
 
-This section covers the practical patterns for adding new tools. For docstring philosophy, see [Context Engineering & Progressive Disclosure](#context-engineering--progressive-disclosure). For testing, see [Development Commands](#testing) and [Test Patterns](#test-patterns).
+### Naming Convention
+`ha_<verb>_<noun>`:
+- `get` — single item (`ha_get_state`)
+- `list` — collections (`ha_list_areas`)
+- `search` — filtered queries (`ha_search_entities`)
+- `set` — create/update (`ha_config_set_helper`)
+- `delete` — remove (`ha_config_delete_automation`)
+- `call` — execute (`ha_call_service`)
 
-### Tool File Template
-
-Create `tools_<domain>.py` in `src/ha_mcp/tools/`. The registry auto-discovers modules with `register_*_tools()` functions.
+### Tool Structure
+Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
-"""
-<Domain> tools for Home Assistant MCP server.
-
-Brief description of what this module provides.
-"""
-
-import logging
-from typing import Annotated, Any
-
-from pydantic import Field
-
-from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage
-
-logger = logging.getLogger(__name__)
-
-
 def register_<domain>_tools(mcp, client, **kwargs):
-    """Register <domain> tools with the MCP server."""
-
-    @mcp.tool(annotations={
-        "readOnlyHint": True,      # No side effects
-        "idempotentHint": True,    # Safe to retry
-        "tags": ["<domain>"],
-        "title": "Human Readable Title"
-    })
+    @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
-    async def ha_<verb>_<noun>(
-        required_param: str,
-        optional_param: Annotated[
-            str | None,
-            Field(default=None, description="What this param does")
-        ] = None,
-    ) -> dict[str, Any]:
-        """One-line summary starting with action verb.
-
-        Extended description if needed. For complex schemas, add:
-        Use ha_get_domain_docs('<domain>') for parameter details.
-        """
-        try:
-            result = await client.some_operation(required_param)
-            return {"success": True, "data": result}
-        except Exception as e:
-            return exception_to_structured_error(e, context={"param": required_param})
-```
-
-### Tool Naming
-
-Follow `ha_<verb>_<noun>` pattern:
-
-| Verb | Use For | Examples |
-|------|---------|----------|
-| `get` | Retrieve single item | `ha_get_state`, `ha_get_automation` |
-| `list` | Retrieve collections | `ha_list_areas`, `ha_list_services` |
-| `search` | Query with filters | `ha_search_entities`, `ha_deep_search` |
-| `set` | Create or update | `ha_config_set_helper` |
-| `delete` | Remove items | `ha_config_delete_automation` |
-| `call` | Execute actions | `ha_call_service` |
-
-### Parameter Patterns
-
-```python
-from typing import Annotated, Any, Literal
-from pydantic import Field
-
-# Required - no default value
-entity_id: str
-
-# Optional with description and validation
-limit: Annotated[
-    int,
-    Field(default=10, description="Max results to return", ge=1, le=100)
-] = 10
-
-# Enum/Literal for constrained choices
-mode: Literal["on", "off", "toggle"] = "on"
-
-# Optional complex type (handles JSON string from some MCP clients)
-config: Annotated[
-    dict[str, Any] | str | None,
-    Field(default=None, description="Config dict or JSON string")
-] = None
-
-# List that may arrive as JSON string
-search_types: Annotated[
-    str | list[str] | None,
-    Field(default=None, description="Types to search: ['automation', 'script']")
-] = None
-```
-
-**Coerce string params** from MCP clients that stringify values:
-```python
-from .util_helpers import coerce_bool_param, parse_string_list_param
-
-# In tool function body:
-group_by = coerce_bool_param(group_by, "group_by", default=False)
-search_types = parse_string_list_param(search_types, "search_types")
+    async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
+        """One-line summary starting with action verb."""
+        # For complex schemas, add: "Use ha_get_domain_docs('<domain>') for details."
 ```
 
 ### Safety Annotations
-
-| Annotation | When to Use | Example Tools |
-|------------|-------------|---------------|
-| `readOnlyHint: True` | No side effects | `ha_search_entities`, `ha_get_state` |
-| `idempotentHint: True` | Safe to retry (most operations) | `ha_call_service`, `ha_config_set_*` |
-| `destructiveHint: True` | Deletes data, hard to undo | `ha_config_delete_automation` |
-| `openWorldHint: True` | Interacts with external services | Tools calling external APIs |
-
-```python
-@mcp.tool(annotations={
-    "readOnlyHint": False,
-    "destructiveHint": True,
-    "idempotentHint": True,
-    "tags": ["config"],
-    "title": "Delete Automation"
-})
-```
+| Annotation | Use For |
+|------------|---------|
+| `readOnlyHint: True` | No side effects |
+| `idempotentHint: True` | Safe to retry |
+| `destructiveHint: True` | Deletes data |
 
 ### Error Handling
-
-Use structured errors from `errors.py` with actionable suggestions:
-
+Use structured errors from `errors.py`:
 ```python
-from ..errors import ErrorCode, create_error_response, create_entity_not_found_error
-
-# Specific error for known conditions
-if not entity:
-    return create_entity_not_found_error(entity_id, details="Check spelling")
-
-# Generic error with suggestions
+from ..errors import create_error_response, ErrorCode
 return create_error_response(
-    code=ErrorCode.SERVICE_CALL_FAILED,
-    message="Failed to call service",
-    details=str(e),
-    suggestions=[
-        "Check service exists: ha_get_services()",
-        "Verify entity supports this service",
-    ],
+    code=ErrorCode.ENTITY_NOT_FOUND,
+    message="Entity not found",
+    suggestions=["Use ha_search_entities() to find valid IDs"]
 )
-
-# Catch-all wrapper for unexpected errors
-except Exception as e:
-    return exception_to_structured_error(e, context={"entity_id": entity_id})
 ```
 
-### Return Value Patterns
-
+### Return Values
 ```python
-# Success with data
-return {"success": True, "data": result, "count": len(items)}
-
-# Success with timezone metadata (for time-related data)
-return await add_timezone_metadata(client, {"success": True, "entities": entities})
-
-# Partial success / degraded mode
-return {
-    "success": True,
-    "partial": True,
-    "warning": "Fuzzy search unavailable, using exact match",
-    "results": [...]
-}
-
-# Error (structured) - prefer create_error_response() or exception_to_structured_error()
-return {
-    "success": False,
-    "error": {
-        "code": "ENTITY_NOT_FOUND",
-        "message": "Entity not found",
-        "suggestions": ["Use ha_search_entities() to find valid IDs"]
-    }
-}
+{"success": True, "data": result}                    # Success
+{"success": True, "partial": True, "warning": "..."}  # Degraded
+{"success": False, "error": {...}}                    # Failure
 ```
 
 ## Tool Waiting Behavior
