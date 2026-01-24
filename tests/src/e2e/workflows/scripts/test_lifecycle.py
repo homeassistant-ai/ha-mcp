@@ -1161,9 +1161,25 @@ async def test_script_search_and_discovery(mcp_client):
     logger.info("✅ Script search and discovery test completed")
 
 
+@pytest.fixture
+async def script_blueprint_path(mcp_client):
+    """Fixture to get the path of the first available script blueprint."""
+    async with MCPAssertions(mcp_client) as mcp:
+        list_result = await mcp.call_tool_success(
+            "ha_get_blueprint",
+            {"domain": "script"},
+        )
+        blueprints = list_result.get("blueprints", [])
+        if not blueprints:
+            pytest.skip("No script blueprints available for testing")
+        return blueprints[0]["path"]
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_blueprint_script_lifecycle(mcp_client):
+async def test_blueprint_script_lifecycle(
+    mcp_client, cleanup_tracker, script_blueprint_path
+):
     """
     Test: Create and update blueprint-based script
 
@@ -1173,19 +1189,8 @@ async def test_blueprint_script_lifecycle(mcp_client):
     logger.info("Testing blueprint script lifecycle (issue #466)...")
 
     async with MCPAssertions(mcp_client) as mcp:
-        # Step 1: List available script blueprints
-        list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "script"},
-        )
-
-        blueprints = list_result.get("blueprints", [])
-        if not blueprints:
-            logger.info("No script blueprints available, skipping test")
-            pytest.skip("No script blueprints available for testing")
-
-        # Use the first available blueprint
-        blueprint_path = blueprints[0]["path"]
+        # Use the blueprint path from fixture
+        blueprint_path = script_blueprint_path
         logger.info(f"Using blueprint: {blueprint_path}")
 
         # Step 2: Get blueprint details to understand required inputs
@@ -1237,6 +1242,8 @@ async def test_blueprint_script_lifecycle(mcp_client):
 
         # If it succeeded, great! (unlikely with empty inputs)
         script_id = "test_blueprint_script_e2e"
+        script_entity = f"script.{script_id}"
+        cleanup_tracker.track("script", script_entity)
         logger.info(f"✅ Created blueprint script: {script_id}")
 
         # Step 4: Wait for script to be registered, then verify no sequence field
@@ -1250,18 +1257,14 @@ async def test_blueprint_script_lifecycle(mcp_client):
         assert "use_blueprint" in config, "Config should have use_blueprint"
         logger.info("✅ Blueprint script config verified")
 
-        # Step 5: Clean up
-        await mcp.call_tool_success(
-            "ha_config_remove_script",
-            {"script_id": script_id},
-        )
-
         logger.info("✅ Blueprint script lifecycle test completed")
 
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_blueprint_script_with_empty_sequence(mcp_client):
+async def test_blueprint_script_with_empty_sequence(
+    mcp_client, cleanup_tracker, script_blueprint_path
+):
     """
     Test: Blueprint script with empty sequence array gets cleaned
 
@@ -1271,17 +1274,8 @@ async def test_blueprint_script_with_empty_sequence(mcp_client):
     logger.info("Testing blueprint script with empty sequence array...")
 
     async with MCPAssertions(mcp_client) as mcp:
-        # List available blueprints
-        list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "script"},
-        )
-
-        blueprints = list_result.get("blueprints", [])
-        if not blueprints:
-            pytest.skip("No script blueprints available for testing")
-
-        blueprint_path = blueprints[0]["path"]
+        # Use the blueprint path from fixture
+        blueprint_path = script_blueprint_path
 
         # Create blueprint script WITH empty sequence (should be stripped)
         script_config = {
@@ -1321,13 +1315,9 @@ async def test_blueprint_script_with_empty_sequence(mcp_client):
 
         # If somehow it succeeded (unlikely with empty inputs)
         script_id = "test_blueprint_empty_seq_e2e"
+        script_entity = f"script.{script_id}"
+        cleanup_tracker.track("script", script_entity)
         logger.info(f"✅ Created blueprint script with empty sequence: {script_id}")
-
-        # Clean up
-        await mcp.call_tool_success(
-            "ha_config_remove_script",
-            {"script_id": script_id},
-        )
 
         logger.info("✅ Empty sequence test completed")
 
