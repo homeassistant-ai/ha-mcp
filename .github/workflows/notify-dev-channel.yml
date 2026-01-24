@@ -130,10 +130,11 @@ jobs:
 
           ---
 
-          **If the issue persists after testing:**
-          - If still broken in dev channel OR after Tuesday's stable release
-          - [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and reference #${ISSUE_NUM}
-          - Please don't comment on this closed issue - a new issue helps us track it properly!
+          **After testing:**
+          - ✅ **If it's fixed:** Great! Feel free to comment here to confirm
+          - ❌ **If still broken:** [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and reference #${ISSUE_NUM}
+            - Closed issues can't be reopened by reporters
+            - A new issue helps us track the problem properly
           EOF
               )"
             fi
