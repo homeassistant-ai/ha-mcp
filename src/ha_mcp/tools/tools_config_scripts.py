@@ -16,6 +16,29 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
+def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Strip empty sequence array from script config.
+
+    Blueprint-based scripts should not have a sequence field since this comes
+    from the blueprint itself. If an empty array is present, it overrides the
+    blueprint's configuration and breaks the script.
+
+    Args:
+        config: Script configuration dict
+
+    Returns:
+        Configuration with empty sequence array removed
+    """
+    cleaned = config.copy()
+
+    # Remove empty sequence array for blueprint scripts
+    if "sequence" in cleaned and cleaned["sequence"] == []:
+        del cleaned["sequence"]
+
+    return cleaned
+
+
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant script configuration tools."""
 
@@ -81,7 +104,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         config: Annotated[
             str | dict[str, Any],
             Field(
-                description="Script configuration dictionary with 'sequence' (required) and optional fields like 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
+                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
             ),
         ],
     ) -> dict[str, Any]:
@@ -89,9 +112,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Create or update a Home Assistant script.
 
         Creates a new script or updates an existing one with the provided configuration.
+        Supports both regular scripts (with sequence) and blueprint-based scripts.
 
-        Required config fields:
-            - sequence: List of actions to execute
+        Required config fields (choose one):
+            - sequence: List of actions to execute (for regular scripts)
+            - use_blueprint: Blueprint configuration (for blueprint-based scripts)
 
         Optional config fields:
             - alias: Display name (defaults to script_id)
@@ -156,6 +181,30 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "alias": "Updated Morning Routine"
         })
 
+        Create blueprint-based script:
+        ha_config_set_script("notification_script", {
+            "alias": "My Notification Script",
+            "use_blueprint": {
+                "path": "notification_script.yaml",
+                "input": {
+                    "message": "Hello World",
+                    "title": "Test Notification"
+                }
+            }
+        })
+
+        Update blueprint script inputs:
+        ha_config_set_script("notification_script", {
+            "alias": "My Notification Script",
+            "use_blueprint": {
+                "path": "notification_script.yaml",
+                "input": {
+                    "message": "Updated message",
+                    "title": "Updated Title"
+                }
+            }
+        })
+
         PREFER NATIVE ACTIONS OVER TEMPLATES:
         Before using template-based logic in scripts, check if native actions exist:
         - Use `choose` action instead of template-based service names
@@ -190,11 +239,16 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             config_dict = cast(dict[str, Any], parsed_config)
 
-            if "sequence" not in config_dict:
+            # Validate required fields based on script type
+            # Blueprint scripts only need use_blueprint, regular scripts need sequence
+            if "use_blueprint" in config_dict:
+                # Strip empty sequence array that would override blueprint
+                config_dict = _strip_empty_script_fields(config_dict)
+            elif "sequence" not in config_dict:
                 return {
                     "success": False,
-                    "error": "config must include 'sequence' field",
-                    "required_fields": ["sequence"],
+                    "error": "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
+                    "required_fields": ["sequence OR use_blueprint"],
                 }
 
             result = await client.upsert_script_config(config_dict, script_id)
@@ -211,8 +265,9 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "script_id": script_id,
                 "error": str(e),
                 "suggestions": [
-                    "Ensure config includes 'sequence' field",
-                    "Validate sequence actions syntax",
+                    "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
+                    "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
+                    "Validate sequence actions syntax for regular scripts",
                     "Check entity_ids exist if using service calls",
                     "Use ha_search_entities(domain_filter='script') to find scripts",
                     "Use ha_get_domain_docs('script') for configuration help",

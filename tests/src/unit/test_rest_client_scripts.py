@@ -168,3 +168,79 @@ class TestGetScriptConfig:
             await mock_client.get_script_config("nonexistent_script")
 
         assert exc_info.value.status_code == 404
+
+
+class TestUpsertScriptConfig:
+    """Tests for upsert_script_config validation."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock HomeAssistantClient for testing."""
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+            client.base_url = "http://test.local:8123"
+            client.token = "test-token"
+            client.timeout = 30
+            client.httpx_client = MagicMock()
+            return client
+
+    @pytest.mark.asyncio
+    async def test_upsert_script_with_sequence(self, mock_client):
+        """Regular script with sequence should succeed."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {
+            "alias": "Test Script",
+            "sequence": [{"delay": {"seconds": 1}}],
+        }
+
+        result = await mock_client.upsert_script_config(config, "test_script")
+
+        assert result["success"] is True
+        assert result["script_id"] == "test_script"
+
+    @pytest.mark.asyncio
+    async def test_upsert_script_with_blueprint(self, mock_client):
+        """Blueprint-based script should succeed."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {
+            "alias": "Blueprint Script",
+            "use_blueprint": {
+                "path": "test.yaml",
+                "input": {},
+            },
+        }
+
+        result = await mock_client.upsert_script_config(config, "test_script")
+
+        assert result["success"] is True
+        assert result["script_id"] == "test_script"
+
+    @pytest.mark.asyncio
+    async def test_upsert_script_missing_both_sequence_and_blueprint(self, mock_client):
+        """Script without sequence or use_blueprint should fail."""
+        config = {
+            "alias": "Incomplete Script",
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            await mock_client.upsert_script_config(config, "test_script")
+
+        assert "sequence" in str(exc_info.value) and "use_blueprint" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_upsert_script_adds_alias_if_missing(self, mock_client):
+        """Script without alias should get alias from script_id."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        config = {
+            "sequence": [{"delay": {"seconds": 1}}],
+        }
+
+        await mock_client.upsert_script_config(config, "test_script")
+
+        # Verify alias was added
+        call_args = mock_client._request.call_args
+        json_arg = call_args[1]["json"]
+        assert json_arg["alias"] == "test_script"

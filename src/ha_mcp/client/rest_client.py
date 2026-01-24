@@ -861,8 +861,13 @@ class HomeAssistantClient:
             # Validate required fields
             if "alias" not in config:
                 config["alias"] = script_id
-            if "sequence" not in config:
-                raise ValueError("Script configuration must include 'sequence'")
+
+            # Validate that either sequence or use_blueprint is present
+            if "sequence" not in config and "use_blueprint" not in config:
+                raise ValueError(
+                    "Script configuration must include either 'sequence' (regular scripts) "
+                    "or 'use_blueprint' (blueprint-based scripts)"
+                )
 
             response = await self._request("POST", endpoint, json=config)
 
