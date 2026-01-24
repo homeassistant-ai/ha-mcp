@@ -5,7 +5,6 @@ Tests the automation trace functionality: Create automation → Trigger → Get 
 Verifies that ha_get_automation_traces returns non-empty traces after automation runs.
 """
 
-import asyncio
 import logging
 
 import pytest

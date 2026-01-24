@@ -8,7 +8,6 @@ Note: Tests are designed to work with both Docker test environment (localhost:81
 and production environments. Entity references are dynamically discovered.
 """
 
-import asyncio
 import logging
 
 import pytest

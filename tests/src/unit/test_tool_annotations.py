@@ -7,11 +7,9 @@ Every tool MUST have exactly one of:
 Additionally, every tool SHOULD have a title for UI display.
 """
 
-import ast
 import re
 from pathlib import Path
 
-import pytest
 
 
 def get_tools_dir() -> Path:
@@ -218,4 +216,4 @@ class TestToolAnnotations:
         # This is a warning, not a hard failure - some tools might legitimately be destructive
         # even without obvious naming
         if suspicious:
-            print(f"\nNote: These destructive tools don't have typical modifying names:\n  " + "\n  ".join(suspicious))
+            print("\nNote: These destructive tools don't have typical modifying names:\n  " + "\n  ".join(suspicious))

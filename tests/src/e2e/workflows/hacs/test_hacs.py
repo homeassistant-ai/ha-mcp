@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, assert_mcp_failure, parse_mcp_result
+from ...utilities.assertions import parse_mcp_result
 
 logger = logging.getLogger(__name__)
 
@@ -604,7 +604,7 @@ class TestMcpToolsInstallation:
         if data.get("already_installed"):
             logger.info(f"ha_mcp_tools already installed: {data.get('version')}")
         else:
-            logger.info(f"ha_mcp_tools installed successfully")
+            logger.info("ha_mcp_tools installed successfully")
             assert "note" in data, "Should include note about restart"
 
         # Verify services list is provided

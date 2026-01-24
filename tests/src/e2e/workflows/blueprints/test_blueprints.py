@@ -9,7 +9,6 @@ Note: Tests are designed to work with both Docker test environment (localhost:81
 and production environments. Blueprint availability may vary.
 """
 
-import asyncio
 import logging
 
 import pytest
@@ -380,7 +379,7 @@ async def test_blueprint_automation_lifecycle(mcp_client):
             error_msg = str(create_result.get("error", {}).get("message", ""))
             # If error is about missing blueprint inputs, our validation passed! HA rejected it.
             if "Missing input" in error_msg or "input" in error_msg.lower():
-                logger.info(f"✅ Our validation passed (config reached HA), HA rejected due to missing blueprint inputs as expected")
+                logger.info("✅ Our validation passed (config reached HA), HA rejected due to missing blueprint inputs as expected")
                 logger.info("✅ Blueprint automation lifecycle test completed (validation works)")
                 return
             # If error is about missing trigger/action, our fix didn't work

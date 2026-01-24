@@ -34,7 +34,6 @@ from ..utils.decode import decode_content
 from ..utils.decorator import concurrent
 from ..utils.file_system import async_exists, async_remove, async_remove_directory
 from ..utils.filters import filter_content_return_one_of_type
-from ..utils.github_graphql_query import GET_REPOSITORY_RELEASES
 from ..utils.json import json_loads
 from ..utils.logger import LOGGER
 from ..utils.path import is_safe

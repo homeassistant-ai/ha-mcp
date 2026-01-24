@@ -4,7 +4,6 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
-import os
 import sys
 import pytest
 from pathlib import Path

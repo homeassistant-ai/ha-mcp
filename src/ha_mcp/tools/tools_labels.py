@@ -675,6 +675,46 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Deduplicate labels
             parsed_labels = list(set(parsed_labels))
 
+            # Validate that all label IDs exist before attempting assignment
+            if parsed_labels:
+                try:
+                    # Fetch all available labels via WebSocket
+                    message: dict[str, Any] = {
+                        "type": "config/label_registry/list",
+                    }
+                    label_list_result = await client.send_websocket_message(message)
+
+                    if not label_list_result.get("success"):
+                        return {
+                            "success": False,
+                            "error": "Failed to fetch available labels for validation",
+                            "suggestions": ["Check Home Assistant connection"],
+                        }
+
+                    available_labels = label_list_result.get("result", [])
+                    available_label_ids = {lbl['label_id'] for lbl in available_labels if isinstance(lbl, dict) and 'label_id' in lbl}
+
+                    # Check for non-existent labels
+                    invalid_labels = [lbl for lbl in parsed_labels if lbl not in available_label_ids]
+
+                    if invalid_labels:
+                        return {
+                            "success": False,
+                            "error": f"Labels do not exist: {', '.join(invalid_labels)}",
+                            "invalid_labels": invalid_labels,
+                            "suggestions": [
+                                "Use ha_config_get_label() to see all available labels",
+                                "Create missing labels with ha_config_set_label()",
+                            ],
+                        }
+                except Exception as e:
+                    logger.error(f"Error validating label IDs: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Failed to validate label IDs: {str(e)}",
+                        "suggestions": ["Check Home Assistant connection"],
+                    }
+
             # Coerce parallel parameter
             parallel_bool = coerce_bool_param(parallel, "parallel", default=True)
             if parallel_bool is None:

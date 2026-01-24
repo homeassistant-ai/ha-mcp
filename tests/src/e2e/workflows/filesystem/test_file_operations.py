@@ -24,7 +24,6 @@ Tests are designed for the Docker Home Assistant test environment.
 import logging
 import os
 import uuid
-from typing import Any
 
 import pytest
 

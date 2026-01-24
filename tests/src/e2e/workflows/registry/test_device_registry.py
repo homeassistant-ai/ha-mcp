@@ -320,7 +320,7 @@ class TestDeviceUpdate:
         update_data = parse_mcp_result(update_result)
 
         assert update_data.get("success"), f"Failed to update labels: {update_data}"
-        logger.info(f"Labels update command succeeded")
+        logger.info("Labels update command succeeded")
 
         # Verify the response structure contains labels field
         updated_entry = update_data.get("device_entry", {})
