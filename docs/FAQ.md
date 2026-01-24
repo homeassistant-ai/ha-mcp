@@ -149,6 +149,27 @@ source ~/.zshrc
 2. **Subsequent requests** - Should be faster (packages cached)
 3. **Alternative** - Use Docker for consistent performance
 
+### Tools are missing or using old version
+
+If you're seeing fewer tools than expected or outdated behavior, `uvx` may be using a cached old version.
+
+**Solution:**
+
+```bash
+# Clear the uv cache
+uv cache clean
+
+# Force refresh to latest version
+uvx --refresh ha-mcp@latest
+```
+
+**Verify the version:**
+```bash
+uvx ha-mcp@latest --version
+```
+
+The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest) (currently 6.x). If you see version 3.x or older, the cache needs clearing.
+
 ---
 
 ## OAuth Troubleshooting
