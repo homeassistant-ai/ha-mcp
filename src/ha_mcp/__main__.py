@@ -440,6 +440,13 @@ def main() -> None:
     sys.exit(0)
 
 
+def main_dev() -> None:
+    """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
+    import os
+    os.environ["LOG_LEVEL"] = "DEBUG"
+    main()
+
+
 # HTTP entry point for web clients
 def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
     """Return runtime configuration shared by HTTP transports.
