@@ -108,7 +108,6 @@ Spend less time configuring, more time enjoying your smart home.
 | **🔧 Manage** | Automations, scripts, helpers, dashboards, areas, zones, groups, calendars, blueprints |
 | **📊 Monitor** | History, statistics, camera snapshots, automation traces, ZHA devices |
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
-| **🔐 Auth** | OAuth 2.1 with DCR for secure multi-user access (Claude.ai), token-based for local clients |
 
 <details>
 <summary><b>🛠️ Complete Tool List (97 tools)</b></summary>
