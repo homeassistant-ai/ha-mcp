@@ -2,7 +2,6 @@
 
 import os
 import yaml
-import pytest
 
 
 class TestDockerCompose:

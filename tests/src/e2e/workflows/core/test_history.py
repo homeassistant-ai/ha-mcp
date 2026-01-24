@@ -6,7 +6,7 @@ state change history and long-term statistics.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -65,7 +65,7 @@ class TestGetHistory:
         logger.info("Testing ha_get_history with ISO datetime")
 
         # Use yesterday as start time
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = datetime.now(UTC) - timedelta(days=1)
         start_time = yesterday.isoformat()
 
         result = await mcp_client.call_tool(

@@ -1,6 +1,5 @@
 """Unit tests for tools_updates module."""
 
-import pytest
 
 from ha_mcp.tools.tools_updates import _categorize_update, _supports_release_notes
 

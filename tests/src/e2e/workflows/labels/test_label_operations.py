@@ -268,12 +268,13 @@ class TestLabelValidation:
         """Test: Validation rejects non-existent label IDs before entity lookup."""
         # This test doesn't need an entity - validation happens before entity operations
         # Try to set non-existent labels - should fail in validation phase
+        invalid_labels = ["nonexistent_label_abc", "nonexistent_label_xyz"]
         result = await mcp_client.call_tool(
             "ha_manage_entity_labels",
             {
                 "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
                 "operation": "set",
-                "labels": ["nonexistent_label_abc", "nonexistent_label_xyz"],
+                "labels": invalid_labels,
             },
         )
         data = parse_mcp_result(result)
@@ -281,8 +282,9 @@ class TestLabelValidation:
         # Should fail with clear error message
         assert data.get("success") is False, f"Should reject non-existent labels: {data}"
         assert "do not exist" in data.get("error", "").lower(), f"Error message should mention non-existent labels: {data}"
-        assert "invalid_labels" in data or "nonexistent_label_abc" in str(data), (
-            f"Response should identify invalid labels: {data}"
+        assert "invalid_labels" in data, f"Response should contain 'invalid_labels' key: {data}"
+        assert set(data["invalid_labels"]) == set(invalid_labels), (
+            f"Invalid labels list is incorrect: {data.get('invalid_labels')}"
         )
         logger.info("✅ Non-existent labels rejected in validation phase")
 
@@ -328,8 +330,9 @@ class TestLabelValidation:
         assert data.get("success") is False, (
             f"Should reject operation with mixed valid/invalid labels: {data}"
         )
-        assert "invalid_label_a" in str(data) or "invalid_labels" in data, (
-            f"Should identify invalid labels: {data}"
+        assert "invalid_labels" in data, f"Should identify invalid labels: {data}"
+        assert set(data["invalid_labels"]) == {"invalid_label_a", "invalid_label_b"}, (
+            f"Invalid labels list is incorrect: {data.get('invalid_labels')}"
         )
         logger.info("✅ Mixed valid/invalid labels rejected (Issue #475 fix)")
 
@@ -348,8 +351,8 @@ class TestLabelValidation:
         assert data.get("success") is False
         assert "suggestions" in data, f"Should include suggestions: {data}"
         suggestions_text = " ".join(data.get("suggestions", []))
-        assert "ha_config_get_label" in suggestions_text or "ha_config_set_label" in suggestions_text, (
-            f"Suggestions should reference helper tools: {data}"
+        assert "ha_config_get_label" in suggestions_text and "ha_config_set_label" in suggestions_text, (
+            f"Suggestions should reference both helper tools: {data}"
         )
         logger.info("✅ Validation error includes helpful suggestions")
 

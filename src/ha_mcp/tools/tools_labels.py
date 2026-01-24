@@ -692,7 +692,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
 
                     available_labels = label_list_result.get("result", [])
-                    available_label_ids = {lbl.get("label_id") for lbl in available_labels}
+                    available_label_ids = {lbl['label_id'] for lbl in available_labels if isinstance(lbl, dict) and 'label_id' in lbl}
 
                     # Check for non-existent labels
                     invalid_labels = [lbl for lbl in parsed_labels if lbl not in available_label_ids]

@@ -74,7 +74,6 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     HACS requires the frontend (~51MB) to be present to fully initialize.
     This is not committed to git to keep the repo size manageable.
     """
-    import subprocess
     import tarfile
     import urllib.request
 

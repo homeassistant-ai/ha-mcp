@@ -5,7 +5,6 @@ Tests the graceful degradation search methods:
 - _partial_results_search: Last resort entity listing
 """
 
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

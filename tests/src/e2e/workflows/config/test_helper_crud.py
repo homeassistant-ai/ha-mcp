@@ -853,7 +853,7 @@ class TestTimerCRUD:
             mcp_client, entity_id, "idle", timeout=10
         )
         assert state_reached, f"Timer {entity_id} not registered in idle state within timeout"
-        logger.info(f"Timer initial state: idle")
+        logger.info("Timer initial state: idle")
 
         # START timer
         start_result = await mcp_client.call_tool(

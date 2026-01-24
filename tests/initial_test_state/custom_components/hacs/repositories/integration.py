@@ -180,7 +180,7 @@ class HacsIntegrationRepository(HacsRepository):
             else f"{self.content.path.remote}/{RepositoryFile.MAINIFEST_JSON}"
         )
 
-        if not manifest_path in (x.full_path for x in self.tree):
+        if manifest_path not in (x.full_path for x in self.tree):
             raise HacsException(f"No {RepositoryFile.MAINIFEST_JSON} file found '{manifest_path}'")
 
         response = await self.hacs.async_github_api_method(

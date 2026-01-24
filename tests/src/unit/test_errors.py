@@ -4,7 +4,6 @@ These tests verify that error codes, error responses, and helper functions
 work correctly to provide informative, structured error messages.
 """
 
-import pytest
 
 from ha_mcp.errors import (
     DEFAULT_SUGGESTIONS,

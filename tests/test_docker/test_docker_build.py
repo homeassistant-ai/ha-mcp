@@ -1,7 +1,6 @@
 """Test Docker image builds successfully and contains expected components."""
 
 import subprocess
-import pytest
 
 
 class TestDockerBuild:

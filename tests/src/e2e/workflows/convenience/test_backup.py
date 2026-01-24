@@ -14,7 +14,6 @@ Tests for backup MCP tools that provide safety mechanisms:
 These tools are critical for configuration safety and disaster recovery.
 """
 
-import asyncio
 import logging
 import time
 
@@ -78,7 +77,7 @@ class TestBackupTools:
                 size_mb = data["size_bytes"] / (1024 * 1024)
                 logger.info(f"📦 Backup size: {size_mb:.2f} MB")
 
-            logger.info(f"✅ Backup test completed successfully")
+            logger.info("✅ Backup test completed successfully")
 
         except Exception as e:
             logger.error(f"❌ Backup creation test failed: {e}")
@@ -127,7 +126,7 @@ class TestBackupTools:
             # Verify backup completed (tool waits for completion)
             assert "completed" in data["status"].lower(), f"Backup did not complete: {data['status']}"
 
-            logger.info(f"✅ Custom name backup test completed successfully")
+            logger.info("✅ Custom name backup test completed successfully")
 
         except Exception as e:
             logger.error(f"❌ Custom name backup creation test failed: {e}")
