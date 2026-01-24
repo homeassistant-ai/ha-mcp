@@ -58,6 +58,47 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
           echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
 
+  publish-pypi-dev:
+    name: Publish PyPI (dev channel)
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-dev
+      url: https://pypi.org/p/ha-mcp-dev
+    permissions:
+      contents: read
+      id-token: write  # Required for PyPI trusted publishing
+    env:
+      DEV_VERSION: ${{ needs.prepare.outputs.dev_version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Temporarily set package name and version for dev build
+        run: |
+          # Replace package name and version in pyproject.toml for build only
+          sed -i 's/^name = "ha-mcp"/name = "ha-mcp-dev"/' pyproject.toml
+          sed -i 's/^version = .*/version = "'"$DEV_VERSION"'"/' pyproject.toml
+          # Replace package name in version lookup
+          sed -i "s/version('ha-mcp')/version('ha-mcp-dev')/g" src/ha_mcp/__main__.py
+          # Add ha-mcp-dev entry point with DEBUG logging
+          sed -i '/^ha-mcp = "ha_mcp.__main__:main"$/a ha-mcp-dev = "ha_mcp.__main__:main_dev"' pyproject.toml
+          echo "Building ha-mcp-dev version: $DEV_VERSION"
+          grep -E '^(name|version) = ' pyproject.toml
+          echo "Entry points:"
+          grep -A5 '^\[project.scripts\]' pyproject.toml
+
+      - name: Build distribution
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
   publish-docker-dev:
     name: Publish Docker (dev channel)
     needs: prepare
@@ -132,7 +173,7 @@ jobs:
 
           **PyPI (dev channel):**
           \`\`\`bash
-          pip install ha-mcp --pre
+          pip install ha-mcp-dev
           \`\`\`
           EOF
 

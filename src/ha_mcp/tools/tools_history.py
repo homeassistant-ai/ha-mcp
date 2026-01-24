@@ -25,6 +25,27 @@ from .util_helpers import add_timezone_metadata, coerce_int_param, parse_string_
 logger = logging.getLogger(__name__)
 
 
+def _convert_timestamp(value: Any) -> str | None:
+    """Convert a timestamp value to ISO format string.
+
+    Handles both Unix epoch floats (from WebSocket short-form responses)
+    and string timestamps (from long-form responses).
+
+    Args:
+        value: Timestamp as Unix epoch float, ISO string, or None
+
+    Returns:
+        ISO format string or None if value is None/invalid
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=UTC).isoformat()
+    if isinstance(value, str):
+        return value
+    return None
+
+
 def parse_relative_time(time_str: str | None, default_hours: int = 24) -> datetime:
     """
     Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
@@ -304,9 +325,15 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Format states for output
                     formatted_states = []
                     for state in limited_states:
+                        # Get timestamps - WebSocket returns short-form (lc/lu) as Unix epoch floats
+                        # or long-form (last_changed/last_updated) as strings
+                        last_changed_raw = state.get("lc", state.get("last_changed"))
+                        last_updated_raw = state.get("lu", state.get("last_updated"))
+
                         state_entry = {
                             "state": state.get("s", state.get("state")),
-                            "last_changed": state.get("lc", state.get("last_changed")),
+                            "last_changed": _convert_timestamp(last_changed_raw),
+                            "last_updated": _convert_timestamp(last_updated_raw),
                         }
                         if not minimal_response:
                             state_entry["attributes"] = state.get(
