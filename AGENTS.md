@@ -359,6 +359,7 @@ NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified c
 | `pr.yml` | PR opened | Lint, type check |
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
+| `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
 | `semver-release.yml` | Weekly Tue 10:00 UTC | Stable release |
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |

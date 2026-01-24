@@ -1,0 +1,141 @@
+name: Notify Dev Channel on Merge
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 10
+
+      - name: Find merged PR and linked issues
+        id: find-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get the commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Commit message: $COMMIT_MSG"
+
+          # Extract PR number from merge commit
+          # GitHub merge commits have format: "Merge pull request #123 from user/branch"
+          PR_NUM=$(echo "$COMMIT_MSG" | grep -oP 'Merge pull request #\K\d+' || echo "")
+
+          if [ -z "$PR_NUM" ]; then
+            echo "No PR number found in merge commit. Skipping notification."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Found PR #$PR_NUM"
+          echo "pr_number=$PR_NUM" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+          # Get PR body to find linked issues
+          PR_BODY=$(gh pr view $PR_NUM --json body --jq '.body // ""')
+
+          # Extract issue numbers from various closing keywords
+          # Matches: Closes #123, Fixes #456, Resolves #789, Fix #101, Close #102, etc.
+          ISSUES=$(echo "$PR_BODY" | grep -oiP '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s*#\K\d+' | sort -u | tr '\n' ',' | sed 's/,$//')
+
+          echo "Linked issues: $ISSUES"
+          echo "issues=$ISSUES" >> $GITHUB_OUTPUT
+
+      - name: Comment on merged PR
+        if: steps.find-pr.outputs.skip != 'true' && steps.find-pr.outputs.pr_number
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ steps.find-pr.outputs.pr_number }} --body "$(cat <<'EOF'
+          ## 🧪 Your changes are now in the dev channel!
+
+          Your PR has been merged to master and is available for testing in the **dev channel**.
+
+          **Test your changes before the Tuesday release:**
+          📖 **[Dev Channel Documentation](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dev-channel.md)**
+
+          ### Quick start
+
+          ```bash
+          # Run dev version
+          uvx ha-mcp-dev
+
+          # Check version
+          uvx ha-mcp-dev --version
+          ```
+
+          **Docker:**
+          ```bash
+          docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
+          docker run --rm -i \
+            -e HOMEASSISTANT_URL=http://your-ha:8123 \
+            -e HOMEASSISTANT_TOKEN=your_token \
+            ghcr.io/homeassistant-ai/ha-mcp:dev
+          ```
+
+          ---
+
+          **Found an issue?** Please [open a new bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and mention this PR for context.
+          EOF
+          )"
+
+      - name: Comment on linked issues
+        if: steps.find-pr.outputs.skip != 'true' && steps.find-pr.outputs.issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUM: ${{ steps.find-pr.outputs.pr_number }}
+        run: |
+          IFS=',' read -ra ISSUE_ARRAY <<< "${{ steps.find-pr.outputs.issues }}"
+          for ISSUE_NUM in "${ISSUE_ARRAY[@]}"; do
+            if [ -n "$ISSUE_NUM" ]; then
+              echo "Commenting on issue #$ISSUE_NUM"
+              gh issue comment $ISSUE_NUM --body "$(cat <<EOF
+          ## ✅ This issue has been addressed in the dev channel!
+
+          A fix for this issue has been merged to master (PR #${PR_NUM}) and is available for testing in the **dev channel**.
+
+          **Test the fix before the Tuesday release:**
+          📖 **[Dev Channel Documentation](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dev-channel.md)**
+
+          ### Quick start
+
+          \`\`\`bash
+          # Run dev version
+          uvx ha-mcp-dev
+
+          # Check version
+          uvx ha-mcp-dev --version
+          \`\`\`
+
+          **Docker:**
+          \`\`\`bash
+          docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
+          docker run --rm -i \\
+            -e HOMEASSISTANT_URL=http://your-ha:8123 \\
+            -e HOMEASSISTANT_TOKEN=your_token \\
+            ghcr.io/homeassistant-ai/ha-mcp:dev
+          \`\`\`
+
+          ---
+
+          **After testing:**
+          - ✅ **If it's fixed:** Great! Feel free to comment here to confirm
+          - ❌ **If still broken:** [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and reference #${ISSUE_NUM}
+            - Closed issues can't be reopened by reporters
+            - A new issue helps us track the problem properly
+          EOF
+              )"
+            fi
+          done
