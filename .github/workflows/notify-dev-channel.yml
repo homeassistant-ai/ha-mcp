@@ -85,7 +85,9 @@ jobs:
             ghcr.io/homeassistant-ai/ha-mcp:dev
           ```
 
-          If you find any issues, please report them before the next stable release!
+          ---
+
+          **Found an issue?** Please [open a new bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and mention this PR for context.
           EOF
           )"
 
@@ -126,7 +128,12 @@ jobs:
             ghcr.io/homeassistant-ai/ha-mcp:dev
           \`\`\`
 
-          If the issue is resolved, great! If not, please let us know before the next stable release.
+          ---
+
+          **If the issue persists after testing:**
+          - If still broken in dev channel OR after Tuesday's stable release
+          - [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and reference #${ISSUE_NUM}
+          - Please don't comment on this closed issue - a new issue helps us track it properly!
           EOF
               )"
             fi
