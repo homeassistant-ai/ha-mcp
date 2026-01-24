@@ -1342,7 +1342,7 @@ async def test_regular_script_still_requires_sequence(mcp_client):
         result = await mcp.call_tool_failure(
             "ha_config_set_script",
             {"script_id": "test_regular_no_seq", "config": script_config},
-            expected_error="sequence OR use_blueprint",
+            expected_error="either 'sequence'",
         )
 
         assert "required_fields" in result
