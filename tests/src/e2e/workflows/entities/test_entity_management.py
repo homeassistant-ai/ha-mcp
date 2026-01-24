@@ -323,3 +323,238 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
+
+    async def test_get_entity_single(self, mcp_client, cleanup_tracker):
+        """Test ha_get_entity with single entity lookup and full field verification."""
+        cleaner = EntityCleaner(mcp_client)
+
+        # Create test helper
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Get Entity Test",
+                "icon": "mdi:test-tube",
+            },
+        )
+        data = assert_mcp_success(create_result, "Create test entity")
+        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        cleaner.track_entity("input_boolean", entity_id)
+
+        # Create a test area
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": "E2E Get Entity Room", "icon": "mdi:room"},
+        )
+        area_data = assert_mcp_success(area_result, "Create test area")
+        area_id = area_data.get("area_id")
+        cleanup_tracker.track("area", area_id)
+
+        # Set properties using ha_set_entity
+        test_aliases = ["test alias", "another alias"]
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "area_id": area_id,
+                "name": "Custom Get Entity Name",
+                "icon": "mdi:lightbulb",
+                "aliases": test_aliases,
+            },
+        )
+
+        # Call ha_get_entity with single entity_id
+        get_result = await mcp_client.call_tool(
+            "ha_get_entity",
+            {"entity_id": entity_id},
+        )
+        get_data = assert_mcp_success(get_result, "Get single entity")
+
+        # Verify response structure
+        assert get_data.get("entity_id") == entity_id, f"entity_id mismatch: {get_data}"
+        assert "entity_entry" in get_data, f"Missing entity_entry: {get_data}"
+
+        entity_entry = get_data["entity_entry"]
+
+        # Verify all expected fields
+        assert entity_entry.get("entity_id") == entity_id, (
+            f"entity_entry.entity_id mismatch: {entity_entry}"
+        )
+        assert entity_entry.get("name") == "Custom Get Entity Name", (
+            f"name mismatch: {entity_entry}"
+        )
+        assert entity_entry.get("icon") == "mdi:lightbulb", (
+            f"icon mismatch: {entity_entry}"
+        )
+        assert entity_entry.get("area_id") == area_id, (
+            f"area_id mismatch: {entity_entry}"
+        )
+
+        # Verify disabled_by/hidden_by and translated booleans
+        assert entity_entry.get("disabled_by") is None, (
+            f"disabled_by should be None: {entity_entry}"
+        )
+        assert entity_entry.get("hidden_by") is None, (
+            f"hidden_by should be None: {entity_entry}"
+        )
+        assert entity_entry.get("enabled") is True, (
+            f"enabled should be True when disabled_by is None: {entity_entry}"
+        )
+        assert entity_entry.get("hidden") is False, (
+            f"hidden should be False when hidden_by is None: {entity_entry}"
+        )
+
+        # Verify aliases
+        returned_aliases = entity_entry.get("aliases", [])
+        assert set(test_aliases) == set(returned_aliases), (
+            f"aliases mismatch: expected {test_aliases}, got {returned_aliases}"
+        )
+
+        logger.info("Single entity lookup verified with all fields")
+
+        # Cleanup
+        await cleaner.cleanup_all()
+        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+
+    async def test_get_entity_multiple(self, mcp_client, cleanup_tracker):
+        """Test ha_get_entity with multiple entities returns list response."""
+        cleaner = EntityCleaner(mcp_client)
+
+        # Create first test helper
+        create_result1 = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Get Entity Multi 1",
+                "icon": "mdi:numeric-1",
+            },
+        )
+        data1 = assert_mcp_success(create_result1, "Create first test entity")
+        entity_id1 = data1.get("entity_id") or f"input_boolean.{data1['helper_data']['id']}"
+        cleaner.track_entity("input_boolean", entity_id1)
+
+        # Create second test helper
+        create_result2 = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Get Entity Multi 2",
+                "icon": "mdi:numeric-2",
+            },
+        )
+        data2 = assert_mcp_success(create_result2, "Create second test entity")
+        entity_id2 = data2.get("entity_id") or f"input_boolean.{data2['helper_data']['id']}"
+        cleaner.track_entity("input_boolean", entity_id2)
+
+        # Call ha_get_entity with list of 2 entity_ids
+        get_result = await mcp_client.call_tool(
+            "ha_get_entity",
+            {"entity_id": [entity_id1, entity_id2]},
+        )
+        get_data = assert_mcp_success(get_result, "Get multiple entities")
+
+        # Verify response structure
+        assert get_data.get("count") == 2, f"Expected count=2, got: {get_data}"
+        assert "entity_entries" in get_data, f"Missing entity_entries: {get_data}"
+
+        entity_entries = get_data["entity_entries"]
+        assert len(entity_entries) == 2, f"Expected 2 entries, got: {entity_entries}"
+
+        # Verify both entities are present
+        returned_entity_ids = {e.get("entity_id") for e in entity_entries}
+        assert entity_id1 in returned_entity_ids, f"entity_id1 missing: {entity_entries}"
+        assert entity_id2 in returned_entity_ids, f"entity_id2 missing: {entity_entries}"
+
+        # Verify each entry has expected fields
+        for entry in entity_entries:
+            assert "entity_id" in entry, f"Missing entity_id: {entry}"
+            assert "name" in entry, f"Missing name: {entry}"
+            assert "icon" in entry, f"Missing icon: {entry}"
+            assert "area_id" in entry, f"Missing area_id: {entry}"
+            assert "disabled_by" in entry, f"Missing disabled_by: {entry}"
+            assert "hidden_by" in entry, f"Missing hidden_by: {entry}"
+            assert "enabled" in entry, f"Missing enabled: {entry}"
+            assert "hidden" in entry, f"Missing hidden: {entry}"
+            assert "aliases" in entry, f"Missing aliases: {entry}"
+
+        logger.info("Multiple entity lookup verified")
+
+        # Cleanup
+        await cleaner.cleanup_all()
+
+    async def test_get_entity_nonexistent(self, mcp_client):
+        """Test error handling for non-existent entity in ha_get_entity."""
+        result = await mcp_client.call_tool(
+            "ha_get_entity",
+            {"entity_id": "sensor.nonexistent_entity_xyz"},
+        )
+        data = parse_mcp_result(result)
+
+        assert not data.get("success", True), "Should fail for non-existent entity"
+        assert "error" in data, f"Missing error field: {data}"
+        assert "suggestions" in data, f"Missing suggestions field: {data}"
+
+        logger.info("Non-existent entity error handling verified")
+
+    async def test_get_entity_empty_list(self, mcp_client):
+        """Test ha_get_entity with empty list returns empty result."""
+        result = await mcp_client.call_tool(
+            "ha_get_entity",
+            {"entity_id": []},
+        )
+        data = assert_mcp_success(result, "Get entity with empty list")
+
+        assert data.get("count") == 0, f"Expected count=0, got: {data}"
+        assert data.get("entity_entries") == [], f"Expected empty entity_entries: {data}"
+        assert data.get("message") == "No entities requested", (
+            f"Expected 'No entities requested' message: {data}"
+        )
+
+        logger.info("Empty list handling verified")
+
+    async def test_get_entity_partial_failure(self, mcp_client, cleanup_tracker):
+        """Test ha_get_entity with mix of valid/invalid entities returns partial results."""
+        cleaner = EntityCleaner(mcp_client)
+
+        # Create one valid test entity
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Get Entity Partial",
+                "icon": "mdi:test-tube",
+            },
+        )
+        data = assert_mcp_success(create_result, "Create test entity")
+        valid_entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        cleaner.track_entity("input_boolean", valid_entity_id)
+
+        nonexistent_entity_id = "sensor.nonexistent_partial_test"
+
+        # Call ha_get_entity with mix of valid and invalid
+        get_result = await mcp_client.call_tool(
+            "ha_get_entity",
+            {"entity_id": [valid_entity_id, nonexistent_entity_id]},
+        )
+        get_data = assert_mcp_success(get_result, "Get entity partial success")
+
+        # Verify partial success
+        assert get_data.get("count") == 1, f"Expected count=1 (partial), got: {get_data}"
+
+        entity_entries = get_data.get("entity_entries", [])
+        assert len(entity_entries) == 1, f"Expected 1 entry: {entity_entries}"
+        assert entity_entries[0].get("entity_id") == valid_entity_id, (
+            f"Valid entity not in results: {entity_entries}"
+        )
+
+        # Verify errors array has the invalid entity
+        errors = get_data.get("errors", [])
+        assert len(errors) == 1, f"Expected 1 error: {errors}"
+        assert errors[0].get("entity_id") == nonexistent_entity_id, (
+            f"Nonexistent entity not in errors: {errors}"
+        )
+
+        logger.info("Partial failure handling verified")
+
+        # Cleanup
+        await cleaner.cleanup_all()

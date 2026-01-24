@@ -204,3 +204,193 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
             return exception_to_structured_error(e, context={"entity_id": entity_id})
+
+    @mcp.tool(
+        annotations={
+            "readOnlyHint": True,
+            "idempotentHint": True,
+            "tags": ["entity"],
+            "title": "Get Entity",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_entity(
+        entity_id: Annotated[
+            str | list[str],
+            Field(
+                description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch'])"
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Get entity registry information for one or more entities.
+
+        Returns detailed entity registry metadata including area assignment,
+        custom name/icon, enabled/hidden state, aliases, labels, and more.
+
+        RELATED TOOLS:
+        - ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)
+        - ha_get_state(): Get current state/attributes (on/off, temperature, etc.)
+        - ha_search_entities(): Find entities by name, domain, or area
+
+        EXAMPLES:
+        - Single entity: ha_get_entity("sensor.temperature")
+        - Multiple entities: ha_get_entity(["light.living_room", "switch.porch"])
+
+        RESPONSE FIELDS:
+        - entity_id: Full entity identifier
+        - name: Custom display name (null if using original_name)
+        - original_name: Default name from integration
+        - icon: Custom icon (null if using default)
+        - area_id: Assigned area/room ID (null if unassigned)
+        - disabled_by: Why disabled (null=enabled, "user"/"integration"/etc)
+        - hidden_by: Why hidden (null=visible, "user"/"integration"/etc)
+        - enabled: Boolean shorthand (True if disabled_by is null)
+        - hidden: Boolean shorthand (True if hidden_by is not null)
+        - aliases: Voice assistant aliases
+        - labels: Assigned label IDs
+        - platform: Integration platform (e.g., "hue", "zwave_js")
+        - device_id: Associated device ID (null if standalone)
+        - unique_id: Integration's unique identifier
+        """
+        try:
+            # Validate and parse entity_id parameter
+            entity_ids: list[str]
+            is_bulk: bool
+
+            if isinstance(entity_id, str):
+                entity_ids = [entity_id]
+                is_bulk = False
+            elif isinstance(entity_id, list):
+                if not entity_id:
+                    return {
+                        "success": True,
+                        "entity_entries": [],
+                        "count": 0,
+                        "message": "No entities requested",
+                    }
+                if not all(isinstance(e, str) for e in entity_id):
+                    return {
+                        "success": False,
+                        "error": "All entity_id values must be strings",
+                    }
+                entity_ids = entity_id
+                is_bulk = True
+            else:
+                return {
+                    "success": False,
+                    "error": f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
+                }
+
+            async def _fetch_entity(eid: str) -> dict[str, Any]:
+                """Fetch a single entity from the registry."""
+                message: dict[str, Any] = {
+                    "type": "config/entity_registry/get",
+                    "entity_id": eid,
+                }
+                result = await client.send_websocket_message(message)
+
+                if not result.get("success"):
+                    error = result.get("error", {})
+                    error_msg = (
+                        error.get("message", str(error))
+                        if isinstance(error, dict)
+                        else str(error)
+                    )
+                    return {
+                        "success": False,
+                        "entity_id": eid,
+                        "error": error_msg,
+                    }
+
+                entry = result.get("result", {})
+                return {
+                    "success": True,
+                    "entity_id": entry.get("entity_id"),
+                    "name": entry.get("name"),
+                    "original_name": entry.get("original_name"),
+                    "icon": entry.get("icon"),
+                    "area_id": entry.get("area_id"),
+                    "disabled_by": entry.get("disabled_by"),
+                    "hidden_by": entry.get("hidden_by"),
+                    "enabled": entry.get("disabled_by") is None,
+                    "hidden": entry.get("hidden_by") is not None,
+                    "aliases": entry.get("aliases", []),
+                    "labels": entry.get("labels", []),
+                    "platform": entry.get("platform"),
+                    "device_id": entry.get("device_id"),
+                    "unique_id": entry.get("unique_id"),
+                }
+
+            # Single entity case
+            if not is_bulk:
+                eid = entity_ids[0]
+                logger.info(f"Getting entity registry entry for {eid}")
+                result = await _fetch_entity(eid)
+
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "entity_id": eid,
+                        "entity_entry": {
+                            k: v for k, v in result.items() if k not in ("success",)
+                        },
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "entity_id": eid,
+                        "error": f"Entity not found: {result.get('error', 'Unknown error')}",
+                        "suggestions": [
+                            "Use ha_search_entities() to find valid entity IDs",
+                            "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
+                        ],
+                    }
+
+            # Bulk case - fetch all entities
+            import asyncio
+
+            logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
+            results = await asyncio.gather(
+                *[_fetch_entity(eid) for eid in entity_ids],
+                return_exceptions=True,
+            )
+
+            entity_entries: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+
+            for eid, fetch_result in zip(entity_ids, results, strict=True):
+                if isinstance(fetch_result, BaseException):
+                    errors.append({
+                        "entity_id": eid,
+                        "error": str(fetch_result),
+                    })
+                    continue
+                if fetch_result.get("success"):
+                    entity_entries.append(
+                        {k: v for k, v in fetch_result.items() if k not in ("success",)}
+                    )
+                else:
+                    errors.append({
+                        "entity_id": eid,
+                        "error": fetch_result.get("error", "Unknown error"),
+                    })
+
+            response: dict[str, Any] = {
+                "success": True,
+                "count": len(entity_entries),
+                "entity_entries": entity_entries,
+            }
+
+            if errors:
+                response["errors"] = errors
+                response["suggestions"] = [
+                    "Use ha_search_entities() to find valid entity IDs for failed lookups"
+                ]
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error getting entity: {e}")
+            return exception_to_structured_error(
+                e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids}
+            )
