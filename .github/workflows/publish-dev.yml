@@ -81,6 +81,8 @@ jobs:
           # Replace package name and version in pyproject.toml for build only
           sed -i 's/^name = "ha-mcp"/name = "ha-mcp-dev"/' pyproject.toml
           sed -i 's/^version = .*/version = "'"$DEV_VERSION"'"/' pyproject.toml
+          # Replace package name in version lookup
+          sed -i "s/version('ha-mcp')/version('ha-mcp-dev')/g" src/ha_mcp/__main__.py
           echo "Building ha-mcp-dev version: $DEV_VERSION"
           grep -E '^(name|version) = ' pyproject.toml
 
