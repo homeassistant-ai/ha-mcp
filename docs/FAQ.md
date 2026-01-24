@@ -174,9 +174,27 @@ The version should match the [latest release](https://github.com/homeassistant-a
 
 ## OAuth Troubleshooting
 
+### "404 Not Found" errors
+
+**Symptom:** When Claude.ai tries to connect, you see `404 Not Found` errors in server logs.
+
+**Common mistake:** Including `/mcp` in `MCP_BASE_URL`.
+
+```bash
+# ❌ WRONG
+MCP_BASE_URL=https://your-tunnel.com/mcp uvx ha-mcp-oauth
+
+# ✅ CORRECT
+MCP_BASE_URL=https://your-tunnel.com uvx ha-mcp-oauth
+```
+
+Then use `https://your-tunnel.com/mcp` as the connector URL in Claude.ai.
+
+See [Understanding MCP_BASE_URL](#understanding-mcp_base_url-vs-mcp_secret_path) below for more details.
+
 ### OAuth consent form not loading
 
-1. **Check MCP_BASE_URL** - Must be set to your public HTTPS URL
+1. **Check MCP_BASE_URL** - Must be set to your public HTTPS URL (without `/mcp` suffix)
 2. **Verify HTTPS** - OAuth requires HTTPS in production
 3. **Check tunnel** - Ensure Cloudflare Tunnel or similar is running
 
@@ -250,6 +268,33 @@ There are **two different services** with different ports:
 
 In all cases, the ha-mcp OAuth server needs network access to your Home Assistant instance to validate credentials.
 
+### Understanding MCP_BASE_URL vs MCP_SECRET_PATH
+
+**Quick guide:**
+
+1. **Set `MCP_BASE_URL` to your public domain without any path:**
+   ```bash
+   MCP_BASE_URL=https://your-tunnel.com  # No /mcp at the end!
+   ```
+
+2. **Keep `MCP_SECRET_PATH` at the default:**
+   ```bash
+   MCP_SECRET_PATH=/mcp  # Usually don't need to set this
+   ```
+
+3. **Use the combined URL in Claude.ai:**
+   ```
+   https://your-tunnel.com/mcp
+   ```
+
+**Examples:**
+
+| Your Setup | MCP_BASE_URL | URL for Claude.ai | Valid? |
+|------------|--------------|-------------------|--------|
+| Cloudflare Tunnel | `https://random-words.trycloudflare.com` | `https://random-words.trycloudflare.com/mcp` | ✅ |
+| Custom domain | `https://ha-mcp.yourdomain.com` | `https://ha-mcp.yourdomain.com/mcp` | ✅ |
+| **Common mistake** | `https://your-tunnel.com/mcp` | Won't work | ❌ |
+
 ---
 
 ## Configuration Options
@@ -266,7 +311,7 @@ In all cases, the ha-mcp OAuth server needs network access to your Home Assistan
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `MCP_BASE_URL` | Public HTTPS URL of your server | `http://localhost:8086` | Yes (production) |
+| `MCP_BASE_URL` | Public HTTPS URL of your server root (do NOT include `/mcp` suffix) | `http://localhost:8086` | Yes (production) |
 | `MCP_PORT` | Server port | `8086` | No |
 | `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` | No |
 | `OAUTH_ENCRYPTION_KEY` | 32-byte base64 key for token encryption | Auto-generated | Recommended |

@@ -95,11 +95,17 @@ Server URL: `https://your-public-url.com/mcp`
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MCP_BASE_URL` | Public HTTPS URL (required for OAuth) | `http://localhost:8086` |
+| `MCP_BASE_URL` | Public HTTPS URL of server **root** (do NOT include `/mcp`) | `http://localhost:8086` |
 | `MCP_PORT` | Server port | `8086` |
 | `MCP_SECRET_PATH` | Endpoint path | `/mcp` |
 | `OAUTH_ENCRYPTION_KEY` | Token encryption key | Auto-generated |
 | `LOG_LEVEL` | Logging verbosity | `INFO` |
+
+> **⚠️ Important:** Set `MCP_BASE_URL` to your domain root only:
+> - ✅ Correct: `https://your-tunnel.com`
+> - ❌ Wrong: `https://your-tunnel.com/mcp`
+>
+> Final MCP endpoint = `MCP_BASE_URL` + `MCP_SECRET_PATH`.
 
 > **Note:** In OAuth mode, `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are NOT required. Users provide their credentials via the consent form.
 

@@ -64,11 +64,17 @@ uvx ha-mcp@latest ha-mcp-oauth
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `MCP_BASE_URL` | Public HTTPS URL of your server | `http://localhost:8086` | **Yes** (for production) |
+| `MCP_BASE_URL` | Public HTTPS URL of your server **root** (see warning below) | `http://localhost:8086` | **Yes** (for production) |
 | `MCP_PORT` | Server port | `8086` | No |
 | `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` | No |
 | `OAUTH_ENCRYPTION_KEY` | 32-byte base64 key for token encryption | Auto-generated | **Recommended** |
 | `LOG_LEVEL` | Logging verbosity | `INFO` | No |
+
+> **⚠️ Important:** Set `MCP_BASE_URL` to your domain root only:
+> - ✅ Correct: `https://your-tunnel.com`
+> - ❌ Wrong: `https://your-tunnel.com/mcp`
+>
+> The full MCP endpoint will be `https://your-tunnel.com/mcp` (used in Claude.ai).
 
 > **Note:** If `OAUTH_ENCRYPTION_KEY` is not set, a temporary key is generated. Tokens will be invalidated on server restart. For production, generate a persistent key:
 > ```bash
