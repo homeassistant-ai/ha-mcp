@@ -11,6 +11,7 @@ import platform
 import sys
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote_plus
 
 from pydantic import Field
 
@@ -20,6 +21,10 @@ from ..utils.usage_logger import AVG_LOG_ENTRIES_PER_TOOL, get_recent_logs, get_
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
+
+# GitHub issue template URLs
+RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md"
+AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md"
 
 
 def _detect_installation_method() -> str:
@@ -226,6 +231,16 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Anonymization instructions
         anonymization_guide = _generate_anonymization_guide()
 
+        # Generate suggested title
+        suggested_title = _generate_bug_title(diagnostic_info, recent_logs)
+
+        # Generate search keywords and URLs for duplicate check
+        search_keywords = _generate_search_keywords(diagnostic_info, recent_logs)
+        duplicate_check_urls = [
+            f"https://github.com/homeassistant-ai/ha-mcp/issues?q=is%3Aissue+{quote_plus(keyword)}"
+            for keyword in search_keywords[:3]  # Limit to top 3 keywords
+        ]
+
         return {
             "success": True,
             "diagnostic_info": diagnostic_info,
@@ -237,21 +252,35 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "runtime_bug_template": runtime_bug_template,
             "agent_behavior_template": agent_behavior_template,
             "anonymization_guide": anonymization_guide,
+            "suggested_title": suggested_title,
+            "duplicate_check_urls": duplicate_check_urls,
             "instructions": (
-                "ANALYZE THE CONVERSATION to determine which template to present:\n\n"
-                "🐛 Present RUNTIME_BUG_TEMPLATE if:\n"
-                "   - User reports an error, failure, or unexpected behavior in ha-mcp\n"
-                "   - A tool returned an error or incorrect result\n"
-                "   - Something is broken or not working\n"
-                "   Submit at: https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md\n\n"
-                "🤖 Present AGENT_BEHAVIOR_TEMPLATE if:\n"
-                "   - User mentions YOU (the agent) used the wrong tool\n"
-                "   - User suggests YOU should have done something differently\n"
-                "   - User reports YOUR inefficiency or mistakes\n"
-                "   Submit at: https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md\n\n"
-                "If UNCLEAR which type, ASK: 'Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?'\n\n"
-                "Present the chosen template to the user. Ask them to fill in the description sections. "
-                "Remind them to follow the anonymization_guide to protect their privacy."
+                "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
+                "1. **Check for duplicates FIRST** (before presenting the template):\n"
+                "   - Use the duplicate_check_urls to search for similar issues\n"
+                "   - If gh CLI is available: use `gh issue list --search \"keyword\"`\n"
+                "   - Otherwise: inform user to check the duplicate_check_urls\n"
+                "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
+                "2. **Determine which template to present**:\n"
+                "   - ANALYZE THE CONVERSATION to determine which template to present\n\n"
+                "   🐛 Present RUNTIME_BUG_TEMPLATE if:\n"
+                "      - User reports an error, failure, or unexpected behavior in ha-mcp\n"
+                "      - A tool returned an error or incorrect result\n"
+                "      - Something is broken or not working\n\n"
+                "   🤖 Present AGENT_BEHAVIOR_TEMPLATE if:\n"
+                "      - User mentions YOU (the agent) used the wrong tool\n"
+                "      - User suggests YOU should have done something differently\n"
+                "      - User reports YOUR inefficiency or mistakes\n\n"
+                "   If UNCLEAR which type, ASK: 'Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?'\n\n"
+                "3. **Present the report to the user**:\n"
+                "   a. Show the suggested_title (user can edit if needed)\n"
+                "   b. Present the chosen template IN A MARKDOWN CODE BLOCK (```markdown...```) for easy copy/paste\n"
+                "   c. PROMINENTLY display the submission URL at the top:\n"
+                f"      - Runtime bugs: {RUNTIME_BUG_URL}\n"
+                f"      - Agent behavior: {AGENT_BEHAVIOR_URL}\n"
+                "   d. Ask them to fill in the description sections\n"
+                "   e. Remind them to follow the anonymization_guide to protect their privacy\n\n"
+                "CRITICAL: Always present templates in markdown code blocks (```markdown...```) so users can copy/paste easily!"
             ),
         }
 
@@ -322,6 +351,84 @@ def _extract_error_messages(logs: list[dict[str, Any]]) -> list[str]:
     return error_messages
 
 
+def _generate_bug_title(
+    diagnostic_info: dict[str, Any],
+    recent_logs: list[dict[str, Any]],
+) -> str:
+    """
+    Generate a concise bug title (single line, ~60 chars max).
+
+    Strategy:
+    1. If there are error messages, use the most recent one as basis
+    2. Otherwise, use generic template based on connection status
+    3. Truncate to ~60 chars max
+    """
+    title = ""
+    # Try to get the most recent error directly from logs
+    for log in reversed(recent_logs):
+        error_msg = log.get("error_message")
+        if error_msg:
+            tool_name = log.get("tool_name", "unknown")
+            title = f"{tool_name}: {error_msg}"
+            break
+
+    if not title:
+        # No errors - check connection status
+        conn_status = diagnostic_info.get("connection_status", "Unknown")
+        if "Error" in conn_status or "Failed" in conn_status:
+            title = f"Connection issue: {conn_status}"
+        else:
+            title = "Issue with ha-mcp"
+
+    # Truncate to ~60 chars, trying to preserve words
+    if len(title) > 60:
+        title = title[:57] + "..."
+
+    return title
+
+
+def _generate_search_keywords(
+    diagnostic_info: dict[str, Any],
+    recent_logs: list[dict[str, Any]],
+) -> list[str]:
+    """
+    Generate search keywords for duplicate issue detection.
+
+    Returns a list of keywords to search for similar issues.
+    """
+    keywords = set()
+
+    # Find the most recent error from logs
+    last_error_log = next((log for log in reversed(recent_logs) if log.get("error_message")), None)
+
+    if last_error_log:
+        tool_name = last_error_log.get("tool_name")
+        if tool_name:
+            keywords.add(tool_name)
+
+        error_msg = last_error_log.get("error_message", "").lower()
+        # Common error patterns
+        if "connection" in error_msg:
+            keywords.add("connection")
+        if "timeout" in error_msg:
+            keywords.add("timeout")
+        if "authentication" in error_msg or "auth" in error_msg:
+            keywords.add("authentication")
+        if "not found" in error_msg:
+            keywords.add("not found")
+
+    # Add connection-based keywords
+    conn_status = diagnostic_info.get("connection_status", "Unknown")
+    if "Error" in conn_status or "Failed" in conn_status:
+        keywords.add("connection")
+
+    # Default to generic search if no specific keywords
+    if not keywords:
+        keywords.add("bug")
+
+    return list(keywords)
+
+
 def _generate_runtime_bug_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
@@ -365,7 +472,7 @@ def _generate_runtime_bug_template(
 > All environment info and logs below were collected automatically.
 
 **Submit this report at:**
-https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md
+{RUNTIME_BUG_URL}
 
 ---
 
@@ -456,7 +563,7 @@ def _generate_agent_behavior_template(
 > Tool call history was collected automatically to help analyze agent behavior.
 
 **Submit this feedback at:**
-https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md
+{AGENT_BEHAVIOR_URL}
 
 ---
 

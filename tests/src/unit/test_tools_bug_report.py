@@ -42,6 +42,15 @@ class TestBugReportTool:
         register_bug_report_tools(mock_mcp, mock_client)
         return mock_mcp
 
+    @pytest.fixture
+    def ha_report_issue_func(self, registered_tools):
+        """Return the unwrapped ha_report_issue function."""
+        ha_report_issue = registered_tools._tools["ha_report_issue"]
+        actual_func = ha_report_issue
+        while hasattr(actual_func, "__wrapped__"):
+            actual_func = actual_func.__wrapped__
+        return actual_func
+
     @pytest.mark.asyncio
     async def test_bug_report_success(self, registered_tools, mock_client):
         """Test successful bug report generation."""
@@ -77,6 +86,8 @@ class TestBugReportTool:
         assert "recent_logs" in result
         assert "log_count" in result
         assert "instructions" in result
+        assert "suggested_title" in result
+        assert "duplicate_check_urls" in result
 
         # Check diagnostic info
         diag = result["diagnostic_info"]
@@ -314,3 +325,118 @@ class TestBugReportTool:
         assert "AGENT_BEHAVIOR_TEMPLATE" in instructions
         assert "ANALYZE THE CONVERSATION" in instructions
         assert "privacy" in instructions.lower()
+
+    @pytest.mark.asyncio
+    async def test_bug_report_suggested_title(self, ha_report_issue_func, mock_client):
+        """Test that a suggested title is generated."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_recent_logs"
+        ) as mock_get_logs:
+            mock_get_logs.return_value = [
+                {
+                    "timestamp": "2024-12-01T10:00:00",
+                    "tool_name": "ha_call_service",
+                    "success": False,
+                    "execution_time_ms": 50,
+                    "error_message": "Service not found",
+                },
+            ]
+
+            result = await ha_report_issue_func()
+
+            # Check suggested title is present and has correct format
+            assert "suggested_title" in result
+            title = result["suggested_title"]
+            assert isinstance(title, str)
+            assert len(title) > 0
+            assert len(title) <= 60
+            # Should be exactly: "tool_name: error_message"
+            assert title == "ha_call_service: Service not found"
+
+    @pytest.mark.asyncio
+    async def test_bug_report_suggested_title_no_errors(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Test title generation when there are no errors."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_recent_logs"
+        ) as mock_get_logs:
+            mock_get_logs.return_value = [
+                {
+                    "timestamp": "2024-12-01T10:00:00",
+                    "tool_name": "ha_get_state",
+                    "success": True,
+                    "execution_time_ms": 100,
+                },
+            ]
+
+            result = await ha_report_issue_func()
+
+            # Should still generate a generic title
+            assert "suggested_title" in result
+            title = result["suggested_title"]
+            assert isinstance(title, str)
+            assert len(title) > 0
+            assert len(title) <= 60
+
+    @pytest.mark.asyncio
+    async def test_bug_report_duplicate_check_urls(self, ha_report_issue_func, mock_client):
+        """Test that duplicate check URLs are generated with correct keywords."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_recent_logs"
+        ) as mock_get_logs:
+            mock_get_logs.return_value = [
+                {
+                    "timestamp": "2024-12-01T10:00:00",
+                    "tool_name": "ha_call_service",
+                    "success": False,
+                    "execution_time_ms": 50,
+                    "error_message": "Connection timeout",
+                },
+            ]
+
+            result = await ha_report_issue_func()
+
+            # Check duplicate check URLs are present
+            assert "duplicate_check_urls" in result
+            urls = result["duplicate_check_urls"]
+            assert isinstance(urls, list)
+            assert len(urls) > 0
+            # All URLs should be GitHub issue search URLs
+            for url in urls:
+                assert "github.com/homeassistant-ai/ha-mcp/issues" in url
+                assert "is%3Aissue" in url
+
+            # Verify keywords are in URLs
+            url_content = "".join(urls)
+            assert "ha_call_service" in url_content
+            assert "connection" in url_content
+            assert "timeout" in url_content
+
+    @pytest.mark.asyncio
+    async def test_bug_report_updated_instructions(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Test that instructions include new workflow steps."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func()
+
+        instructions = result["instructions"]
+        # Check for new workflow steps
+        assert "Check for duplicates FIRST" in instructions
+        assert "duplicate_check_urls" in instructions
+        assert "suggested_title" in instructions
+        assert "markdown code block" in instructions.lower()
+        assert "```markdown" in instructions
+        assert "PROMINENTLY display the submission URL" in instructions
