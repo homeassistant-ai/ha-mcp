@@ -29,12 +29,13 @@ jobs:
           COMMIT_MSG=$(git log -1 --pretty=%B)
           echo "Commit message: $COMMIT_MSG"
 
-          # Extract PR number from merge commit
+          # Extract PR number from commit message
           # GitHub merge commits have format: "Merge pull request #123 from user/branch"
-          PR_NUM=$(echo "$COMMIT_MSG" | grep -oP 'Merge pull request #\K\d+' || echo "")
+          # GitHub squash merges have format: "Title with (#123)" in first line
+          PR_NUM=$(echo "$COMMIT_MSG" | head -1 | grep -oP '(?:Merge pull request #|[[(]#)\K\d+' || echo "")
 
           if [ -z "$PR_NUM" ]; then
-            echo "No PR number found in merge commit. Skipping notification."
+            echo "No PR number found in commit message. Skipping notification."
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
