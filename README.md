@@ -142,6 +142,14 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
+## 🧪 Dev Channel
+
+Want early access to new features and fixes? Dev releases (`.devN`) are published on every push to master.
+
+**[Dev Channel Documentation](docs/dev-channel.md)** — Instructions for pip/uvx, Docker, and Home Assistant add-on.
+
+---
+
 ## 🤝 Contributing
 
 For development setup, testing instructions, and contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
