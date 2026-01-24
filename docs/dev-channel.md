@@ -1,69 +1,114 @@
 # Dev Channel
 
-Want to test the latest changes before they hit stable? Dev releases are published automatically on every push to the `master` branch.
+Want to test the latest changes before the weekly Tuesday release? The dev channel provides early access to features, bug fixes, and improvements as soon as they're merged to master.
 
-## What is the Dev Channel?
+**Who should use this:**
+- Contributors testing their PRs
+- Issue reporters verifying fixes
+- Early adopters wanting the latest features
 
-The dev channel provides early access to:
-- **New features** before they're included in stable releases
-- **Bug fixes** as soon as they're merged
-- **Performance improvements** and optimizations
+**Important:** Dev releases (`.devN`) may contain bugs. For production use, stick with stable releases.
 
 ## Release Schedule
 
-| Channel | When Updated | Package |
-|---------|--------------|---------|
-| **Dev** | Every push to master | `ha-mcp-dev` |
-| **Stable** | Weekly (Tuesday 10:00 UTC) | `ha-mcp` |
+| Channel | When Updated | Package/Tag |
+|---------|--------------|-------------|
+| **Dev** | Every push to master | `ha-mcp-dev` / `:dev` |
+| **Stable** | Weekly (Tuesday 10:00 UTC) | `ha-mcp` / `:latest` |
 
 ## Installation Methods
 
-### pip / uvx
+### uvx (Recommended)
 
-Dev releases are published as a separate package called `ha-mcp-dev`:
+The simplest method - no installation required, no virtual environments, just run:
 
 ```bash
-# Install dev version with pip
-pip install ha-mcp-dev
-
-# Install dev version with uv
-uv pip install ha-mcp-dev
-
-# Run directly with uvx
+# Run dev version directly
 uvx ha-mcp-dev
 ```
 
-**Config changes required:** None. The same `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` environment variables work with dev releases.
+**Check version:**
+```bash
+uvx ha-mcp-dev --version
+# Output: ha-mcp 6.3.1.dev140
+```
 
 **Switch back to stable:**
+```bash
+uvx ha-mcp
+```
 
-To reliably switch to the latest stable version, it's best to uninstall the dev package and then install the stable package.
+**Config changes required:** None. Uses the same `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` environment variables.
+
+### pip (Alternative)
+
+If you prefer installing the package:
 
 ```bash
-# With pip
-pip uninstall ha-mcp-dev -y && pip install ha-mcp
+# Install system-wide (requires sudo/admin on some systems)
+pip install --user ha-mcp-dev
 
-# With uv
-uv pip uninstall ha-mcp-dev && uv pip install ha-mcp
+# Run the installed package
+ha-mcp-dev
+```
+
+**Check version:**
+```bash
+pip show ha-mcp-dev | grep Version
+```
+
+**Switch back to stable:**
+```bash
+pip uninstall ha-mcp-dev -y
+pip install --user ha-mcp
+```
+
+### uv (Alternative)
+
+Using uv's package installer:
+
+```bash
+# Create a virtual environment (one-time setup)
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dev version
+uv pip install ha-mcp-dev
+
+# Run
+ha-mcp-dev
+```
+
+**Check version:**
+```bash
+uv pip show ha-mcp-dev | grep Version
+```
+
+**Switch back to stable:**
+```bash
+uv pip uninstall ha-mcp-dev
+uv pip install ha-mcp
 ```
 
 ### Docker
 
-<!-- TODO: Verify this works -->
+Dev images are published to GitHub Container Registry with the `dev` tag.
 
-Dev images are published to GitHub Container Registry with the `dev` tag:
-
+**Pull the dev image:**
 ```bash
-# Pull the dev image
 docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
+```
 
-# Run in stdio mode (Claude Desktop)
+**Run in stdio mode (Claude Desktop):**
+```bash
 docker run --rm -i \
   -e HOMEASSISTANT_URL=http://your-ha-instance:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
   ghcr.io/homeassistant-ai/ha-mcp:dev
+```
 
-# Run in HTTP mode (web clients)
+**Run in HTTP mode (web clients):**
+```bash
 docker run -d -p 8086:8086 \
   -e HOMEASSISTANT_URL=http://your-ha-instance:8123 \
   -e HOMEASSISTANT_TOKEN=your_token \
@@ -77,39 +122,44 @@ docker run -d -p 8086:8086 \
 ```
 
 **Switch back to stable:**
-
-Pull the `latest` image, then stop your `dev` container and start a new one using the `latest` tag.
-
 ```bash
 docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
+# Stop your dev container and start a new one with :latest tag
 ```
 
 ### Home Assistant Add-on
 
-<!-- TODO: Verify this works -->
+The dev channel is available as a **separate add-on** in the Home Assistant add-on store.
 
-The add-on supports switching between stable and dev channels via configuration.
+**To use the dev channel:**
 
-1. Open the add-on configuration in Home Assistant
-2. Change the `channel` option:
+1. Open Home Assistant
+2. Go to **Settings** → **Add-ons** → **Add-on Store**
+3. Search for **"Home Assistant MCP Server (Dev)"**
+4. Click **Install**
+5. Configure with your token (if not using auto-discovery)
+6. Start the add-on
 
-```yaml
-# For dev channel
-channel: dev
+**Key differences from stable add-on:**
 
-# For stable channel (default)
-channel: stable
-```
+| Property | Stable | Dev |
+|----------|--------|-----|
+| **Name** | Home Assistant MCP Server | Home Assistant MCP Server (Dev) |
+| **Slug** | `ha_mcp` | `ha_mcp_dev` |
+| **Stage** | Stable | Experimental |
+| **Updates** | Weekly (Tuesday) | Every master push |
 
-3. Restart the add-on
+**Can I run both?** Yes! Both add-ons can be installed simultaneously. They use different slugs and configuration.
 
-**Config changes required:** Add or modify the `channel` configuration option.
-
-**Switch back to stable:** Set `channel: stable` or remove the channel option entirely (stable is the default).
+**Switch back to stable:** Simply stop the dev add-on and start/install the stable "Home Assistant MCP Server" add-on instead.
 
 ### Claude Desktop Configuration
 
-If you're using Claude Desktop with a manual configuration, update your `claude_desktop_config.json`:
+If you're using Claude Desktop, update your `claude_desktop_config.json`:
+
+**Location:**
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 **For uvx (dev channel):**
 ```json
@@ -129,34 +179,44 @@ If you're using Claude Desktop with a manual configuration, update your `claude_
 
 **Config changes required:** Change `"ha-mcp"` to `"ha-mcp-dev"` in the args array.
 
-**Switch back to stable:** Change `"ha-mcp-dev"` back to `"ha-mcp"` in the args array.
+**Switch back to stable:** Change `"ha-mcp-dev"` back to `"ha-mcp"` in the args array, then restart Claude Desktop.
 
 ## Checking Your Version
 
-To verify which version you're running:
+The easiest way to check your version:
 
 ```bash
-# Check installed version (dev package)
+# With uvx
+uvx ha-mcp-dev --version
+
+# With pip
 pip show ha-mcp-dev | grep Version
 
-# Check installed version (stable package)
-pip show ha-mcp | grep Version
-
-# Or with uv
+# With uv
 uv pip show ha-mcp-dev | grep Version
+
+# With Docker
+docker run --rm ghcr.io/homeassistant-ai/ha-mcp:dev ha-mcp --version
 ```
+
+Dev versions follow the format: `6.3.1.dev140` where `.dev140` indicates the 140th commit since the last stable release.
 
 ## Reporting Issues
 
 If you encounter issues with a dev release:
 
-1. Note the exact version number
-2. Check if the issue exists in the [latest stable release](https://github.com/homeassistant-ai/ha-mcp/releases/latest)
-3. If it's a dev-only issue, [open a bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) with the dev version number
+1. **Note the exact version number** (e.g., `6.3.1.dev140`)
+2. **Check if the issue exists in stable** - Try the [latest stable release](https://github.com/homeassistant-ai/ha-mcp/releases/latest) to confirm it's dev-specific
+3. **Report the issue:**
+   - If it's a regression (worked in stable, broken in dev), comment on the related PR or issue
+   - If it's a new bug, [open a bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and include:
+     - The dev version number
+     - Whether it reproduces in stable
+     - Steps to reproduce
 
 ## See Also
 
 - [Main Documentation](../README.md)
 - [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)
-- [FAQ & Troubleshooting](./FAQ.md)
+- [FAQ & Troubleshooting](https://homeassistant-ai.github.io/ha-mcp/faq/)
 - [Contributing Guide](../CONTRIBUTING.md)
