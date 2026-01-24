@@ -58,6 +58,40 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
           echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
 
+  publish-pypi-dev:
+    name: Publish PyPI (dev channel)
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ha-mcp
+    permissions:
+      contents: read
+      id-token: write  # Required for PyPI trusted publishing
+    env:
+      DEV_VERSION: ${{ needs.prepare.outputs.dev_version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Temporarily set dev version in pyproject.toml
+        run: |
+          # Replace version in pyproject.toml for build only
+          sed -i 's/^version = .*/version = "'"$DEV_VERSION"'"/' pyproject.toml
+          echo "Building version: $DEV_VERSION"
+          grep '^version = ' pyproject.toml
+
+      - name: Build distribution
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
   publish-docker-dev:
     name: Publish Docker (dev channel)
     needs: prepare
