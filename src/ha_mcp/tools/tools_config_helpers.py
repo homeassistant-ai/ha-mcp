@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 from .util_helpers import parse_string_list_param
 
@@ -385,7 +386,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 labels = parse_string_list_param(labels, "labels")
                 options = parse_string_list_param(options, "options")
             except ValueError as e:
-                return {"success": False, "error": f"Invalid list parameter: {e}"}
+                return create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid list parameter: {e}",
+                )
 
             # Determine if this is a create or update based on helper_id
             action = "update" if helper_id else "create"

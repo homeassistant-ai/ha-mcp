@@ -373,7 +373,8 @@ class TestHaExposeEntity:
         )
 
         assert result["success"] is False
-        assert "should_expose" in result["error"].lower() or "boolean" in result["error"].lower()
+        error_msg = result["error"]["message"] if isinstance(result["error"], dict) else result["error"]
+        assert "should_expose" in error_msg.lower() or "boolean" in error_msg.lower()
 
     # ==================== API Error Handling Tests ====================
 
