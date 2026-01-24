@@ -63,8 +63,8 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     environment:
-      name: pypi
-      url: https://pypi.org/p/ha-mcp
+      name: pypi-dev
+      url: https://pypi.org/p/ha-mcp-dev
     permissions:
       contents: read
       id-token: write  # Required for PyPI trusted publishing
@@ -76,12 +76,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Temporarily set dev version in pyproject.toml
+      - name: Temporarily set package name and version for dev build
         run: |
-          # Replace version in pyproject.toml for build only
+          # Replace package name and version in pyproject.toml for build only
+          sed -i 's/^name = "ha-mcp"/name = "ha-mcp-dev"/' pyproject.toml
           sed -i 's/^version = .*/version = "'"$DEV_VERSION"'"/' pyproject.toml
-          echo "Building version: $DEV_VERSION"
-          grep '^version = ' pyproject.toml
+          echo "Building ha-mcp-dev version: $DEV_VERSION"
+          grep -E '^(name|version) = ' pyproject.toml
 
       - name: Build distribution
         run: uv build
@@ -166,7 +167,7 @@ jobs:
 
           **PyPI (dev channel):**
           \`\`\`bash
-          pip install ha-mcp --pre
+          pip install ha-mcp-dev
           \`\`\`
           EOF
 
