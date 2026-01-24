@@ -445,6 +445,54 @@ src/ha_mcp/
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
 
+## Writing MCP Tools
+
+### Naming Convention
+`ha_<verb>_<noun>`:
+- `get` — single item (`ha_get_state`)
+- `list` — collections (`ha_list_areas`)
+- `search` — filtered queries (`ha_search_entities`)
+- `set` — create/update (`ha_config_set_helper`)
+- `delete` — remove (`ha_config_delete_automation`)
+- `call` — execute (`ha_call_service`)
+
+### Tool Structure
+Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
+
+```python
+def register_<domain>_tools(mcp, client, **kwargs):
+    @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
+    @log_tool_usage
+    async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
+        """One-line summary starting with action verb."""
+        # For complex schemas, add: "Use ha_get_domain_docs('<domain>') for details."
+```
+
+### Safety Annotations
+| Annotation | Use For |
+|------------|---------|
+| `readOnlyHint: True` | No side effects |
+| `idempotentHint: True` | Safe to retry |
+| `destructiveHint: True` | Deletes data |
+
+### Error Handling
+Use structured errors from `errors.py`:
+```python
+from ..errors import create_error_response, ErrorCode
+return create_error_response(
+    code=ErrorCode.ENTITY_NOT_FOUND,
+    message="Entity not found",
+    suggestions=["Use ha_search_entities() to find valid IDs"]
+)
+```
+
+### Return Values
+```python
+{"success": True, "data": result}                    # Success
+{"success": True, "partial": True, "warning": "..."}  # Degraded
+{"success": False, "error": {...}}                    # Failure
+```
+
 ## Tool Waiting Behavior
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
