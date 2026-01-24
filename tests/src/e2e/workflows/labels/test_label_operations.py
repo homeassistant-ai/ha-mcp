@@ -261,6 +261,101 @@ class TestLabelRemoveOperation:
 
 @pytest.mark.labels
 @pytest.mark.cleanup
+class TestLabelValidation:
+    """Test label validation (Issue #475)."""
+
+    async def test_reject_nonexistent_label_in_validation(self, mcp_client):
+        """Test: Validation rejects non-existent label IDs before entity lookup."""
+        # This test doesn't need an entity - validation happens before entity operations
+        # Try to set non-existent labels - should fail in validation phase
+        result = await mcp_client.call_tool(
+            "ha_manage_entity_labels",
+            {
+                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
+                "operation": "set",
+                "labels": ["nonexistent_label_abc", "nonexistent_label_xyz"],
+            },
+        )
+        data = parse_mcp_result(result)
+
+        # Should fail with clear error message
+        assert data.get("success") is False, f"Should reject non-existent labels: {data}"
+        assert "do not exist" in data.get("error", "").lower(), f"Error message should mention non-existent labels: {data}"
+        assert "invalid_labels" in data or "nonexistent_label_abc" in str(data), (
+            f"Response should identify invalid labels: {data}"
+        )
+        logger.info("✅ Non-existent labels rejected in validation phase")
+
+    async def test_reject_nonexistent_label_add(self, mcp_client):
+        """Test: Add operation rejects non-existent label IDs."""
+        # Try to add non-existent label - validation happens before entity operations
+        result = await mcp_client.call_tool(
+            "ha_manage_entity_labels",
+            {
+                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
+                "operation": "add",
+                "labels": ["nonexistent_label_add_test"],
+            },
+        )
+        data = parse_mcp_result(result)
+
+        # Should fail with clear error message
+        assert data.get("success") is False, f"Should reject non-existent label: {data}"
+        assert "do not exist" in data.get("error", "").lower(), f"Error message should mention non-existent labels: {data}"
+        logger.info("✅ Non-existent label rejected for add operation")
+
+    async def test_reject_mixed_valid_invalid_labels(self, mcp_client, cleanup_tracker):
+        """Test: Rejects operation when mixing valid and invalid labels (Issue #475 scenario)."""
+        # Create one valid label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label", {"name": "Valid Label Issue 475"}
+        )
+        valid_label_id = parse_mcp_result(create_result).get("label_id")
+        cleanup_tracker.track("label", valid_label_id)
+
+        # Try to set both valid and invalid labels - validation happens before entity operations
+        result = await mcp_client.call_tool(
+            "ha_manage_entity_labels",
+            {
+                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
+                "operation": "set",
+                "labels": [valid_label_id, "invalid_label_a", "invalid_label_b"],
+            },
+        )
+        data = parse_mcp_result(result)
+
+        # Should reject entire operation
+        assert data.get("success") is False, (
+            f"Should reject operation with mixed valid/invalid labels: {data}"
+        )
+        assert "invalid_label_a" in str(data) or "invalid_labels" in data, (
+            f"Should identify invalid labels: {data}"
+        )
+        logger.info("✅ Mixed valid/invalid labels rejected (Issue #475 fix)")
+
+    async def test_validation_provides_helpful_suggestions(self, mcp_client):
+        """Test: Validation error includes helpful suggestions."""
+        result = await mcp_client.call_tool(
+            "ha_manage_entity_labels",
+            {
+                "entity_id": "light.fake_entity",
+                "operation": "set",
+                "labels": ["bad_label_id"],
+            },
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("success") is False
+        assert "suggestions" in data, f"Should include suggestions: {data}"
+        suggestions_text = " ".join(data.get("suggestions", []))
+        assert "ha_config_get_label" in suggestions_text or "ha_config_set_label" in suggestions_text, (
+            f"Suggestions should reference helper tools: {data}"
+        )
+        logger.info("✅ Validation error includes helpful suggestions")
+
+
+@pytest.mark.labels
+@pytest.mark.cleanup
 class TestLabelSetOperation:
     """Test label 'set' operation (replace all labels)."""
 
