@@ -373,6 +373,16 @@ jobs:
             **Your Task:**
             Analyze this GitHub issue and provide helpful triage guidance.
 
+            **IMPORTANT**: You are read-only. You CANNOT:
+            - Modify files or create code changes
+            - Create pull requests
+            - Commit changes
+
+            You CAN:
+            - Read files and search the codebase
+            - Identify root causes and suggest fixes (provide fixes as diffs in Technical Analysis section)
+            - Guide users on what to do next
+
             **Issue #${{ steps.issue_number.outputs.number }}**: ${{ steps.issue_data.outputs.issue_title }}
 
             **Description:**
@@ -405,6 +415,8 @@ jobs:
             - `google_web_search <query>` - Search web for error messages or external docs
 
             **Critical Rules:**
+            - **YOU ARE READ-ONLY**: You cannot modify files, create PRs, or make code changes
+            - If you identify a fix, provide it as a diff in the Technical Analysis section
             - ONLY reference file paths you actually found with `grep` or `find`
             - ONLY reference issue numbers you found with `gh issue`
             - If you can't find relevant code, say so - don't make up paths
@@ -449,6 +461,20 @@ jobs:
 
             - `actual/path/from/grep.py:123` - [what this code does]
             - `another/real/file.py:456` - [explanation]
+
+            ### Proposed Fix
+
+            [If you identified a specific fix, provide it here as a diff. If no fix identified, omit this section]
+
+            ```diff
+            --- a/path/to/file.py
+            +++ b/path/to/file.py
+            @@ -10,7 +10,7 @@
+             def function():
+            -    old_code = "broken"
+            +    new_code = "fixed"
+                 return result
+            ```
 
             ### Related Issues/PRs
 
