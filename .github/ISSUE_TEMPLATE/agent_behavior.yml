@@ -1,0 +1,95 @@
+name: "🤖 AI Agent Behavior Feedback"
+description: "Report AI agent inefficiency, wrong tool usage, or suggest workflow improvements"
+title: "[AGENT] "
+labels: ["agent-behavior"]
+assignees:
+  - julienld
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🤖 Report AI Agent Behavior
+
+        Use this template when the AI agent:
+        - Used the wrong tool or made inefficient choices
+        - Should have done something differently
+        - Misinterpreted tool output or provided bad parameters
+
+        **This is NOT for bugs in ha-mcp** (use Runtime Bug template instead).
+
+  - type: textarea
+    id: user_commentary
+    attributes:
+      label: "💬 Why Are You Reporting This?"
+      description: |
+        **In your own words** (not AI-generated), tell us:
+        - What bothered you about the agent's approach?
+        - What were you trying to accomplish?
+        - Why do you think it could be better?
+
+        **Examples:**
+        - "The agent searched for entities 3 times instead of using the result from the first search"
+        - "It used ha_search_entities when I just needed the state of one light"
+        - "The agent kept retrying the same failed command without adjusting its approach"
+        - "I'm not sure why it's wrong, but it felt slow and inefficient"
+
+        **Note:** Just share your perspective - don't worry about being technical.
+      placeholder: |
+        Example: "The agent made 5 API calls when I think 1 would have been enough..."
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        ## 🚨 Use the `ha_report_issue` Tool (Required)
+
+        **Tell your AI agent:**
+
+        > "You struggled with [describe the issue from your first field]. Let's make an issue report with the ha_report_issue tool."
+
+        The agent will collect:
+        - Tool call history
+        - Environment information
+        - Timestamps and performance data
+
+  - type: textarea
+    id: conversation_paste
+    attributes:
+      label: "📋 Copy-Paste from Conversation"
+      description: |
+        **Paste the relevant part of your conversation here.**
+
+        Include:
+        - Your original request to the agent
+        - The agent's tool calls and responses
+        - The ha_report_issue output (if you used it)
+
+        **Don't worry about formatting** - just copy and paste! We can read messy text, code blocks, JSON, whatever.
+      placeholder: |
+        User: Can you turn on the living room lights?
+
+        Agent: I'll search for the living room light entity.
+        [Tool: ha_search_entities, query="living room light"]
+        Result: Found entity light.living_room
+
+        Agent: Now I'll search for it again to confirm...
+        [Tool: ha_search_entities, query="living room"]
+        Result: ...
+
+        [Paste everything here, including ha_report_issue output if available]
+      render: markdown
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        That's it! We'll analyze the agent's behavior and see how we can improve it.
+
+        **Privacy reminder:** Remove any sensitive data (tokens, passwords) before submitting.

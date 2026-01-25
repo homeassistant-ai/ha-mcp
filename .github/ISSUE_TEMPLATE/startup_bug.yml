@@ -1,0 +1,221 @@
+name: "🚀 Startup/Installation Bug"
+description: "Report a bug preventing ha-mcp from starting, installing, or connecting"
+title: "[BUG] "
+labels: ["bug", "startup"]
+assignees:
+  - julienld
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🚀 Report a Startup/Installation Bug
+
+        Use this template when:
+        - ha-mcp won't start or install
+        - Connection to Home Assistant fails
+        - Your AI client can't connect to ha-mcp
+
+  - type: textarea
+    id: what_went_wrong
+    attributes:
+      label: "💬 What Went Wrong?"
+      description: |
+        **In your own words** (not AI-generated), tell us:
+        - What happened when you tried to start/install ha-mcp?
+        - What error did you see?
+        - What were you trying to accomplish?
+
+        **Examples:**
+        - "The server starts then immediately exits"
+        - "Claude Desktop shows 'MCP server disconnected' every time"
+        - "I get a Python error about missing modules"
+        - "Docker container won't stay running"
+
+        **Note:** No AI-generated content please - just describe what happened.
+      placeholder: |
+        Example: "When I restart Claude Desktop, it says the MCP server failed to start..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: ai_generated_content
+    attributes:
+      label: "📋 AI-Generated Content / Logs / Config"
+      description: |
+        **Copy-paste anything relevant here.**
+
+        This can include:
+        - Error messages from terminal/logs
+        - AI-generated summaries or explanations
+        - Configuration files (remove tokens!)
+        - Docker logs
+        - Any output that might help
+
+        **Don't worry about formatting** - just paste everything! Messy is fine.
+
+        **IMPORTANT:** Remove tokens, passwords, and API keys before pasting!
+      placeholder: |
+        [Paste error logs here]
+
+        ERROR: Connection refused to http://homeassistant.local:8123
+        Traceback (most recent call last):
+          File "/path/to/ha_mcp/client.py", line 123
+            ...
+
+        [Or paste your config file - REMOVE TOKENS!]
+        {
+          "mcpServers": {
+            "ha-mcp": {
+              "command": "uvx",
+              "args": ["ha-mcp"],
+              "env": {
+                "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+                "HOMEASSISTANT_TOKEN": "[REDACTED]"
+              }
+            }
+          }
+        }
+
+        [Or paste AI-generated analysis]
+        The error suggests that the server cannot connect because...
+      render: markdown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: "🖥️ Client Application"
+      description: "Which client are you using?"
+      options:
+        - "Claude Desktop"
+        - "Claude Code"
+        - "Continue"
+        - "Cline"
+        - "Open WebUI"
+        - "Gemini CLI"
+        - "VSCode (via Continue or other)"
+        - "Cursor"
+        - "Zed"
+        - "Other (specify below)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation_method
+    attributes:
+      label: "📦 Installation Method"
+      description: "How did you install ha-mcp?"
+      options:
+        - "uvx ha-mcp"
+        - "pip install ha-mcp"
+        - "uv pip install ha-mcp"
+        - "Docker (ghcr.io/homeassistant-ai/ha-mcp)"
+        - "Home Assistant Add-on"
+        - "Binary download (GitHub releases)"
+        - "Git clone + uv sync"
+        - "Other (specify below)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: "💻 Operating System"
+      description: "Which OS?"
+      options:
+        - "macOS"
+        - "Windows"
+        - "Linux"
+        - "WSL (Windows Subsystem for Linux)"
+        - "Other"
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: "OS Version"
+      description: "Specific version (e.g., 'macOS 15.2', 'Ubuntu 24.04', 'Windows 11')"
+      placeholder: "macOS 15.2"
+    validations:
+      required: true
+
+  - type: input
+    id: setup_guide_url
+    attributes:
+      label: "📖 Setup Guide Followed"
+      description: "Which setup guide did you follow? See https://homeassistant-ai.github.io/ha-mcp/setup/"
+      placeholder: "https://homeassistant-ai.github.io/ha-mcp/guide-macos/"
+    validations:
+      required: true
+
+  - type: textarea
+    id: exact_steps
+    attributes:
+      label: "🔄 Exact Steps You Followed"
+      description: |
+        Describe the **exact steps** you took:
+        - Installation command you ran
+        - Configuration changes you made
+        - When the error occurred
+
+        **Be specific!** This helps us reproduce the issue.
+      placeholder: |
+        1. Opened Terminal
+        2. Ran: uvx ha-mcp
+        3. Added config to Claude Desktop at ~/Library/Application Support/Claude/claude_desktop_config.json
+        4. Set HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN
+        5. Restarted Claude Desktop
+        6. Got error: "MCP server failed to start"
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: "🐍 Python Version"
+      description: "Output of `python --version` or `python3 --version`"
+      placeholder: "Python 3.13.0"
+    validations:
+      required: false
+
+  - type: input
+    id: ha_mcp_version
+    attributes:
+      label: "📦 ha-mcp Version"
+      description: "If known (or 'latest')"
+      placeholder: "6.4.0 or 'latest from PyPI'"
+    validations:
+      required: false
+
+  - type: input
+    id: home_assistant_version
+    attributes:
+      label: "🏠 Home Assistant Version"
+      description: "If known"
+      placeholder: "2025.1.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "💡 Additional Context"
+      description: |
+        Any other relevant information:
+        - Network setup (proxy, VPN, firewall)
+        - Previous versions that worked
+        - Workarounds you found
+        - Anything else that might help
+      placeholder: "Additional details..."
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        **Privacy reminder:** Remove tokens, passwords, and API keys before submitting!

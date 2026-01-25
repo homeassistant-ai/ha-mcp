@@ -1,0 +1,536 @@
+name: '🤖 Issue Triage'
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to triage'
+        required: true
+        type: number
+
+concurrency:
+  group: 'triage-${{ github.event.issue.number || inputs.issue_number }}'
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  should_run:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      skip_preanalysis: ${{ steps.check.outputs.skip_preanalysis }}
+    steps:
+      - name: Check if workflow should run
+        id: check
+        uses: actions/github-script@v8
+        with:
+          script: |
+            let issue;
+            let comment;
+            let issueNumber;
+
+            // Handle manual workflow dispatch
+            if (context.eventName === 'workflow_dispatch') {
+              issueNumber = context.payload.inputs.issue_number;
+              issue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              }).then(r => r.data);
+              core.info(`Manual trigger for issue #${issueNumber}`);
+            } else {
+              issue = context.payload.issue;
+              issueNumber = issue.number;
+              comment = context.payload.comment;
+            }
+
+            // Don't run on pull requests
+            if (issue.pull_request) {
+              core.info('Skipping: This is a pull request');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Check if already triaged (has triaged label)
+            const hasTriagedLabel = issue.labels.some(l => l.name === 'triaged');
+            if (hasTriagedLabel && context.eventName !== 'workflow_dispatch') {
+              core.info('Skipping: Already triaged (has triaged label)');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Don't run if bot commented
+            if (comment && comment.user.type === 'Bot') {
+              core.info('Skipping: Comment is from a bot');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Get all comments NOW to avoid race condition
+            const allComments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            // Count non-bot comments from issue author
+            const authorComments = allComments.data.filter(c =>
+              c.user.login === issue.user.login &&
+              c.user.type !== 'Bot'
+            );
+
+            const hasAuthorComments = authorComments.length > 0;
+
+            // Skip pre-analysis if author has already commented (provided more info)
+            core.setOutput('skip_preanalysis', hasAuthorComments ? 'true' : 'false');
+
+            // For manual dispatch, always run
+            if (context.eventName === 'workflow_dispatch') {
+              core.info(`Manual trigger: Running (skip_preanalysis: ${hasAuthorComments})`);
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            // For new issues, always run
+            if (context.eventName === 'issues') {
+              core.info('Running: New issue created (will run pre-analysis)');
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            // For comments, only run if from issue author
+            if (comment && comment.user.login === issue.user.login) {
+              core.info('Running: Comment from issue author (will skip pre-analysis)');
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            core.info('Skipping: Comment not from issue author');
+            core.setOutput('should_run', 'false');
+
+  triage:
+    runs-on: ubuntu-latest
+    needs: should_run
+    if: needs.should_run.outputs.should_run == 'true'
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get issue number
+        id: issue_number
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueNumber = context.payload.inputs?.issue_number || context.issue.number;
+            core.setOutput('number', issueNumber);
+            return issueNumber;
+
+      - name: Post initial "working" comment
+        id: initial_comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const comment = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: '🤖 **Issue Triage Bot is analyzing this issue...**\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.'
+            });
+            core.setOutput('comment_id', comment.data.id);
+            return comment.data.id;
+
+      - name: Fetch full issue thread
+        id: issue_data
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const issueTitle = issue.data.title;
+            const issueBody = issue.data.body || '';
+            const labels = issue.data.labels.map(l => l.name);
+
+            // Detect issue type
+            let issueType = 'unknown';
+            if (labels.includes('runtime-bug') || issueBody.includes('### 🐛 Runtime Bug')) {
+              issueType = 'runtime-bug';
+            } else if (labels.includes('startup-bug') || issueBody.includes('### 🚀 Startup/Installation Bug')) {
+              issueType = 'startup-bug';
+            } else if (labels.includes('agent-behavior') || issueBody.includes('### 🤖 AI Agent Behavior')) {
+              issueType = 'agent-behavior';
+            }
+
+            // Format author comments for prompt
+            const issueAuthor = issue.data.user.login;
+            const authorComments = comments.data
+              .filter(c => c.user.login === issueAuthor && c.user.type !== 'Bot')
+              .map((c, idx) => `**Comment ${idx + 1}:**\n${c.body}`)
+              .join('\n\n---\n\n');
+
+            core.setOutput('issue_title', issueTitle);
+            core.setOutput('issue_body', issueBody);
+            core.setOutput('issue_author', issueAuthor);
+            core.setOutput('issue_labels', labels.join(','));
+            core.setOutput('issue_type', issueType);
+            core.setOutput('comments_json', JSON.stringify(comments.data));
+            core.setOutput('comment_count', comments.data.length);
+            core.setOutput('author_comments', authorComments || 'No additional comments from author');
+
+      - name: Build completeness check prompt
+        id: build_prompt
+        if: needs.should_run.outputs.skip_preanalysis != 'true'
+        uses: actions/github-script@v8
+        env:
+          ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+        with:
+          script: |
+            const issueType = process.env.ISSUE_TYPE;
+            const issueTitle = process.env.ISSUE_TITLE;
+            const issueBody = process.env.ISSUE_BODY;
+
+            let requirements = '';
+            if (issueType === 'runtime-bug') {
+              requirements = `**For Runtime Bugs**:
+            1. Exact error message with stack trace (copy-pasted, not just "doesn't work")
+            2. ha-mcp version number (from \`ha-mcp --version\`)
+            3. Installation method (uvx/pip/docker/addon/git)
+            4. What tool or action was being used when the error occurred
+            5. Home Assistant version (if relevant)`;
+            } else if (issueType === 'startup-bug') {
+              requirements = `**For Startup/Installation Bugs**:
+            1. Exact error message or connection failure details
+            2. ha-mcp version number
+            3. Installation method (uvx/pip/docker/addon)
+            4. Client application (Claude Desktop/Code/Continue/etc)
+            5. Operating system
+            6. Config file content (sanitized, no tokens)`;
+            } else if (issueType === 'agent-behavior') {
+              requirements = `**For Agent Behavior Issues**:
+            1. Which tool exhibited the unexpected behavior
+            2. What input was provided to the tool
+            3. What output was received (include ha_report_issue output if available)
+            4. What output was expected instead
+            5. Context about what the agent was trying to accomplish`;
+            } else {
+              requirements = `**General Requirements** (issue type unknown):
+            1. Exact error message or clear description of the problem
+            2. ha-mcp version number
+            3. Installation method (uvx/pip/docker/addon)
+            4. What was being done when the issue occurred`;
+            }
+
+            const prompt = `You are doing a QUICK evaluation of a GitHub issue. Do NOT search files, do NOT read code, do NOT use any tools.
+            Base your evaluation ONLY on the issue text provided below.
+
+            **Project**: Home Assistant MCP Server (ha-mcp)
+            - MCP server with 95+ tools for AI assistants to control Home Assistant
+            - Supports: Claude Desktop, Claude Code, Cursor, Gemini CLI, Continue, etc.
+            - Installation: uvx, pip, docker, Home Assistant add-on
+            - Users can run \`ha_report_issue\` tool to auto-collect diagnostic info
+
+            **Issue Title**: "${issueTitle}"
+            **Issue Type**: ${issueType}
+            **Issue Body**: "${issueBody}"
+
+            **Common Issue Types**:
+            - Runtime bugs: Tool errors, API failures
+            - Startup issues: Connection failures, Docker problems
+            - Agent behavior: Tools returning unexpected results
+            - Support questions: "How do I...", "Can I..."
+
+            **Question**: Is there enough information to provide helpful diagnostic guidance?
+
+            ${requirements}
+
+            **Decision Criteria**:
+            - If this is a support/docs question (not a bug): Output "COMPLETE" (we can still provide guidance)
+            - If 70%+ of required items present: Output "COMPLETE"
+            - If there's a clear, specific error message (even if other details missing): Output "COMPLETE"
+            - If issue provides diagnostic value (stack trace, logs, specific symptoms): Output "COMPLETE"
+            - If the issue is too vague: Output a helpful missing info message
+
+            **Your response**:
+            - If complete enough: Output exactly "COMPLETE" (nothing else)
+            - If missing info: Output a bulleted list of what's missing with instructions:
+              * **[Missing item]** - [How to get it]
+
+            Be concise. Focus only on what's actually missing.
+
+            **CRITICAL**: Do NOT use tools. Do NOT search files. Evaluate based ONLY on the issue text above.`;
+
+            core.setOutput('prompt', prompt);
+
+      - name: Evaluate completeness and generate response
+        id: evaluate
+        if: needs.should_run.outputs.skip_preanalysis != 'true'
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ''
+        with:
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_model: 'gemini-3-flash-preview'
+          settings: |
+            {
+              "model": {
+                "maxSessionTurns": 2,
+                "temperature": 0.3
+              },
+              "tools": {
+                "core": []
+              }
+            }
+          prompt: '${{ steps.build_prompt.outputs.prompt }}'
+
+      - name: Full analysis (if COMPLETE or author commented)
+        id: gemini_analysis
+        if: contains(steps.evaluate.outputs.summary, 'COMPLETE') || needs.should_run.outputs.skip_preanalysis == 'true'
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ''
+          ISSUE_NUMBER: '${{ steps.issue_number.outputs.number }}'
+          ISSUE_TITLE: '${{ steps.issue_data.outputs.issue_title }}'
+          ISSUE_BODY: '${{ steps.issue_data.outputs.issue_body }}'
+          ISSUE_AUTHOR: '${{ steps.issue_data.outputs.issue_author }}'
+          ISSUE_LABELS: '${{ steps.issue_data.outputs.issue_labels }}'
+          COMMENTS_JSON: '${{ steps.issue_data.outputs.comments_json }}'
+          COMMENT_COUNT: '${{ steps.issue_data.outputs.comment_count }}'
+          REPO_OWNER: '${{ github.repository_owner }}'
+          REPO_NAME: '${{ github.event.repository.name }}'
+        with:
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_model: 'gemini-3-flash-preview'
+          settings: |
+            {
+              "model": {
+                "maxSessionTurns": 50
+              },
+              "tools": {
+                "core": [
+                  "read_file",
+                  "ls",
+                  "grep",
+                  "glob",
+                  "run_shell_command(cat)",
+                  "run_shell_command(ls)",
+                  "run_shell_command(grep)",
+                  "run_shell_command(find)",
+                  "run_shell_command(head)",
+                  "run_shell_command(tail)",
+                  "run_shell_command(git log)",
+                  "run_shell_command(git show)",
+                  "run_shell_command(gh issue)",
+                  "google_web_search"
+                ]
+              }
+            }
+          prompt: |
+            You are a triage bot for the **ha-mcp** project (Home Assistant MCP Server).
+
+            **Project Context:**
+            - ha-mcp is an MCP (Model Context Protocol) server that connects AI assistants to Home Assistant
+            - It provides 95+ tools for controlling smart home devices, automations, and scenes
+            - Installation methods: uvx, pip, Docker, or Home Assistant add-on
+            - Codebase structure: src/ha_mcp/ (tools, client, server code)
+            - Common issues: connection timeouts, authentication errors, tool failures
+
+            **CRITICAL: You are triaging a GitHub issue**
+            - Users may provide **inaccurate or wrong information** (wrong version, wrong file paths, misunderstood errors)
+            - **Do NOT take user claims for granted** - verify by searching the actual codebase
+            - If a user says "this worked in version X but broke in Y", check git log to verify
+            - Trust the **main branch code** and **recent git history** over user reports
+            - If something seems fixed in main, check recent commits with git log
+
+            **Your Task:**
+            Analyze this GitHub issue and provide helpful triage guidance.
+
+            **Issue #${{ steps.issue_number.outputs.number }}**: ${{ steps.issue_data.outputs.issue_title }}
+
+            **Description:**
+            ${{ steps.issue_data.outputs.issue_body }}
+
+            **Author:** ${{ steps.issue_data.outputs.issue_author }}
+
+            **Comments from author:**
+            ${{ steps.issue_data.outputs.author_comments }}
+
+            **Investigation Steps:**
+            1. **Search for similar issues**: Use `gh issue list` with labels/search to find related problems
+            2. **Find relevant code**: Use `grep -r` to search for error messages, function names, or relevant keywords
+            3. **Read actual files**: Use `cat` on files you find - DO NOT make up file paths
+            4. **Check git history**: Use `git log` to see recent changes, especially if user claims regression
+            5. **Find files**: Use `find` to locate specific files or patterns
+            6. **Web search**: Use `google_web_search` only if you need to look up error messages or external documentation
+
+            **Shell Commands Available:**
+            - `gh issue list --search "query"` - Find similar issues in this repo
+            - `gh issue view <number>` - Check specific issue details
+            - `grep -r "pattern" src/ --include="*.py"` - Search codebase for error messages, function names
+            - `find src/ -name "*.py" -type f` - Find Python files
+            - `cat <path>` - Read file content (only paths found via grep/find)
+            - `head -n 50 <path>` - Read first 50 lines of a file
+            - `tail -n 50 <path>` - Read last 50 lines of a file
+            - `git log --oneline -20` - See recent commits
+            - `git log --grep="pattern" --oneline` - Search commit messages
+            - `git show <commit>:<file>` - Show file content at specific commit
+            - `google_web_search <query>` - Search web for error messages or external docs
+
+            **Critical Rules:**
+            - ONLY reference file paths you actually found with `grep` or `find`
+            - ONLY reference issue numbers you found with `gh issue`
+            - If you can't find relevant code, say so - don't make up paths
+            - **If a tool/function doesn't exist**: Clearly state "This tool/feature does not exist in ha-mcp" and suggest it's a feature request
+            - **Verify user claims**: If user says "this broke in version X", check git log to verify
+            - **Check main branch first**: If user reports a bug, verify it still exists in current code
+            - Be specific: use actual error messages and function names from the issue
+            - Focus on actionable steps the user can take
+            - Be efficient: if you can't find something after 2-3 searches, move on
+            - Prioritize the most likely root cause - don't investigate every possibility
+            - Use shell commands properly: `grep -r`, `find`, `cat`, `head`, `tail`, `git log`
+
+            **RESPONSE FORMAT:**
+
+            Your response MUST follow this EXACT format. Copy this structure precisely:
+
+            ## 🔍 Analysis
+
+            [2-3 paragraphs explaining what's likely happening - write for the user, not too technical]
+
+            **IMPORTANT**: If the reported tool/feature doesn't exist in the codebase after searching:
+            - Start with: "The `[tool_name]` tool does not exist in ha-mcp."
+            - Suggest similar existing tools if applicable
+            - Recommend filing a feature request
+
+            ## 🛠️ Suggested Steps
+
+            1. [First concrete action - be specific, include exact commands if relevant]
+            2. [Second step]
+            3. [Third step]
+
+            <details>
+            <summary>📊 Technical Analysis (for maintainers)</summary>
+
+            ### Root Cause
+
+            [Deep technical explanation - file paths, code references, API details]
+
+            ### Affected Code
+
+            [ONLY include files you actually found with `grep -r` or `find`. If you didn't investigate code, write "Not investigated" or omit this section]
+
+            - `actual/path/from/grep.py:123` - [what this code does]
+            - `another/real/file.py:456` - [explanation]
+
+            ### Related Issues/PRs
+
+            [ONLY include issues you found with `gh issue list` or `gh issue view`. If none found, write "No similar issues found" or omit this section]
+
+            - #123 - [actual similar issue from gh issue]
+            - #456 - [actual related PR from gh issue]
+
+            </details>
+
+            ---
+
+            *🤖 Automated analysis by Issue Bot*
+
+            **HTML FORMAT RULES (CRITICAL):**
+            - The `<details>` tag MUST be on its own line
+            - The `<summary>` tag MUST be on the NEXT line after `<details>`
+            - There MUST be a blank line after `</summary>`
+            - Content goes after the blank line
+            - There MUST be a blank line before `</details>`
+            - The `</details>` tag MUST be on its own line
+            - DO NOT use markdown code fences (```) around the details section
+            - DO NOT use <br> tags
+
+            **Example of correct HTML:**
+            <details>
+            <summary>Title here</summary>
+
+            Content here with blank line above and below
+
+            </details>
+
+      - name: Update comment and labels
+        if: always() && steps.initial_comment.outputs.comment_id
+        uses: actions/github-script@v8
+        env:
+          EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
+          EVALUATE_ERROR: ${{ steps.evaluate.outputs.error }}
+          GEMINI_SUMMARY: ${{ steps.gemini_analysis.outputs.summary }}
+          GEMINI_ERROR: ${{ steps.gemini_analysis.outputs.error }}
+          COMMENT_ID: ${{ steps.initial_comment.outputs.comment_id }}
+          SKIP_PREANALYSIS: ${{ needs.should_run.outputs.skip_preanalysis }}
+        with:
+          script: |
+            const commentId = process.env.COMMENT_ID;
+            const evaluateResult = process.env.EVALUATE_RESULT || '';
+            const evaluateError = process.env.EVALUATE_ERROR || '';
+            const geminiSummary = process.env.GEMINI_SUMMARY || '';
+            const geminiError = process.env.GEMINI_ERROR || '';
+            const skipPreanalysis = process.env.SKIP_PREANALYSIS === 'true';
+
+            let analysisBody;
+            let shouldAddTriagedLabel = false;
+
+            if (geminiSummary) {
+              // Full analysis completed
+              analysisBody = geminiSummary;
+              shouldAddTriagedLabel = true;
+            } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
+              // Missing info - use evaluation's generated message
+              analysisBody = `## ℹ️ Information Needed\n\n`;
+              analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
+              analysisBody += evaluateResult + '\n\n';
+              analysisBody += `---\n\n`;
+              analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
+              analysisBody += `*🤖 Automated triage by Issue Bot*`;
+            } else if (geminiError) {
+              analysisBody = `❌ **Analysis failed**\n\nAn error occurred:\n\n\`\`\`\n${geminiError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+            } else if (evaluateError) {
+              analysisBody = `❌ **Evaluation failed**\n\nAn error occurred:\n\n\`\`\`\n${evaluateError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+            } else {
+              analysisBody = `⚠️ **No output generated.**\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+            }
+
+            // Update comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: commentId,
+              body: analysisBody
+            });
+
+            // Add triaged label when analysis is done
+            if (shouldAddTriagedLabel) {
+              const issueNumber = ${{ steps.issue_number.outputs.number }};
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: ['triaged']
+              });
+            }

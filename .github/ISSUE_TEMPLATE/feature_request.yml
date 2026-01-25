@@ -1,0 +1,41 @@
+name: "💡 Feature Request"
+description: "Suggest a new feature or improvement"
+title: "[FEATURE] "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 💡 Suggest a Feature
+
+        Tell us what you'd like to see added to ha-mcp!
+
+  - type: textarea
+    id: feature_description
+    attributes:
+      label: "What would you like to see?"
+      description: "Describe the feature or improvement you want."
+      placeholder: |
+        Example: "Add a tool to manage Home Assistant scenes"
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: "Why do you need this?"
+      description: "What problem does this solve? What would you use it for?"
+      placeholder: |
+        Example: "I have 10 scenes for different times of day, and I want the AI to activate them based on context without needing to write automations."
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "Additional context"
+      description: "Any other details, examples, or related issues?"
+      placeholder: "Optional: screenshots, examples, links to similar features..."
+    validations:
+      required: false

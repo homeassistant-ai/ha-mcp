@@ -1,0 +1,96 @@
+name: "🐛 Runtime Bug"
+description: "Report a bug that occurs while ha-mcp is running (errors, crashes, incorrect behavior)"
+title: "[BUG] "
+labels: ["bug"]
+assignees:
+  - julienld
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Report a Runtime Bug
+
+        Use this template when:
+        - You get an error message while using ha-mcp
+        - A tool returns incorrect or unexpected results
+        - Something crashes or stops working
+
+        **Not for startup issues** (use Startup/Installation Bug template instead).
+
+  - type: textarea
+    id: user_commentary
+    attributes:
+      label: "💬 What Happened?"
+      description: |
+        **In your own words** (not AI-generated), tell us:
+        - What were you trying to do?
+        - What went wrong?
+        - What do you think caused it?
+
+        **Examples:**
+        - "I tried to turn on a light but got a timeout error"
+        - "The automation tool says it created an automation, but it's not in Home Assistant"
+        - "Every time I search for entities, it returns 0 results even though I have 50+ devices"
+        - "I have no idea what happened, it just crashed"
+
+        **Note:** Just describe the problem - don't worry about being technical.
+      placeholder: |
+        Example: "I asked the agent to create an automation, it ran for a while then gave an error about 'invalid service'..."
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        ## 🚨 Use the `ha_report_issue` Tool (Required)
+
+        **Tell your AI agent:**
+
+        > "I got an error: [describe the error from your first field]. Let's make an issue report with the ha_report_issue tool."
+
+        The agent will collect:
+        - Error messages and stack traces
+        - Environment information (versions, platform, etc.)
+        - Recent tool call history
+        - Relevant logs
+
+  - type: textarea
+    id: conversation_paste
+    attributes:
+      label: "📋 Copy-Paste from Conversation"
+      description: |
+        **Paste the relevant part of your conversation here.**
+
+        Include:
+        - Your original request
+        - The error message or unexpected behavior
+        - The ha_report_issue output (if you used it)
+        - Any other relevant output from the agent
+
+        **Don't worry about formatting** - just copy and paste everything! We can read messy text, code blocks, JSON, logs, whatever.
+      placeholder: |
+        User: Create an automation to turn on lights at sunset
+
+        Agent: I'll create the automation for you.
+        [Tool: ha_config_set_automation, ...]
+        Error: Invalid service call: light.turn_on requires entity_id
+
+        Agent: Let me run ha_report_issue to collect diagnostic info...
+        [Paste ha_report_issue output here]
+
+        [Include everything - error messages, logs, ha_report_issue JSON, etc.]
+      render: markdown
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        That's it! We'll investigate the bug and work on a fix.
+
+        **Privacy reminder:** Remove any sensitive data (tokens, passwords, personal names) before submitting.

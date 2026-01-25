@@ -1,0 +1,63 @@
+name: "📚 Documentation Issue"
+description: "Report errors, unclear instructions, or suggest improvements to documentation"
+title: "[DOCS] "
+labels: ["documentation"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📚 Documentation Issue
+
+        Report errors, unclear instructions, or suggest improvements.
+
+  - type: dropdown
+    id: doc_type
+    attributes:
+      label: "Where is the issue?"
+      options:
+        - "Setup Wizard (https://homeassistant-ai.github.io/ha-mcp/setup/)"
+        - "README"
+        - "Setup Guide (macOS/Windows)"
+        - "FAQ / Troubleshooting"
+        - "Tool documentation"
+        - "Other"
+    validations:
+      required: true
+
+  - type: input
+    id: page_url
+    attributes:
+      label: "Link to page (if applicable)"
+      description: "Paste the URL of the page with the issue"
+      placeholder: "https://homeassistant-ai.github.io/ha-mcp/..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: issue_description
+    attributes:
+      label: "What's wrong or unclear?"
+      description: "Describe the issue with the documentation."
+      placeholder: |
+        Example: "The setup guide says to run 'uvx ha-mcp' but doesn't mention that you need Python 3.13+"
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested_fix
+    attributes:
+      label: "How should it be fixed?"
+      description: "Optional: suggest what the docs should say instead."
+      placeholder: |
+        Example: "Add a note that Python 3.13+ is required before running uvx"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "Additional context"
+      description: "Screenshots, browser info, or any other helpful details?"
+    validations:
+      required: false
