@@ -32,35 +32,43 @@ When implementing features or debugging, consult these resources:
 | `needs-choice` | Multiple approaches, needs stakeholder input |
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
-| `triaged` | Analysis complete |
+| `triaged` | Level 1 (automated Gemini) analysis complete |
+| `level2-triaged` | Level 2 (deep Claude) analysis complete |
 
 ### Issue Triage Workflow
 
-When the user says "triage new issues" or similar:
+**Two-Tier Triage System:**
 
-1. **List untriaged issues first**:
+- **Level 1 (Automated - Gemini)**: Runs automatically on new issues via `.github/workflows/gemini-triage.yml`. Performs quick completeness check and adds initial guidance. Adds `triaged` label when complete.
+
+- **Level 2 (Human-Directed - Claude)**: Deep codebase analysis, implementation planning, and architectural assessment. Use for issues requiring detailed planning or architectural decisions.
+
+**When the user says "triage new issues" or "level 2 triage":**
+
+1. **List issues needing level 2 triage**:
    ```bash
-   gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["triaged"]) | not) | "#\(.number): \(.title)"'
+   gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["level2-triaged"]) | not) | "#\(.number): \(.title)"'
    ```
 
-2. **Report the list to the user** showing all issues that need triage
+2. **Report the list to the user** showing all issues that need level 2 triage
 
 3. **Launch parallel triage subagents** - one Task tool call per issue, ALL IN THE SAME MESSAGE:
    ```
    # In a SINGLE assistant message, make multiple Task tool calls:
-   <Task tool call: subagent_type="triage", prompt="Triage issue #42 on homeassistant-ai/ha-mcp">
-   <Task tool call: subagent_type="triage", prompt="Triage issue #43 on homeassistant-ai/ha-mcp">
-   <Task tool call: subagent_type="triage", prompt="Triage issue #44 on homeassistant-ai/ha-mcp">
-   # ... one for each untriaged issue
+   <Task tool call: subagent_type="triage", prompt="Level 2 triage issue #42 on homeassistant-ai/ha-mcp">
+   <Task tool call: subagent_type="triage", prompt="Level 2 triage issue #43 on homeassistant-ai/ha-mcp">
+   <Task tool call: subagent_type="triage", prompt="Level 2 triage issue #44 on homeassistant-ai/ha-mcp">
+   # ... one for each issue needing deep analysis
    ```
 
 4. **Each triage agent independently**:
    - Fetches and analyzes the issue
-   - Explores affected codebase areas
-   - Assesses implementation approaches
+   - Performs deep codebase exploration
+   - Assesses implementation approaches and complexity
+   - Evaluates priority relative to other issues
    - Updates labels (`ready-to-implement`, `needs-choice`, `needs-info`, priority)
-   - Adds the `triaged` label
-   - Posts analysis comment to the issue
+   - Adds the `level2-triaged` label
+   - Posts detailed analysis comment to the issue
 
 5. **Collect and summarize results** from all parallel agents
 
