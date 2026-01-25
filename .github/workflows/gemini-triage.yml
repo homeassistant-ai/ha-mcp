@@ -405,6 +405,7 @@ jobs:
             **Shell Commands Available:**
             - `gh issue list --search "query"` - Find similar issues in this repo
             - `gh issue view <number>` - Check specific issue details
+            - **NOTE**: You can ONLY use `gh issue list` and `gh issue view`. You CANNOT use `gh issue edit`, `gh issue comment`, `gh issue close`, or any other gh commands.
             - `grep -r "pattern" src/ --include="*.py"` - Search codebase for error messages, function names
             - `find src/ -name "*.py" -type f` - Find Python files
             - `cat <path>` - Read file content (only paths found via grep/find)
