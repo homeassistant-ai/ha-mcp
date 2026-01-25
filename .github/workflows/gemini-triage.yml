@@ -348,7 +348,8 @@ jobs:
                   "run_shell_command(tail)",
                   "run_shell_command(git log)",
                   "run_shell_command(git show)",
-                  "run_shell_command(gh issue)",
+                  "run_shell_command(gh issue view)",
+                  "run_shell_command(gh issue list)",
                   "google_web_search"
                 ]
               }
