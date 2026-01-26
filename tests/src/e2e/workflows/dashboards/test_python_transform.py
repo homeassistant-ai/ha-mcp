@@ -4,10 +4,10 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_python_transform_simple_update(mcp, ha_client):
+async def test_python_transform_simple_update(mcp_client, ha_client):
     """Test simple icon update with python_transform."""
     # Create dashboard
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python",
@@ -24,13 +24,13 @@ async def test_python_transform_simple_update(mcp, ha_client):
     )
 
     # Get config_hash
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python"}
     )
     config_hash = get_result["config_hash"]
 
     # Update with python_transform
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python",
@@ -43,17 +43,17 @@ async def test_python_transform_simple_update(mcp, ha_client):
     assert result["action"] == "python_transform"
 
     # Verify update
-    verify = await mcp.call_tool(
+    verify = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python"}
     )
     assert verify["config"]["views"][0]["cards"][0]["icon"] == "mdi:lightbulb"
 
 
 @pytest.mark.asyncio
-async def test_python_transform_pattern_update(mcp, ha_client):
+async def test_python_transform_pattern_update(mcp_client, ha_client):
     """Test pattern-based update with python_transform."""
     # Create dashboard with multiple light cards
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-pattern",
@@ -72,13 +72,13 @@ async def test_python_transform_pattern_update(mcp, ha_client):
     )
 
     # Get config_hash
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-pattern"}
     )
     config_hash = get_result["config_hash"]
 
     # Update all lights with pattern
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-pattern",
@@ -94,7 +94,7 @@ for card in config['views'][0]['cards']:
     assert result["success"] is True
 
     # Verify updates
-    verify = await mcp.call_tool(
+    verify = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-pattern"}
     )
     cards = verify["config"]["views"][0]["cards"]
@@ -104,21 +104,21 @@ for card in config['views'][0]['cards']:
 
 
 @pytest.mark.asyncio
-async def test_python_transform_blocked_import(mcp, ha_client):
+async def test_python_transform_blocked_import(mcp_client, ha_client):
     """Test that imports are blocked."""
     # Create dashboard
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {"url_path": "test-python-security", "config": {"views": [{"cards": []}]}},
     )
 
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-security"}
     )
     config_hash = get_result["config_hash"]
 
     # Try malicious expression
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-security",
@@ -132,14 +132,14 @@ async def test_python_transform_blocked_import(mcp, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_python_transform_requires_config_hash(mcp, ha_client):
+async def test_python_transform_requires_config_hash(mcp_client, ha_client):
     """Test that python_transform requires config_hash."""
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard", {"url_path": "test-python-hash", "config": {"views": []}}
     )
 
     # Try without config_hash
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {"url_path": "test-python-hash", "python_transform": "config['views'] = []"},
     )
@@ -149,9 +149,9 @@ async def test_python_transform_requires_config_hash(mcp, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_python_transform_mutual_exclusivity(mcp, ha_client):
+async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
     """Test that python_transform is mutually exclusive with config."""
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-exclusive",
@@ -168,22 +168,22 @@ async def test_python_transform_mutual_exclusivity(mcp, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_python_transform_add_card(mcp, ha_client):
+async def test_python_transform_add_card(mcp_client, ha_client):
     """Test adding a card with python_transform."""
     # Create dashboard
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {"url_path": "test-python-add", "config": {"views": [{"cards": []}]}},
     )
 
     # Get config_hash
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-add"}
     )
     config_hash = get_result["config_hash"]
 
     # Add card with python_transform
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-add",
@@ -195,7 +195,7 @@ async def test_python_transform_add_card(mcp, ha_client):
     assert result["success"] is True
 
     # Verify card added
-    verify = await mcp.call_tool(
+    verify = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-add"}
     )
     cards = verify["config"]["views"][0]["cards"]
@@ -205,10 +205,10 @@ async def test_python_transform_add_card(mcp, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_python_transform_delete_card(mcp, ha_client):
+async def test_python_transform_delete_card(mcp_client, ha_client):
     """Test deleting a card with python_transform."""
     # Create dashboard with multiple cards
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-delete",
@@ -227,13 +227,13 @@ async def test_python_transform_delete_card(mcp, ha_client):
     )
 
     # Get config_hash
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-delete"}
     )
     config_hash = get_result["config_hash"]
 
     # Delete middle card
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-delete",
@@ -245,7 +245,7 @@ async def test_python_transform_delete_card(mcp, ha_client):
     assert result["success"] is True
 
     # Verify card deleted
-    verify = await mcp.call_tool(
+    verify = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-delete"}
     )
     cards = verify["config"]["views"][0]["cards"]
@@ -255,22 +255,22 @@ async def test_python_transform_delete_card(mcp, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_python_transform_hash_conflict(mcp, ha_client):
+async def test_python_transform_hash_conflict(mcp_client, ha_client):
     """Test that hash conflicts are detected."""
     # Create dashboard
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {"url_path": "test-python-conflict", "config": {"views": [{"cards": []}]}},
     )
 
     # Get config_hash
-    get_result = await mcp.call_tool(
+    get_result = await mcp_client.call_tool(
         "ha_config_get_dashboard", {"url_path": "test-python-conflict"}
     )
     config_hash = get_result["config_hash"]
 
     # Modify dashboard directly
-    await mcp.call_tool(
+    await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-conflict",
@@ -279,7 +279,7 @@ async def test_python_transform_hash_conflict(mcp, ha_client):
     )
 
     # Try to use old hash - should fail
-    result = await mcp.call_tool(
+    result = await mcp_client.call_tool(
         "ha_config_set_dashboard",
         {
             "url_path": "test-python-conflict",
