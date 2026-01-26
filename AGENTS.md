@@ -93,14 +93,26 @@ gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") 
 ```
 
 **Resolve threads:**
-After addressing a comment, you can resolve the thread (optional, user may prefer to do this):
+After addressing a comment, **ALWAYS post a comment explaining the resolution, then mark the thread as resolved**:
+
 ```bash
+# 1. FIRST: Post comment explaining what was done
+gh pr review <PR> --comment --body "✅ Fixed in [commit]. [Explanation]"
+# OR for dismissed suggestions:
+gh pr review <PR> --comment --body "📝 Not addressing because [reason]."
+
+# 2. THEN: Resolve the thread
 gh api graphql -f query='mutation($threadId: ID!) {
   resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
     thread { id isResolved }
   }
 }' -f threadId=<thread_id>
 ```
+
+**Why comment first:**
+- Provides context for future reviewers
+- Documents decision-making process
+- Makes it clear what was done or why suggestion was dismissed
 
 ## Git & PR Policies
 

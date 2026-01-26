@@ -61,9 +61,12 @@ Implement GitHub issues completely, from initial branch creation through to a cl
    - **For unrelated test failures**: Fix them even if time-consuming (document in final report)
    - For each review comment (from humans, not bots unless valid):
      - Assess if the suggestion prevents bugs or improves maintainability
-     - If worthy: implement the fix
-     - If not worthy: dismiss with explanation
-     - Resolve the comment thread using GraphQL mutation
+     - If worthy: implement the fix, commit, and push
+     - If not worthy: document reason for not implementing
+     - **ALWAYS post a comment on the thread** explaining what was done:
+       - If fixed: "✅ Fixed in commit [hash]. [Brief explanation of change]"
+       - If dismissed: "📝 Not addressing because [reason]. [Alternative approach if applicable]"
+     - **ALWAYS resolve the thread** after posting explanation comment using GraphQL mutation
    - Push all fixes: `git push`
 
 9. **Wait and re-check**: After pushing fixes:
@@ -144,7 +147,10 @@ gh api graphql -f query='query($owner: String!, $repo: String!, $pr: Int!) { rep
 # Post comment on PR (for final summary)
 gh pr comment <pr-number> --body "<markdown content>"
 
-# Resolve a review thread
+# Post comment on review thread (do this BEFORE resolving)
+gh pr review <pr-number> --comment --body "<explanation of resolution>"
+
+# Resolve a review thread (do this AFTER posting comment)
 gh api graphql -f query='mutation($threadId: ID!) { resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) { thread { id isResolved } } }' -f threadId='<thread-id>'
 ```
 
