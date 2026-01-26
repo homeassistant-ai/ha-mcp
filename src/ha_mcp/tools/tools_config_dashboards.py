@@ -16,6 +16,7 @@ import httpx
 from pydantic import Field
 
 from ..config import get_global_settings
+from ..utils.python_sandbox import PythonSandboxError, get_security_documentation, safe_execute
 from .helpers import log_tool_usage
 from .util_helpers import parse_json_param
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import jq - it's not available on Windows ARM64
 try:
-    import jq
+    import jq  # noqa: F401 - Used to check availability, re-imported in function
     JQ_AVAILABLE = True
 except ImportError:
     JQ_AVAILABLE = False
@@ -427,12 +428,27 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             str | None,
             Field(
                 description="jq expression to transform existing dashboard config. "
-                "Mutually exclusive with config. Requires config_hash for validation. "
+                "Mutually exclusive with config and python_transform. Requires config_hash for validation. "
                 "Examples: '.views[0].sections[1].cards[0].icon = \"mdi:thermometer\"', "
                 "'.views[0].cards += [{\"type\": \"button\", \"entity\": \"light.bedroom\"}]', "
                 "'del(.views[0].sections[0].cards[2])'. "
                 "MULTI-OP: Chain with '|': 'del(.views[0].cards[2]) | .views[0].cards[0].icon = \"mdi:new\"'. "
                 "Use ha_dashboard_find_card() to get jq_path for targeted edits."
+            ),
+        ] = None,
+        python_transform: Annotated[
+            str | None,
+            Field(
+                description="Python expression to transform existing dashboard config. "
+                "Mutually exclusive with config and jq_transform. "
+                "Requires config_hash for validation. "
+                "See PYTHON TRANSFORM SECURITY below for allowed operations. "
+                "Examples: "
+                "Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" "
+                "Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" "
+                "Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" "
+                "\n\n"
+                + get_security_documentation(),
             ),
         ] = None,
         config_hash: Annotated[
@@ -465,12 +481,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Create or update a Home Assistant dashboard.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports two modes: full config replacement OR jq-based transformation.
+        Supports three modes: full config replacement, Python transformation, OR jq-based transformation.
 
         IMPORTANT: url_path must contain a hyphen (-) to be valid.
 
         WHEN TO USE WHICH MODE:
-        - jq_transform: Preferred for edits. Surgical changes, fewer tokens.
+        - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
+        - jq_transform: Legacy mode. Requires jq binary (not available on Windows ARM64).
         - config: New dashboards only, or full restructure. Replaces everything.
 
         JQ TRANSFORM EXAMPLES:
@@ -488,6 +505,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         to get updated structure. Chain multiple ops in ONE expression when possible.
 
         TIP: Use ha_dashboard_find_card() to get the jq_path for any card.
+
+        PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
+        - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
+        - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
+        - Delete card: 'del config["views"][0]["cards"][2]'
+        - Pattern-based update: 'for card in config["views"][0]["cards"]: if "light" in card.get("entity", ""): card["icon"] = "mdi:lightbulb"'
+        - Multi-operation: 'config["views"][0]["cards"][0]["icon"] = "mdi:a"; config["views"][0]["cards"][1]["icon"] = "mdi:b"'
 
         MODERN DASHBOARD BEST PRACTICES (2024+):
         - Use "sections" view type (default) with grid-based layouts
@@ -589,16 +613,146 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ],
                 }
 
-            # Validate mutual exclusivity of config and jq_transform
-            if config is not None and jq_transform is not None:
+            # Validate mutual exclusivity of config, jq_transform, and python_transform
+            transforms_provided = sum(
+                [
+                    config is not None,
+                    jq_transform is not None,
+                    python_transform is not None,
+                ]
+            )
+
+            if transforms_provided > 1:
                 return {
                     "success": False,
                     "action": "set",
-                    "error": "Cannot use both 'config' and 'jq_transform' parameters",
+                    "error": "Cannot use multiple transform methods simultaneously",
                     "suggestions": [
-                        "Use 'config' for full replacement",
-                        "Use 'jq_transform' for targeted changes to existing dashboard",
+                        "Use only ONE of: config, jq_transform, or python_transform",
+                        "config: Full replacement",
+                        "jq_transform: jq-based edits (requires jq installation)",
+                        "python_transform: Python-based edits (recommended, works everywhere)",
                     ],
+                }
+
+            # Handle python_transform mode
+            if python_transform is not None:
+                # config_hash is REQUIRED
+                if config_hash is None:
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": "config_hash is required for python_transform",
+                        "suggestions": [
+                            "Call ha_config_get_dashboard() first",
+                            "Use the config_hash from that response",
+                        ],
+                    }
+
+                # Fetch current dashboard config
+                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+                if url_path:
+                    get_data["url_path"] = url_path
+
+                response = await client.send_websocket_message(get_data)
+
+                if isinstance(response, dict) and not response.get("success", True):
+                    error_msg = response.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": f"Dashboard not found or inaccessible: {error_msg}",
+                        "suggestions": [
+                            "python_transform requires an existing dashboard",
+                            "Use 'config' parameter to create a new dashboard",
+                            "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
+                        ],
+                    }
+
+                current_config = (
+                    response.get("result") if isinstance(response, dict) else response
+                )
+                if not isinstance(current_config, dict):
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": "Current dashboard config is invalid",
+                        "suggestions": [
+                            "Initialize dashboard with 'config' parameter first"
+                        ],
+                    }
+
+                # Validate config_hash for optimistic locking
+                current_hash = _compute_config_hash(current_config)
+                if current_hash != config_hash:
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": "Dashboard modified since last read (conflict)",
+                        "suggestions": [
+                            "Call ha_config_get_dashboard() again",
+                            "Use the fresh config_hash from that response",
+                        ],
+                    }
+
+                # Apply Python transformation with validation
+                try:
+                    transformed_config = safe_execute(python_transform, current_config)
+                except PythonSandboxError as e:
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": str(e),
+                        "suggestions": [
+                            "Check expression syntax",
+                            "Ensure only allowed operations are used",
+                            "See tool description for allowed operations",
+                            f"Expression: {python_transform[:100]}...",
+                        ],
+                    }
+
+                # Save transformed config
+                save_data: dict[str, Any] = {
+                    "type": "lovelace/config/save",
+                    "config": transformed_config,
+                }
+                if url_path:
+                    save_data["url_path"] = url_path
+
+                save_result = await client.send_websocket_message(save_data)
+
+                if isinstance(save_result, dict) and not save_result.get("success", True):
+                    error_msg = save_result.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": "python_transform",
+                        "url_path": url_path,
+                        "error": f"Failed to save transformed config: {error_msg}",
+                        "suggestions": [
+                            "Expression may have produced invalid dashboard structure",
+                            "Verify config format is valid Lovelace JSON",
+                        ],
+                    }
+
+                # Compute new hash for potential chaining
+                new_config_hash = _compute_config_hash(transformed_config)
+
+                return {
+                    "success": True,
+                    "action": "python_transform",
+                    "url_path": url_path,
+                    "config_hash": new_config_hash,
+                    "python_expression": python_transform,
+                    "message": f"Dashboard {url_path} updated via Python transform",
                 }
 
             # Handle jq_transform mode
