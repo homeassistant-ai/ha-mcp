@@ -40,10 +40,10 @@ class TestAddonStartup:
             .with_volume_mapping(str(addon_config.parent), "/data", mode="ro")
         )
 
-        # Build the image first
+        # Build the image first (use as_posix() for Windows compatibility)
         container.get_docker_client().client.images.build(
             path=str(context_path),
-            dockerfile=str(dockerfile_path),
+            dockerfile=dockerfile_path.as_posix(),
             tag="ha-mcp-addon-test",
             rm=True,
             buildargs={
@@ -115,13 +115,13 @@ class TestAddonStartup:
             .with_volume_mapping(str(config_file.parent), "/data", mode="rw")
         )
 
-        # Build if not already built
+        # Build if not already built (use as_posix() for Windows compatibility)
         try:
             container.get_docker_client().client.images.get("ha-mcp-addon-test")
         except Exception:
             container.get_docker_client().client.images.build(
                 path=str(context_path),
-                dockerfile=str(dockerfile_path),
+                dockerfile=dockerfile_path.as_posix(),
                 tag="ha-mcp-addon-test",
                 rm=True,
                 buildargs={
@@ -162,13 +162,13 @@ class TestAddonStartup:
             .with_volume_mapping(str(addon_config.parent), "/data", mode="ro")
         )
 
-        # Build if not already built
+        # Build if not already built (use as_posix() for Windows compatibility)
         try:
             container.get_docker_client().client.images.get("ha-mcp-addon-test")
         except Exception:
             container.get_docker_client().client.images.build(
                 path=str(context_path),
-                dockerfile=str(dockerfile_path),
+                dockerfile=dockerfile_path.as_posix(),
                 tag="ha-mcp-addon-test",
                 rm=True,
                 buildargs={

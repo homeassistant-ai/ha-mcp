@@ -18,7 +18,10 @@ production-level functionality and compatibility.
 import ast
 import json
 import logging
+import sys
 from typing import Any
+
+import pytest
 
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions
@@ -359,6 +362,7 @@ class TestDashboardDocumentationTools:
         logger.info("ha_get_card_documentation (invalid) test passed")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="jq library not available on Windows")
 class TestJqTransformAndFindCard:
     """E2E tests for jq_transform and ha_dashboard_find_card."""
 

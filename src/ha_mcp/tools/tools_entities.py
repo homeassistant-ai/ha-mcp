@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
@@ -111,7 +112,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed_aliases = parse_string_list_param(aliases, "aliases")
                 except ValueError as e:
-                    return {"success": False, "error": f"Invalid aliases parameter: {e}"}
+                    return create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid aliases parameter: {e}",
+                    )
 
             # Build update message
             message: dict[str, Any] = {

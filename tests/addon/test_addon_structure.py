@@ -2,6 +2,9 @@
 
 import os
 import stat
+import sys
+
+import pytest
 import yaml
 
 try:
@@ -79,6 +82,7 @@ class TestAddonStructure:
         assert not any(arch in config["arch"] for arch in unsupported_archs), \
             "32-bit platforms not supported by uv base image"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix permissions not applicable on Windows")
     def test_start_script_executable(self):
         """Verify start.py has executable permissions."""
         start_py = f"{ADDON_DIR}/start.py"

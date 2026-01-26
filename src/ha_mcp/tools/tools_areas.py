@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 from .util_helpers import parse_string_list_param
 
@@ -120,7 +121,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return {"success": False, "error": f"Invalid aliases parameter: {e}"}
+                return create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid aliases parameter: {e}",
+                )
 
             # Determine if this is a create or update operation
             if area_id:
@@ -348,7 +352,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return {"success": False, "error": f"Invalid aliases parameter: {e}"}
+                return create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid aliases parameter: {e}",
+                )
 
             # Determine if this is a create or update operation
             if floor_id:
