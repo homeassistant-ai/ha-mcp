@@ -102,7 +102,6 @@ SAFE_METHODS = {
     # String methods (for entity filtering)
     "startswith",
     "endswith",
-    "contains",
     "lower",
     "upper",
     "strip",
