@@ -15,6 +15,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
@@ -784,7 +785,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_labels = parse_string_list_param(labels, "labels")
             except ValueError as e:
-                return {"success": False, "error": f"Invalid labels parameter: {e}"}
+                return create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid labels parameter: {e}",
+                )
 
         # Delegate to internal implementation
         return await _update_device_internal(
