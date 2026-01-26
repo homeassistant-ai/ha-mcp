@@ -484,6 +484,7 @@ async def _run_http_with_graceful_shutdown(
             port=port,
             path=path,
             show_banner=show_banner,
+            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
         )
     )
 
@@ -723,6 +724,7 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
             host="0.0.0.0",
             port=port,
             path=path,
+            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
         )
     )
 
