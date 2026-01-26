@@ -484,6 +484,7 @@ async def _run_http_with_graceful_shutdown(
             port=port,
             path=path,
             show_banner=show_banner,
+            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
         )
     )
 
@@ -716,6 +717,10 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     tools = await mcp.get_tools()
     logger.info(f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}")
 
+    # Respect FastMCP's show_cli_banner setting for consistency
+    import fastmcp
+    show_banner = fastmcp.settings.show_cli_banner
+
     # Run server
     server_task = asyncio.create_task(
         mcp.run_async(
@@ -723,6 +728,8 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
             host="0.0.0.0",
             port=port,
             path=path,
+            show_banner=show_banner,
+            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
         )
     )
 
