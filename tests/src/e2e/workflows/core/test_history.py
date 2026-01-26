@@ -270,6 +270,74 @@ class TestGetHistory:
         else:
             logger.info("Comma-separated format may not be supported")
 
+    async def test_get_history_timestamps_present(self, mcp_client):
+        """Test that history returns valid timestamps for last_changed and last_updated.
+
+        This is a regression test for issue #447 where timestamps were null/missing.
+        """
+        logger.info("Testing ha_get_history includes valid timestamps")
+
+        result = await mcp_client.call_tool(
+            "ha_get_history",
+            {
+                "entity_ids": "sun.sun",
+                "start_time": "24h",
+                "minimal_response": False,
+                "significant_changes_only": False,
+                "limit": 10,
+            },
+        )
+
+        data = assert_mcp_success(result, "Get history with timestamps")
+
+        # History data is nested in 'data' key
+        inner_data = data.get("data", data)
+        assert "entities" in inner_data, f"Missing 'entities' in response: {data}"
+        assert len(inner_data["entities"]) > 0, "No entities in response"
+
+        entity_history = inner_data["entities"][0]
+        assert "states" in entity_history, f"Missing states: {entity_history}"
+        states = entity_history["states"]
+
+        if len(states) > 0:
+            logger.info(f"Checking {len(states)} state entries for valid timestamps")
+
+            for idx, state in enumerate(states):
+                # Verify both timestamp fields are present
+                assert "last_changed" in state, f"State {idx} missing 'last_changed': {state}"
+                assert "last_updated" in state, f"State {idx} missing 'last_updated': {state}"
+
+                # Verify timestamps are not null
+                last_changed = state["last_changed"]
+                last_updated = state["last_updated"]
+
+                assert last_changed is not None, f"State {idx} has null last_changed: {state}"
+                assert last_updated is not None, f"State {idx} has null last_updated: {state}"
+
+                # Verify timestamps are valid ISO 8601 strings
+                assert isinstance(last_changed, str), (
+                    f"State {idx} last_changed not a string: {type(last_changed)}"
+                )
+                assert isinstance(last_updated, str), (
+                    f"State {idx} last_updated not a string: {type(last_updated)}"
+                )
+
+                # Verify timestamps can be parsed as ISO datetime
+                try:
+                    datetime.fromisoformat(last_changed.replace("Z", "+00:00"))
+                except ValueError as e:
+                    pytest.fail(f"State {idx} last_changed not valid ISO format: {last_changed}: {e}")
+
+                try:
+                    datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                except ValueError as e:
+                    pytest.fail(f"State {idx} last_updated not valid ISO format: {last_updated}: {e}")
+
+            logger.info("✓ All state entries have valid last_changed and last_updated timestamps")
+            logger.info(f"Sample: last_changed={states[0]['last_changed']}, last_updated={states[0]['last_updated']}")
+        else:
+            logger.warning("No state history available for test (may be normal for short periods)")
+
 
 @pytest.mark.asyncio
 @pytest.mark.core

@@ -327,18 +327,21 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     for state in limited_states:
                         # Get timestamps - WebSocket returns short-form (lc/lu) as Unix epoch floats
                         # or long-form (last_changed/last_updated) as strings
-                        last_changed_raw = state.get("lc", state.get("last_changed"))
-                        last_updated_raw = state.get("lu", state.get("last_updated"))
+                        # Note: HA WebSocket API omits 'lc' when it equals 'lu' (optimization)
+                        last_updated_raw = state.get("lu") or state.get("last_updated")
+                        last_changed_raw = state.get("lc") or state.get("last_changed")
+
+                        # If last_changed is missing, it means it equals last_updated
+                        if last_changed_raw is None and last_updated_raw is not None:
+                            last_changed_raw = last_updated_raw
 
                         state_entry = {
-                            "state": state.get("s", state.get("state")),
+                            "state": state.get("s") or state.get("state"),
                             "last_changed": _convert_timestamp(last_changed_raw),
                             "last_updated": _convert_timestamp(last_updated_raw),
                         }
                         if not minimal_response:
-                            state_entry["attributes"] = state.get(
-                                "a", state.get("attributes", {})
-                            )
+                            state_entry["attributes"] = state.get("a") or state.get("attributes", {})
                         formatted_states.append(state_entry)
 
                     entities_history.append(
