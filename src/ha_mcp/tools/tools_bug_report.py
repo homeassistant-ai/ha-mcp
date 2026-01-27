@@ -23,8 +23,8 @@ from .helpers import log_tool_usage
 logger = logging.getLogger(__name__)
 
 # GitHub issue template URLs
-RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md"
-AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md"
+RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
 
 
 def _detect_installation_method() -> str:
@@ -272,15 +272,23 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "      - User suggests YOU should have done something differently\n"
                 "      - User reports YOUR inefficiency or mistakes\n\n"
                 "   If UNCLEAR which type, ASK: 'Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?'\n\n"
-                "3. **Present the report to the user**:\n"
+                "3. **ANONYMIZE before presenting** (CRITICAL):\n"
+                "   BEFORE showing the report to the user, YOU MUST anonymize sensitive information:\n"
+                "   a. Replace person names with generic labels (person.user1, person.user2)\n"
+                "   b. Replace location names with generic names (Home, Location1)\n"
+                "   c. Replace device names containing personal info (bedroom_1, device_1)\n"
+                "   d. Verify no tokens, passwords, or IPs are visible\n"
+                "   e. Keep entity domains, error messages, and technical details\n"
+                "   See anonymization_guide for full details.\n\n"
+                "4. **Present the anonymized report to the user**:\n"
                 "   a. Show the suggested_title (user can edit if needed)\n"
-                "   b. Present the chosen template IN A MARKDOWN CODE BLOCK (```markdown...```) for easy copy/paste\n"
+                "   b. Present the chosen ANONYMIZED template IN A MARKDOWN CODE BLOCK (```markdown...```) for easy copy/paste\n"
                 "   c. PROMINENTLY display the submission URL at the top:\n"
                 f"      - Runtime bugs: {RUNTIME_BUG_URL}\n"
                 f"      - Agent behavior: {AGENT_BEHAVIOR_URL}\n"
                 "   d. Ask them to fill in the description sections\n"
-                "   e. Remind them to follow the anonymization_guide to protect their privacy\n\n"
-                "CRITICAL: Always present templates in markdown code blocks (```markdown...```) so users can copy/paste easily!"
+                "   e. Remind them to review for any remaining personal information before submitting\n\n"
+                "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
 
