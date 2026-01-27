@@ -3,6 +3,96 @@
 <!-- version list -->
 
 
+## v6.4.0 (2026-01-27)
+
+### Added
+
+- Add python_transform for cross-platform dashboard updates
+  ([#496](https://github.com/homeassistant-ai/ha-mcp/pull/496))
+- Enable stateless_http mode for restart resilience
+  ([#495](https://github.com/homeassistant-ai/ha-mcp/pull/495))
+- **workflow**: Clarify Gemini triage is read-only, add diff format for fixes
+  ([`3e89988`](https://github.com/homeassistant-ai/ha-mcp/commit/3e899888269135ce36307365ab2d4c9923bcdc31))
+- **workflow**: Skip automated triage for julienld's issues
+  ([`2b74ee9`](https://github.com/homeassistant-ai/ha-mcp/commit/2b74ee9cff460403c3e8ed1475e1841e112c5a44))
+- Add AI-powered issue triage workflow and simplified YAML templates
+  ([`69e2fd0`](https://github.com/homeassistant-ai/ha-mcp/commit/69e2fd0de44bdcf037e9e8926f22b9f425233b2c))
+- **entity**: Add ha_update_entity tool for entity registry updates
+  ([#469](https://github.com/homeassistant-ai/ha-mcp/pull/469))
+- Improve ha_report_issue with title, duplicate check, and markdown formatting
+  ([#484](https://github.com/homeassistant-ai/ha-mcp/pull/484))
+- Add ha-mcp-dev executable with automatic DEBUG logging
+  ([`79a1456`](https://github.com/homeassistant-ai/ha-mcp/commit/79a145680eb24d093bbc0293a7129b814e832c43))
+- Publish dev builds to separate ha-mcp-dev package
+  ([`f768dd2`](https://github.com/homeassistant-ai/ha-mcp/commit/f768dd21303a4f7b4acf44572ddcdf6328c62926))
+- Publish dev builds to PyPI for --pre flag support
+  ([`e1e73e1`](https://github.com/homeassistant-ai/ha-mcp/commit/e1e73e1423e118615246ce25f990860a6d8fe587))
+
+### Changed
+
+- Add guidance to resolve review threads with comments
+  ([`03ad555`](https://github.com/homeassistant-ai/ha-mcp/commit/03ad5553d9ca8d449f96df2eb77b0b0fd2d79c7a))
+- **workflow**: Clarify only gh issue list/view commands available
+  ([`2501fde`](https://github.com/homeassistant-ai/ha-mcp/commit/2501fdec4870c7313c18bb762e9dbf17bda8162d))
+- Update contributors section with recent contributions
+  ([#492](https://github.com/homeassistant-ai/ha-mcp/pull/492))
+- Add MCP tool authoring guide to AGENTS.md
+  ([#461](https://github.com/homeassistant-ai/ha-mcp/pull/461))
+- Move OAuth to separate guide, position as beta alternative
+  ([#487](https://github.com/homeassistant-ai/ha-mcp/pull/487))
+- Add comprehensive dev channel documentation
+  ([#476](https://github.com/homeassistant-ai/ha-mcp/pull/476))
+- Add uvx cache troubleshooting to FAQ
+  ([`f21c431`](https://github.com/homeassistant-ai/ha-mcp/commit/f21c4310235130f77c54bb48e341adcae69ed935))
+
+### Fixed
+
+- Update ha_report_issue URLs and improve workflow PR extraction
+  ([#505](https://github.com/homeassistant-ai/ha-mcp/pull/505))
+- **workflow**: Restrict Gemini to read-only gh commands
+  ([`5e27889`](https://github.com/homeassistant-ai/ha-mcp/commit/5e27889c41546f2f2e2b1171e6cdf411fa3b64e5))
+- Validate label IDs in ha_manage_entity_labels to prevent silent failures
+  ([#486](https://github.com/homeassistant-ai/ha-mcp/pull/486))
+- Update package name reference in version lookup for ha-mcp-dev
+  ([`97df158`](https://github.com/homeassistant-ai/ha-mcp/commit/97df1582cf81a61337b78801ea40c19d56045a03))
+- Pin httpx to <1.0 to prevent incompatible prerelease versions
+  ([#483](https://github.com/homeassistant-ai/ha-mcp/pull/483))
+- Validate operations in ha_bulk_control and report errors (#385)
+  ([#473](https://github.com/homeassistant-ai/ha-mcp/pull/473))
+- Remove redundant asyncio.sleep calls in E2E helper tests
+  ([#470](https://github.com/homeassistant-ai/ha-mcp/pull/470))
+
+### Refactoring
+
+- Standardize MCP tool error handling and fix test compatibility
+  ([#494](https://github.com/homeassistant-ai/ha-mcp/pull/494))
+- **agents**: Rebrand level2-triage to issue-analysis workflow
+  ([`d2748ab`](https://github.com/homeassistant-ai/ha-mcp/commit/d2748abb8a304e6f8683305f36164b8438b92b00))
+- **agents**: Convert triage agent to level2-triaged workflow
+  ([`407da6a`](https://github.com/homeassistant-ai/ha-mcp/commit/407da6acfc8ecb65f1f6afedc858006273e2795e))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Added
+
+- **ci**: Add workflow to notify PRs/issues when merged to dev
+  ([#489](https://github.com/homeassistant-ai/ha-mcp/pull/489))
+
+### Fixed
+
+- **ci**: Support squash merge format in notify workflow
+  ([#491](https://github.com/homeassistant-ai/ha-mcp/pull/491))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.2.4 to 44.2.6
+  ([#499](https://github.com/homeassistant-ai/ha-mcp/pull/499))
+</details>
+
+
 ## v6.3.1 (2026-01-20)
 
 ### Changed
