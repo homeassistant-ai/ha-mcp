@@ -1,14 +1,22 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended"
+  ],
   "timezone": "UTC",
-  "schedule": ["after 3pm on tuesday"],
-  "enabledManagers": ["custom.regex"],
+  "schedule": [
+    "after 3pm on tuesday"
+  ],
+  "enabledManagers": [
+    "custom.regex"
+  ],
   "ignorePaths": [],
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["tests/.*\\.py$"],
+      "managerFilePatterns": [
+        "/tests/.*\\.py$/"
+      ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+.*?\\S+:(?<currentValue>[\\d.]+)"
       ],
@@ -19,8 +27,12 @@
   "packageRules": [
     {
       "description": "Python version upgrades - wait 6 months after release",
-      "matchManagers": ["asdf"],
-      "matchPackageNames": ["python"],
+      "matchManagers": [
+        "asdf"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
       "minimumReleaseAge": "180 days",
       "postUpgradeTasks": {
         "commands": [
@@ -51,5 +63,8 @@
       }
     }
   ],
-  "labels": ["dependencies", "python-upgrade"]
+  "labels": [
+    "dependencies",
+    "python-upgrade"
+  ]
 }
