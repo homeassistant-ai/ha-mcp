@@ -113,7 +113,7 @@ class TestBugReportTool:
         assert "🔄 Steps to Reproduce" in runtime_template
         assert "✅ Expected vs ❌ Actual Behavior" in runtime_template
         assert "🔧 Environment" in runtime_template
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md" in runtime_template
+        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml" in runtime_template
 
         # Check agent behavior template
         agent_template = result["agent_behavior_template"]
@@ -121,7 +121,7 @@ class TestBugReportTool:
         assert "🤖 What Did the AI Agent Do?" in agent_template
         assert "🎯 What Should the Agent Have Done?" in agent_template
         assert "🔧 Tool Calls Made" in agent_template
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md" in agent_template
+        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml" in agent_template
 
         # Check anonymization guide
         anon_guide = result["anonymization_guide"]
@@ -194,8 +194,8 @@ class TestBugReportTool:
         result = await actual_func()
 
         # Check both templates have correct URLs
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.md" in result["runtime_bug_template"]
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior_feedback.md" in result["agent_behavior_template"]
+        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml" in result["runtime_bug_template"]
+        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml" in result["agent_behavior_template"]
 
     @pytest.mark.asyncio
     async def test_bug_report_no_timezone(self, registered_tools, mock_client):
@@ -324,7 +324,8 @@ class TestBugReportTool:
         assert "RUNTIME_BUG_TEMPLATE" in instructions
         assert "AGENT_BEHAVIOR_TEMPLATE" in instructions
         assert "ANALYZE THE CONVERSATION" in instructions
-        assert "privacy" in instructions.lower()
+        assert "anonymize" in instructions.lower()
+        assert "personal information" in instructions.lower()
 
     @pytest.mark.asyncio
     async def test_bug_report_suggested_title(self, ha_report_issue_func, mock_client):
