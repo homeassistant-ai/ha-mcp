@@ -276,7 +276,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "   BEFORE showing the report to the user, YOU MUST anonymize sensitive information:\n"
                 "   a. Replace person names with generic labels (person.user1, person.user2)\n"
                 "   b. Replace location names with generic names (Home, Location1)\n"
-                "   c. Replace device names containing personal info (bedroom_1, device_1)\n"
+                "   c. Replace device names containing personal info (e.g., 'juliens_bedroom') with generic ones (e.g., 'bedroom_1')\n"
                 "   d. Verify no tokens, passwords, or IPs are visible\n"
                 "   e. Keep entity domains, error messages, and technical details\n"
                 "   See anonymization_guide for full details.\n\n"
