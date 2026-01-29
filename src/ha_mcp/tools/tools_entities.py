@@ -125,9 +125,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Set aliases: ha_set_entity("light.lamp", aliases=["bedroom light", "lamp"])
         - Set labels: ha_set_entity("light.lamp", labels=["outdoor", "smart"])
         - Clear labels: ha_set_entity("light.lamp", labels=[])
-        - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": true})
-        - Hide from all: ha_set_entity("light.lamp", expose_to={"conversation": false, "cloud.alexa": false, "cloud.google_assistant": false})
-        - Combined: ha_set_entity("light.lamp", name="Lamp", labels=["outdoor"], expose_to={"conversation": true})
+        - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
+        - Hide from all: ha_set_entity("light.lamp", expose_to={"conversation": False, "cloud.alexa": False, "cloud.google_assistant": False})
+        - Combined: ha_set_entity("light.lamp", name="Lamp", labels=["outdoor"], expose_to={"conversation": True})
         - Clear area: ha_set_entity("sensor.temp", area_id="")
 
         NOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.
