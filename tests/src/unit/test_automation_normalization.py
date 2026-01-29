@@ -475,9 +475,7 @@ class TestAutomationNormalization:
         # return a clear validation error about the malformed structure.
         delay_step = result["action"][0]["choose"][0]["sequence"][0]
         assert "actions" in delay_step
-        assert "action" not in delay_step or delay_step.get("action") != [
-            {"service": "light.turn_on"}
-        ]
+        assert "action" not in delay_step
 
     def test_no_normalize_triggers_inside_nested_structure(self):
         """Test that 'triggers' is NOT normalized to 'trigger' inside nested structures."""
@@ -529,6 +527,7 @@ class TestAutomationNormalization:
         then_steps = result["action"][0]["then"]
         step_with_actions = then_steps[1]
         assert "actions" in step_with_actions
+        assert "action" not in step_with_actions
 
     def test_root_level_actions_still_normalized(self):
         """Test that root-level 'actions' is still normalized to 'action'."""
