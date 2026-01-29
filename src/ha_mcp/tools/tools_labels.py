@@ -577,6 +577,11 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Manage label assignments for entities with add, remove, or set operations.
 
+        **DEPRECATED**: For simple set/replace operations on a single entity, prefer
+        ha_set_entity(entity_id, labels=["label1", "label2"]) which supports labels
+        alongside other entity properties in a single call.
+        This tool remains useful for add/remove operations and bulk operations.
+
         This tool provides three operations for managing entity labels:
         - **add**: Append labels to existing labels (preserves all current labels)
         - **remove**: Remove specific labels (preserves remaining labels)

@@ -68,6 +68,11 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         """
         Expose or hide entities from voice assistants (Alexa, Google Home, Assist).
 
+        **DEPRECATED**: For single-entity exposure changes, prefer
+        ha_set_entity(entity_id, expose_to={"conversation": true, "cloud.alexa": false})
+        which supports exposure alongside other entity properties in a single call.
+        This tool remains useful for bulk operations across multiple entities.
+
         This controls which entities are accessible via voice commands through
         Home Assistant's voice assistant integrations.
 
