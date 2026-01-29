@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_automation_config(
-    config: Any, parent_key: str | None = None, in_choose_or_if: bool = False
+    config: Any,
+    parent_key: str | None = None,
+    in_choose_or_if: bool = False,
+    is_root: bool = True,
 ) -> Any:
     """
     Recursively normalize automation config field names to HA API format.
@@ -30,6 +33,11 @@ def _normalize_automation_config(
     Home Assistant accepts both singular ('trigger', 'action', 'condition')
     and plural ('triggers', 'actions', 'conditions') field names in YAML,
     but the API expects singular forms at the root level.
+
+    IMPORTANT: 'triggers' → 'trigger' and 'actions' → 'action' normalization
+    is ONLY applied at the root level. Deeper in the tree these keys are either
+    invalid or semantically different, and normalizing them can produce keys
+    that Home Assistant rejects (e.g., 'action' inside a delay object).
 
     IMPORTANT: Inside 'choose' and 'if' action blocks, the 'conditions' key
     (plural) is required by the HA schema and should NOT be normalized to
@@ -44,6 +52,9 @@ def _normalize_automation_config(
         parent_key: The parent dictionary key (for context tracking)
         in_choose_or_if: Whether we're inside a choose/if option that requires
                          'conditions' (plural) to remain unchanged
+        is_root: Whether this is the root-level automation config dict.
+                 Only root level gets 'triggers'→'trigger' and
+                 'actions'→'action' normalization.
 
     Returns:
         Normalized configuration with singular field names at root level,
@@ -55,7 +66,9 @@ def _normalize_automation_config(
         # If parent is 'choose' or 'if', items are options that need 'conditions' preserved
         is_option_list = parent_key in ("choose", "if")
         return [
-            _normalize_automation_config(item, parent_key, is_option_list)
+            _normalize_automation_config(
+                item, parent_key, is_option_list, is_root=False
+            )
             for item in config
         ]
 
@@ -70,14 +83,18 @@ def _normalize_automation_config(
     # that needs its nested 'conditions' key preserved
     is_compound_condition_block = normalized.get("condition") in ("or", "and", "not")
 
-    # Map plural field names to singular (HA API format)
-    # EXCEPT 'conditions' when inside choose/if blocks OR in compound condition blocks
-    field_mappings = {
-        "triggers": "trigger",
-        "actions": "action",
-        # Note: 'sequence' is already singular, but some users might use 'sequences'
-        "sequences": "sequence",
-    }
+    # Build field mappings based on context
+    field_mappings: dict[str, str] = {}
+
+    # 'triggers' → 'trigger' and 'actions' → 'action' ONLY at root level.
+    # Deeper in the tree these keys are invalid and normalizing them produces
+    # keys HA rejects (e.g., 'action' inside a delay object — see issue #498).
+    if is_root:
+        field_mappings["triggers"] = "trigger"
+        field_mappings["actions"] = "action"
+
+    # 'sequences' → 'sequence' is safe at any level (only meaningful in choose options)
+    field_mappings["sequences"] = "sequence"
 
     # Only add 'conditions' mapping if NOT inside a choose/if option
     # AND NOT a compound condition block (or/and/not)
@@ -94,7 +111,7 @@ def _normalize_automation_config(
 
     # Recursively process all values in the dictionary
     for key, value in normalized.items():
-        normalized[key] = _normalize_automation_config(value, key)
+        normalized[key] = _normalize_automation_config(value, key, is_root=False)
 
     return normalized
 

@@ -31,15 +31,11 @@ class TestAutomationNormalization:
                 {
                     "choose": [
                         {
-                            "conditions": [
-                                {"condition": "trigger", "id": "trigger_1"}
-                            ],
+                            "conditions": [{"condition": "trigger", "id": "trigger_1"}],
                             "sequence": [{"service": "light.turn_on"}],
                         },
                         {
-                            "conditions": [
-                                {"condition": "trigger", "id": "trigger_2"}
-                            ],
+                            "conditions": [{"condition": "trigger", "id": "trigger_2"}],
                             "sequence": [{"service": "light.turn_off"}],
                         },
                     ]
@@ -67,7 +63,11 @@ class TestAutomationNormalization:
             "action": [
                 {
                     "if": [
-                        {"conditions": [{"condition": "state", "entity_id": "light.test"}]}
+                        {
+                            "conditions": [
+                                {"condition": "state", "entity_id": "light.test"}
+                            ]
+                        }
                     ],
                     "then": [{"service": "light.turn_on"}],
                     "else": [{"service": "light.turn_off"}],
@@ -188,7 +188,9 @@ class TestAutomationNormalization:
                 {
                     "choose": [
                         {
-                            "conditions": [{"condition": "state"}],  # Should be preserved
+                            "conditions": [
+                                {"condition": "state"}
+                            ],  # Should be preserved
                             "sequence": [
                                 {
                                     # This 'conditions' block is a condition action, and should be normalized
@@ -228,8 +230,16 @@ class TestAutomationNormalization:
                 {
                     "condition": "or",
                     "conditions": [
-                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
-                        {"condition": "state", "entity_id": "light.test2", "state": "on"},
+                        {
+                            "condition": "state",
+                            "entity_id": "light.test1",
+                            "state": "on",
+                        },
+                        {
+                            "condition": "state",
+                            "entity_id": "light.test2",
+                            "state": "on",
+                        },
                     ],
                 }
             ],
@@ -255,8 +265,16 @@ class TestAutomationNormalization:
                 {
                     "condition": "and",
                     "conditions": [
-                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
-                        {"condition": "numeric_state", "entity_id": "sensor.temp", "above": 20},
+                        {
+                            "condition": "state",
+                            "entity_id": "light.test1",
+                            "state": "on",
+                        },
+                        {
+                            "condition": "numeric_state",
+                            "entity_id": "sensor.temp",
+                            "above": 20,
+                        },
                     ],
                 }
             ],
@@ -277,7 +295,9 @@ class TestAutomationNormalization:
             "condition": [
                 {
                     "condition": "not",
-                    "conditions": [{"condition": "state", "entity_id": "light.test", "state": "on"}],
+                    "conditions": [
+                        {"condition": "state", "entity_id": "light.test", "state": "on"}
+                    ],
                 }
             ],
         }
@@ -298,12 +318,24 @@ class TestAutomationNormalization:
                 {
                     "condition": "and",
                     "conditions": [
-                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                        {
+                            "condition": "state",
+                            "entity_id": "light.test1",
+                            "state": "on",
+                        },
                         {
                             "condition": "or",
                             "conditions": [
-                                {"condition": "state", "entity_id": "light.test2", "state": "on"},
-                                {"condition": "state", "entity_id": "light.test3", "state": "on"},
+                                {
+                                    "condition": "state",
+                                    "entity_id": "light.test2",
+                                    "state": "on",
+                                },
+                                {
+                                    "condition": "state",
+                                    "entity_id": "light.test3",
+                                    "state": "on",
+                                },
                             ],
                         },
                     ],
@@ -383,7 +415,11 @@ class TestAutomationNormalization:
                 {
                     "condition": "or",
                     "conditions": [
-                        {"condition": "state", "entity_id": "light.test1", "state": "on"},
+                        {
+                            "condition": "state",
+                            "entity_id": "light.test1",
+                            "state": "on",
+                        },
                     ],
                 }
             ],
@@ -403,3 +439,179 @@ class TestAutomationNormalization:
         # Inside compound condition, 'conditions' should be preserved
         or_condition = result["condition"][0]
         assert "conditions" in or_condition
+
+    def test_no_normalize_actions_inside_delay_object(self):
+        """Test that 'actions' is NOT normalized to 'action' inside nested structures.
+
+        Regression test for issue #498: AI models sometimes include an 'actions'
+        key inside a delay object or other nested structure. The normalizer should
+        NOT convert it to 'action' because that produces a key HA rejects as
+        'extra keys not allowed'.
+        """
+        config = {
+            "alias": "Test",
+            "trigger": [{"platform": "state", "entity_id": "sensor.test"}],
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [{"condition": "trigger", "id": "t1"}],
+                            "sequence": [
+                                {
+                                    "delay": {"seconds": 5},
+                                    "actions": [{"service": "light.turn_on"}],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # The erroneous 'actions' key inside the delay step should NOT be
+        # normalized to 'action' — it should be left as-is so that HA can
+        # return a clear validation error about the malformed structure.
+        delay_step = result["action"][0]["choose"][0]["sequence"][0]
+        assert "actions" in delay_step
+        assert "action" not in delay_step or delay_step.get("action") != [
+            {"service": "light.turn_on"}
+        ]
+
+    def test_no_normalize_triggers_inside_nested_structure(self):
+        """Test that 'triggers' is NOT normalized to 'trigger' inside nested structures."""
+        config = {
+            "alias": "Test",
+            "trigger": [{"platform": "state"}],
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [{"condition": "trigger", "id": "t1"}],
+                            "sequence": [
+                                {"service": "light.turn_on", "triggers": ["fake"]},
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # 'triggers' inside a service call should NOT be normalized
+        service_step = result["action"][0]["choose"][0]["sequence"][0]
+        assert "triggers" in service_step
+        assert "trigger" not in service_step
+
+    def test_no_normalize_actions_inside_then_block(self):
+        """Test that 'actions' inside if/then blocks is NOT normalized (issue #498)."""
+        config = {
+            "alias": "Test",
+            "trigger": [{"platform": "state"}],
+            "action": [
+                {
+                    "if": [
+                        {"condition": "state", "entity_id": "light.test", "state": "on"}
+                    ],
+                    "then": [
+                        {"delay": {"seconds": 10}},
+                        {"actions": [{"service": "light.turn_off"}]},
+                    ],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # 'actions' inside then block should NOT be normalized to 'action'
+        then_steps = result["action"][0]["then"]
+        step_with_actions = then_steps[1]
+        assert "actions" in step_with_actions
+
+    def test_root_level_actions_still_normalized(self):
+        """Test that root-level 'actions' is still normalized to 'action'."""
+        config = {
+            "alias": "Test",
+            "triggers": [{"platform": "state"}],
+            "actions": [{"service": "light.turn_on"}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert "trigger" in result
+        assert "triggers" not in result
+        assert "action" in result
+        assert "actions" not in result
+
+    def test_complex_nested_choose_if_then_with_delays(self):
+        """Test the exact scenario from issue #498 — complex nested choose/if/then with delays."""
+        config = {
+            "alias": "Complex Automation",
+            "triggers": [{"platform": "state", "entity_id": "sensor.test"}],
+            "actions": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [{"condition": "trigger", "id": "t1"}],
+                            "sequence": [
+                                {
+                                    "service": "notify.mobile",
+                                    "data": {"message": "Step 1"},
+                                },
+                                {"delay": {"minutes": 2}},
+                                {
+                                    "if": [
+                                        {
+                                            "condition": "state",
+                                            "entity_id": "light.test",
+                                            "state": "on",
+                                        }
+                                    ],
+                                    "then": [
+                                        {"delay": {"seconds": 30}},
+                                        {
+                                            "service": "light.turn_off",
+                                            "target": {"entity_id": "light.test"},
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                        {
+                            "conditions": [{"condition": "trigger", "id": "t2"}],
+                            "sequence": [
+                                {"delay": {"seconds": 5}},
+                                {
+                                    "service": "light.turn_on",
+                                    "target": {"entity_id": "light.test"},
+                                },
+                            ],
+                        },
+                    ],
+                    "default": [
+                        {"service": "notify.mobile", "data": {"message": "Default"}}
+                    ],
+                }
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        # Root level should be normalized
+        assert "trigger" in result
+        assert "action" in result
+        assert "triggers" not in result
+        assert "actions" not in result
+
+        # Choose conditions should be preserved as plural
+        choose_block = result["action"][0]["choose"]
+        assert "conditions" in choose_block[0]
+        assert "conditions" in choose_block[1]
+
+        # Nested if/then structure should be intact
+        if_block = choose_block[0]["sequence"][2]
+        assert "if" in if_block
+        assert "then" in if_block
+        assert len(if_block["then"]) == 2
