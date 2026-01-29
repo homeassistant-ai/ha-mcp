@@ -263,7 +263,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             entity_entry = {}
 
             if has_registry_updates:
-                logger.info(f"Updating entity {entity_id}: {', '.join(updates_made)}")
+                logger.info(f"Updating entity registry for {entity_id}: {', '.join(u for u in updates_made if not u.startswith('expose_to='))}")
                 result = await client.send_websocket_message(message)
 
                 if not result.get("success"):
