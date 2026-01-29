@@ -304,11 +304,11 @@ class SmartSearchTools:
                     area_data["entities"] = [
                         {
                             "entity_id": entity_id,
-                            "friendly_name": state_map.get(entity_id, {})
+                            "friendly_name": (state_info := state_map.get(entity_id, {}))
                             .get("attributes", {})
                             .get("friendly_name", entity_id),
                             "domain": entity_id.split(".")[0],
-                            "state": state_map.get(entity_id, {}).get("state", "unknown"),
+                            "state": state_info.get("state", "unknown"),
                         }
                         for entity_id in area_entities
                     ]
