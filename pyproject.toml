@@ -46,6 +46,7 @@ hamcp-test-env = "tests.test_env_manager:main"
 ha-mcp-web = "ha_mcp.__main__:main_web"
 ha-mcp-sse = "ha_mcp.__main__:main_sse"
 ha-mcp-oauth = "ha_mcp.__main__:main_oauth"
+ha-mcp-cognito = "ha_mcp.__main__:main_cognito"
 
 [tool.setuptools]
 package-dir = {"" = "src", "tests" = "tests"}

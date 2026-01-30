@@ -1,6 +1,7 @@
 """Home Assistant MCP Server."""
 
 import truststore
+
 truststore.inject_into_ssl()
 
 import asyncio  # noqa: E402
@@ -124,6 +125,33 @@ Configuration options:
 
 For detailed setup instructions, see:
   https://github.com/homeassistant-ai/ha-mcp#-installation
+
+==============================================================================
+"""
+
+# AWS Cognito configuration error message template
+_COGNITO_CONFIG_ERROR_MESSAGE = """
+==============================================================================
+              Home Assistant MCP Server - AWS Cognito Configuration Error
+==============================================================================
+
+Missing required environment variables:
+{missing_vars}
+
+This mode uses AWS Cognito for OAuth authentication (Claude connector compatible).
+
+Required environment variables:
+  - COGNITO_USER_POOL_ID
+  - COGNITO_CLIENT_ID
+  - COGNITO_CLIENT_SECRET
+
+Recommended environment variables:
+  - MCP_BASE_URL (public URL of this service, no /mcp suffix)
+  - AWS_REGION (if omitted, inferred from COGNITO_USER_POOL_ID when possible)
+
+Optional environment variables:
+  - COGNITO_REDIRECT_PATH (default: /auth/callback)
+  - COGNITO_ALLOWED_CLIENT_REDIRECT_URIS (comma-separated patterns)
 
 ==============================================================================
 """
@@ -330,6 +358,7 @@ async def _run_with_graceful_shutdown() -> None:
     # Respect FastMCP's show_cli_banner setting
     # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Create a task for the MCP server
@@ -382,6 +411,7 @@ def main() -> None:
     # Handle --version flag early, before server creation requires config
     if "--version" in sys.argv or "-V" in sys.argv:
         from importlib.metadata import version
+
         print(f"ha-mcp {version('ha-mcp')}")
         sys.exit(0)
 
@@ -393,6 +423,7 @@ def main() -> None:
 
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # In standard mode (not OAuth), validate that real credentials are provided
@@ -419,7 +450,7 @@ def main() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
     )
 
     # Set up signal handlers before running
@@ -443,6 +474,7 @@ def main() -> None:
 def main_dev() -> None:
     """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
     import os
+
     os.environ["LOG_LEVEL"] = "DEBUG"
     main()
 
@@ -474,6 +506,7 @@ async def _run_http_with_graceful_shutdown(
     # Respect FastMCP's show_cli_banner setting
     # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Create a task for the MCP server
@@ -573,6 +606,7 @@ def main_web() -> None:
     """
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # Validate credentials (required in non-OAuth HTTP mode)
@@ -591,7 +625,7 @@ def main_web() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
     )
 
     _run_http_server("streamable-http", default_port=8086)
@@ -608,6 +642,7 @@ def main_sse() -> None:
     """
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # Validate credentials (required in non-OAuth SSE mode)
@@ -626,7 +661,7 @@ def main_sse() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
     )
 
     _run_http_server("sse", default_port=8087)
@@ -652,11 +687,11 @@ def main_oauth() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
-        force=True  # Force reconfiguration
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        force=True,  # Force reconfiguration
     )
     # Also configure all ha_mcp loggers
-    for logger_name in ['ha_mcp', 'ha_mcp.auth', 'ha_mcp.auth.provider']:
+    for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
     logger.info(f"OAuth mode logging configured at {log_level} level")
 
@@ -675,6 +710,135 @@ def main_oauth() -> None:
         raise
     except Exception as e:
         logger.error(f"OAuth server error: {e}")
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+def _parse_csv_env(name: str) -> list[str] | None:
+    """Parse comma-separated environment variable into a list of strings."""
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    values = [part.strip() for part in raw.split(",")]
+    return [v for v in values if v]
+
+
+def main_cognito() -> None:
+    """Run server with AWS Cognito OAuth authentication over HTTP.
+
+    Environment:
+    - HOMEASSISTANT_URL (required)
+    - HOMEASSISTANT_TOKEN (required)
+    - MCP_PORT (optional, default: 8086)
+    - MCP_SECRET_PATH (optional, default: "/mcp")
+    - MCP_BASE_URL (optional, default: http://localhost:{MCP_PORT})
+    - COGNITO_USER_POOL_ID (required)
+    - COGNITO_CLIENT_ID (required)
+    - COGNITO_CLIENT_SECRET (required)
+    - AWS_REGION (optional; inferred from COGNITO_USER_POOL_ID when possible)
+    - COGNITO_REDIRECT_PATH (optional, default: "/auth/callback")
+    - COGNITO_ALLOWED_CLIENT_REDIRECT_URIS (optional, comma-separated)
+    """
+    from typing import Any
+
+    from starlette.responses import JSONResponse
+
+    # Configure logging before server creation
+    from ha_mcp.config import get_settings
+
+    settings = get_settings()
+
+    # Validate credentials (required in Cognito mode)
+    missing_vars = []
+    if settings.homeassistant_url == "http://oauth-mode":
+        missing_vars.append("  - HOMEASSISTANT_URL")
+    if settings.homeassistant_token == "oauth-mode-token":
+        missing_vars.append("  - HOMEASSISTANT_TOKEN")
+
+    # Validate Cognito configuration
+    user_pool_id = os.getenv("COGNITO_USER_POOL_ID")
+    client_id = os.getenv("COGNITO_CLIENT_ID")
+    client_secret = os.getenv("COGNITO_CLIENT_SECRET")
+
+    if not user_pool_id:
+        missing_vars.append("  - COGNITO_USER_POOL_ID")
+    if not client_id:
+        missing_vars.append("  - COGNITO_CLIENT_ID")
+    if not client_secret:
+        missing_vars.append("  - COGNITO_CLIENT_SECRET")
+
+    if missing_vars:
+        print(
+            _COGNITO_CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    )
+
+    port, path = _get_http_runtime(default_port=8086)
+    base_url = os.getenv("MCP_BASE_URL", f"http://localhost:{port}")
+
+    aws_region = os.getenv("AWS_REGION")
+    if not aws_region and user_pool_id and "_" in user_pool_id:
+        aws_region = user_pool_id.split("_", 1)[0]
+
+    redirect_path = os.getenv("COGNITO_REDIRECT_PATH", "/auth/callback")
+
+    allowed_redirects = _parse_csv_env("COGNITO_ALLOWED_CLIENT_REDIRECT_URIS")
+    if allowed_redirects is None:
+        from ha_mcp.auth.aws_cognito_provider import (
+            DEFAULT_ALLOWED_CLIENT_REDIRECT_URIS,
+        )
+
+        allowed_redirects = DEFAULT_ALLOWED_CLIENT_REDIRECT_URIS
+
+    from ha_mcp.auth.aws_cognito_provider import ClaudeCompatibleCognitoProvider
+
+    auth_provider = ClaudeCompatibleCognitoProvider(
+        user_pool_id=user_pool_id,
+        aws_region=aws_region,
+        client_id=client_id,
+        client_secret=client_secret,
+        base_url=base_url,
+        issuer_url=base_url,
+        redirect_path=redirect_path,
+        required_scopes=["openid"],
+        allowed_client_redirect_uris=allowed_redirects,
+    )
+
+    # Create server and attach auth
+    server = _get_server()
+    server.mcp.auth = auth_provider
+
+    # Basic health check endpoint for container platforms (App Runner, etc.)
+    @server.mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
+    async def _healthz(_request: Any) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    # Set up signal handlers
+    _setup_signal_handlers()
+
+    # Run with graceful shutdown support
+    try:
+        asyncio.run(
+            _run_http_with_graceful_shutdown(
+                transport="streamable-http",
+                host="0.0.0.0",
+                port=port,
+                path=path,
+            )
+        )
+    except KeyboardInterrupt:
+        logger.info("Interrupted, exiting")
+    except SystemExit:
+        raise
+    except Exception as e:
+        logger.error(f"Cognito server error: {e}")
         sys.exit(1)
 
     sys.exit(0)
@@ -715,10 +879,13 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
 
     # Get tool count (get_tools is async, but we can count registered tools)
     tools = await mcp.get_tools()
-    logger.info(f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}")
+    logger.info(
+        f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
+    )
 
     # Respect FastMCP's show_cli_banner setting for consistency
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Run server
