@@ -740,8 +740,7 @@ def main_cognito() -> None:
     - COGNITO_REDIRECT_PATH (optional, default: "/auth/callback")
     - COGNITO_ALLOWED_CLIENT_REDIRECT_URIS (optional, comma-separated)
     """
-    from typing import Any
-
+    from starlette.requests import Request
     from starlette.responses import JSONResponse
 
     # Configure logging before server creation
@@ -761,12 +760,14 @@ def main_cognito() -> None:
     client_id = os.getenv("COGNITO_CLIENT_ID")
     client_secret = os.getenv("COGNITO_CLIENT_SECRET")
 
-    if not user_pool_id:
-        missing_vars.append("  - COGNITO_USER_POOL_ID")
-    if not client_id:
-        missing_vars.append("  - COGNITO_CLIENT_ID")
-    if not client_secret:
-        missing_vars.append("  - COGNITO_CLIENT_SECRET")
+    cognito_vars = {
+        "COGNITO_USER_POOL_ID": user_pool_id,
+        "COGNITO_CLIENT_ID": client_id,
+        "COGNITO_CLIENT_SECRET": client_secret,
+    }
+    for var, value in cognito_vars.items():
+        if not value:
+            missing_vars.append(f"  - {var}")
 
     if missing_vars:
         print(
@@ -774,6 +775,10 @@ def main_cognito() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    assert user_pool_id is not None
+    assert client_id is not None
+    assert client_secret is not None
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
@@ -784,7 +789,7 @@ def main_cognito() -> None:
     base_url = os.getenv("MCP_BASE_URL", f"http://localhost:{port}")
 
     aws_region = os.getenv("AWS_REGION")
-    if not aws_region and user_pool_id and "_" in user_pool_id:
+    if not aws_region and "_" in user_pool_id:
         aws_region = user_pool_id.split("_", 1)[0]
 
     redirect_path = os.getenv("COGNITO_REDIRECT_PATH", "/auth/callback")
@@ -817,7 +822,7 @@ def main_cognito() -> None:
 
     # Basic health check endpoint for container platforms (App Runner, etc.)
     @server.mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
-    async def _healthz(_request: Any) -> JSONResponse:
+    async def _healthz(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
     # Set up signal handlers
