@@ -57,6 +57,7 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
         (error_code == "HACS_DISABLED", f"HACS disabled: {data.get('disabled_reason', 'unknown')}"),
         ((error_code == "INTERNAL_ERROR" and "rate" in error_str) or ("rate" in error_str and "limit" in error_str), "GitHub rate limit"),
         (error_code == "INTERNAL_ERROR" and "github" in error_str, "GitHub access issue"),
+        (error_code == "INTERNAL_ERROR", f"HACS internal error: {error_str}"),
         ("not found" in error_str, "Command not found"),
         ("unknown command" in error_str, "Unknown command"),
         ("disabled" in error_str, "HACS disabled"),
