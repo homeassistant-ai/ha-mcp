@@ -216,8 +216,7 @@ class TestLabelEntityRegistryIntegrity:
             "ha_get_state",
             {"entity_id": entity_id},
         )
-        after_data = parse_mcp_result(after_result)
-        assert after_data.get("success"), "Entity should still be accessible after label change"
+        assert_mcp_success(after_result, "get state after label change")
 
         logger.info("Entity properties preserved after label operation")
 
