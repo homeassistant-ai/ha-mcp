@@ -5,6 +5,7 @@ This module provides tools for managing entity lifecycle and properties
 via the Home Assistant entity registry API.
 """
 
+import json
 import logging
 from typing import Annotated, Any
 
@@ -158,11 +159,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             parsed_expose_to: dict[str, bool] | None = None
             if expose_to is not None:
                 if isinstance(expose_to, str):
-                    import json as _json
-
                     try:
-                        parsed_expose_to = _json.loads(expose_to)
-                    except _json.JSONDecodeError:
+                        parsed_expose_to = json.loads(expose_to)
+                    except json.JSONDecodeError:
                         return create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             "expose_to must be a JSON dict mapping assistant IDs to booleans, "
