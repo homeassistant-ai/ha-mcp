@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: Use this agent for DEEP ANALYSIS of a SINGLE GitHub issue. Performs comprehensive codebase exploration, implementation planning, and architectural assessment. This is human-directed deep analysis, complementing the automated Gemini triage. This agent handles ONE issue at a time - when analyzing multiple issues, launch multiple issue-analysis agents in parallel (one per issue).\n\nExamples:\n\n<example>\nContext: Deep analysis needed for complex issue.\nuser: "Analyze issue #42"\nassistant: "I'll perform deep analysis of issue #42, explore the codebase thoroughly, assess implementation complexity, and provide detailed recommendations."\n<Task tool call to issue-analysis agent with prompt including issue #42>\n</example>\n\n<example>\nContext: User wants detailed implementation planning.\nuser: "What would it take to implement issue #15?"\nassistant: "I'll use the issue-analysis agent to perform deep analysis of issue #15 with detailed implementation assessment."\n<Task tool call to issue-analysis agent>\n</example>
+description: Deep analysis of a single GitHub issue with codebase exploration, implementation planning, and architectural assessment. Handles one issue at a time - launch multiple agents in parallel for multiple issues.
 model: opus
 ---
 
