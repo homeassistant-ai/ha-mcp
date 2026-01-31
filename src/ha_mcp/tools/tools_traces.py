@@ -429,11 +429,11 @@ def _format_detailed_trace(
             step_info = step.copy()
             step_info["path"] = path
             
-            if path.startswith("trigger/"):
+            if path == "trigger" or path.startswith("trigger/"):
                 triggers.append(step_info)
-            elif path.startswith("condition/"):
+            elif path == "condition" or path.startswith("condition/"):
                 conditions.append(step_info)
-            elif path.startswith("action/"):
+            elif path == "action" or path.startswith("action/"):
                 actions.append(step_info)
     
     # Sort by timestamp (if available) or path to maintain execution order
