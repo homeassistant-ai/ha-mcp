@@ -143,7 +143,11 @@ class SmartSearchTools:
         self, area_query: str, group_by_domain: bool = True
     ) -> dict[str, Any]:
         """
-        Get entities grouped by area/room with fuzzy matching.
+        Get entities grouped by area/room using the HA registries for accurate area resolution.
+
+        Uses entity registry, device registry, and area registry to determine
+        which area each entity belongs to. Fuzzy matches the query against
+        area names/IDs to find the target area(s).
 
         Args:
             area_query: Area/room name to search for
@@ -153,55 +157,163 @@ class SmartSearchTools:
             Dictionary with area-grouped entities
         """
         try:
-            # Get all entities
-            entities = await self.client.get_states()
+            # Fetch all registries and states in parallel
+            entities_task = self.client.get_states()
+            area_registry_task = self.client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            )
+            entity_registry_task = self.client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+            device_registry_task = self.client.send_websocket_message(
+                {"type": "config/device_registry/list"}
+            )
 
-            # Search by area
-            area_matches = self.fuzzy_searcher.search_by_area(entities, area_query)
+            results = await asyncio.gather(
+                entities_task,
+                area_registry_task,
+                entity_registry_task,
+                device_registry_task,
+                return_exceptions=True,
+            )
 
-            # Format results
-            formatted_areas = {}
+            entities = results[0] if not isinstance(results[0], Exception) else []
+
+            # Parse area registry: area_id -> area info
+            area_registry: dict[str, dict[str, Any]] = {}
+            if isinstance(results[1], dict) and results[1].get("success"):
+                for area in results[1].get("result", []):
+                    area_id = area.get("area_id", "")
+                    if area_id:
+                        area_registry[area_id] = area
+
+            # Parse entity registry: entity_id -> {area_id, device_id}
+            entity_reg_map: dict[str, dict[str, str | None]] = {}
+            if isinstance(results[2], dict) and results[2].get("success"):
+                for entry in results[2].get("result", []):
+                    entity_id = entry.get("entity_id")
+                    if entity_id:
+                        entity_reg_map[entity_id] = {
+                            "area_id": entry.get("area_id"),
+                            "device_id": entry.get("device_id"),
+                        }
+
+            # Parse device registry: device_id -> area_id
+            device_area_map: dict[str, str | None] = {}
+            if isinstance(results[3], dict) and results[3].get("success"):
+                for device in results[3].get("result", []):
+                    device_id = device.get("id", "")
+                    if device_id:
+                        device_area_map[device_id] = device.get("area_id")
+
+            # Fuzzy match area_query against known area names and IDs
+            area_query_lower = area_query.lower().strip()
+            matched_area_ids: set[str] = set()
+
+            for area_id, area_info in area_registry.items():
+                area_name = area_info.get("name", "")
+                # Exact match on area_id or name (case-insensitive)
+                if area_query_lower == area_id.lower() or area_query_lower == area_name.lower():
+                    matched_area_ids.add(area_id)
+                    continue
+                # Fuzzy match on area name
+                name_score = calculate_partial_ratio(area_query_lower, area_name.lower())
+                id_score = calculate_partial_ratio(area_query_lower, area_id.lower())
+                best_score = max(name_score, id_score)
+                if best_score >= 80:
+                    matched_area_ids.add(area_id)
+
+            if not matched_area_ids:
+                return {
+                    "area_query": area_query,
+                    "total_areas_found": 0,
+                    "total_entities": 0,
+                    "areas": {},
+                    "search_metadata": {
+                        "grouped_by_domain": group_by_domain,
+                        "area_inference_method": "registry_lookup",
+                        "available_areas": [
+                            {"area_id": aid, "name": ainfo.get("name", aid)}
+                            for aid, ainfo in area_registry.items()
+                        ],
+                    },
+                    "usage_tips": [
+                        "No areas matched your query. See available_areas for valid area names.",
+                        "Try exact area names from Home Assistant",
+                        "Use ha_list_areas() to see all areas",
+                    ],
+                }
+
+            # Build entity_id -> resolved area_id mapping
+            # Priority: entity direct area_id > device area_id
+            entity_area_resolved: dict[str, str] = {}
+            for entity_id, reg_info in entity_reg_map.items():
+                area_id = reg_info.get("area_id")
+                if not area_id and reg_info.get("device_id"):
+                    area_id = device_area_map.get(reg_info["device_id"])
+                if area_id:
+                    entity_area_resolved[entity_id] = area_id
+
+            # Build state lookup for entity details
+            state_map: dict[str, dict[str, Any]] = {}
+            for entity in entities:
+                eid = entity.get("entity_id", "")
+                if eid:
+                    state_map[eid] = entity
+
+            # Collect entities belonging to matched areas
+            formatted_areas: dict[str, dict[str, Any]] = {}
             total_entities = 0
 
-            for area_name, area_entities in area_matches.items():
-                area_data = {
+            for area_id in matched_area_ids:
+                area_info = area_registry.get(area_id, {})
+                area_name = area_info.get("name", area_id)
+
+                # Find all entities in this area
+                area_entities = [
+                    entity_id
+                    for entity_id, resolved_area in entity_area_resolved.items()
+                    if resolved_area == area_id
+                ]
+
+                area_data: dict[str, Any] = {
                     "area_name": area_name,
+                    "area_id": area_id,
                     "entity_count": len(area_entities),
                     "entities": {},
                 }
 
                 if group_by_domain:
-                    # Group by domain
                     domains: dict[str, list[dict[str, Any]]] = {}
-                    for entity in area_entities:
-                        domain = entity["entity_id"].split(".")[0]
+                    for entity_id in area_entities:
+                        domain = entity_id.split(".")[0]
+                        state_info = state_map.get(entity_id, {})
                         if domain not in domains:
                             domains[domain] = []
                         domains[domain].append(
                             {
-                                "entity_id": entity["entity_id"],
-                                "friendly_name": entity.get("attributes", {}).get(
-                                    "friendly_name", entity["entity_id"]
+                                "entity_id": entity_id,
+                                "friendly_name": state_info.get("attributes", {}).get(
+                                    "friendly_name", entity_id
                                 ),
-                                "state": entity.get("state", "unknown"),
+                                "state": state_info.get("state", "unknown"),
                             }
                         )
                     area_data["entities"] = domains
                 else:
-                    # Flat list
                     area_data["entities"] = [
                         {
-                            "entity_id": entity["entity_id"],
-                            "friendly_name": entity.get("attributes", {}).get(
-                                "friendly_name", entity["entity_id"]
-                            ),
-                            "domain": entity["entity_id"].split(".")[0],
-                            "state": entity.get("state", "unknown"),
+                            "entity_id": entity_id,
+                            "friendly_name": (state_info := state_map.get(entity_id, {}))
+                            .get("attributes", {})
+                            .get("friendly_name", entity_id),
+                            "domain": entity_id.split(".")[0],
+                            "state": state_info.get("state", "unknown"),
                         }
-                        for entity in area_entities
+                        for entity_id in area_entities
                     ]
 
-                formatted_areas[area_name] = area_data
+                formatted_areas[area_id] = area_data
                 total_entities += len(area_entities)
 
             return {
@@ -211,13 +323,12 @@ class SmartSearchTools:
                 "areas": formatted_areas,
                 "search_metadata": {
                     "grouped_by_domain": group_by_domain,
-                    "area_inference_method": "fuzzy_name_matching",
+                    "area_inference_method": "registry_lookup",
                 },
                 "usage_tips": [
                     "Try room names: 'salon', 'chambre', 'cuisine'",
                     "English names: 'living', 'bedroom', 'kitchen'",
-                    "Partial matches: 'bed' finds 'bedroom' entities",
-                    "Use get_all_states to see all area_id attributes",
+                    "Use ha_list_areas() to see all available areas",
                 ],
             }
 
