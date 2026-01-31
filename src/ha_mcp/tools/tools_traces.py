@@ -411,11 +411,47 @@ def _format_detailed_trace(
         "state": trace.get("state"),
     }
 
+    raw_trace = trace.get("trace", {})
+    
+    # Initialize lists
+    triggers = []
+    conditions = []
+    actions = []
+    
+    # Home Assistant trace data is stored as a flat dict with path keys
+    # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
+    for path, steps in raw_trace.items():
+        if not isinstance(steps, list):
+            continue
+            
+        for step in steps:
+            # Create a copy to avoid modifying original
+            step_info = step.copy()
+            step_info["path"] = path
+            
+            if path == "trigger" or path.startswith("trigger/"):
+                triggers.append(step_info)
+            elif path == "condition" or path.startswith("condition/"):
+                conditions.append(step_info)
+            elif path == "action" or path.startswith("action/"):
+                actions.append(step_info)
+    
+    # Sort by timestamp (if available) or path to maintain execution order
+    def sort_key(item):
+        return (item.get("timestamp", ""), item.get("path", ""))
+        
+    triggers.sort(key=sort_key)
+    conditions.sort(key=sort_key)
+    actions.sort(key=sort_key)
+
     # Extract trigger information
-    trigger_trace = trace.get("trace", {}).get("trigger", [])
-    if trigger_trace:
-        trigger_step = trigger_trace[0]
-        trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
+    if triggers:
+        trigger_step = triggers[0]
+        trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
+        # Sometimes variables are in 'variables' key, sometimes 'changed_variables'
+        if not trigger_vars:
+            trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
+            
         result["trigger"] = {
             "platform": trigger_vars.get("platform"),
             "description": trigger_vars.get("description"),
@@ -427,26 +463,29 @@ def _format_detailed_trace(
             result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
+    
+    # If no trigger info found in traces, try to get it from the top-level trigger field if present
+    # (some HA versions might populate this)
+    if "trigger" not in result and "trigger" in trace:
+        result["trigger"] = {"description": trace["trigger"]}
 
     # Extract condition results
-    condition_trace = trace.get("trace", {}).get("condition", [])
-    if condition_trace:
+    if conditions:
         condition_results = []
-        for cond in condition_trace:
+        for cond in conditions:
             cond_result = {
                 "result": cond.get("result", {}).get("result"),
+                "path": cond.get("path"),
             }
-            # Try to get condition type from the path
-            if "path" in cond:
-                cond_result["path"] = cond["path"]
+            if "timestamp" in cond:
+                cond_result["timestamp"] = cond["timestamp"]
             condition_results.append(cond_result)
         result["condition_results"] = condition_results
 
     # Extract action trace
-    action_trace = trace.get("trace", {}).get("action", [])
-    if action_trace:
+    if actions:
         action_results = []
-        for action in action_trace:
+        for action in actions:
             action_info: dict[str, Any] = {
                 "path": action.get("path"),
             }
@@ -465,12 +504,17 @@ def _format_detailed_trace(
                 action_info["error"] = action["error"]
 
             # Extract variables if they contain useful debugging info
-            variables = action.get("variables", {})
+            # Check both 'variables' and 'changed_variables'
+            variables = action.get("variables") or action.get("changed_variables", {})
             if variables and "trigger" not in variables:  # Skip trigger vars (already shown)
                 # Only include non-empty variable sets
                 useful_vars = {k: v for k, v in variables.items() if v is not None}
                 if useful_vars:
                     action_info["variables"] = useful_vars
+            
+            # Add child execution info (for nested scripts/automations)
+            if "child_id" in action:
+                action_info["child_id"] = action["child_id"]
 
             action_results.append(action_info)
 
