@@ -49,8 +49,7 @@ class TestLabelSetOperation:
             "ha_config_set_label",
             {"name": label},
         )
-        create_data = parse_mcp_result(create_result)
-        assert_mcp_success(create_data, "create label")
+        create_data = assert_mcp_success(create_result, "create label")
         label_id = create_data.get("label_id", label)
         cleanup_tracker.track("label", label_id)
 
@@ -59,8 +58,7 @@ class TestLabelSetOperation:
             "ha_set_entity",
             {"entity_id": entity_id, "labels": [label_id]},
         )
-        data = parse_mcp_result(result)
-        assert_mcp_success(data, "set labels")
+        data = assert_mcp_success(result, "set labels")
         assert label_id in data.get("entity_entry", {}).get("labels", [])
 
         logger.info(f"Set labels on {entity_id}: {data.get('entity_entry', {}).get('labels')}")
@@ -82,8 +80,7 @@ class TestLabelSetOperation:
                 "ha_config_set_label",
                 {"name": name},
             )
-            create_data = parse_mcp_result(create_result)
-            assert_mcp_success(create_data, f"create label {name}")
+            create_data = assert_mcp_success(create_result, f"create label {name}")
             label_id = create_data.get("label_id", name)
             labels.append(label_id)
             cleanup_tracker.track("label", label_id)
@@ -93,8 +90,7 @@ class TestLabelSetOperation:
             "ha_set_entity",
             {"entity_id": entity_id, "labels": labels},
         )
-        data = parse_mcp_result(result)
-        assert_mcp_success(data, "set multiple labels")
+        data = assert_mcp_success(result, "set multiple labels")
 
         entity_labels = data.get("entity_entry", {}).get("labels", [])
         for label_id in labels:
@@ -117,8 +113,7 @@ class TestLabelSetOperation:
             "ha_config_set_label",
             {"name": "test_clear_label"},
         )
-        create_data = parse_mcp_result(create_result)
-        assert_mcp_success(create_data, "create label")
+        create_data = assert_mcp_success(create_result, "create label")
         label_id = create_data.get("label_id", "test_clear_label")
         cleanup_tracker.track("label", label_id)
 
@@ -132,8 +127,7 @@ class TestLabelSetOperation:
             "ha_set_entity",
             {"entity_id": entity_id, "labels": []},
         )
-        data = parse_mcp_result(result)
-        assert_mcp_success(data, "clear labels")
+        data = assert_mcp_success(result, "clear labels")
 
         entity_labels = data.get("entity_entry", {}).get("labels", [])
         assert len(entity_labels) == 0, "Labels should be empty after clearing"
@@ -153,8 +147,7 @@ class TestLabelSetOperation:
                 "ha_config_set_label",
                 {"name": name},
             )
-            create_data = parse_mcp_result(create_result)
-            assert_mcp_success(create_data, f"create label {name}")
+            create_data = assert_mcp_success(create_result, f"create label {name}")
             label_id = create_data.get("label_id", name)
             labels.append(label_id)
             cleanup_tracker.track("label", label_id)
@@ -170,8 +163,7 @@ class TestLabelSetOperation:
             "ha_set_entity",
             {"entity_id": entity_id, "labels": [labels[1]]},
         )
-        data = parse_mcp_result(result)
-        assert_mcp_success(data, "replace labels")
+        data = assert_mcp_success(result, "replace labels")
 
         entity_labels = data.get("entity_entry", {}).get("labels", [])
         assert labels[1] in entity_labels, "New label should be present"
@@ -209,8 +201,7 @@ class TestLabelEntityRegistryIntegrity:
             "ha_config_set_label",
             {"name": "test_integrity"},
         )
-        create_data = parse_mcp_result(create_result)
-        assert_mcp_success(create_data, "create label")
+        create_data = assert_mcp_success(create_result, "create label")
         label_id = create_data.get("label_id", "test_integrity")
         cleanup_tracker.track("label", label_id)
 
@@ -218,8 +209,7 @@ class TestLabelEntityRegistryIntegrity:
             "ha_set_entity",
             {"entity_id": entity_id, "labels": [label_id]},
         )
-        set_data = parse_mcp_result(set_result)
-        assert_mcp_success(set_data, "set labels")
+        assert_mcp_success(set_result, "set labels")
 
         # Verify entity still functions - get state again
         after_result = await mcp_client.call_tool(
