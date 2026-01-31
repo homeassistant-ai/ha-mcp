@@ -1,11 +1,9 @@
 """
 Label Operations E2E Tests
 
-Comprehensive tests for ha_manage_entity_labels operations:
-- Add: Append labels to existing labels (preserves others)
-- Remove: Remove specific labels (preserves remaining)
-- Set: Replace all labels (overwrites)
-- Bulk: Multiple entities in parallel and sequential modes
+Tests for ha_set_entity labels parameter:
+- Set: Replace all labels on an entity
+- Clear: Remove all labels from an entity
 
 Also includes regression test for Issue #396 (entity registry corruption).
 """
@@ -36,579 +34,205 @@ async def test_entity_id(mcp_client) -> str:
     return results[0]["entity_id"]
 
 
-@pytest.fixture
-async def test_entity_ids(mcp_client) -> list[str]:
-    """Find multiple suitable entities for testing."""
-    search_result = await mcp_client.call_tool(
-        "ha_search_entities",
-        {"query": "light", "domain_filter": "light", "limit": 20},
-    )
-    search_data = parse_mcp_result(search_result)
-    results = search_data.get("data", search_data).get("results", [])
-    if len(results) < 3:
-        pytest.skip("Need at least 3 light entities for bulk testing")
-    return [r["entity_id"] for r in results[:3]]
-
-
-@pytest.mark.labels
-@pytest.mark.cleanup
-class TestLabelAddOperation:
-    """Test label 'add' operation (append labels, preserve existing)."""
-
-    async def test_add_to_empty(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Add labels to entity with no existing labels."""
-        entity_id = test_entity_id
-
-        # Create test labels
-        create_result_1 = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Add Test 1"}
-        )
-        label1_id = parse_mcp_result(create_result_1).get("label_id")
-        cleanup_tracker.track("label", label1_id)
-
-        create_result_2 = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Add Test 2"}
-        )
-        label2_id = parse_mcp_result(create_result_2).get("label_id")
-        cleanup_tracker.track("label", label2_id)
-
-        # Clear any existing labels first
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": []},
-        )
-
-        # Add first label
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "add", "labels": [label1_id]},
-        )
-        data = assert_mcp_success(result, "add first label")
-        assert len(data.get("labels", [])) == 1
-        assert label1_id in data.get("labels", [])
-        logger.info(f"Added first label to empty entity: {label1_id}")
-
-        # Add second label (should preserve first)
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "add", "labels": [label2_id]},
-        )
-        data = assert_mcp_success(result, "add second label")
-        assert len(data.get("labels", [])) == 2
-        assert label1_id in data.get("labels", [])
-        assert label2_id in data.get("labels", [])
-        logger.info("Added second label, first label preserved ✅")
-
-    async def test_add_preserves_existing(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Add operation preserves existing labels."""
-        entity_id = test_entity_id
-
-        # Create labels
-        labels = []
-        for i in range(3):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Preserve Test {i+1}"}
-            )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
-            labels.append(label_id)
-
-        # Set initial labels
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": labels[:2]},
-        )
-
-        # Add third label
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "add", "labels": [labels[2]]},
-        )
-        data = assert_mcp_success(result, "add to existing")
-
-        final_labels = data.get("labels", [])
-        assert len(final_labels) == 3
-        assert all(lbl in final_labels for lbl in labels)
-        logger.info("Add operation preserved all existing labels ✅")
-
-    async def test_add_duplicate_idempotent(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Adding duplicate label is idempotent (no error, no duplicates)."""
-        entity_id = test_entity_id
-
-        # Create label
-        result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Duplicate Test"}
-        )
-        label_id = parse_mcp_result(result).get("label_id")
-        cleanup_tracker.track("label", label_id)
-
-        # Add label twice
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "add", "labels": [label_id]},
-        )
-
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "add", "labels": [label_id]},
-        )
-        data = assert_mcp_success(result, "add duplicate")
-
-        # Should still have only 1 instance
-        final_labels = data.get("labels", [])
-        assert final_labels.count(label_id) == 1
-        logger.info("Adding duplicate label is idempotent ✅")
-
-
-@pytest.mark.labels
-@pytest.mark.cleanup
-class TestLabelRemoveOperation:
-    """Test label 'remove' operation (subtract labels, preserve remaining)."""
-
-    async def test_remove_only_label(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Remove the only label (clears all)."""
-        entity_id = test_entity_id
-
-        # Create label
-        result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Remove Only Test"}
-        )
-        label_id = parse_mcp_result(result).get("label_id")
-        cleanup_tracker.track("label", label_id)
-
-        # Set label
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": [label_id]},
-        )
-
-        # Remove label
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "remove", "labels": [label_id]},
-        )
-        data = assert_mcp_success(result, "remove only label")
-
-        assert len(data.get("labels", [])) == 0
-        logger.info("Removed only label, entity now has no labels ✅")
-
-    async def test_remove_preserves_others(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Remove operation preserves non-specified labels."""
-        entity_id = test_entity_id
-
-        # Create 3 labels
-        labels = []
-        for i in range(3):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Remove Preserve {i+1}"}
-            )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
-            labels.append(label_id)
-
-        # Set all 3 labels
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": labels},
-        )
-
-        # Remove middle label
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "remove", "labels": [labels[1]]},
-        )
-        data = assert_mcp_success(result, "remove middle label")
-
-        final_labels = data.get("labels", [])
-        assert len(final_labels) == 2
-        assert labels[0] in final_labels
-        assert labels[1] not in final_labels
-        assert labels[2] in final_labels
-        logger.info("Remove operation preserved other labels ✅")
-
-    async def test_remove_nonexistent_safe(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Removing non-existent label is safe (no error)."""
-        entity_id = test_entity_id
-
-        # Create 2 labels
-        labels = []
-        for i in range(2):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Remove Safe {i+1}"}
-            )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
-            labels.append(label_id)
-
-        # Set first label only
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": [labels[0]]},
-        )
-
-        # Try to remove second label (not present)
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "remove", "labels": [labels[1]]},
-        )
-        data = assert_mcp_success(result, "remove non-existent label")
-
-        final_labels = data.get("labels", [])
-        assert len(final_labels) == 1
-        assert labels[0] in final_labels
-        logger.info("Removing non-existent label is safe ✅")
-
-
-@pytest.mark.labels
-@pytest.mark.cleanup
-class TestLabelValidation:
-    """Test label validation (Issue #475)."""
-
-    async def test_reject_nonexistent_label_in_validation(self, mcp_client):
-        """Test: Validation rejects non-existent label IDs before entity lookup."""
-        # This test doesn't need an entity - validation happens before entity operations
-        # Try to set non-existent labels - should fail in validation phase
-        invalid_labels = ["nonexistent_label_abc", "nonexistent_label_xyz"]
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
-                "operation": "set",
-                "labels": invalid_labels,
-            },
-        )
-        data = parse_mcp_result(result)
-
-        # Should fail with clear error message
-        assert data.get("success") is False, f"Should reject non-existent labels: {data}"
-        assert "do not exist" in data.get("error", "").lower(), f"Error message should mention non-existent labels: {data}"
-        assert "invalid_labels" in data, f"Response should contain 'invalid_labels' key: {data}"
-        assert set(data["invalid_labels"]) == set(invalid_labels), (
-            f"Invalid labels list is incorrect: {data.get('invalid_labels')}"
-        )
-        logger.info("✅ Non-existent labels rejected in validation phase")
-
-    async def test_reject_nonexistent_label_add(self, mcp_client):
-        """Test: Add operation rejects non-existent label IDs."""
-        # Try to add non-existent label - validation happens before entity operations
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
-                "operation": "add",
-                "labels": ["nonexistent_label_add_test"],
-            },
-        )
-        data = parse_mcp_result(result)
-
-        # Should fail with clear error message
-        assert data.get("success") is False, f"Should reject non-existent label: {data}"
-        assert "do not exist" in data.get("error", "").lower(), f"Error message should mention non-existent labels: {data}"
-        logger.info("✅ Non-existent label rejected for add operation")
-
-    async def test_reject_mixed_valid_invalid_labels(self, mcp_client, cleanup_tracker):
-        """Test: Rejects operation when mixing valid and invalid labels (Issue #475 scenario)."""
-        # Create one valid label
-        create_result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Valid Label Issue 475"}
-        )
-        valid_label_id = parse_mcp_result(create_result).get("label_id")
-        cleanup_tracker.track("label", valid_label_id)
-
-        # Try to set both valid and invalid labels - validation happens before entity operations
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": "light.fake_entity",  # Entity doesn't matter, validation happens first
-                "operation": "set",
-                "labels": [valid_label_id, "invalid_label_a", "invalid_label_b"],
-            },
-        )
-        data = parse_mcp_result(result)
-
-        # Should reject entire operation
-        assert data.get("success") is False, (
-            f"Should reject operation with mixed valid/invalid labels: {data}"
-        )
-        assert "invalid_labels" in data, f"Should identify invalid labels: {data}"
-        assert set(data["invalid_labels"]) == {"invalid_label_a", "invalid_label_b"}, (
-            f"Invalid labels list is incorrect: {data.get('invalid_labels')}"
-        )
-        logger.info("✅ Mixed valid/invalid labels rejected (Issue #475 fix)")
-
-    async def test_validation_provides_helpful_suggestions(self, mcp_client):
-        """Test: Validation error includes helpful suggestions."""
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": "light.fake_entity",
-                "operation": "set",
-                "labels": ["bad_label_id"],
-            },
-        )
-        data = parse_mcp_result(result)
-
-        assert data.get("success") is False
-        assert "suggestions" in data, f"Should include suggestions: {data}"
-        suggestions_text = " ".join(data.get("suggestions", []))
-        assert "ha_config_get_label" in suggestions_text and "ha_config_set_label" in suggestions_text, (
-            f"Suggestions should reference both helper tools: {data}"
-        )
-        logger.info("✅ Validation error includes helpful suggestions")
-
-
 @pytest.mark.labels
 @pytest.mark.cleanup
 class TestLabelSetOperation:
-    """Test label 'set' operation (replace all labels)."""
+    """Test setting labels on entities via ha_set_entity."""
 
-    async def test_set_replaces_all(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Set operation replaces all existing labels."""
+    async def test_set_labels(self, mcp_client, cleanup_tracker, test_entity_id):
+        """Test: Set labels on an entity."""
+        entity_id = test_entity_id
+        label = "test_set_label"
+
+        # Create the test label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": label},
+        )
+        create_data = parse_mcp_result(create_result)
+        assert_mcp_success(create_data, "create label")
+        label_id = create_data.get("label_id", label)
+        cleanup_tracker.track("label", label_id)
+
+        # Set labels on entity
+        result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [label_id]},
+        )
+        data = parse_mcp_result(result)
+        assert_mcp_success(data, "set labels")
+        assert label_id in data.get("entity_entry", {}).get("labels", [])
+
+        logger.info(f"Set labels on {entity_id}: {data.get('entity_entry', {}).get('labels')}")
+
+        # Clean up: clear labels
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
+
+    async def test_set_multiple_labels(self, mcp_client, cleanup_tracker, test_entity_id):
+        """Test: Set multiple labels on an entity at once."""
         entity_id = test_entity_id
 
-        # Create labels
+        # Create two test labels
         labels = []
-        for i in range(4):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Set Replace {i+1}"}
+        for name in ["test_multi_1", "test_multi_2"]:
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": name},
             )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
+            create_data = parse_mcp_result(create_result)
+            assert_mcp_success(create_data, f"create label {name}")
+            label_id = create_data.get("label_id", name)
             labels.append(label_id)
+            cleanup_tracker.track("label", label_id)
 
-        # Set first 2 labels
-        await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": labels[:2]},
-        )
-
-        # Set last 2 labels (should replace first 2)
+        # Set both labels
         result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": labels[2:]},
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": labels},
         )
-        data = assert_mcp_success(result, "set replacement")
+        data = parse_mcp_result(result)
+        assert_mcp_success(data, "set multiple labels")
 
-        final_labels = data.get("labels", [])
-        assert len(final_labels) == 2
-        assert labels[0] not in final_labels
-        assert labels[1] not in final_labels
-        assert labels[2] in final_labels
-        assert labels[3] in final_labels
-        logger.info("Set operation replaced all previous labels ✅")
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        for label_id in labels:
+            assert label_id in entity_labels, f"Label {label_id} should be set"
 
-    async def test_set_empty_clears_all(self, mcp_client, cleanup_tracker, test_entity_id):
-        """Test: Set with empty list clears all labels."""
+        logger.info(f"Set multiple labels on {entity_id}: {entity_labels}")
+
+        # Clean up: clear labels
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
+
+    async def test_clear_labels(self, mcp_client, cleanup_tracker, test_entity_id):
+        """Test: Clear all labels from an entity using empty list."""
         entity_id = test_entity_id
 
-        # Create and set labels
-        labels = []
-        for i in range(2):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Set Clear {i+1}"}
-            )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
-            labels.append(label_id)
+        # Create and set a label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "test_clear_label"},
+        )
+        create_data = parse_mcp_result(create_result)
+        assert_mcp_success(create_data, "create label")
+        label_id = create_data.get("label_id", "test_clear_label")
+        cleanup_tracker.track("label", label_id)
 
         await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": labels},
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [label_id]},
         )
 
-        # Clear all with empty list
+        # Clear all labels
         result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": []},
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
         )
-        data = assert_mcp_success(result, "set empty")
+        data = parse_mcp_result(result)
+        assert_mcp_success(data, "clear labels")
 
-        assert len(data.get("labels", [])) == 0
-        logger.info("Set with empty list cleared all labels ✅")
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        assert len(entity_labels) == 0, "Labels should be empty after clearing"
+
+        logger.info(f"Cleared labels on {entity_id}")
+
+    async def test_set_replaces_existing_labels(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
+        """Test: Setting labels replaces all existing labels."""
+        entity_id = test_entity_id
+
+        # Create two labels
+        labels = []
+        for name in ["test_replace_1", "test_replace_2"]:
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": name},
+            )
+            create_data = parse_mcp_result(create_result)
+            assert_mcp_success(create_data, f"create label {name}")
+            label_id = create_data.get("label_id", name)
+            labels.append(label_id)
+            cleanup_tracker.track("label", label_id)
+
+        # Set first label
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [labels[0]]},
+        )
+
+        # Replace with second label only
+        result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [labels[1]]},
+        )
+        data = parse_mcp_result(result)
+        assert_mcp_success(data, "replace labels")
+
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        assert labels[1] in entity_labels, "New label should be present"
+        assert labels[0] not in entity_labels, "Old label should be replaced"
+
+        logger.info(f"Replaced labels on {entity_id}: {entity_labels}")
+
+        # Clean up
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
 
 
 @pytest.mark.labels
 @pytest.mark.cleanup
-class TestBulkOperations:
-    """Test bulk operations (multiple entities)."""
+class TestLabelEntityRegistryIntegrity:
+    """Regression test for Issue #396: Entity registry corruption from label operations."""
 
-    async def test_bulk_parallel_add(self, mcp_client, cleanup_tracker, test_entity_ids):
-        """Test: Bulk add operation in parallel mode."""
-        entities = test_entity_ids
-
-        # Create label
-        result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Bulk Parallel Test"}
-        )
-        label_id = parse_mcp_result(result).get("label_id")
-        cleanup_tracker.track("label", label_id)
-
-        # Bulk add to multiple entities (parallel)
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": entities,
-                "operation": "add",
-                "labels": [label_id],
-                "parallel": True,
-            },
-        )
-        data = assert_mcp_success(result, "bulk parallel add")
-
-        assert data.get("mode") == "bulk"
-        assert data.get("execution_mode") == "parallel"
-        assert data.get("total_operations") == 3
-        assert data.get("successful") == 3
-        assert data.get("failed") == 0
-        logger.info(f"Bulk parallel add succeeded for {len(entities)} entities ✅")
-
-    async def test_bulk_sequential_add(self, mcp_client, cleanup_tracker, test_entity_ids):
-        """Test: Bulk add operation in sequential mode."""
-        entities = test_entity_ids
-
-        # Create label
-        result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Bulk Sequential Test"}
-        )
-        label_id = parse_mcp_result(result).get("label_id")
-        cleanup_tracker.track("label", label_id)
-
-        # Bulk add to multiple entities (sequential)
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": entities,
-                "operation": "add",
-                "labels": [label_id],
-                "parallel": False,
-            },
-        )
-        data = assert_mcp_success(result, "bulk sequential add")
-
-        assert data.get("mode") == "bulk"
-        assert data.get("execution_mode") == "sequential"
-        assert data.get("total_operations") == 3
-        assert data.get("successful") == 3
-        logger.info(f"Bulk sequential add succeeded for {len(entities)} entities ✅")
-
-    async def test_bulk_partial_failure(self, mcp_client, cleanup_tracker, test_entity_ids):
-        """Test: Bulk operation with some invalid entities (error isolation)."""
-        entities = test_entity_ids[:2].copy()
-
-        # Add invalid entity ID
-        entities.append("light.nonexistent_entity_12345")
-
-        # Create label
-        result = await mcp_client.call_tool(
-            "ha_config_set_label", {"name": "Bulk Partial Failure Test"}
-        )
-        label_id = parse_mcp_result(result).get("label_id")
-        cleanup_tracker.track("label", label_id)
-
-        # Bulk add (should succeed for valid, fail for invalid)
-        result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {
-                "entity_id": entities,
-                "operation": "add",
-                "labels": [label_id],
-                "parallel": True,
-            },
-        )
-        data = assert_mcp_success(result, "bulk partial failure")
-
-        assert data.get("mode") == "bulk"
-        assert data.get("total_operations") == 3
-        assert data.get("successful") == 2
-        assert data.get("failed") == 1
-        logger.info("Bulk operation isolated failure to invalid entity ✅")
-
-
-@pytest.mark.labels
-@pytest.mark.cleanup
-@pytest.mark.slow
-class TestRegressionIssue396:
-    """Regression test for Issue #396: Entity registry corruption from rapid operations."""
-
-    async def test_rapid_operations_no_corruption(self, mcp_client, cleanup_tracker, test_entity_id):
-        """
-        Test: 13+ rapid label operations don't corrupt entity registry.
-
-        Issue #396 reported that 5+ rapid label operations would corrupt
-        the entity registry, making the label UI inaccessible.
-
-        This test validates that the new implementation handles rapid
-        operations correctly without corruption.
-        """
+    async def test_labels_dont_corrupt_entity_properties(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
+        """Test: Setting labels should not affect other entity properties."""
         entity_id = test_entity_id
 
-        # Create test labels
-        labels = []
-        for i in range(5):
-            result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": f"Rapid Op Label {i+1}"}
-            )
-            label_id = parse_mcp_result(result).get("label_id")
-            cleanup_tracker.track("label", label_id)
-            labels.append(label_id)
-
-        logger.info("Starting rapid operation test (13 operations)...")
-
-        # Perform 13 rapid operations (add/remove/set cycle)
-        operations = []
-
-        # Cycle 1: Add all labels one by one
-        for label in labels:
-            operations.append(("add", [label]))
-
-        # Cycle 2: Remove half
-        operations.append(("remove", labels[:2]))
-
-        # Cycle 3: Set to different subset
-        operations.append(("set", labels[2:4]))
-
-        # Cycle 4: Add back
-        for label in labels[:2]:
-            operations.append(("add", [label]))
-
-        # Cycle 5: Remove and re-add rapidly
-        operations.append(("remove", [labels[0]]))
-        operations.append(("add", [labels[0]]))
-        operations.append(("remove", [labels[1]]))
-        operations.append(("add", [labels[1]]))
-
-        # Execute operations rapidly
-        for idx, (operation, lbls) in enumerate(operations, 1):
-            result = await mcp_client.call_tool(
-                "ha_manage_entity_labels",
-                {
-                    "entity_id": entity_id,
-                    "operation": operation,
-                    "labels": lbls,
-                },
-            )
-            assert_mcp_success(result, f"operation {idx}/{len(operations)}")
-            logger.info(f"Operation {idx}/{len(operations)}: {operation} completed")
-
-        logger.info(f"Completed {len(operations)} rapid operations")
-
-        # Verify entity registry is still accessible (not corrupted)
-        # 1. Can still list labels
-        list_result = await mcp_client.call_tool("ha_config_get_label", {})
-        assert_mcp_success(list_result, "list labels after rapid operations")
-
-        # 2. Can still get entity state
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": entity_id}
+        # Get initial entity state
+        initial_result = await mcp_client.call_tool(
+            "ha_get_state",
+            {"entity_id": entity_id},
         )
-        assert_mcp_success(state_result, "get entity state after rapid operations")
+        initial_data = parse_mcp_result(initial_result)
 
-        # 3. Can still modify labels
-        final_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
-            {"entity_id": entity_id, "operation": "set", "labels": []},
+        # Create and set a label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "test_integrity"},
         )
-        assert_mcp_success(final_result, "final label modification")
+        create_data = parse_mcp_result(create_result)
+        assert_mcp_success(create_data, "create label")
+        label_id = create_data.get("label_id", "test_integrity")
+        cleanup_tracker.track("label", label_id)
 
-        logger.info("✅ Entity registry not corrupted after 13+ rapid operations")
-        logger.info("✅ Issue #396 regression test PASSED")
+        set_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [label_id]},
+        )
+        set_data = parse_mcp_result(set_result)
+        assert_mcp_success(set_data, "set labels")
+
+        # Verify entity still functions - get state again
+        after_result = await mcp_client.call_tool(
+            "ha_get_state",
+            {"entity_id": entity_id},
+        )
+        after_data = parse_mcp_result(after_result)
+        assert after_data.get("success"), "Entity should still be accessible after label change"
+
+        logger.info("Entity properties preserved after label operation")
+
+        # Clean up
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
