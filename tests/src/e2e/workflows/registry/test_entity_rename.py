@@ -349,11 +349,10 @@ class TestEntityRenameVoiceExposure:
 
         # 2. EXPOSE: Entity to conversation assistant
         expose_result = await mcp_client.call_tool(
-            "ha_expose_entity",
+            "ha_set_entity",
             {
-                "entity_ids": original_entity_id,
-                "assistants": "conversation",
-                "should_expose": True,
+                "entity_id": original_entity_id,
+                "expose_to": {"conversation": True},
             },
         )
         expose_data = parse_mcp_result(expose_result)
