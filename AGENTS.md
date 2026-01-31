@@ -513,6 +513,9 @@ return create_error_response(
 {"success": False, "error": {...}}                    # Failure
 ```
 
+### Tool Consolidation
+When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
+
 ## Tool Waiting Behavior
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.

@@ -223,10 +223,9 @@ class TestLabelLifecycle:
             # 2. ASSIGN: Assign label to entity
             logger.info(f"Assigning label {label_id} to entity {test_entity}")
             assign_result = await mcp_client.call_tool(
-                "ha_manage_entity_labels",
+                "ha_set_entity",
                 {
                     "entity_id": test_entity,
-                    "operation": "set",
                     "labels": [label_id],
                 },
             )
@@ -235,8 +234,8 @@ class TestLabelLifecycle:
             logger.info("Label assigned successfully")
 
             # 3. VERIFY: Check assignment in entity data
-            entity_data = assign_data.get("entity_data", {})
-            assigned_labels = entity_data.get("labels", [])
+            entity_entry = assign_data.get("entity_entry", {})
+            assigned_labels = entity_entry.get("labels", [])
             assert label_id in assigned_labels, (
                 f"Label {label_id} should be in entity labels. Got: {assigned_labels}"
             )
@@ -245,17 +244,16 @@ class TestLabelLifecycle:
             # 4. CLEAR: Remove labels from entity
             logger.info(f"Clearing labels from entity {test_entity}")
             clear_result = await mcp_client.call_tool(
-                "ha_manage_entity_labels",
+                "ha_set_entity",
                 {
                     "entity_id": test_entity,
-                    "operation": "set",
                     "labels": [],  # Empty list clears all labels
                 },
             )
 
             clear_data = assert_mcp_success(clear_result, "clear labels")
-            entity_data = clear_data.get("entity_data", {})
-            assigned_labels = entity_data.get("labels", [])
+            entity_entry = clear_data.get("entity_entry", {})
+            assigned_labels = entity_entry.get("labels", [])
             assert len(assigned_labels) == 0, (
                 f"Entity should have no labels. Got: {assigned_labels}"
             )
@@ -301,17 +299,16 @@ class TestLabelLifecycle:
             # 2. ASSIGN: Assign all labels to entity
             logger.info(f"Assigning {len(created_label_ids)} labels to {test_entity}")
             assign_result = await mcp_client.call_tool(
-                "ha_manage_entity_labels",
+                "ha_set_entity",
                 {
                     "entity_id": test_entity,
-                    "operation": "set",
                     "labels": created_label_ids,
                 },
             )
 
             assign_data = assert_mcp_success(assign_result, "assign multiple labels")
-            entity_data = assign_data.get("entity_data", {})
-            assigned_labels = entity_data.get("labels", [])
+            entity_entry = assign_data.get("entity_entry", {})
+            assigned_labels = entity_entry.get("labels", [])
 
             for label_id in created_label_ids:
                 assert label_id in assigned_labels, (
@@ -323,17 +320,16 @@ class TestLabelLifecycle:
             subset_labels = created_label_ids[:2]  # First two labels only
             logger.info(f"Updating to subset of labels: {subset_labels}")
             update_result = await mcp_client.call_tool(
-                "ha_manage_entity_labels",
+                "ha_set_entity",
                 {
                     "entity_id": test_entity,
-                    "operation": "set",
                     "labels": subset_labels,
                 },
             )
 
             update_data = assert_mcp_success(update_result, "update labels subset")
-            entity_data = update_data.get("entity_data", {})
-            assigned_labels = entity_data.get("labels", [])
+            entity_entry = update_data.get("entity_entry", {})
+            assigned_labels = entity_entry.get("labels", [])
 
             assert len(assigned_labels) == 2, (
                 f"Entity should have 2 labels. Got: {len(assigned_labels)}"
@@ -349,10 +345,9 @@ class TestLabelLifecycle:
 
             # 4. CLEAR: Clear all labels
             await mcp_client.call_tool(
-                "ha_manage_entity_labels",
+                "ha_set_entity",
                 {
                     "entity_id": test_entity,
-                    "operation": "set",
                     "labels": [],
                 },
             )
@@ -405,10 +400,9 @@ class TestLabelValidation:
         logger.info("Testing assign to nonexistent entity...")
 
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": "light.nonexistent_entity_12345",
-                "operation": "set",
                 "labels": ["some_label"],
             },
         )

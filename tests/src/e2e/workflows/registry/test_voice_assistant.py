@@ -2,7 +2,7 @@
 Voice Assistant Exposure E2E Tests
 
 Tests for voice assistant exposure tools:
-- ha_expose_entity - Expose/hide entities from voice assistants
+- ha_set_entity(expose_to=...) - Expose/hide entities from voice assistants
 - ha_get_entity_exposure - List entity exposure status
 - ha_get_entity_exposure - Get specific entity exposure
 
@@ -132,12 +132,12 @@ class TestVoiceAssistantExposure:
 
     async def test_expose_entity_to_conversation(self, mcp_client, cleanup_tracker):
         """
-        Test: Expose an entity to the conversation assistant (Assist)
+        Test: Expose an entity to the conversation assistant (Assist) via ha_set_entity
 
         Note: This test uses the 'conversation' assistant which is built-in
         and doesn't require Nabu Casa.
         """
-        logger.info("Testing ha_expose_entity to conversation assistant")
+        logger.info("Testing ha_set_entity expose_to conversation assistant")
 
         # Create a test entity
         create_result = await mcp_client.call_tool(
@@ -154,19 +154,18 @@ class TestVoiceAssistantExposure:
         cleanup_tracker.track("input_boolean", entity_id)
 
 
-        # Expose to conversation assistant
+        # Expose to conversation assistant via ha_set_entity
         expose_result = await mcp_client.call_tool(
-            "ha_expose_entity",
+            "ha_set_entity",
             {
-                "entity_ids": entity_id,
-                "assistants": "conversation",
-                "should_expose": True,
+                "entity_id": entity_id,
+                "expose_to": {"conversation": True},
             },
         )
 
         expose_data = parse_mcp_result(expose_result)
         assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
-        assert expose_data.get("exposed") is True
+        assert expose_data.get("exposure") == {"conversation": True}
 
         logger.info(f"Exposed entity to conversation: {expose_data}")
 
@@ -190,9 +189,9 @@ class TestVoiceAssistantExposure:
 
     async def test_hide_entity_from_assistant(self, mcp_client, cleanup_tracker):
         """
-        Test: Hide an entity from a voice assistant
+        Test: Hide an entity from a voice assistant via ha_set_entity
         """
-        logger.info("Testing ha_expose_entity to hide entity")
+        logger.info("Testing ha_set_entity expose_to hide entity")
 
         # Create a test entity
         create_result = await mcp_client.call_tool(
@@ -209,19 +208,18 @@ class TestVoiceAssistantExposure:
         cleanup_tracker.track("input_boolean", entity_id)
 
 
-        # Hide from conversation assistant
+        # Hide from conversation assistant via ha_set_entity
         hide_result = await mcp_client.call_tool(
-            "ha_expose_entity",
+            "ha_set_entity",
             {
-                "entity_ids": entity_id,
-                "assistants": "conversation",
-                "should_expose": False,
+                "entity_id": entity_id,
+                "expose_to": {"conversation": False},
             },
         )
 
         hide_data = parse_mcp_result(hide_result)
         assert hide_data.get("success"), f"Failed to hide entity: {hide_data}"
-        assert hide_data.get("exposed") is False
+        assert hide_data.get("exposure") == {"conversation": False}
 
         logger.info(f"Hidden entity from conversation: {hide_data}")
 
@@ -231,68 +229,22 @@ class TestVoiceAssistantExposure:
             {"helper_type": "input_boolean", "helper_id": "test_hide_entity"},
         )
 
-    async def test_expose_multiple_entities(self, mcp_client, cleanup_tracker):
-        """
-        Test: Expose multiple entities at once
-        """
-        logger.info("Testing ha_expose_entity with multiple entities")
-
-        # Create test entities
-        entities = []
-        for i in range(2):
-            name = f"test_multi_expose_{i}"
-            create_result = await mcp_client.call_tool(
-                "ha_config_set_helper",
-                {"helper_type": "input_boolean", "name": name},
-            )
-            create_data = parse_mcp_result(create_result)
-            assert create_data.get("success"), f"Failed to create helper: {create_data}"
-
-            entity_id = f"input_boolean.{name}"
-            entities.append(entity_id)
-            cleanup_tracker.track("input_boolean", entity_id)
-
-
-        # Expose multiple entities at once
-        expose_result = await mcp_client.call_tool(
-            "ha_expose_entity",
-            {
-                "entity_ids": entities,
-                "assistants": "conversation",
-                "should_expose": True,
-            },
-        )
-
-        expose_data = parse_mcp_result(expose_result)
-        assert expose_data.get("success"), f"Failed to expose entities: {expose_data}"
-
-        logger.info(f"Exposed {len(entities)} entities: {expose_data}")
-
-        # Cleanup
-        for i in range(2):
-            await mcp_client.call_tool(
-                "ha_config_remove_helper",
-                {"helper_type": "input_boolean", "helper_id": f"test_multi_expose_{i}"},
-            )
-
     async def test_expose_entity_invalid_assistant(self, mcp_client):
         """
-        Test: Invalid assistant name should fail
+        Test: Invalid assistant name in expose_to should fail
         """
-        logger.info("Testing ha_expose_entity with invalid assistant")
+        logger.info("Testing ha_set_entity expose_to with invalid assistant")
 
         result = await mcp_client.call_tool(
-            "ha_expose_entity",
+            "ha_set_entity",
             {
-                "entity_ids": "input_boolean.test",
-                "assistants": "invalid_assistant",
-                "should_expose": True,
+                "entity_id": "input_boolean.test",
+                "expose_to": {"invalid_assistant": True},
             },
         )
 
         data = parse_mcp_result(result)
         assert not data.get("success"), "Invalid assistant should fail"
-        assert "valid_assistants" in data, "Should suggest valid assistants"
 
         logger.info("Invalid assistant correctly rejected")
 
