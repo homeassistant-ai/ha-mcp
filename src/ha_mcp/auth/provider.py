@@ -248,6 +248,21 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             else:
                 enhanced_routes.append(route)
 
+        # Add OpenID Configuration endpoint for ChatGPT compatibility
+        # ChatGPT expects /.well-known/openid-configuration (OpenID Connect Discovery)
+        # in addition to /.well-known/oauth-authorization-server (OAuth 2.1)
+        # Per RFC 8414, many servers support both endpoints with identical metadata
+        from mcp.server.auth.routes import cors_middleware
+        enhanced_routes.append(
+            Route(
+                path="/.well-known/openid-configuration",
+                endpoint=cors_middleware(
+                    enhanced_metadata_handler, ["GET", "OPTIONS"]
+                ),
+                methods=["GET", "OPTIONS"],
+            )
+        )
+
         # Add consent form routes (these override the default authorize behavior)
         consent_routes = [
             Route("/consent", endpoint=self._consent_get, methods=["GET"]),

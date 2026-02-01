@@ -509,6 +509,21 @@ class TestOAuthRoutes:
         # Note: Full handler testing requires ASGI app context, which is tested in E2E tests
 
     @pytest.mark.asyncio
+    async def test_openid_configuration_endpoint(self, provider):
+        """Test OpenID Configuration endpoint exists for ChatGPT compatibility."""
+        routes = provider.get_routes()
+        openid_route = next(
+            (r for r in routes if r.path == "/.well-known/openid-configuration"),
+            None
+        )
+
+        # Verify the route exists (required by ChatGPT MCP connector)
+        assert openid_route is not None
+        assert openid_route.path == "/.well-known/openid-configuration"
+
+        # Note: Should return same metadata as oauth-authorization-server for compatibility
+
+    @pytest.mark.asyncio
     async def test_consent_get_success(self, provider, mock_request):
         """Test consent form GET with valid transaction."""
         from mcp.shared.auth import OAuthClientInformationFull
