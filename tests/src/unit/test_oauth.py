@@ -153,6 +153,25 @@ class TestHomeAssistantOAuthProvider:
             await provider.register_client(client_info)
 
     @pytest.mark.asyncio
+    async def test_register_client_without_scopes_gets_defaults(self, provider):
+        """Test client registration without scopes gets all valid scopes (ChatGPT compat)."""
+        from mcp.shared.auth import OAuthClientInformationFull
+
+        # ChatGPT registers without specifying scopes
+        client_info = OAuthClientInformationFull(
+            client_id="chatgpt-client",
+            redirect_uris=["https://chatgpt.com/callback"],
+            scope=None,  # No scopes specified
+        )
+
+        await provider.register_client(client_info)
+
+        # Should have been granted all valid scopes
+        stored = await provider.get_client("chatgpt-client")
+        assert stored is not None
+        assert stored.scope == "homeassistant mcp"
+
+    @pytest.mark.asyncio
     async def test_get_client_not_found(self, provider):
         """Test getting non-existent client returns None."""
         result = await provider.get_client("non-existent")

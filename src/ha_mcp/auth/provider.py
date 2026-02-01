@@ -278,6 +278,17 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         """Register a new OAuth client."""
+        # Set default scopes if client doesn't specify any (ChatGPT compatibility)
+        # ChatGPT registers without scopes, then requests them during authorization
+        if (
+            client_info.scope is None
+            and self.client_registration_options is not None
+            and self.client_registration_options.valid_scopes is not None
+        ):
+            # Grant all valid scopes by default
+            client_info.scope = " ".join(self.client_registration_options.valid_scopes)
+            logger.info(f"Client registered without scopes, granting all valid scopes: {client_info.scope}")
+
         # Validate scopes if configured
         if (
             client_info.scope is not None
