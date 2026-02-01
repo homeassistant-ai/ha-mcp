@@ -105,8 +105,10 @@ class TestHomeAssistantOAuthProvider:
     """Tests for HomeAssistantOAuthProvider."""
 
     @pytest.fixture
-    def provider(self):
+    def provider(self, tmp_path, monkeypatch):
         """Create a provider instance for testing."""
+        # Use temporary directory for key file in tests
+        monkeypatch.setenv("HOME", str(tmp_path))
         return HomeAssistantOAuthProvider(
             base_url="http://localhost:8086",
         )
@@ -118,6 +120,43 @@ class TestHomeAssistantOAuthProvider:
         assert provider.client_registration_options.enabled is True
         assert provider.revocation_options is not None
         assert provider.revocation_options.enabled is True
+
+    def test_encryption_key_persistence(self, tmp_path, monkeypatch):
+        """Test that encryption key is automatically persisted to file."""
+        from pathlib import Path
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        key_file = tmp_path / ".ha-mcp" / "oauth_key"
+
+        # First provider creates and saves key
+        provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        key1 = provider1._encryption_key
+
+        # Key file should exist
+        assert key_file.exists()
+        assert key_file.stat().st_mode & 0o777 == 0o600  # Check permissions
+
+        # Second provider should load same key
+        provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        key2 = provider2._encryption_key
+
+        # Keys should match
+        assert key1 == key2
+
+    def test_encryption_key_from_environment(self, tmp_path, monkeypatch):
+        """Test that OAUTH_ENCRYPTION_KEY env var takes precedence."""
+        from cryptography.fernet import Fernet
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        # Generate a test key
+        test_key = Fernet.generate_key()
+        monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", test_key.decode())
+
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+
+        # Should use env var key, not generate new one
+        assert provider._encryption_key == test_key
 
     @pytest.mark.asyncio
     async def test_register_client(self, provider):

@@ -142,24 +142,55 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     def _get_or_create_encryption_key(self) -> bytes:
         """
-        Get encryption key from environment or generate a new one.
+        Get encryption key from environment, file, or generate a new one.
 
-        For production: Set OAUTH_ENCRYPTION_KEY environment variable
-        For dev: A key is generated (tokens won't survive restarts)
+        Priority:
+        1. OAUTH_ENCRYPTION_KEY environment variable (for advanced users)
+        2. Persistent key file at ~/.ha-mcp/oauth_key (auto-generated)
+        3. Generate temporary key (dev/testing only)
         """
+        # Check environment variable first (highest priority)
         key_str = os.getenv("OAUTH_ENCRYPTION_KEY")
         if key_str:
             logger.info("Using OAUTH_ENCRYPTION_KEY from environment")
             return key_str.encode()
-        else:
-            # Generate a new key (tokens won't survive restart)
-            key = Fernet.generate_key()
-            logger.warning(
-                "No OAUTH_ENCRYPTION_KEY set - generated temporary key. "
-                "Tokens will be invalid after server restart. "
-                "Set OAUTH_ENCRYPTION_KEY for persistence."
+
+        # Try to load from persistent file
+        from pathlib import Path
+        key_file = Path.home() / ".ha-mcp" / "oauth_key"
+
+        if key_file.exists():
+            try:
+                key_bytes = key_file.read_bytes()
+                # Validate it's a proper Fernet key
+                Fernet(key_bytes)
+                logger.info(f"Using persistent OAuth key from {key_file}")
+                return key_bytes
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load OAuth key from {key_file}: {e}. "
+                    "Generating new key."
+                )
+
+        # Generate new key and persist it
+        key = Fernet.generate_key()
+        try:
+            key_file.parent.mkdir(parents=True, exist_ok=True)
+            key_file.write_bytes(key)
+            # Set restrictive permissions (owner read/write only)
+            os.chmod(key_file, 0o600)
+            logger.info(
+                f"Generated new OAuth encryption key and saved to {key_file}. "
+                "This key will persist across server restarts. "
+                "To share across multiple instances, copy this file or set OAUTH_ENCRYPTION_KEY."
             )
-            return key
+        except Exception as e:
+            logger.warning(
+                f"Failed to persist OAuth key to {key_file}: {e}. "
+                "Using temporary key - tokens will be invalid after restart."
+            )
+
+        return key
 
     def _encrypt_credentials(self, ha_url: str, ha_token: str) -> str:
         """Encrypt HA credentials into a token string."""
