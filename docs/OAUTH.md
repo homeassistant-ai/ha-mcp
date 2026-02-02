@@ -28,16 +28,13 @@ OAuth authentication allows users to enter their Home Assistant credentials via 
 docker run -d --name ha-mcp-oauth \
   -p 8086:8086 \
   -e MCP_BASE_URL=https://your-tunnel.com \
-  -e OAUTH_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
   ha-mcp-oauth
 ```
 
 **uvx:**
 ```bash
-MCP_BASE_URL=https://your-tunnel.com \
-OAUTH_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
-uvx ha-mcp@latest ha-mcp-oauth
+MCP_BASE_URL=https://your-tunnel.com uvx ha-mcp@latest ha-mcp-oauth
 ```
 
 ### 2. Environment Variables
@@ -45,7 +42,6 @@ uvx ha-mcp@latest ha-mcp-oauth
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `MCP_BASE_URL` | Your public domain (no path) | `https://your-tunnel.com` |
-| `OAUTH_ENCRYPTION_KEY` | 32-byte key for token encryption | Generate with command above |
 | `MCP_PORT` | Server port (optional) | `8086` (default) |
 
 ### 3. Expose with HTTPS
@@ -97,17 +93,16 @@ Verify your Long-Lived Access Token:
 - Generate fresh token in HA: Profile → Security → Long-lived access tokens
 - Copy the complete token
 
-### Session expires after server restart
+### Do tokens persist across server restarts?
 
-Set a persistent `OAUTH_ENCRYPTION_KEY`. Without it, tokens are invalidated when the server restarts.
+**Yes!** The encryption key is automatically saved to `~/.ha-mcp/oauth_key` and reused on restart.
 
+**For multi-instance deployments**, copy the key file to other servers:
 ```bash
-# Generate key
-python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-# Use it
-docker run -e OAUTH_ENCRYPTION_KEY=your-key-here ...
+scp ~/.ha-mcp/oauth_key server2:~/.ha-mcp/
 ```
+
+Or use the `OAUTH_ENCRYPTION_KEY` environment variable to share the same key across all instances.
 
 ### Can I use OAuth with Home Assistant OS?
 
