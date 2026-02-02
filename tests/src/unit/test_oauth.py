@@ -617,36 +617,28 @@ class TestOAuthRoutes:
         # Note: Full handler testing requires ASGI app context, which is tested in E2E tests
 
     @pytest.mark.asyncio
-    async def test_openid_configuration_endpoint(self, provider):
-        """Test OpenID Configuration endpoint exists for ChatGPT compatibility."""
+    @pytest.mark.parametrize("discovery_path,description", [
+        ("/.well-known/openid-configuration", "standard OpenID Configuration endpoint"),
+        ("/token/.well-known/openid-configuration", "ChatGPT bug workaround endpoint"),
+    ])
+    async def test_openid_configuration_endpoints(self, provider, discovery_path, description):
+        """Test OpenID Configuration endpoints exist for ChatGPT compatibility.
+
+        Covers:
+        - Standard /.well-known/openid-configuration (required by ChatGPT)
+        - Non-standard /token/.well-known/openid-configuration (ChatGPT bug workaround)
+
+        Both should serve the same metadata as /.well-known/oauth-authorization-server.
+        """
         routes = provider.get_routes()
-        openid_route = next(
-            (r for r in routes if r.path == "/.well-known/openid-configuration"),
+        route = next(
+            (r for r in routes if r.path == discovery_path),
             None
         )
 
-        # Verify the route exists (required by ChatGPT MCP connector)
-        assert openid_route is not None
-        assert openid_route.path == "/.well-known/openid-configuration"
-
-        # Note: Should return same metadata as oauth-authorization-server for compatibility
-
-    @pytest.mark.asyncio
-    async def test_chatgpt_token_openid_endpoint(self, provider):
-        """Test ChatGPT bug workaround endpoint exists at /token/.well-known/openid-configuration."""
-        routes = provider.get_routes()
-        chatgpt_route = next(
-            (r for r in routes if r.path == "/token/.well-known/openid-configuration"),
-            None
-        )
-
-        # Verify the route exists (ChatGPT incorrectly requests this non-standard path)
-        assert chatgpt_route is not None
-        assert chatgpt_route.path == "/token/.well-known/openid-configuration"
-
-        # Note: This is a workaround for ChatGPT's non-standard OAuth implementation
-        # It requests /.well-known/openid-configuration at the /token path
-        # Should return same metadata as the standard endpoints
+        # Verify the route exists
+        assert route is not None, f"Missing {description} at {discovery_path}"
+        assert route.path == discovery_path
 
     @pytest.mark.asyncio
     async def test_consent_get_success(self, provider, mock_request):
