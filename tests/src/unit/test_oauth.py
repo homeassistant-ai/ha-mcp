@@ -632,6 +632,23 @@ class TestOAuthRoutes:
         # Note: Should return same metadata as oauth-authorization-server for compatibility
 
     @pytest.mark.asyncio
+    async def test_chatgpt_token_openid_endpoint(self, provider):
+        """Test ChatGPT bug workaround endpoint exists at /token/.well-known/openid-configuration."""
+        routes = provider.get_routes()
+        chatgpt_route = next(
+            (r for r in routes if r.path == "/token/.well-known/openid-configuration"),
+            None
+        )
+
+        # Verify the route exists (ChatGPT incorrectly requests this non-standard path)
+        assert chatgpt_route is not None
+        assert chatgpt_route.path == "/token/.well-known/openid-configuration"
+
+        # Note: This is a workaround for ChatGPT's non-standard OAuth implementation
+        # It requests /.well-known/openid-configuration at the /token path
+        # Should return same metadata as the standard endpoints
+
+    @pytest.mark.asyncio
     async def test_consent_get_success(self, provider, mock_request):
         """Test consent form GET with valid transaction."""
         from mcp.shared.auth import OAuthClientInformationFull

@@ -352,6 +352,19 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             )
         )
 
+        # ChatGPT bug workaround: It also requests /token/.well-known/openid-configuration
+        # This is non-standard (mixing token endpoint path with discovery path)
+        # but we'll serve the same metadata to ensure ChatGPT can connect
+        enhanced_routes.append(
+            Route(
+                path="/token/.well-known/openid-configuration",
+                endpoint=cors_middleware(
+                    enhanced_metadata_handler, ["GET", "OPTIONS"]
+                ),
+                methods=["GET", "OPTIONS"],
+            )
+        )
+
         # Add consent form routes (these override the default authorize behavior)
         consent_routes = [
             Route("/consent", endpoint=self._consent_get, methods=["GET"]),
