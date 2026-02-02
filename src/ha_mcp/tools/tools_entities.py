@@ -5,7 +5,6 @@ This module provides tools for managing entity lifecycle and properties
 via the Home Assistant entity registry API.
 """
 
-import json
 import logging
 from typing import Annotated, Any
 
@@ -14,9 +13,24 @@ from pydantic import Field
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .tools_voice_assistant import KNOWN_ASSISTANTS
-from .util_helpers import coerce_bool_param, parse_string_list_param
+from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
+
+
+def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Format entity registry entry for API response."""
+    return {
+        "entity_id": entry.get("entity_id"),
+        "name": entry.get("name"),
+        "original_name": entry.get("original_name"),
+        "icon": entry.get("icon"),
+        "area_id": entry.get("area_id"),
+        "disabled_by": entry.get("disabled_by"),
+        "hidden_by": entry.get("hidden_by"),
+        "aliases": entry.get("aliases", []),
+        "labels": entry.get("labels", []),
+    }
 
 
 def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -158,28 +172,21 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Parse and validate expose_to parameter
             parsed_expose_to: dict[str, bool] | None = None
             if expose_to is not None:
-                if isinstance(expose_to, str):
-                    try:
-                        parsed_expose_to = json.loads(expose_to)
-                    except json.JSONDecodeError:
-                        return create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "expose_to must be a JSON dict mapping assistant IDs to booleans, "
-                            'e.g. {"conversation": true, "cloud.alexa": false}',
-                        )
-                elif isinstance(expose_to, dict):
-                    parsed_expose_to = expose_to
-                else:
+                try:
+                    parsed = parse_json_param(expose_to, "expose_to")
+                except ValueError as e:
                     return create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"expose_to must be a dict, got {type(expose_to).__name__}",
+                        str(e),
                     )
 
-                if not isinstance(parsed_expose_to, dict):
+                if not isinstance(parsed, dict):
                     return create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "expose_to must be a dict mapping assistant IDs to booleans",
+                        "expose_to must be a dict mapping assistant IDs to booleans, "
+                        'e.g. {"conversation": true, "cloud.alexa": false}',
                     )
+                parsed_expose_to = parsed
 
                 # Validate assistant names
                 invalid_assistants = [
@@ -194,7 +201,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Coerce values to bool
                 for asst, val in parsed_expose_to.items():
-                    coerced = coerce_bool_param(val, f"expose_to[{asst}]")
+                    try:
+                        coerced = coerce_bool_param(val, f"expose_to[{asst}]")
+                    except ValueError as e:
+                        return create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            str(e),
+                        )
                     if coerced is None:
                         return create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -228,14 +241,24 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
 
             if enabled is not None:
-                # Convert boolean to API format: True=enable (None), False=disable ("user")
-                enabled_bool = coerce_bool_param(enabled, "enabled")
+                try:
+                    enabled_bool = coerce_bool_param(enabled, "enabled")
+                except ValueError as e:
+                    return create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                    )
                 message["disabled_by"] = None if enabled_bool else "user"
                 updates_made.append("enabled" if enabled_bool else "disabled")
 
             if hidden is not None:
-                # Convert boolean to API format: True=hide ("user"), False=show (None)
-                hidden_bool = coerce_bool_param(hidden, "hidden")
+                try:
+                    hidden_bool = coerce_bool_param(hidden, "hidden")
+                except ValueError as e:
+                    return create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                    )
                 message["hidden_by"] = "user" if hidden_bool else None
                 updates_made.append("hidden" if hidden_bool else "visible")
 
@@ -254,15 +277,18 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": "No updates specified",
-                    "suggestion": "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, labels, or expose_to",
+                    "suggestions": [
+                        "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, labels, or expose_to"
+                    ],
                 }
 
             # Send entity registry update (covers all fields except expose_to)
             has_registry_updates = len(message) > 2  # more than just type + entity_id
-            entity_entry = {}
+            entity_entry: dict[str, Any] = {}
 
             if has_registry_updates:
-                logger.info(f"Updating entity registry for {entity_id}: {', '.join(u for u in updates_made if not u.startswith('expose_to='))}")
+                registry_update_fields = [u for u in updates_made if not u.startswith("expose_to=")]
+                logger.info(f"Updating entity registry for {entity_id}: {', '.join(registry_update_fields)}")
                 result = await client.send_websocket_message(message)
 
                 if not result.get("success"):
@@ -286,11 +312,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_entry = result.get("result", {}).get("entity_entry", {})
 
             # Handle expose_to via separate WebSocket API
-            exposure_result = None
+            exposure_result: dict[str, bool] | None = None
             if parsed_expose_to is not None:
                 # Group by should_expose value for efficient API calls
                 expose_true = [a for a, v in parsed_expose_to.items() if v]
                 expose_false = [a for a, v in parsed_expose_to.items() if not v]
+
+                succeeded: dict[str, bool] = {}
 
                 for assistants, should_expose in [
                     (expose_true, True),
@@ -319,28 +347,24 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             if isinstance(error, dict)
                             else str(error)
                         )
-                        # Return partial success if registry update succeeded
+                        failed = dict.fromkeys(assistants, should_expose)
                         response: dict[str, Any] = {
                             "success": False,
-                            "error": f"Entity registry updated but exposure failed: {error_msg}",
+                            "error": f"Exposure failed: {error_msg}",
                             "entity_id": entity_id,
+                            "exposure_succeeded": succeeded,
+                            "exposure_failed": failed,
                         }
                         if has_registry_updates:
                             response["partial"] = True
-                            response["entity_entry"] = {
-                                "entity_id": entity_entry.get("entity_id"),
-                                "name": entity_entry.get("name"),
-                                "original_name": entity_entry.get("original_name"),
-                                "icon": entity_entry.get("icon"),
-                                "area_id": entity_entry.get("area_id"),
-                                "disabled_by": entity_entry.get("disabled_by"),
-                                "hidden_by": entity_entry.get("hidden_by"),
-                                "aliases": entity_entry.get("aliases", []),
-                                "labels": entity_entry.get("labels", []),
-                            }
+                            response["entity_entry"] = _format_entity_entry(entity_entry)
                         return response
 
-                exposure_result = parsed_expose_to
+                    # Track successful exposures
+                    for a in assistants:
+                        succeeded[a] = should_expose
+
+                exposure_result = succeeded
 
             # If only expose_to was set (no registry updates), fetch current entity state
             if not has_registry_updates and parsed_expose_to is not None:
@@ -351,22 +375,23 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 get_result = await client.send_websocket_message(get_msg)
                 if get_result.get("success"):
                     entity_entry = get_result.get("result", {})
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Entity '{entity_id}' not found in registry",
+                        "entity_id": entity_id,
+                        "suggestions": [
+                            "Verify the entity_id exists using ha_search_entities()",
+                            "Exposure may have been applied but entity state could not be confirmed",
+                        ],
+                        "exposure_applied": exposure_result,
+                    }
 
             response_data: dict[str, Any] = {
                 "success": True,
                 "entity_id": entity_id,
                 "updates": updates_made,
-                "entity_entry": {
-                    "entity_id": entity_entry.get("entity_id"),
-                    "name": entity_entry.get("name"),
-                    "original_name": entity_entry.get("original_name"),
-                    "icon": entity_entry.get("icon"),
-                    "area_id": entity_entry.get("area_id"),
-                    "disabled_by": entity_entry.get("disabled_by"),
-                    "hidden_by": entity_entry.get("hidden_by"),
-                    "aliases": entity_entry.get("aliases", []),
-                    "labels": entity_entry.get("labels", []),
-                },
+                "entity_entry": _format_entity_entry(entity_entry),
                 "message": f"Entity updated: {', '.join(updates_made)}",
             }
 

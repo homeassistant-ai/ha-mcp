@@ -461,6 +461,8 @@ class TestHaSetEntityCombined:
 
         assert result["success"] is False
         assert "No updates specified" in result["error"]
+        assert "suggestions" in result
+        assert isinstance(result["suggestions"], list)
 
     @pytest.mark.asyncio
     async def test_expose_failure_after_registry_success_returns_partial(
@@ -506,3 +508,177 @@ class TestHaSetEntityCombined:
         assert result.get("partial") is True
         assert "entity_entry" in result
         assert result["entity_entry"]["name"] == "Updated"
+        # Should report which assistants succeeded and failed
+        assert "exposure_succeeded" in result
+        assert "exposure_failed" in result
+        assert result["exposure_failed"] == {"conversation": True}
+
+    @pytest.mark.asyncio
+    async def test_expose_only_failure_returns_error_without_partial(
+        self, mock_mcp, mock_client
+    ):
+        """If only expose_to is set and it fails, return error without partial flag."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": {"message": "Exposure not supported"},
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is False
+        assert "partial" not in result
+        assert result["exposure_succeeded"] == {}
+        assert result["exposure_failed"] == {"conversation": True}
+
+    @pytest.mark.asyncio
+    async def test_expose_mixed_partial_failure_reports_succeeded(
+        self, mock_mcp, mock_client
+    ):
+        """If first exposure group succeeds but second fails, report which succeeded."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True},  # expose_true succeeds
+                {"success": False, "error": {"message": "Failed"}},  # expose_false fails
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            expose_to={"conversation": True, "cloud.alexa": False},
+        )
+
+        assert result["success"] is False
+        assert result["exposure_succeeded"] == {"conversation": True}
+        assert result["exposure_failed"] == {"cloud.alexa": False}
+
+    @pytest.mark.asyncio
+    async def test_expose_only_entity_not_found_returns_error(
+        self, mock_mcp, mock_client
+    ):
+        """If only expose_to is set and entity fetch fails, return error."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True},  # expose call succeeds
+                {"success": False, "error": {"message": "Entity not found"}},  # get entity fails
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.nonexistent",
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is False
+        assert "not found" in result["error"]
+        assert "exposure_applied" in result
+
+    @pytest.mark.asyncio
+    async def test_enabled_invalid_value_returns_error(self, mock_mcp, mock_client):
+        """Invalid value for enabled should return a validation error."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(entity_id="light.test", enabled="maybe")
+
+        assert result["success"] is False
+        error = result.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "enabled" in error_msg.lower() or "boolean" in error_msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_hidden_invalid_value_returns_error(self, mock_mcp, mock_client):
+        """Invalid value for hidden should return a validation error."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(entity_id="light.test", hidden="maybe")
+
+        assert result["success"] is False
+        error = result.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "hidden" in error_msg.lower() or "boolean" in error_msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_expose_to_all_three_assistants(self, mock_mcp, mock_client):
+        """All 3 assistants in a single expose_to call should work."""
+        entity_entry = {
+            "entity_id": "light.test",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": [],
+        }
+
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True},  # expose_true call
+                {"success": True},  # expose_false call
+                {"success": True, "result": entity_entry},  # get entity call
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            expose_to={
+                "conversation": True,
+                "cloud.alexa": True,
+                "cloud.google_assistant": False,
+            },
+        )
+
+        assert result["success"] is True
+        assert result["exposure"] == {
+            "conversation": True,
+            "cloud.alexa": True,
+            "cloud.google_assistant": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_expose_to_list_returns_error(self, mock_mcp, mock_client):
+        """Passing a list instead of dict for expose_to should return error."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            expose_to=["conversation"],
+        )
+
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_registry_failure_with_labels(self, mock_mcp, mock_client):
+        """Registry update failure when labels are included should return error."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": {"message": "Entity not found"},
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.nonexistent",
+            labels=["outdoor"],
+        )
+
+        assert result["success"] is False
+        assert "suggestions" in result
