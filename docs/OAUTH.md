@@ -93,8 +93,6 @@ Verify your Long-Lived Access Token:
 
 **Yes!** Access tokens are stateless and self-contained - they work across server restarts and multi-instance deployments without any configuration.
 
-Tokens are base64-encoded JSON containing your Home Assistant credentials. No encryption keys needed - security comes from HTTPS transport and your Long-Lived Access Token being the authorization boundary.
-
 ### Can I use OAuth with Home Assistant OS?
 
 No. The ha-mcp add-on doesn't support OAuth mode.
