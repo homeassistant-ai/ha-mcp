@@ -91,14 +91,9 @@ Verify your Long-Lived Access Token:
 
 ### Do tokens persist across server restarts?
 
-**Yes!** The encryption key is automatically saved to `~/.ha-mcp/oauth_key` and reused on restart.
+**Yes!** Access tokens are stateless and self-contained - they work across server restarts and multi-instance deployments without any configuration.
 
-**For multi-instance deployments**, copy the key file to other servers:
-```bash
-scp ~/.ha-mcp/oauth_key server2:~/.ha-mcp/
-```
-
-Or use the `OAUTH_ENCRYPTION_KEY` environment variable to share the same key across all instances.
+Tokens are base64-encoded JSON containing your Home Assistant credentials. No encryption keys needed - security comes from HTTPS transport and your Long-Lived Access Token being the authorization boundary.
 
 ### Can I use OAuth with Home Assistant OS?
 
