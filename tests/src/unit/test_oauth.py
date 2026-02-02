@@ -105,8 +105,10 @@ class TestHomeAssistantOAuthProvider:
     """Tests for HomeAssistantOAuthProvider."""
 
     @pytest.fixture
-    def provider(self):
+    def provider(self, tmp_path, monkeypatch):
         """Create a provider instance for testing."""
+        # Use temporary directory for key file in tests
+        monkeypatch.setenv("HOME", str(tmp_path))
         return HomeAssistantOAuthProvider(
             base_url="http://localhost:8086",
         )
@@ -118,6 +120,93 @@ class TestHomeAssistantOAuthProvider:
         assert provider.client_registration_options.enabled is True
         assert provider.revocation_options is not None
         assert provider.revocation_options.enabled is True
+
+    def test_encryption_key_persistence(self, tmp_path, monkeypatch):
+        """Test that encryption key is automatically persisted to file."""
+        from pathlib import Path
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        key_file = tmp_path / ".ha-mcp" / "oauth_key"
+
+        # First provider creates and saves key
+        provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        key1 = provider1._encryption_key
+
+        # Key file should exist
+        assert key_file.exists()
+        assert key_file.stat().st_mode & 0o777 == 0o600  # Check permissions
+
+        # Second provider should load same key
+        provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        key2 = provider2._encryption_key
+
+        # Keys should match
+        assert key1 == key2
+
+    def test_encryption_key_from_environment(self, tmp_path, monkeypatch):
+        """Test that OAUTH_ENCRYPTION_KEY env var takes precedence."""
+        from cryptography.fernet import Fernet
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        # Generate a test key
+        test_key = Fernet.generate_key()
+        monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", test_key.decode())
+
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+
+        # Should use env var key, not generate new one
+        assert provider._encryption_key == test_key
+
+    def test_base_url_auto_detection(self, tmp_path, monkeypatch):
+        """Test that base URL is auto-detected from requests."""
+        from unittest.mock import Mock
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        # Create provider without base_url
+        provider = HomeAssistantOAuthProvider()
+
+        # Create mock request
+        request = Mock()
+        request.headers = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "my-tunnel.trycloudflare.com",
+        }
+        request.url.scheme = "http"
+        request.url.netloc = "localhost:8086"
+
+        # Should detect from request headers
+        base = provider._get_base_url(request)
+        assert base == "https://my-tunnel.trycloudflare.com"
+
+        # Should cache the detected URL
+        assert provider._detected_base_url == "https://my-tunnel.trycloudflare.com"
+
+        # Subsequent calls should use cached value
+        base2 = provider._get_base_url()
+        assert base2 == "https://my-tunnel.trycloudflare.com"
+
+    def test_base_url_configured_takes_precedence(self, tmp_path, monkeypatch):
+        """Test that configured base_url takes precedence over auto-detection."""
+        from unittest.mock import Mock
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        # Create provider with explicit base_url
+        provider = HomeAssistantOAuthProvider(base_url="https://configured.com")
+
+        # Create mock request
+        request = Mock()
+        request.headers = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "different-host.com",
+        }
+
+        # Should use configured URL, not detect from request
+        base = provider._get_base_url(request)
+        assert base == "https://configured.com"
+        assert provider._detected_base_url is None  # Never cached
 
     @pytest.mark.asyncio
     async def test_register_client(self, provider):
