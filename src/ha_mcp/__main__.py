@@ -642,7 +642,7 @@ def main_oauth() -> None:
     Environment:
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
-    - MCP_BASE_URL (optional, default: http://localhost:{MCP_PORT})
+    - MCP_BASE_URL (optional, auto-detected from incoming requests)
     - LOG_LEVEL (optional, default: INFO)
 
     Note: HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN are NOT required in this mode.
@@ -662,7 +662,7 @@ def main_oauth() -> None:
 
     port = int(os.getenv("MCP_PORT", "8086"))
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
-    base_url = os.getenv("MCP_BASE_URL", f"http://localhost:{port}")
+    base_url = os.getenv("MCP_BASE_URL")  # Optional - will be auto-detected if not set
 
     # Set up signal handlers
     _setup_signal_handlers()
