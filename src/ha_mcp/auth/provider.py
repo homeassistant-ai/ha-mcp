@@ -80,7 +80,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     def __init__(
         self,
-        base_url: AnyHttpUrl | str,
+        base_url: AnyHttpUrl | str | None = None,
         issuer_url: AnyHttpUrl | str | None = None,
         service_documentation_url: AnyHttpUrl | str | None = None,
         client_registration_options: ClientRegistrationOptions | None = None,
@@ -91,7 +91,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         Initialize the Home Assistant OAuth provider.
 
         Args:
-            base_url: The public URL of this MCP server
+            base_url: The public URL of this MCP server (auto-detected if not provided)
             issuer_url: The issuer URL for OAuth metadata (defaults to base_url)
             service_documentation_url: URL to service documentation
             client_registration_options: Options for client registration
@@ -138,7 +138,13 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self._encryption_key = self._get_or_create_encryption_key()
         self._cipher = Fernet(self._encryption_key)
 
-        logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
+        # Auto-detected base URL (cached from first request)
+        self._detected_base_url: str | None = None
+
+        if base_url:
+            logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
+        else:
+            logger.info("HomeAssistantOAuthProvider initialized (base_url will be auto-detected)")
 
     def _get_or_create_encryption_key(self) -> bytes:
         """
@@ -211,6 +217,55 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             logger.debug(f"Failed to decrypt token: {e}")
             return None
 
+    def _get_base_url(self, request: Request | None = None) -> str:
+        """
+        Get the base URL, auto-detecting from request if not configured.
+
+        Args:
+            request: Starlette request object for auto-detection
+
+        Returns:
+            Base URL string
+        """
+        # Use configured base_url if available
+        if self.base_url:
+            return str(self.base_url).rstrip('/')
+
+        # Use cached detected URL if available
+        if self._detected_base_url:
+            return self._detected_base_url
+
+        # Auto-detect from request
+        if request:
+            # Get protocol from X-Forwarded-Proto or request scheme
+            proto = request.headers.get(
+                "X-Forwarded-Proto",
+                "https" if request.url.scheme == "https" else "http"
+            )
+
+            # Get host from X-Forwarded-Host or Host header
+            host = request.headers.get(
+                "X-Forwarded-Host",
+                request.headers.get("Host", request.url.netloc)
+            )
+
+            # Remove any path components (we only want the origin)
+            base = f"{proto}://{host}"
+
+            # Cache the detected URL
+            self._detected_base_url = base
+            logger.info(f"Auto-detected base URL from request: {base}")
+
+            return base
+
+        # Fallback to localhost (shouldn't happen in production)
+        logger.warning(
+            "No base_url configured and no request available for auto-detection. "
+            "Using http://localhost:8086 as fallback. "
+            "Set MCP_BASE_URL environment variable for production."
+        )
+        return "http://localhost:8086"
+
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
         Get OAuth routes including custom consent form routes.
@@ -232,9 +287,12 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             """Enhanced OAuth metadata handler with Claude.ai compatibility."""
             from mcp.server.auth.routes import build_metadata
 
+            # Get base URL (configured or auto-detected)
+            base = self._get_base_url(request)
+
             # Get base metadata from MCP SDK
             metadata = build_metadata(
-                issuer_url=self.base_url,  # type: ignore[arg-type]
+                issuer_url=AnyHttpUrl(base),
                 service_documentation_url=AnyHttpUrl("https://github.com/homeassistant-ai/ha-mcp"),
                 client_registration_options=self.client_registration_options or {},  # type: ignore[arg-type]
                 revocation_options=self.revocation_options or {},  # type: ignore[arg-type]
@@ -377,8 +435,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         }
 
         # Build consent form URL
-        assert self.base_url is not None
-        consent_url = f"{str(self.base_url).rstrip('/')}/consent?txn_id={txn_id}"
+        base = self._get_base_url()
+        consent_url = f"{base}/consent?txn_id={txn_id}"
 
         logger.debug(f"Redirecting to consent form: {consent_url}")
         return consent_url
@@ -466,7 +524,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         if not ha_url or not ha_token:
             # Redirect back to form with error
-            assert self.base_url is not None
+            base = self._get_base_url(request)
             error_params = urlencode(
                 {
                     "txn_id": txn_id,
@@ -474,7 +532,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 }
             )
             return RedirectResponse(
-                f"{str(self.base_url).rstrip('/')}/consent?{error_params}",
+                f"{base}/consent?{error_params}",
                 status_code=303,
             )
 
@@ -483,7 +541,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             str(ha_url), str(ha_token)
         )
         if validation_error:
-            assert self.base_url is not None
+            base = self._get_base_url(request)
             error_params = urlencode(
                 {
                     "txn_id": txn_id,
@@ -491,7 +549,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 }
             )
             return RedirectResponse(
-                f"{str(self.base_url).rstrip('/')}/consent?{error_params}",
+                f"{base}/consent?{error_params}",
                 status_code=303,
             )
 
