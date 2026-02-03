@@ -31,16 +31,16 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.homeassistant-ai/ha-mcp"
 
+# Create non-root user for security
+RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser
+
 WORKDIR /app
 
 # Copy the virtual environment, source, and config from builder
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/src /app/src
-COPY fastmcp.json fastmcp-http.json ./
+COPY --chown=mcpuser:mcpuser --from=builder /app/.venv /app/.venv
+COPY --chown=mcpuser:mcpuser --from=builder /app/src /app/src
+COPY --chown=mcpuser:mcpuser fastmcp.json fastmcp-http.json ./
 
-# Create non-root user for security
-RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser && \
-    chown -R mcpuser:mcpuser /app
 USER mcpuser
 
 # Activate virtual environment via PATH
