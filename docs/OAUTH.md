@@ -21,29 +21,7 @@ OAuth authentication allows users to enter their Home Assistant credentials via 
 
 ## Setup
 
-### 1. Start OAuth Server
-
-**Docker:**
-```bash
-docker run -d --name ha-mcp-oauth \
-  -p 8086:8086 \
-  ghcr.io/homeassistant-ai/ha-mcp:latest \
-  ha-mcp-oauth
-```
-
-**uvx:**
-```bash
-uvx ha-mcp@latest ha-mcp-oauth
-```
-
-### 2. Environment Variables (All Optional!)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MCP_PORT` | Server port | `8086` |
-| `MCP_BASE_URL` | Public URL (auto-detected if not set) | Detected from request headers |
-
-### 3. Expose with HTTPS
+### 1. Expose with HTTPS
 
 ```bash
 # Quick tunnel for testing
@@ -51,6 +29,31 @@ cloudflared tunnel --url http://localhost:8086
 ```
 
 For production, set up a [persistent Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
+
+### 2. Start OAuth Server
+
+**Docker:**
+```bash
+docker run -d --name ha-mcp-oauth \
+  -p 8086:8086 \
+  -e MCP_BASE_URL=https://your-tunnel.trycloudflare.com \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-oauth
+```
+
+**uvx:**
+```bash
+export MCP_BASE_URL=https://your-tunnel.trycloudflare.com
+uvx ha-mcp@latest ha-mcp-oauth
+```
+
+### 3. Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MCP_BASE_URL` | **Required.** Public URL where this server is accessible | None |
+| `MCP_PORT` | Server port | `8086` |
+| `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` |
 
 ### 4. Connect in Claude.ai
 
@@ -75,7 +78,7 @@ Make sure you're using the correct URL in Claude.ai:
 ❌ Wrong:   https://your-tunnel.com
 ```
 
-The server auto-detects its base URL from incoming requests, so you don't need to configure anything - just use `your-tunnel/mcp` in Claude.ai.
+The `/mcp` path is required - this is where the MCP server endpoints are mounted.
 
 ### "Invalid credentials" on consent form
 

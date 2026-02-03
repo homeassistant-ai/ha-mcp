@@ -121,56 +121,6 @@ class TestHomeAssistantOAuthProvider:
         assert provider.revocation_options is not None
         assert provider.revocation_options.enabled is True
 
-    def test_base_url_auto_detection(self, tmp_path, monkeypatch):
-        """Test that base URL is auto-detected from requests."""
-        from unittest.mock import Mock
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Create provider without base_url
-        provider = HomeAssistantOAuthProvider()
-
-        # Create mock request
-        request = Mock()
-        request.headers = {
-            "X-Forwarded-Proto": "https",
-            "X-Forwarded-Host": "my-tunnel.trycloudflare.com",
-        }
-        request.url.scheme = "http"
-        request.url.netloc = "localhost:8086"
-
-        # Should detect from request headers
-        base = provider._get_base_url(request)
-        assert base == "https://my-tunnel.trycloudflare.com"
-
-        # Should cache the detected URL
-        assert provider._detected_base_url == "https://my-tunnel.trycloudflare.com"
-
-        # Subsequent calls should use cached value
-        base2 = provider._get_base_url()
-        assert base2 == "https://my-tunnel.trycloudflare.com"
-
-    def test_base_url_configured_takes_precedence(self, tmp_path, monkeypatch):
-        """Test that configured base_url takes precedence over auto-detection."""
-        from unittest.mock import Mock
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Create provider with explicit base_url
-        provider = HomeAssistantOAuthProvider(base_url="https://configured.com")
-
-        # Create mock request
-        request = Mock()
-        request.headers = {
-            "X-Forwarded-Proto": "https",
-            "X-Forwarded-Host": "different-host.com",
-        }
-
-        # Should use configured URL, not detect from request
-        base = provider._get_base_url(request)
-        assert base == "https://configured.com"
-        assert provider._detected_base_url is None  # Never cached
-
     @pytest.mark.asyncio
     async def test_register_client(self, provider):
         """Test client registration."""
