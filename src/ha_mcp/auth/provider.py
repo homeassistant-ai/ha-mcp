@@ -6,15 +6,16 @@ for Home Assistant MCP Server. Users authenticate via a consent form where they
 provide their Home Assistant URL and Long-Lived Access Token (LLAT).
 """
 
+import binascii
+import json
 import logging
-import os
 import secrets
 import time
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from cryptography.fernet import Fernet
 from fastmcp.server.auth.auth import AccessToken  # FastMCP version has claims field
 from mcp.server.auth.provider import (
     AuthorizationCode,
@@ -71,16 +72,20 @@ class HomeAssistantOAuthProvider(OAuthProvider):
     - Dynamic Client Registration (DCR)
     - PKCE support
     - Custom consent form for collecting HA credentials
-    - Token management with refresh token support
+    - Stateless access tokens (base64-encoded JSON)
 
     The consent form collects the user's Home Assistant URL and
-    Long-Lived Access Token, validates them, and stores them
-    securely for subsequent API calls.
+    Long-Lived Access Token, validates them, and encodes them into
+    stateless access tokens for subsequent API calls.
+
+    Access tokens are base64-encoded JSON containing HA credentials.
+    No encryption or signing - security comes from HTTPS transport
+    and the LLAT itself being the authorization boundary.
     """
 
     def __init__(
         self,
-        base_url: AnyHttpUrl | str | None = None,
+        base_url: AnyHttpUrl | str,
         issuer_url: AnyHttpUrl | str | None = None,
         service_documentation_url: AnyHttpUrl | str | None = None,
         client_registration_options: ClientRegistrationOptions | None = None,
@@ -91,7 +96,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         Initialize the Home Assistant OAuth provider.
 
         Args:
-            base_url: The public URL of this MCP server (auto-detected if not provided)
+            base_url: The public URL of this MCP server (required)
             issuer_url: The issuer URL for OAuth metadata (defaults to base_url)
             service_documentation_url: URL to service documentation
             client_registration_options: Options for client registration
@@ -134,137 +139,49 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self._access_to_refresh_map: dict[str, str] = {}
         self._refresh_to_access_map: dict[str, str] = {}
 
-        # Initialize encryption key for stateless tokens
-        self._encryption_key = self._get_or_create_encryption_key()
-        self._cipher = Fernet(self._encryption_key)
+        logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
 
-        # Auto-detected base URL (cached from first request)
-        self._detected_base_url: str | None = None
-
-        if base_url:
-            logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
-        else:
-            logger.info("HomeAssistantOAuthProvider initialized (base_url will be auto-detected)")
-
-    def _get_or_create_encryption_key(self) -> bytes:
+    def _encode_credentials(self, ha_url: str, ha_token: str) -> str:
         """
-        Get encryption key from environment, file, or generate a new one.
+        Encode HA credentials into a stateless access token.
 
-        Priority:
-        1. OAUTH_ENCRYPTION_KEY environment variable (for advanced users)
-        2. Persistent key file at ~/.ha-mcp/oauth_key (auto-generated)
-        3. Generate temporary key (dev/testing only)
+        Tokens are base64-encoded JSON containing HA credentials.
+        No encryption or signing - credentials are readable but transmitted over HTTPS.
+        The LLAT itself provides the security boundary.
         """
-        # Check environment variable first (highest priority)
-        key_str = os.getenv("OAUTH_ENCRYPTION_KEY")
-        if key_str:
-            logger.info("Using OAUTH_ENCRYPTION_KEY from environment")
-            return key_str.encode()
+        payload = {
+            "ha_url": ha_url,
+            "ha_token": ha_token,
+            "iat": int(time.time()),
+        }
+        json_str = json.dumps(payload)
+        encoded = urlsafe_b64encode(json_str.encode()).decode().rstrip("=")
+        return encoded
 
-        # Try to load from persistent file
-        from pathlib import Path
-        key_file = Path.home() / ".ha-mcp" / "oauth_key"
+    def _decode_credentials(self, token: str) -> tuple[str, str] | None:
+        """
+        Decode access token to extract HA credentials.
 
-        if key_file.exists():
-            try:
-                key_bytes = key_file.read_bytes()
-                # Validate it's a proper Fernet key
-                Fernet(key_bytes)
-                logger.info(f"Using persistent OAuth key from {key_file}")
-                return key_bytes
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load OAuth key from {key_file}: {e}. "
-                    "Generating new key."
-                )
-
-        # Generate new key and persist it
-        key = Fernet.generate_key()
+        Returns (ha_url, ha_token) or None if invalid.
+        """
         try:
-            key_file.parent.mkdir(parents=True, exist_ok=True)
-            key_file.write_bytes(key)
-            # Set restrictive permissions (owner read/write only)
-            os.chmod(key_file, 0o600)
-            logger.info(
-                f"Generated new OAuth encryption key and saved to {key_file}. "
-                "This key will persist across server restarts. "
-                "To share across multiple instances, copy this file or set OAUTH_ENCRYPTION_KEY."
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to persist OAuth key to {key_file}: {e}. "
-                "Using temporary key - tokens will be invalid after restart."
-            )
+            # Add padding if needed
+            padding = 4 - (len(token) % 4)
+            if padding != 4:
+                token += "=" * padding
 
-        return key
+            decoded = urlsafe_b64decode(token.encode()).decode()
+            payload = json.loads(decoded)
 
-    def _encrypt_credentials(self, ha_url: str, ha_token: str) -> str:
-        """Encrypt HA credentials into a token string."""
-        credentials_str = f"{ha_url}|{ha_token}"
-        encrypted = self._cipher.encrypt(credentials_str.encode())
-        return encrypted.decode()
+            ha_url = payload.get("ha_url")
+            ha_token = payload.get("ha_token")
 
-    def _decrypt_credentials(self, token: str) -> tuple[str, str] | None:
-        """Decrypt token to get HA credentials. Returns (ha_url, ha_token) or None."""
-        try:
-            decrypted = self._cipher.decrypt(token.encode())
-            credentials_str = decrypted.decode()
-            parts = credentials_str.split("|", 1)
-            if len(parts) == 2:
-                return parts[0], parts[1]
+            if ha_url and ha_token:
+                return ha_url, ha_token
             return None
-        except Exception as e:
-            logger.debug(f"Failed to decrypt token: {e}")
+        except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.debug(f"Failed to decode token: {e}")
             return None
-
-    def _get_base_url(self, request: Request | None = None) -> str:
-        """
-        Get the base URL, auto-detecting from request if not configured.
-
-        Args:
-            request: Starlette request object for auto-detection
-
-        Returns:
-            Base URL string
-        """
-        # Use configured base_url if available
-        if self.base_url:
-            return str(self.base_url).rstrip('/')
-
-        # Use cached detected URL if available
-        if self._detected_base_url:
-            return self._detected_base_url
-
-        # Auto-detect from request
-        if request:
-            # Get protocol from X-Forwarded-Proto or request scheme
-            proto = request.headers.get(
-                "X-Forwarded-Proto",
-                "https" if request.url.scheme == "https" else "http"
-            )
-
-            # Get host from X-Forwarded-Host or Host header
-            host = request.headers.get(
-                "X-Forwarded-Host",
-                request.headers.get("Host", request.url.netloc)
-            )
-
-            # Remove any path components (we only want the origin)
-            base = f"{proto}://{host}"
-
-            # Cache the detected URL
-            self._detected_base_url = base
-            logger.info(f"Auto-detected base URL from request: {base}")
-
-            return base
-
-        # Fallback to localhost (shouldn't happen in production)
-        logger.warning(
-            "No base_url configured and no request available for auto-detection. "
-            "Using http://localhost:8086 as fallback. "
-            "Set MCP_BASE_URL environment variable for production."
-        )
-        return "http://localhost:8086"
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
@@ -287,8 +204,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             """Enhanced OAuth metadata handler with Claude.ai compatibility."""
             from mcp.server.auth.routes import build_metadata
 
-            # Get base URL (configured or auto-detected)
-            base = self._get_base_url(request)
+            # Get base URL
+            base = str(self.base_url).rstrip('/')
 
             # Get base metadata from MCP SDK
             metadata = build_metadata(
@@ -448,7 +365,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         }
 
         # Build consent form URL
-        base = self._get_base_url()
+        base = str(self.base_url).rstrip('/')
         consent_url = f"{base}/consent?txn_id={txn_id}"
 
         logger.debug(f"Redirecting to consent form: {consent_url}")
@@ -537,7 +454,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         if not ha_url or not ha_token:
             # Redirect back to form with error
-            base = self._get_base_url(request)
+            base = str(self.base_url).rstrip('/')
             error_params = urlencode(
                 {
                     "txn_id": txn_id,
@@ -554,7 +471,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             str(ha_url), str(ha_token)
         )
         if validation_error:
-            base = self._get_base_url(request)
+            base = str(self.base_url).rstrip('/')
             error_params = urlencode(
                 {
                     "txn_id": txn_id,
@@ -697,7 +614,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
-        # Get HA credentials for this client to encrypt in token
+        # Get HA credentials for this client to encode in token
         ha_credentials = self.ha_credentials.get(client.client_id)
         if not ha_credentials:
             raise TokenError(
@@ -705,9 +622,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 f"No Home Assistant credentials found for client {client.client_id}",
             )
 
-        # STATELESS TOKEN: Encrypt HA credentials directly into the access token
-        # No server-side storage needed - token contains everything
-        access_token_value = self._encrypt_credentials(
+        # STATELESS TOKEN: Encode HA credentials directly into the access token
+        # No server-side storage needed - token contains everything as base64-encoded JSON
+        access_token_value = self._encode_credentials(
             ha_credentials.ha_url, ha_credentials.ha_token
         )
 
@@ -727,7 +644,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         if client.client_id in self.ha_credentials:
             del self.ha_credentials[client.client_id]
 
-        logger.info(f"Issued encrypted stateless access token for client {client.client_id}")
+        logger.info(f"Issued stateless access token for client {client.client_id}")
 
         return OAuthToken(
             access_token=access_token_value,
@@ -822,22 +739,22 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
         Load and validate access token.
 
-        STATELESS: Decrypts token to extract HA credentials.
-        No server-side storage needed - token is self-contained.
+        STATELESS: Decodes token to extract HA credentials.
+        No server-side storage needed - token is self-contained base64-encoded JSON.
         """
 
-        # Decrypt token to get HA credentials
-        credentials = self._decrypt_credentials(token)
+        # Decode token to get HA credentials
+        credentials = self._decode_credentials(token)
         if not credentials:
             return None
 
         ha_url, ha_token = credentials
 
-        # Create AccessToken object with decrypted credentials in claims
-        # No expiry check - tokens don't expire (encryption key rotation handles security)
+        # Create AccessToken object with decoded credentials in claims
+        # No expiry check - tokens don't expire (LLAT revocation handles security)
         return AccessToken(
             token=token,
-            client_id="decrypted",  # We don't store client_id in token
+            client_id="stateless",  # We don't store client_id in token
             scopes=["homeassistant", "mcp"],
             expires_at=None,  # Stateless tokens don't expire
             claims={
