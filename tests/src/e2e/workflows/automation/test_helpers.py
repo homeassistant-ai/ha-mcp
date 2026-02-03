@@ -196,10 +196,10 @@ class TestHelperIntegration:
         logger.info("✅ Helper deleted successfully")
 
         # 5. VERIFY: Helper is gone - wait a moment for deletion to propagate
-        final_state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": helper_entity}
+        # Use safe_call_tool since we expect this to fail (entity deleted)
+        final_state_data = await safe_call_tool(
+            mcp_client, "ha_get_state", {"entity_id": helper_entity}
         )
-        final_state_data = parse_mcp_result(final_state_result)
         # Should fail or return error since helper no longer exists
         has_error = (
             not final_state_data.get("success")

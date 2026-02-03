@@ -308,12 +308,12 @@ class TestAutomationLifecycle:
             )
 
         # Double-check with direct call for error message verification
-        final_check = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail (automation deleted)
+        final_data = await safe_call_tool(
+            mcp_client,
             "ha_config_get_automation",
-            { "identifier": automation_entity}
+            {"identifier": automation_entity},
         )
-
-        final_data = parse_mcp_result(final_check)
         # Automation should not exist anymore - this should fail
         assert not final_data.get("success"), (
             f"Automation should be deleted but still exists: {final_data}"
