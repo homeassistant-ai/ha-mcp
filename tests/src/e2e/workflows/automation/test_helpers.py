@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +45,10 @@ async def wait_for_entity_state(
     """
     for attempt in range(max_retries):
         try:
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": entity_id}
+            # Use safe_call_tool to handle ToolError exceptions
+            state_data = await safe_call_tool(
+                mcp_client, "ha_get_state", {"entity_id": entity_id}
             )
-            state_data = parse_mcp_result(state_result)
 
             # Check if we have valid entity data
             if "data" in state_data and "state" in state_data["data"]:
@@ -113,7 +113,9 @@ class TestHelperIntegration:
         logger.info(f"🔘 Testing input_boolean lifecycle: {helper_name}")
 
         # 1. CREATE: Basic boolean helper
-        create_result = await mcp_client.call_tool(
+        # Use safe_call_tool to handle ToolError exceptions gracefully
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
@@ -122,8 +124,6 @@ class TestHelperIntegration:
                 "initial": "false",  # String representation for boolean initial value
             },
         )
-
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), (
             f"Failed to create input_boolean: {create_data}"
         )

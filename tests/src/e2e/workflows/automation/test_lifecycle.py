@@ -15,6 +15,7 @@ import pytest
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    safe_call_tool,
     wait_for_automation,
 )
 from ...utilities.wait_helpers import (
@@ -154,12 +155,13 @@ class TestAutomationLifecycle:
         )
 
         logger.info(f"📝 Creating automation: {automation_name}")
-        create_result = await mcp_client.call_tool(
+        # Use safe_call_tool to handle ToolError exceptions gracefully
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_automation",
-            { "config": create_config}
+            {"config": create_config},
         )
-
-        create_data = assert_mcp_success(create_result, "automation creation")
+        assert create_data.get("success"), f"automation creation failed: {create_data}"
 
         # Extract automation entity ID with robust error handling
         automation_entity = create_data.get("entity_id")
