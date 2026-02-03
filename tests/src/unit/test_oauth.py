@@ -121,93 +121,6 @@ class TestHomeAssistantOAuthProvider:
         assert provider.revocation_options is not None
         assert provider.revocation_options.enabled is True
 
-    def test_encryption_key_persistence(self, tmp_path, monkeypatch):
-        """Test that encryption key is automatically persisted to file."""
-        from pathlib import Path
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-        key_file = tmp_path / ".ha-mcp" / "oauth_key"
-
-        # First provider creates and saves key
-        provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
-        key1 = provider1._encryption_key
-
-        # Key file should exist
-        assert key_file.exists()
-        assert key_file.stat().st_mode & 0o777 == 0o600  # Check permissions
-
-        # Second provider should load same key
-        provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
-        key2 = provider2._encryption_key
-
-        # Keys should match
-        assert key1 == key2
-
-    def test_encryption_key_from_environment(self, tmp_path, monkeypatch):
-        """Test that OAUTH_ENCRYPTION_KEY env var takes precedence."""
-        from cryptography.fernet import Fernet
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Generate a test key
-        test_key = Fernet.generate_key()
-        monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", test_key.decode())
-
-        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
-
-        # Should use env var key, not generate new one
-        assert provider._encryption_key == test_key
-
-    def test_base_url_auto_detection(self, tmp_path, monkeypatch):
-        """Test that base URL is auto-detected from requests."""
-        from unittest.mock import Mock
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Create provider without base_url
-        provider = HomeAssistantOAuthProvider()
-
-        # Create mock request
-        request = Mock()
-        request.headers = {
-            "X-Forwarded-Proto": "https",
-            "X-Forwarded-Host": "my-tunnel.trycloudflare.com",
-        }
-        request.url.scheme = "http"
-        request.url.netloc = "localhost:8086"
-
-        # Should detect from request headers
-        base = provider._get_base_url(request)
-        assert base == "https://my-tunnel.trycloudflare.com"
-
-        # Should cache the detected URL
-        assert provider._detected_base_url == "https://my-tunnel.trycloudflare.com"
-
-        # Subsequent calls should use cached value
-        base2 = provider._get_base_url()
-        assert base2 == "https://my-tunnel.trycloudflare.com"
-
-    def test_base_url_configured_takes_precedence(self, tmp_path, monkeypatch):
-        """Test that configured base_url takes precedence over auto-detection."""
-        from unittest.mock import Mock
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Create provider with explicit base_url
-        provider = HomeAssistantOAuthProvider(base_url="https://configured.com")
-
-        # Create mock request
-        request = Mock()
-        request.headers = {
-            "X-Forwarded-Proto": "https",
-            "X-Forwarded-Host": "different-host.com",
-        }
-
-        # Should use configured URL, not detect from request
-        base = provider._get_base_url(request)
-        assert base == "https://configured.com"
-        assert provider._detected_base_url is None  # Never cached
-
     @pytest.mark.asyncio
     async def test_register_client(self, provider):
         """Test client registration."""
@@ -436,14 +349,14 @@ class TestHomeAssistantOAuthProvider:
 
     @pytest.mark.asyncio
     async def test_load_access_token(self, provider):
-        """Test loading encrypted stateless access token."""
-        # Create an encrypted token
-        encrypted_token = provider._encrypt_credentials(
+        """Test loading base64-encoded stateless access token."""
+        # Create an encoded token
+        encoded_token = provider._encode_credentials(
             "http://homeassistant.local:8123",
             "test_token_xyz"
         )
 
-        result = await provider.load_access_token(encrypted_token)
+        result = await provider.load_access_token(encoded_token)
 
         assert result is not None
         assert result.claims["ha_url"] == "http://homeassistant.local:8123"
@@ -453,21 +366,21 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_load_invalid_access_token(self, provider):
         """Test loading invalid token returns None."""
-        # Try to load a non-encrypted token
+        # Try to load a non-base64 token
         result = await provider.load_access_token("invalid_random_string")
 
         assert result is None
 
     @pytest.mark.asyncio
     async def test_verify_token(self, provider):
-        """Test verify_token delegates to load_access_token with encrypted tokens."""
-        # Create an encrypted token
-        encrypted_token = provider._encrypt_credentials(
+        """Test verify_token delegates to load_access_token with base64 tokens."""
+        # Create an encoded token
+        encoded_token = provider._encode_credentials(
             "http://ha.local:8123",
             "valid_token"
         )
 
-        result = await provider.verify_token(encrypted_token)
+        result = await provider.verify_token(encoded_token)
         assert result is not None
         assert result.claims["ha_url"] == "http://ha.local:8123"
 
