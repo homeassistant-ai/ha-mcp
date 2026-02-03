@@ -14,6 +14,7 @@ This test suite validates:
 - Field validation and constraints
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -121,7 +122,7 @@ class TestHelperIntegration:
                 "helper_type": "input_boolean",
                 "name": helper_name,
                 "icon": "mdi:toggle-switch",
-                "initial": "false",  # String representation for boolean initial value
+                "initial": False,  # Native boolean type
             },
         )
         assert create_data.get("success"), (
@@ -228,7 +229,7 @@ class TestHelperIntegration:
                 "min_value": 0,
                 "max_value": 100,
                 "step": 5,
-                "initial": "25",
+                "initial": 25,
                 "mode": "slider",
                 "unit_of_measurement": "%",
                 "icon": "mdi:brightness-percent"},
@@ -850,17 +851,17 @@ class TestHelperIntegration:
             (
                 "input_boolean",
                 "bulk_bool_1",
-                {"name": "bulk_bool_1", "initial": "true"},
+                {"name": "bulk_bool_1", "initial": True},
             ),
             (
                 "input_boolean",
                 "bulk_bool_2",
-                {"name": "bulk_bool_2", "initial": "false"},
+                {"name": "bulk_bool_2", "initial": False},
             ),
             (
                 "input_number",
                 "bulk_num_1",
-                {"name": "bulk_num_1", "min_value": 0, "max_value": 10, "initial": "5"},
+                {"name": "bulk_num_1", "min_value": 0, "max_value": 10, "initial": 5},
             ),
             (
                 "input_select",
@@ -1078,7 +1079,7 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
             "name": "test_list_num",
             "min_value": 0,
             "max_value": 100,
-            "initial": "50",
+            "initial": 50,
             "icon": "mdi:test-tube",
         },
     )
