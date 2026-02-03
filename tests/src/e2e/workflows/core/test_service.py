@@ -237,7 +237,9 @@ class TestCallService:
         """Test calling service with invalid domain."""
         logger.info("Testing ha_call_service with invalid domain")
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail (invalid domain)
+        data = await safe_call_tool(
+            mcp_client,
             "ha_call_service",
             {
                 "domain": "invalid_domain_xyz",
@@ -245,8 +247,6 @@ class TestCallService:
                 "entity_id": "some.entity",
             },
         )
-
-        data = parse_mcp_result(result)
 
         # Should return error
         assert data.get("success") is False or "error" in data, (
