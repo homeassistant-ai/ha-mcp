@@ -22,7 +22,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -189,10 +189,10 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                 }
 
         except ValueError as e:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 str(e),
-            )
+            ))
         except Exception as e:
             logger.error(f"Error updating entity exposure: {e}")
             return {

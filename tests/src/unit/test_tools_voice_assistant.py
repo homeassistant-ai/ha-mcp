@@ -1,7 +1,10 @@
 """Unit tests for voice assistant tools module."""
 
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_voice_assistant import (
     register_voice_assistant_tools,
@@ -365,15 +368,18 @@ class TestHaExposeEntity:
 
     @pytest.mark.asyncio
     async def test_should_expose_invalid_string_returns_error(self, expose_tool):
-        """should_expose with invalid string should return error."""
-        result = await expose_tool(
-            entity_ids="light.test",
-            assistants="conversation",
-            should_expose="maybe"
-        )
+        """should_expose with invalid string should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await expose_tool(
+                entity_ids="light.test",
+                assistants="conversation",
+                should_expose="maybe"
+            )
 
-        assert result["success"] is False
-        error_msg = result["error"]["message"] if isinstance(result["error"], dict) else result["error"]
+        # Parse the error message as JSON and verify the error content
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error_msg = error_data["error"]["message"] if isinstance(error_data["error"], dict) else error_data["error"]
         assert "should_expose" in error_msg.lower() or "boolean" in error_msg.lower()
 
     # ==================== API Error Handling Tests ====================

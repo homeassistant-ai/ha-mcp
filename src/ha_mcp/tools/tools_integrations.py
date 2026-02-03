@@ -229,7 +229,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             logger.error(f"Failed to set integration enabled: {e}")
-            return exception_to_structured_error(e, context={"entry_id": entry_id})
+            exception_to_structured_error(e, context={"entry_id": entry_id})
 
     @mcp.tool(
         annotations={
@@ -294,4 +294,4 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             logger.error(f"Failed to delete config entry: {e}")
-            return exception_to_structured_error(e, context={"entry_id": entry_id})
+            exception_to_structured_error(e, context={"entry_id": entry_id})

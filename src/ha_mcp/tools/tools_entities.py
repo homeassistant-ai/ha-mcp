@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -112,10 +112,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed_aliases = parse_string_list_param(aliases, "aliases")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid aliases parameter: {e}",
-                    )
+                    ))
 
             # Build update message
             message: dict[str, Any] = {
@@ -207,7 +207,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
-            return exception_to_structured_error(e, context={"entity_id": entity_id})
+            exception_to_structured_error(e, context={"entity_id": entity_id})
 
     @mcp.tool(
         annotations={
@@ -395,6 +395,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             logger.error(f"Error getting entity: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids}
             )

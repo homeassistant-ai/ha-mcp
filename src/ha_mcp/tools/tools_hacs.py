@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
@@ -101,11 +101,10 @@ def register_hacs_tools(mcp, client, **kwargs):
             response = await ws_client.send_command("hacs/info")
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS info request failed: {response}"),
                     context={"command": "hacs/info"},
                 )
-                return await add_timezone_metadata(client, error_response)
 
             result = response.get("result", {})
 
@@ -123,6 +122,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             error_response = exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_info"},
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -130,7 +130,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Check Home Assistant connection",
                     "Restart Home Assistant if HACS was recently installed",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "List HACS Installed"})
     @log_tool_usage
@@ -201,11 +201,10 @@ def register_hacs_tools(mcp, client, **kwargs):
             response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS repositories list request failed: {response}"),
                     context={"command": "hacs/repositories/list", "category": category},
                 )
-                return await add_timezone_metadata(client, error_response)
 
             repositories = response.get("result", [])
 
@@ -241,6 +240,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             error_response = exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_list_installed", "category": category},
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -248,7 +248,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                     "Check Home Assistant connection",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "Search HACS Store"})
     @log_tool_usage
@@ -334,11 +334,10 @@ def register_hacs_tools(mcp, client, **kwargs):
             response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS search request failed: {response}"),
                     context={"command": "hacs/repositories/list", "query": query, "category": category},
                 )
-                return await add_timezone_metadata(client, error_response)
 
             all_repositories = response.get("result", [])
 
@@ -401,6 +400,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             error_response = exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_search", "query": query, "category": category},
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -408,7 +408,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Try a simpler search query",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Repository Info"})
     @log_tool_usage
@@ -482,11 +482,10 @@ def register_hacs_tools(mcp, client, **kwargs):
             response = await ws_client.send_command("hacs/repository/info", repository_id=actual_id)
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS repository info request failed: {response}"),
                     context={"command": "hacs/repository/info", "repository_id": repository_id},
                 )
-                return await add_timezone_metadata(client, error_response)
 
             result = response.get("result", {})
 
@@ -517,6 +516,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             error_response = exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_repository_info", "repository_id": repository_id},
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -524,7 +524,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Check repository ID format (e.g., 'hacs/integration' or 'owner/repo')",
                     "Use ha_hacs_search() to find the correct repository ID",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Add HACS Repository"})
     @log_tool_usage
@@ -611,7 +611,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             )
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS add repository request failed: {response}"),
                     context={
                         "command": "hacs/repositories/add",
@@ -619,7 +619,6 @@ def register_hacs_tools(mcp, client, **kwargs):
                         "category": category,
                     },
                 )
-                return await add_timezone_metadata(client, error_response)
 
             result = response.get("result", {})
 
@@ -640,6 +639,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "repository": repository,
                     "category": category,
                 },
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -649,7 +649,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Ensure category matches repository type",
                     "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Download/Install HACS Repository"})
     @log_tool_usage
@@ -746,7 +746,7 @@ def register_hacs_tools(mcp, client, **kwargs):
             response = await ws_client.send_command("hacs/repository/download", **download_kwargs)
 
             if not response.get("success"):
-                error_response = exception_to_structured_error(
+                exception_to_structured_error(
                     Exception(f"HACS download request failed: {response}"),
                     context={
                         "command": "hacs/repository/download",
@@ -754,7 +754,6 @@ def register_hacs_tools(mcp, client, **kwargs):
                         "version": version,
                     },
                 )
-                return await add_timezone_metadata(client, error_response)
 
             result = response.get("result", {})
 
@@ -776,6 +775,7 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "repository_id": repository_id,
                     "version": version,
                 },
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -784,4 +784,4 @@ def register_hacs_tools(mcp, client, **kwargs):
                     "Ensure the repository is in HACS (use ha_hacs_add_repository() if needed)",
                     "Check version format (e.g., 'v1.2.3' or '1.2.3')",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)

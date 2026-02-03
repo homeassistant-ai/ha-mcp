@@ -14,7 +14,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata
 
 logger = logging.getLogger(__name__)
@@ -295,6 +295,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
             error_response = exception_to_structured_error(
                 e,
                 context={"tool": "ha_install_mcp_tools", "restart": restart},
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = [
@@ -302,4 +303,4 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                     "Check Home Assistant logs for errors",
                     "Ensure GitHub is accessible",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_response)

@@ -157,7 +157,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             context = {"helper_type": helper_type}
             if flow_id:
                 context["flow_id"] = flow_id
-            return exception_to_structured_error(e, context=context)
+            exception_to_structured_error(e, context=context)
 
     @mcp.tool(
         annotations={
@@ -220,4 +220,4 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         except Exception as e:
             logger.error(f"Error getting helper schema: {e}")
-            return exception_to_structured_error(e, context={"helper_type": helper_type})
+            exception_to_structured_error(e, context={"helper_type": helper_type})

@@ -15,7 +15,7 @@ from ..errors import (
     create_resource_not_found_error,
     create_validation_error,
 )
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -249,12 +249,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 )
                 error_response["action"] = "get"
                 error_response["reason"] = "not_found"
-                return error_response
+                raise_tool_error(error_response)
 
             logger.error(f"Error getting automation: {e}")
             error_response = exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
+                raise_error=False,
             )
             # Add automation-specific suggestions
             if "error" in error_response and isinstance(error_response["error"], dict):
@@ -263,7 +264,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "Check Home Assistant connection",
                     "Use ha_get_domain_docs('automation') for configuration help",
                 ]
-            return error_response
+            raise_tool_error(error_response)
 
     @mcp.tool(
         annotations={
@@ -411,19 +412,19 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             try:
                 parsed_config = parse_json_param(config, "config")
             except ValueError as e:
-                return create_validation_error(
+                raise_tool_error(create_validation_error(
                     f"Invalid config parameter: {e}",
                     parameter="config",
                     invalid_json=True,
-                )
+                ))
 
             # Ensure config is a dict
             if parsed_config is None or not isinstance(parsed_config, dict):
-                return create_validation_error(
+                raise_tool_error(create_validation_error(
                     "Config parameter must be a JSON object",
                     parameter="config",
                     details=f"Received type: {type(parsed_config).__name__}",
-                )
+                ))
 
             config_dict = cast(dict[str, Any], parsed_config)
 
@@ -441,11 +442,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
             missing_fields = [f for f in required_fields if f not in config_dict]
             if missing_fields:
-                return create_config_error(
+                raise_tool_error(create_config_error(
                     f"Missing required fields: {', '.join(missing_fields)}",
                     identifier=identifier,
                     missing_fields=missing_fields,
-                )
+                ))
 
             result = await client.upsert_automation_config(config_dict, identifier)
             return {
@@ -459,6 +460,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             error_response = exception_to_structured_error(
                 e,
                 context={"identifier": identifier},
+                raise_error=False,
             )
             # Add automation-specific suggestions
             if "error" in error_response and isinstance(error_response["error"], dict):
@@ -469,7 +471,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "Use ha_search_entities(domain_filter='automation') to find automations",
                     "Use ha_get_domain_docs('automation') for comprehensive configuration help",
                 ]
-            return error_response
+            raise_tool_error(error_response)
 
     @mcp.tool(
         annotations={
@@ -513,6 +515,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 error_response = exception_to_structured_error(
                     e,
                     context={"identifier": identifier},
+                    raise_error=False,
                 )
             error_response["action"] = "delete"
             # Add automation-specific suggestions
@@ -522,4 +525,4 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
                 ]
-            return error_response
+            raise_tool_error(error_response)
