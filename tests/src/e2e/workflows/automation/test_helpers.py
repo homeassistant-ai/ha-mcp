@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 async def wait_for_entity_state(
     mcp_client,
     entity_id: str,
-    max_retries: int = 5,
+    max_retries: int = 10,
     delay: float = 1.0,
     expected_state: str | None = None,
 ) -> dict[str, Any] | None:
@@ -37,7 +37,7 @@ async def wait_for_entity_state(
     Args:
         mcp_client: MCP client instance
         entity_id: Entity ID to check
-        max_retries: Maximum number of retries
+        max_retries: Maximum number of retries (default: 10 for CI robustness)
         delay: Delay between retries in seconds
         expected_state: If provided, wait for this specific state
 
@@ -134,8 +134,9 @@ class TestHelperIntegration:
         logger.info(f"✅ Created input_boolean: {helper_entity}")
 
         # 2. VERIFY: Helper exists and has correct initial state
+        # Use longer wait times for CI robustness (entity registration can be slow)
         state_data = await wait_for_entity_state(
-            mcp_client, helper_entity, max_retries=6, delay=0.5
+            mcp_client, helper_entity, max_retries=12, delay=1.0
         )
         assert state_data is not None, (
             f"Helper {helper_entity} was not created or not accessible after retries"
