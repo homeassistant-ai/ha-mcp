@@ -1,9 +1,29 @@
+# syntax=docker/dockerfile:1
 # Home Assistant MCP Server - Production Docker Image
-# Uses uv for fast, reliable Python package management
+# Multi-stage build: uv for dependency resolution, slim Python for runtime
 # Python 3.13 - Security support until 2029-10
 # uv version pinned - Dependabot will create PRs for updates
 
-FROM ghcr.io/astral-sh/uv:0.9.26-python3.13-bookworm-slim
+# --- Build stage: install dependencies with uv ---
+FROM ghcr.io/astral-sh/uv:0.9.29-python3.13-bookworm-slim AS builder
+
+WORKDIR /app
+
+# Compile bytecode for faster startup; copy mode required with cache mounts
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+# Install dependencies first (cached separately from source changes)
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-install-project --no-dev
+
+# Copy source and config, then install the project itself
+COPY src/ ./src/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev
+
+# --- Runtime stage: clean image without uv ---
+FROM python:3.13-slim-bookworm
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \
@@ -13,20 +33,18 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
 
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml ./
-COPY src/ ./src/
+# Copy the virtual environment, source, and config from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
 COPY fastmcp.json fastmcp-http.json ./
-
-# Install dependencies and project with uv
-# --no-cache: Don't cache downloaded packages
-# --system: Install into system Python (not a virtual environment)
-RUN uv pip install --system --no-cache .
 
 # Create non-root user for security
 RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser && \
     chown -R mcpuser:mcpuser /app
 USER mcpuser
+
+# Activate virtual environment via PATH
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Environment variables (can be overridden)
 ENV HOMEASSISTANT_URL="" \
@@ -35,5 +53,4 @@ ENV HOMEASSISTANT_URL="" \
 
 # Default: Run in stdio mode using fastmcp.json
 # For HTTP mode, override with: docker run ... ha-mcp fastmcp run fastmcp-http.json
-ENTRYPOINT ["uv", "run", "--no-project"]
 CMD ["fastmcp", "run", "fastmcp.json"]

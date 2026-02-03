@@ -1,17 +1,43 @@
 """Test Home Assistant add-on startup and logging."""
 
 import json
+import subprocess
 import time
-from pathlib import Path
 
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+IMAGE_TAG = "ha-mcp-addon-test"
+DOCKERFILE = "homeassistant-addon/Dockerfile"
+
+
+def _build_addon_image():
+    """Build the addon test image via docker CLI (supports BuildKit)."""
+    result = subprocess.run(
+        [
+            "docker", "build",
+            "-t", IMAGE_TAG,
+            "-f", DOCKERFILE,
+            "--build-arg", "BUILD_VERSION=1.0.0-test",
+            "--build-arg", "BUILD_ARCH=amd64",
+            ".",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"Failed to build {IMAGE_TAG}:\n{result.stderr}")
+
 
 @pytest.mark.slow
 class TestAddonStartup:
     """Test add-on container startup behavior."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def build_image(self):
+        """Build the addon image once before all tests in this class."""
+        _build_addon_image()
 
     @pytest.fixture
     def addon_config(self, tmp_path):
@@ -27,38 +53,20 @@ class TestAddonStartup:
 
     @pytest.fixture
     def container(self, addon_config):
-        """Build and start the add-on container for testing."""
-        # Build the Docker image from the Dockerfile
-        dockerfile_path = Path("homeassistant-addon/Dockerfile")
-        context_path = Path(".")
-
-        container = (
-            DockerContainer(image="ha-mcp-addon-test")
+        """Create the add-on container for testing (image built by build_image fixture)."""
+        return (
+            DockerContainer(image=IMAGE_TAG)
             .with_bind_ports(9583, 9583)
             .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
-            .with_volume_mapping(str(addon_config.parent), "/data", mode="ro")
+            .with_volume_mapping(str(addon_config.parent), "/data", mode="rw")
         )
-
-        # Build the image first (use as_posix() for Windows compatibility)
-        container.get_docker_client().client.images.build(
-            path=str(context_path),
-            dockerfile=dockerfile_path.as_posix(),
-            tag="ha-mcp-addon-test",
-            rm=True,
-            buildargs={
-                "BUILD_VERSION": "1.0.0-test",
-                "BUILD_ARCH": "amd64",
-            },
-        )
-
-        return container
 
     def test_addon_startup_logs(self, container):
         """Test that add-on produces expected startup logs."""
         # Configure wait strategy for server actually starting
         container.waiting_for(
-            LogMessageWaitStrategy("Starting MCP server").with_startup_timeout(30)
+            LogMessageWaitStrategy("Uvicorn running on").with_startup_timeout(30)
         )
 
         # Start container
@@ -103,32 +111,13 @@ class TestAddonStartup:
         with open(config_file, "w") as f:
             json.dump(config, f)
 
-        # Build and start container
-        dockerfile_path = Path("homeassistant-addon/Dockerfile")
-        context_path = Path(".")
-
         container = (
-            DockerContainer(image="ha-mcp-addon-test")
+            DockerContainer(image=IMAGE_TAG)
             .with_bind_ports(9583, 9583)
             .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
             .with_volume_mapping(str(config_file.parent), "/data", mode="rw")
         )
-
-        # Build if not already built (use as_posix() for Windows compatibility)
-        try:
-            container.get_docker_client().client.images.get("ha-mcp-addon-test")
-        except Exception:
-            container.get_docker_client().client.images.build(
-                path=str(context_path),
-                dockerfile=dockerfile_path.as_posix(),
-                tag="ha-mcp-addon-test",
-                rm=True,
-                buildargs={
-                    "BUILD_VERSION": "1.0.0-test",
-                    "BUILD_ARCH": "amd64",
-                },
-            )
 
         # Configure wait strategy
         container.waiting_for(
@@ -152,30 +141,11 @@ class TestAddonStartup:
 
     def test_addon_startup_missing_supervisor_token(self, addon_config):
         """Test that add-on exits with error when SUPERVISOR_TOKEN is missing."""
-        # Build and start container without SUPERVISOR_TOKEN
-        dockerfile_path = Path("homeassistant-addon/Dockerfile")
-        context_path = Path(".")
-
         container = (
-            DockerContainer(image="ha-mcp-addon-test")
+            DockerContainer(image=IMAGE_TAG)
             .with_bind_ports(9583, 9583)
             .with_volume_mapping(str(addon_config.parent), "/data", mode="ro")
         )
-
-        # Build if not already built (use as_posix() for Windows compatibility)
-        try:
-            container.get_docker_client().client.images.get("ha-mcp-addon-test")
-        except Exception:
-            container.get_docker_client().client.images.build(
-                path=str(context_path),
-                dockerfile=dockerfile_path.as_posix(),
-                tag="ha-mcp-addon-test",
-                rm=True,
-                buildargs={
-                    "BUILD_VERSION": "1.0.0-test",
-                    "BUILD_ARCH": "amd64",
-                },
-            )
 
         container.start()
 
