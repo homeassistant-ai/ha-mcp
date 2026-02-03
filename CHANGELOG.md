@@ -3,6 +3,45 @@
 <!-- version list -->
 
 
+## v6.5.0 (2026-02-03)
+
+### Added
+
+- Remove encryption from OAuth tokens for truly stateless implementation
+  ([#534](https://github.com/homeassistant-ai/ha-mcp/pull/534))
+- **oauth**: Auto-persist encryption key and auto-detect url
+  ([#532](https://github.com/homeassistant-ai/ha-mcp/pull/532))
+
+### Changed
+
+- Add agent skills section to README
+  ([#541](https://github.com/homeassistant-ai/ha-mcp/pull/541))
+
+### Fixed
+
+- Add workaround for ChatGPT's non-standard /token/.well-known/openid-configuration request
+  ([#533](https://github.com/homeassistant-ai/ha-mcp/pull/533))
+- **oauth**: Add OpenID Configuration endpoint for ChatGPT compatibility
+  ([#531](https://github.com/homeassistant-ai/ha-mcp/pull/531))
+- **traces**: Support flat trace structure in ha_get_automation_traces
+  ([#529](https://github.com/homeassistant-ai/ha-mcp/pull/529))
+- Fix YAML frontmatter parsing in agent files
+  ([#519](https://github.com/homeassistant-ai/ha-mcp/pull/519))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **config**: Migrate config renovate.json
+  ([#509](https://github.com/homeassistant-ai/ha-mcp/pull/509))
+- Add Anthropic's MCP builder skill via plugin marketplace
+  ([#520](https://github.com/homeassistant-ai/ha-mcp/pull/520))
+</details>
+
+
 ## v6.4.0 (2026-01-27)
 
 ### Added
