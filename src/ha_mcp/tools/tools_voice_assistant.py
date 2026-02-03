@@ -22,7 +22,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage, raise_tool_error
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -195,10 +195,7 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
             ))
         except Exception as e:
             logger.error(f"Error updating entity exposure: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to update entity exposure: {str(e)}",
-            }
+            exception_to_structured_error(e, context={"entity_ids": entity_ids, "assistants": assistants})
 
     @mcp.tool(
         annotations={
@@ -342,8 +339,4 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
 
         except Exception as e:
             logger.error(f"Error getting entity exposure: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get entity exposure: {str(e)}",
-                "entity_id": entity_id,
-            }
+            exception_to_structured_error(e, context={"entity_id": entity_id})

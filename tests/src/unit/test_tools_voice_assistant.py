@@ -407,21 +407,23 @@ class TestHaExposeEntity:
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
-        """WebSocket exception should be caught and handled."""
+        """WebSocket exception should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=Exception("Connection lost")
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_expose_entity"]
 
-        result = await tool(
-            entity_ids="light.test",
-            assistants="conversation",
-            should_expose=True
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_ids="light.test",
+                assistants="conversation",
+                should_expose=True
+            )
 
-        assert result["success"] is False
-        assert "Connection lost" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Connection" in error_data["error"]["message"] or "connect" in error_data["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_websocket_error_dict_format(self, mock_mcp, mock_client):
@@ -651,17 +653,20 @@ class TestHaListExposedEntities:
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
-        """WebSocket exception should be caught."""
+        """WebSocket exception should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=Exception("Network error")
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool()
+        with pytest.raises(ToolError) as exc_info:
+            await tool()
 
-        assert result["success"] is False
-        assert "Network error" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        # "Network error" message is mapped to "CONNECTION_FAILED" error
+        assert "connect" in error_data["error"]["message"].lower() or "network" in str(exc_info.value).lower()
 
 
 class TestHaGetEntityExposure:
@@ -819,18 +824,20 @@ class TestHaGetEntityExposure:
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
-        """WebSocket exception should be caught."""
+        """WebSocket exception should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=Exception("Timeout")
         )
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool(entity_id="light.living_room")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.living_room")
 
-        assert result["success"] is False
-        assert "Timeout" in result["error"]
-        assert result["entity_id"] == "light.living_room"
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        # "Timeout" message is mapped to timeout error
+        assert "timeout" in str(exc_info.value).lower()
 
 
 class TestKnownAssistants:
