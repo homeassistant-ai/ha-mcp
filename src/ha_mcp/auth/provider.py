@@ -6,6 +6,7 @@ for Home Assistant MCP Server. Users authenticate via a consent form where they
 provide their Home Assistant URL and Long-Lived Access Token (LLAT).
 """
 
+import binascii
 import json
 import logging
 import secrets
@@ -178,7 +179,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             if ha_url and ha_token:
                 return ha_url, ha_token
             return None
-        except Exception as e:
+        except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")
             return None
 
