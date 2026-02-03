@@ -8,7 +8,7 @@ import functools
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal, NoReturn, overload
 
 from fastmcp.exceptions import ToolError
 
@@ -83,12 +83,30 @@ async def get_connected_ws_client(
     return ws_client, None
 
 
+@overload
+def exception_to_structured_error(
+    error: Exception,
+    context: dict[str, Any] | None = None,
+    *,
+    raise_error: Literal[True] = True,
+) -> NoReturn: ...
+
+
+@overload
+def exception_to_structured_error(
+    error: Exception,
+    context: dict[str, Any] | None = None,
+    *,
+    raise_error: Literal[False],
+) -> dict[str, Any]: ...
+
+
 def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
     raise_error: bool = True,
-) -> dict[str, Any]:
+) -> dict[str, Any] | NoReturn:
     """
     Convert an exception to a structured error response.
 

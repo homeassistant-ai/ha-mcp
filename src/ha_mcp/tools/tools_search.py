@@ -396,8 +396,7 @@ def register_search_tools(mcp, client, **kwargs):
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
                 ]
-            final_response = await add_timezone_metadata(client, error_response)
-            raise_tool_error(final_response)
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
     @log_tool_usage
@@ -573,5 +572,4 @@ def register_search_tools(mcp, client, **kwargs):
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
                 ]
-            final_response = await add_timezone_metadata(client, error_response)
-            raise_tool_error(final_response)
+            raise_tool_error(error_response)
