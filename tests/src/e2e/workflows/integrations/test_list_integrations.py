@@ -320,14 +320,19 @@ class TestIntegrationFiltering:
         """
         logger.info("Testing specific entry includes options...")
 
-        # Get any entry
-        all_result = await mcp_client.call_tool("ha_get_integration", {})
-        all_data = assert_mcp_success(all_result, "get all integrations")
+        # Find an entry that actually has options to validate the audit use case
+        list_result = await mcp_client.call_tool(
+            "ha_get_integration", {"include_options": True}
+        )
+        list_data = assert_mcp_success(list_result, "list with options")
 
-        if all_data["total"] == 0:
-            pytest.skip("No integrations available")
+        target_entry = next(
+            (e for e in list_data["entries"] if e.get("options")), None
+        )
+        if not target_entry:
+            pytest.skip("No integrations with non-empty options found")
 
-        entry_id = all_data["entries"][0]["entry_id"]
+        entry_id = target_entry["entry_id"]
 
         result = await mcp_client.call_tool(
             "ha_get_integration", {"entry_id": entry_id}
@@ -341,9 +346,15 @@ class TestIntegrationFiltering:
         assert "entry_id" in entry
         assert "domain" in entry
 
+        # Verify options are present and match what the list endpoint returned
+        assert "options" in entry, "Specific entry should include options"
+        assert entry["options"] == target_entry["options"], (
+            "Options from specific entry should match list endpoint"
+        )
+
         logger.info(
             f"Specific entry test passed: domain={entry.get('domain')}, "
-            f"has_options={'options' in entry}"
+            f"options_keys={list(entry['options'].keys())}"
         )
 
 
