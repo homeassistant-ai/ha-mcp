@@ -378,13 +378,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 else:
                     return {
                         "success": False,
-                        "error": f"Entity '{entity_id}' not found in registry",
+                        "error": f"Entity '{entity_id}' not found in registry after applying exposure changes",
                         "entity_id": entity_id,
                         "suggestions": [
                             "Verify the entity_id exists using ha_search_entities()",
-                            "Exposure may have been applied but entity state could not be confirmed",
+                            "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
                         ],
-                        "exposure_applied": exposure_result,
+                        "exposure_succeeded": exposure_result,
                     }
 
             response_data: dict[str, Any] = {

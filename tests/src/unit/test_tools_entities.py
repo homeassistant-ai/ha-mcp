@@ -581,7 +581,7 @@ class TestHaSetEntityCombined:
 
         assert result["success"] is False
         assert "not found" in result["error"]
-        assert "exposure_applied" in result
+        assert "exposure_succeeded" in result
 
     @pytest.mark.asyncio
     async def test_enabled_invalid_value_returns_error(self, mock_mcp, mock_client):
