@@ -2,6 +2,41 @@
 
 Guidance for Claude Code when working with this repository.
 
+## Repository Structure
+
+This repository uses a worktree-based development workflow:
+
+- **master/** - Main git repository (you are here)
+  - **worktree/** - Git worktrees for feature/fix branches (gitignored)
+  - **local/** - Local scratch work and experiments (gitignored)
+  - **.claude/agents/** - Custom agent workflows
+
+**Symlink Convention**: Every directory with an `AGENTS.md` file has a `CLAUDE.md` symlink pointing to it for convenience.
+
+## Worktree Workflow
+
+### Creating Worktrees
+
+Worktrees should be created in the `worktree/` directory (gitignored):
+
+```bash
+# From repository root
+git worktree add worktree/issue-42 -b issue-42
+git worktree add worktree/feat-new-feature -b feat-new-feature
+```
+
+Worktrees created inside the repository automatically have access to `.claude/agents/` workflows without needing any sync.
+
+### Agent Workflows
+
+Custom agent workflows are located in `.claude/agents/`:
+
+| Agent | File | Model | Purpose |
+|-------|------|-------|---------|
+| **issue-analysis** | `issue-analysis.md` | Opus | Deep issue analysis - comprehensive codebase exploration, implementation planning, architectural assessment, complexity evaluation. Complements automated Gemini triage with human-directed deep analysis. |
+| **issue-to-pr-resolver** | `issue-to-pr-resolver.md` | Sonnet | End-to-end issue implementation: pre-flight checks → worktree creation → implementation with tests → pre-PR checkpoint → PR creation → iterative CI/review resolution until merge-ready. |
+| **pr-checker** | `pr-checker.md` | Sonnet | Review and manage existing PRs - check comments, CI status, resolve review threads, monitor until all checks pass. |
+
 ## Project Overview
 
 **Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 80+ tools for entity control, automations, device management, and more.
