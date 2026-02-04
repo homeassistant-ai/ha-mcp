@@ -682,3 +682,386 @@ class TestHaSetEntityCombined:
 
         assert result["success"] is False
         assert "suggestions" in result
+
+
+class TestHaSetEntityLabelOperations:
+    """Test ha_set_entity label_operation parameter (add/remove)."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_label_add_operation(self, mock_mcp, mock_client):
+        """label_operation='add' should add to existing labels."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # First call: get current entity (to fetch existing labels)
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "labels": ["existing_label"],
+                    },
+                },
+                # Second call: update entity with combined labels
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": None,
+                            "original_name": "Test",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["existing_label", "new_label"],
+                        }
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            labels=["new_label"],
+            label_operation="add",
+        )
+
+        assert result["success"] is True
+        # Verify the update call included both old and new labels
+        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert "existing_label" in update_call["labels"]
+        assert "new_label" in update_call["labels"]
+
+    @pytest.mark.asyncio
+    async def test_label_remove_operation(self, mock_mcp, mock_client):
+        """label_operation='remove' should remove specified labels."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # First call: get current entity (to fetch existing labels)
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "labels": ["keep_label", "remove_label"],
+                    },
+                },
+                # Second call: update entity with remaining labels
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": None,
+                            "original_name": "Test",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["keep_label"],
+                        }
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            labels=["remove_label"],
+            label_operation="remove",
+        )
+
+        assert result["success"] is True
+        # Verify the update call excluded the removed label
+        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert "keep_label" in update_call["labels"]
+        assert "remove_label" not in update_call["labels"]
+
+    @pytest.mark.asyncio
+    async def test_label_add_no_duplicates(self, mock_mcp, mock_client):
+        """label_operation='add' should not create duplicates."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # First call: get current entity
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "labels": ["label_a", "label_b"],
+                    },
+                },
+                # Second call: update entity
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": None,
+                            "original_name": "Test",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["label_a", "label_b", "label_c"],
+                        }
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            labels=["label_b", "label_c"],  # label_b already exists
+            label_operation="add",
+        )
+
+        assert result["success"] is True
+        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        # Should have 3 unique labels, not 4
+        assert len(update_call["labels"]) == 3
+
+
+class TestHaSetEntityBulkOperations:
+    """Test ha_set_entity bulk operations with multiple entity_ids."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_bulk_labels_set(self, mock_mcp, mock_client):
+        """Bulk operation should update labels on multiple entities."""
+        entity_entry = {
+            "entity_id": "light.test",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": ["outdoor"],
+        }
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"entity_entry": entity_entry},
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b", "light.c"],
+            labels=["outdoor"],
+        )
+
+        assert result["success"] is True
+        assert result["total"] == 3
+        assert result["succeeded_count"] == 3
+        assert result["failed_count"] == 0
+        assert len(result["succeeded"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_bulk_expose_to(self, mock_mcp, mock_client):
+        """Bulk operation should update expose_to on multiple entities."""
+        entity_entry = {
+            "entity_id": "light.test",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": [],
+        }
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True},  # expose call for light.a
+                {"success": True, "result": entity_entry},  # get entity for light.a
+                {"success": True},  # expose call for light.b
+                {"success": True, "result": entity_entry},  # get entity for light.b
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b"],
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is True
+        assert result["succeeded_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):
+        """Bulk operation should reject single-entity parameters."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b"],
+            name="Test Name",  # Single-entity param
+            labels=["outdoor"],
+        )
+
+        assert result["success"] is False
+        assert "Single-entity parameters" in result["error"]
+        assert "name" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_partial_failure(self, mock_mcp, mock_client):
+        """Bulk operation should report partial failures."""
+        entity_entry = {
+            "entity_id": "light.a",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": ["outdoor"],
+        }
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # light.a succeeds
+                {"success": True, "result": {"entity_entry": entity_entry}},
+                # light.b fails
+                {"success": False, "error": {"message": "Entity not found"}},
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b"],
+            labels=["outdoor"],
+        )
+
+        assert result["success"] is False
+        assert result["partial"] is True
+        assert result["succeeded_count"] == 1
+        assert result["failed_count"] == 1
+        assert len(result["succeeded"]) == 1
+        assert len(result["failed"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_bulk_empty_list_returns_error(self, mock_mcp, mock_client):
+        """Bulk operation with empty entity_id list should return error."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=[],
+            labels=["outdoor"],
+        )
+
+        assert result["success"] is False
+        assert "empty" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_bulk_label_add_operation(self, mock_mcp, mock_client):
+        """Bulk operation with label_operation='add' should work."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Get labels for light.a
+                {"success": True, "result": {"labels": ["existing"]}},
+                # Update light.a
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.a",
+                            "name": None,
+                            "original_name": "A",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["existing", "new_label"],
+                        }
+                    },
+                },
+                # Get labels for light.b
+                {"success": True, "result": {"labels": ["other"]}},
+                # Update light.b
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.b",
+                            "name": None,
+                            "original_name": "B",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["other", "new_label"],
+                        }
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b"],
+            labels=["new_label"],
+            label_operation="add",
+        )
+
+        assert result["success"] is True
+        assert result["succeeded_count"] == 2
