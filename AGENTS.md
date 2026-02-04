@@ -4,28 +4,69 @@ Guidance for Claude Code when working with this repository.
 
 ## Repository Structure
 
-This repository uses a worktree-based development workflow:
+This repository uses a worktree-based development workflow.
 
-- **master/** - Main git repository (you are here)
-  - **worktree/** - Git worktrees for feature/fix branches (gitignored)
-  - **local/** - Local scratch work and experiments (gitignored)
-  - **.claude/agents/** - Custom agent workflows
+**Documentation Setup:**
+- This file is `AGENTS.md` (the canonical source)
+- `CLAUDE.md` is a symlink pointing to `AGENTS.md`
+- Read either file - they're the same content
+- Commit changes to `AGENTS.md`, the symlink will automatically reflect them
 
-**Symlink Convention**: Every directory with an `AGENTS.md` file has a `CLAUDE.md` symlink pointing to it for convenience.
+**Directory Structure:**
+```
+/home/julien/github/ha-mcp/           # Main repository (checkout master here)
+├── AGENTS.md                          # This file (canonical source)
+├── CLAUDE.md -> AGENTS.md             # Symlink for convenience
+├── worktree/                          # Git worktrees (gitignored)
+│   ├── issue-42/                      # Feature branch worktree
+│   └── fix-something/                 # Fix branch worktree
+├── local/                             # Scratch work (gitignored)
+└── .claude/agents/                    # Custom agent workflows
+```
+
+**Why use `worktree/` subdirectory:**
+- Keeps worktrees organized in one place
+- Gitignored (won't pollute `git status`)
+- All worktrees automatically inherit `.claude/agents/` workflows
+- Easy cleanup: `git worktree prune` removes stale references
 
 ## Worktree Workflow
 
 ### Creating Worktrees
 
-Worktrees should be created in the `worktree/` directory (gitignored):
+**ALWAYS create worktrees in the `worktree/` subdirectory**, not at the repository root.
 
 ```bash
-# From repository root
+# Correct - worktrees go in worktree/ subdirectory
+cd /home/julien/github/ha-mcp
 git worktree add worktree/issue-42 -b issue-42
-git worktree add worktree/feat-new-feature -b feat-new-feature
+git worktree add worktree/feat-new-feature -b feat/new-feature
+
+# Wrong - don't create worktrees at repo root
+git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
+git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
 ```
 
-Worktrees created inside the repository automatically have access to `.claude/agents/` workflows without needing any sync.
+**Working in a worktree:**
+```bash
+# Navigate to your worktree
+cd worktree/issue-42
+
+# Work normally - you have full access to .claude/agents/
+git status
+git commit -m "feat: implement feature"
+git push
+
+# When done, return to main repo and clean up
+cd /home/julien/github/ha-mcp
+git worktree remove worktree/issue-42
+```
+
+**Cleaning up stale worktrees:**
+```bash
+# If worktree directories were deleted but git still tracks them
+git worktree prune
+```
 
 ### Agent Workflows
 
