@@ -141,6 +141,14 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
+## 🧠 Better Results with Agent Skills
+
+This server gives your AI agent tools to control Home Assistant. For better configurations, pair it with [Home Assistant Agent Skills](https://github.com/homeassistant-ai/skills) — domain knowledge that teaches the agent Home Assistant best practices.
+
+An MCP server can create automations, helpers, and dashboards, but it has no opinion on *how* to structure them. Without domain knowledge, agents tend to over-rely on templates, pick the wrong helper type, or produce automations that are hard to maintain. The skills fill that gap: native constructs over Jinja2 workarounds, correct helper selection, safe refactoring workflows, and proper use of automation modes.
+
+---
+
 ## 🧪 Dev Channel
 
 Want early access to new features and fixes? Dev releases (`.devN`) are published on every push to master.

@@ -2,6 +2,82 @@
 
 Guidance for Claude Code when working with this repository.
 
+## Repository Structure
+
+This repository uses a worktree-based development workflow.
+
+**Documentation Setup:**
+- This file is `AGENTS.md` (the canonical source)
+- `CLAUDE.md` is a symlink pointing to `AGENTS.md`
+- Read either file - they're the same content
+- Commit changes to `AGENTS.md`, the symlink will automatically reflect them
+
+**Directory Structure:**
+```
+/home/julien/github/ha-mcp/           # Main repository (checkout master here)
+├── AGENTS.md                          # This file (canonical source)
+├── CLAUDE.md -> AGENTS.md             # Symlink for convenience
+├── worktree/                          # Git worktrees (gitignored)
+│   ├── issue-42/                      # Feature branch worktree
+│   └── fix-something/                 # Fix branch worktree
+├── local/                             # Scratch work (gitignored)
+└── .claude/agents/                    # Custom agent workflows
+```
+
+**Why use `worktree/` subdirectory:**
+- Keeps worktrees organized in one place
+- Gitignored (won't pollute `git status`)
+- All worktrees automatically inherit `.claude/agents/` workflows
+- Easy cleanup: `git worktree prune` removes stale references
+
+## Worktree Workflow
+
+### Creating Worktrees
+
+**ALWAYS create worktrees in the `worktree/` subdirectory**, not at the repository root.
+
+```bash
+# Correct - worktrees go in worktree/ subdirectory
+cd /home/julien/github/ha-mcp
+git worktree add worktree/issue-42 -b issue-42
+git worktree add worktree/feat-new-feature -b feat/new-feature
+
+# Wrong - don't create worktrees at repo root
+git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
+git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
+```
+
+**Working in a worktree:**
+```bash
+# Navigate to your worktree
+cd worktree/issue-42
+
+# Work normally - you have full access to .claude/agents/
+git status
+git commit -m "feat: implement feature"
+git push
+
+# When done, return to main repo and clean up
+cd /home/julien/github/ha-mcp
+git worktree remove worktree/issue-42
+```
+
+**Cleaning up stale worktrees:**
+```bash
+# If worktree directories were deleted but git still tracks them
+git worktree prune
+```
+
+### Agent Workflows
+
+Custom agent workflows are located in `.claude/agents/`:
+
+| Agent | File | Model | Purpose |
+|-------|------|-------|---------|
+| **issue-analysis** | `issue-analysis.md` | Opus | Deep issue analysis - comprehensive codebase exploration, implementation planning, architectural assessment, complexity evaluation. Complements automated Gemini triage with human-directed deep analysis. |
+| **issue-to-pr-resolver** | `issue-to-pr-resolver.md` | Sonnet | End-to-end issue implementation: pre-flight checks → worktree creation → implementation with tests → pre-PR checkpoint → PR creation → iterative CI/review resolution until merge-ready. |
+| **pr-checker** | `pr-checker.md` | Sonnet | Review and manage existing PRs - check comments, CI status, resolve review threads, monitor until all checks pass. |
+
 ## Project Overview
 
 **Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 80+ tools for entity control, automations, device management, and more.
