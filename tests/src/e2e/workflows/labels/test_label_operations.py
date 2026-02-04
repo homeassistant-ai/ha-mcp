@@ -2,8 +2,10 @@
 Label Operations E2E Tests
 
 Tests for ha_set_entity labels parameter:
-- Set: Replace all labels on an entity
-- Clear: Remove all labels from an entity
+- Set: Replace all labels on an entity (label_operation='set' or default)
+- Add: Add labels to existing ones (label_operation='add')
+- Remove: Remove specific labels (label_operation='remove')
+- Clear: Remove all labels from an entity (labels=[])
 
 Also includes regression test for Issue #396 (entity registry corruption).
 """
@@ -219,6 +221,151 @@ class TestLabelEntityRegistryIntegrity:
         assert_mcp_success(after_result, "get state after label change")
 
         logger.info("Entity properties preserved after label operation")
+
+        # Clean up
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
+
+
+@pytest.mark.labels
+@pytest.mark.cleanup
+class TestLabelAddRemoveOperations:
+    """Test add and remove label operations via ha_set_entity."""
+
+    async def test_add_labels_to_existing(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
+        """Test: label_operation='add' adds labels without removing existing ones."""
+        entity_id = test_entity_id
+
+        # Create two test labels
+        labels = []
+        for name in ["test_add_existing", "test_add_new"]:
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": name},
+            )
+            create_data = assert_mcp_success(create_result, f"create label {name}")
+            label_id = create_data.get("label_id", name)
+            labels.append(label_id)
+            cleanup_tracker.track("label", label_id)
+
+        # Set the first label using default 'set' operation
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [labels[0]]},
+        )
+
+        # Add the second label using 'add' operation
+        result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "labels": [labels[1]],
+                "label_operation": "add",
+            },
+        )
+        data = assert_mcp_success(result, "add label")
+
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        assert labels[0] in entity_labels, "Existing label should still be present"
+        assert labels[1] in entity_labels, "New label should be added"
+
+        logger.info(f"Added label to {entity_id}: {entity_labels}")
+
+        # Clean up
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
+
+    async def test_remove_specific_labels(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
+        """Test: label_operation='remove' removes only specified labels."""
+        entity_id = test_entity_id
+
+        # Create two test labels
+        labels = []
+        for name in ["test_remove_keep", "test_remove_delete"]:
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": name},
+            )
+            create_data = assert_mcp_success(create_result, f"create label {name}")
+            label_id = create_data.get("label_id", name)
+            labels.append(label_id)
+            cleanup_tracker.track("label", label_id)
+
+        # Set both labels
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": labels},
+        )
+
+        # Remove only the second label
+        result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "labels": [labels[1]],
+                "label_operation": "remove",
+            },
+        )
+        data = assert_mcp_success(result, "remove label")
+
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        assert labels[0] in entity_labels, "Unspecified label should remain"
+        assert labels[1] not in entity_labels, "Specified label should be removed"
+
+        logger.info(f"Removed label from {entity_id}: {entity_labels}")
+
+        # Clean up
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": []},
+        )
+
+    async def test_add_prevents_duplicates(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
+        """Test: Adding an already-present label doesn't create duplicates."""
+        entity_id = test_entity_id
+
+        # Create a test label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "test_dup_check"},
+        )
+        create_data = assert_mcp_success(create_result, "create label")
+        label_id = create_data.get("label_id", "test_dup_check")
+        cleanup_tracker.track("label", label_id)
+
+        # Set the label
+        await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "labels": [label_id]},
+        )
+
+        # Try to add the same label again
+        result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "labels": [label_id],
+                "label_operation": "add",
+            },
+        )
+        data = assert_mcp_success(result, "add duplicate label")
+
+        entity_labels = data.get("entity_entry", {}).get("labels", [])
+        # Count occurrences - should only be 1
+        count = entity_labels.count(label_id)
+        assert count == 1, f"Label should appear exactly once, found {count}"
+
+        logger.info(f"Duplicate prevention verified for {entity_id}")
 
         # Clean up
         await mcp_client.call_tool(
