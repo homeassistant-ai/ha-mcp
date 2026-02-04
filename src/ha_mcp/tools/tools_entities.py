@@ -82,8 +82,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Add new labels without duplicates
                 final_labels = list(set(current_labels) | set(parsed_labels))
             else:  # remove
-                # Remove specified labels
-                final_labels = [lbl for lbl in current_labels if lbl not in parsed_labels]
+                # Remove specified labels - use set for O(1) membership check
+                labels_to_remove = set(parsed_labels)
+                final_labels = [lbl for lbl in current_labels if lbl not in labels_to_remove]
 
         # Build update message for entity registry
         message: dict[str, Any] = {
