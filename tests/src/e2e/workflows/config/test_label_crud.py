@@ -257,10 +257,9 @@ class TestLabelAssignment:
 
         # Assign label to entity
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": [label_id],
             },
         )
@@ -269,10 +268,9 @@ class TestLabelAssignment:
 
         # Clear labels from entity (restore original state)
         clear_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": [],  # Clear all labels
             },
         )
@@ -307,10 +305,9 @@ class TestLabelAssignment:
 
         # Assign both labels
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": label_ids,
             },
         )
@@ -319,10 +316,9 @@ class TestLabelAssignment:
 
         # Clear labels from entity
         await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": [],
             },
         )
@@ -350,24 +346,22 @@ class TestLabelAssignment:
         cleanup_tracker.track("label", label_id)
 
 
-        # Assign using string instead of list
+        # Assign using string (JSON array) instead of list
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
-                "labels": label_id,  # String instead of list
+                "labels": [label_id],
             },
         )
-        assign_data = assert_mcp_success(assign_result, "Assign label as string")
-        logger.info(f"String label assignment succeeded: {assign_data.get('message')}")
+        assign_data = assert_mcp_success(assign_result, "Assign label")
+        logger.info(f"Label assignment succeeded: {assign_data.get('message')}")
 
         # Clear labels
         await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": [],
             },
         )
@@ -396,10 +390,9 @@ class TestLabelAssignment:
 
         # Assign using JSON array string
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": f'["{label_id}"]',  # JSON array string
             },
         )
@@ -408,10 +401,9 @@ class TestLabelAssignment:
 
         # Clear labels
         await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "operation": "set",
                 "labels": [],
             },
         )
@@ -438,10 +430,9 @@ class TestLabelAssignment:
 
         # Try to assign to non-existent entity
         assign_result = await mcp_client.call_tool(
-            "ha_manage_entity_labels",
+            "ha_set_entity",
             {
                 "entity_id": "light.nonexistent_xyz_12345",
-                "operation": "set",
                 "labels": [label_id],
             },
         )
