@@ -12,7 +12,7 @@ from ..errors import (
     create_validation_error,
 )
 from ..client.rest_client import HomeAssistantConnectionError
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param, parse_json_param
 
 
@@ -79,11 +79,11 @@ def register_service_tools(mcp, client, **kwargs):
             try:
                 parsed_data = parse_json_param(data, "data")
             except ValueError as e:
-                return create_validation_error(
+                raise_tool_error(create_validation_error(
                     f"Invalid data parameter: {e}",
                     parameter="data",
                     invalid_json=True,
-                )
+                ))
 
             # Ensure service_data is a dict
             service_data: dict[str, Any] = {}
@@ -91,11 +91,11 @@ def register_service_tools(mcp, client, **kwargs):
                 if isinstance(parsed_data, dict):
                     service_data = parsed_data
                 else:
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         "Data parameter must be a JSON object",
                         parameter="data",
                         details=f"Received type: {type(parsed_data).__name__}",
-                    )
+                    ))
 
             if entity_id:
                 service_data["entity_id"] = entity_id
@@ -154,10 +154,11 @@ def register_service_tools(mcp, client, **kwargs):
                     "service": service,
                     "entity_id": entity_id,
                 },
+                raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = _build_service_suggestions(domain, service, entity_id)
-            return error_response
+            raise_tool_error(error_response)
         except Exception as error:
             # Use structured error response
             error_response = exception_to_structured_error(
@@ -167,6 +168,7 @@ def register_service_tools(mcp, client, **kwargs):
                     "service": service,
                     "entity_id": entity_id,
                 },
+                raise_error=False,
             )
             suggestions = _build_service_suggestions(domain, service, entity_id)
             if entity_id:
@@ -177,7 +179,7 @@ def register_service_tools(mcp, client, **kwargs):
             # Merge suggestions into error response
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = suggestions
-            return error_response
+            raise_tool_error(error_response)
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     @log_tool_usage
@@ -204,19 +206,19 @@ def register_service_tools(mcp, client, **kwargs):
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
-            return create_validation_error(
+            raise_tool_error(create_validation_error(
                 f"Invalid operations parameter: {e}",
                 parameter="operations",
                 invalid_json=True,
-            )
+            ))
 
         # Ensure operations is a list of dicts
         if parsed_operations is None or not isinstance(parsed_operations, list):
-            return create_validation_error(
+            raise_tool_error(create_validation_error(
                 "Operations parameter must be a list",
                 parameter="operations",
                 details=f"Received type: {type(parsed_operations).__name__}",
-            )
+            ))
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
         result = await device_tools.bulk_device_control(
