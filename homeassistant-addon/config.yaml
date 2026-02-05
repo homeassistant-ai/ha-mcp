@@ -18,6 +18,10 @@ hassio_role: default
 homeassistant_api: true
 # Enable host network mode for local network access
 host_network: true
+# Enable ingress for Nabu Casa remote access (coexists with direct port access)
+ingress: true
+ingress_port: 0
+ingress_stream: true
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
