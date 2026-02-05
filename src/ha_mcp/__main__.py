@@ -640,9 +640,9 @@ def main_oauth() -> None:
     URL and Long-Lived Access Token.
 
     Environment:
+    - MCP_BASE_URL (required): Public URL where this server is accessible (e.g., https://your-tunnel.com)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
-    - MCP_BASE_URL (optional, auto-detected from incoming requests)
     - LOG_LEVEL (optional, default: INFO)
 
     Note: HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN are NOT required in this mode.
@@ -662,7 +662,12 @@ def main_oauth() -> None:
 
     port = int(os.getenv("MCP_PORT", "8086"))
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
-    base_url = os.getenv("MCP_BASE_URL")  # Optional - will be auto-detected if not set
+    base_url = os.getenv("MCP_BASE_URL")
+
+    if not base_url:
+        logger.error("MCP_BASE_URL environment variable is required for OAuth mode")
+        logger.error("Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com")
+        sys.exit(1)
 
     # Set up signal handlers
     _setup_signal_handlers()
@@ -681,7 +686,13 @@ def main_oauth() -> None:
 
 
 async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
-    """Run the OAuth-authenticated MCP server."""
+    """Run the OAuth-authenticated MCP server.
+
+    Args:
+        base_url: Public URL where this server is accessible (required)
+        port: Port to listen on
+        path: MCP endpoint path
+    """
     global _shutdown_event
 
     from ha_mcp.auth import HomeAssistantOAuthProvider
