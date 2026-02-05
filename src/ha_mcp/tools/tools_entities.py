@@ -11,8 +11,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from fastmcp.exceptions import ToolError
+
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
 
@@ -445,20 +447,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed_aliases = parse_string_list_param(aliases, "aliases")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid aliases parameter: {e}",
-                    )
+                    ))
 
             parsed_labels = None
             if labels is not None:
                 try:
                     parsed_labels = parse_string_list_param(labels, "labels")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid labels parameter: {e}",
-                    )
+                    ))
 
             # Parse and validate expose_to parameter
             parsed_expose_to: dict[str, bool] | None = None
@@ -466,17 +468,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed = parse_json_param(expose_to, "expose_to")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         str(e),
-                    )
+                    ))
 
                 if not isinstance(parsed, dict):
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "expose_to must be a dict mapping assistant IDs to booleans, "
                         'e.g. {"conversation": true, "cloud.alexa": false}',
-                    )
+                    ))
                 parsed_expose_to = parsed
 
                 # Validate assistant names
@@ -484,26 +486,26 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     a for a in parsed_expose_to if a not in KNOWN_ASSISTANTS
                 ]
                 if invalid_assistants:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid assistant(s) in expose_to: {invalid_assistants}. "
                         f"Valid: {KNOWN_ASSISTANTS}",
-                    )
+                    ))
 
                 # Coerce values to bool
                 for asst, val in parsed_expose_to.items():
                     try:
                         coerced = coerce_bool_param(val, f"expose_to[{asst}]")
                     except ValueError as e:
-                        return create_error_response(
+                        raise_tool_error(create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             str(e),
-                        )
+                        ))
                     if coerced is None:
-                        return create_error_response(
+                        raise_tool_error(create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             f"expose_to[{asst}] must be a boolean value",
-                        )
+                        ))
                     parsed_expose_to[asst] = coerced
 
             # Single entity case - use existing logic
@@ -579,10 +581,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
             eid_context = entity_id if isinstance(entity_id, str) else entity_ids
-            return exception_to_structured_error(e, context={"entity_id": eid_context})
+            exception_to_structured_error(e, context={"entity_id": eid_context})
 
     @mcp.tool(
         annotations={
@@ -768,6 +772,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except Exception as e:
             logger.error(f"Error getting entity: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids}
             )

@@ -12,8 +12,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from fastmcp.exceptions import ToolError
+
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, raise_tool_error
 from .util_helpers import parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -386,10 +388,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 labels = parse_string_list_param(labels, "labels")
                 options = parse_string_list_param(options, "options")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid list parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update based on helper_id
             action = "update" if helper_id else "create"
@@ -697,6 +699,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Unexpected action: {action}",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             return {
                 "success": False,
