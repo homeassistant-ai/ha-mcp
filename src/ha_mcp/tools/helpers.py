@@ -32,7 +32,7 @@ from ..utils.usage_logger import log_tool_call
 logger = logging.getLogger(__name__)
 
 
-def raise_tool_error(error_response: dict[str, Any]) -> None:
+def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
     """
     Raise a ToolError with structured error information.
 
