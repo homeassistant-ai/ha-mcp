@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,7 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
     async def entity_exists():
         nonlocal attempt
         attempt += 1
-        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
         # Check if 'data' key exists (not 'success' key)
         success = 'data' in data and data['data'] is not None
 
@@ -386,7 +385,8 @@ class TestInputSelectCRUD:
         """Test that input_select requires options."""
         logger.info("Testing input_select without options (should fail)")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_select",
@@ -394,8 +394,6 @@ class TestInputSelectCRUD:
                 # Missing required options
             },
         )
-
-        data = parse_mcp_result(result)
         assert data.get("success") is False, (
             f"Should fail without options: {data}"
         )
@@ -692,15 +690,14 @@ async def test_helper_delete_nonexistent(mcp_client):
     """Test deleting a non-existent helper."""
     logger.info("Testing delete of non-existent helper")
 
-    result = await mcp_client.call_tool(
+    data = await safe_call_tool(
+        mcp_client,
         "ha_config_remove_helper",
         {
             "helper_type": "input_boolean",
             "helper_id": "nonexistent_helper_xyz_12345",
         },
     )
-
-    data = parse_mcp_result(result)
 
     # Should either fail or indicate already deleted
     if data.get("success"):
@@ -938,8 +935,7 @@ class TestScheduleCRUD:
 
         # Wait for entity to be registered (schedule is either on or off depending on current time)
         async def check_schedule_exists():
-            result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-            data = parse_mcp_result(result)
+            data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
             if 'data' in data and data['data'] is not None:
                 state = data.get("data", {}).get("state")
@@ -1051,7 +1047,8 @@ class TestZoneCRUD:
         """Test that zone requires latitude and longitude (validated by HA)."""
         logger.info("Testing zone without coordinates (HA should reject)")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "zone",
@@ -1059,8 +1056,6 @@ class TestZoneCRUD:
                 # Missing required latitude/longitude - HA will validate
             },
         )
-
-        data = parse_mcp_result(result)
         assert data.get("success") is False, f"Should fail without coordinates: {data}"
         logger.info("HA properly validates required zone coordinates")
 
