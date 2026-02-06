@@ -64,16 +64,15 @@ def register_notification_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             notifications = result.get("result", [])
 
-            formatted = []
-            for notif in notifications:
-                formatted.append(
-                    {
-                        "notification_id": notif.get("notification_id"),
-                        "title": notif.get("title"),
-                        "message": notif.get("message"),
-                        "created_at": notif.get("created_at"),
-                    }
-                )
+            formatted = [
+                {
+                    "notification_id": notif.get("notification_id"),
+                    "title": notif.get("title"),
+                    "message": notif.get("message"),
+                    "created_at": notif.get("created_at"),
+                }
+                for notif in notifications
+            ]
 
             return {
                 "success": True,
