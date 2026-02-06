@@ -52,5 +52,5 @@ ENV HOMEASSISTANT_URL="" \
     BACKUP_HINT="normal"
 
 # Default: Run in stdio mode using fastmcp.json
-# For HTTP mode, override with: docker run ... ha-mcp fastmcp run fastmcp-http.json
+# For HTTP mode: docker run ... IMAGE ha-mcp-web
 CMD ["fastmcp", "run", "fastmcp.json"]
