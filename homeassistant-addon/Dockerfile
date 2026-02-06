@@ -19,6 +19,9 @@ RUN uv pip install --system --no-cache .
 COPY homeassistant-addon/start.py /
 RUN chmod a+x /start.py
 
+# Copy bundled MCP webhook proxy integration for Nabu Casa remote access
+COPY homeassistant-addon/mcp_proxy /opt/mcp_proxy
+
 # Labels
 LABEL \
     io.hass.name="Home Assistant MCP Server" \
