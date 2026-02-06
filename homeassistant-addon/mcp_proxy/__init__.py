@@ -74,7 +74,7 @@ def _read_config() -> dict | None:
         return None
     try:
         return json.loads(CONFIG_FILE.read_text())
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as e:
         _LOGGER.error("MCP Proxy: Failed to read %s: %s", CONFIG_FILE, e)
         return None
 
@@ -106,22 +106,25 @@ async def _handle_webhook(
             ) as upstream_resp:
                 content_type = upstream_resp.headers.get("Content-Type", "")
 
+                # Common headers for both streaming and non-streaming
+                resp_headers = {
+                    "Cache-Control": "no-cache, no-transform",
+                    "Content-Encoding": "identity",
+                }
+                mcp_session = upstream_resp.headers.get("Mcp-Session-Id")
+                if mcp_session:
+                    resp_headers["Mcp-Session-Id"] = mcp_session
+
                 if "text/event-stream" in content_type:
                     # SSE streaming response - prevent HA compression middleware
                     # from breaking it (supervisor#6470)
+                    resp_headers["Content-Type"] = "text/event-stream"
+                    resp_headers["X-Accel-Buffering"] = "no"
+
                     response = web.StreamResponse(
                         status=upstream_resp.status,
-                        headers={
-                            "Content-Type": "text/event-stream",
-                            "Cache-Control": "no-cache, no-transform",
-                            "Content-Encoding": "identity",
-                            "X-Accel-Buffering": "no",
-                        },
+                        headers=resp_headers,
                     )
-                    mcp_session = upstream_resp.headers.get("Mcp-Session-Id")
-                    if mcp_session:
-                        response.headers["Mcp-Session-Id"] = mcp_session
-
                     await response.prepare(request)
                     async for chunk in upstream_resp.content.iter_any():
                         await response.write(chunk)
@@ -129,16 +132,8 @@ async def _handle_webhook(
                     return response
                 else:
                     # Non-streaming response
+                    resp_headers["Content-Type"] = content_type
                     resp_body = await upstream_resp.read()
-                    resp_headers = {
-                        "Content-Type": content_type,
-                        "Cache-Control": "no-cache, no-transform",
-                        "Content-Encoding": "identity",
-                    }
-                    mcp_session = upstream_resp.headers.get("Mcp-Session-Id")
-                    if mcp_session:
-                        resp_headers["Mcp-Session-Id"] = mcp_session
-
                     return web.Response(
                         status=upstream_resp.status,
                         body=resp_body,
@@ -149,7 +144,7 @@ async def _handle_webhook(
         _LOGGER.error("MCP Proxy: upstream request failed: %s", err)
         return web.Response(status=502, text=f"MCP Proxy: upstream error: {err}")
     except Exception as err:
-        _LOGGER.error("MCP Proxy: unexpected error: %s", err)
+        _LOGGER.exception("MCP Proxy: unexpected error: %s", err)
         return web.Response(status=500, text=f"MCP Proxy: internal error: {err}")
 
 

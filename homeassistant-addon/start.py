@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -99,7 +100,7 @@ def _supervisor_api_get(path: str) -> dict | None:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
             return data.get("data", {})
-    except Exception as e:
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log_error(f"Failed to query Supervisor API ({path}): {e}")
         return None
 
@@ -179,8 +180,8 @@ def setup_nabu_casa_remote(
     if webhook_id_file.exists():
         try:
             webhook_id = webhook_id_file.read_text().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            log_error(f"Nabu Casa remote: Failed to read webhook ID: {e}")
     if not webhook_id:
         webhook_id = f"mcp_{secrets.token_hex(16)}"
         try:
@@ -212,8 +213,8 @@ def setup_nabu_casa_remote(
                     src_ver = json.loads(src_manifest.read_text()).get("version")
                     if dst_ver == src_ver:
                         needs_update = False
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_error(f"Nabu Casa remote: Failed to compare integration versions: {e}")
 
             if needs_update:
                 first_install = not integration_dst.exists()
