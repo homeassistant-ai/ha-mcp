@@ -47,7 +47,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         path = custom_path.strip()
         if not path.startswith("/"):
             path = "/" + path
-        log_info(f"Using custom secret path from configuration")
+        log_info("Using custom secret path from configuration")
         # Update stored path for consistency
         secret_file.write_text(path)
         return path
@@ -57,7 +57,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         try:
             stored_path = secret_file.read_text().strip()
             if stored_path:
-                log_info(f"Using existing auto-generated secret path")
+                log_info("Using existing auto-generated secret path")
                 return stored_path
         except Exception as e:
             log_error(f"Failed to read stored secret path: {e}")
