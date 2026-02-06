@@ -136,7 +136,7 @@ def get_nabu_casa_url() -> str | None:
                 remote_domain = cloud_data.get("remote_domain")
                 if remote_domain:
                     return f"https://{remote_domain}"
-    except Exception as e:
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log_info(f"Nabu Casa cloud status not available: {e}")
 
     return None
@@ -213,7 +213,7 @@ def setup_nabu_casa_remote(
                     src_ver = json.loads(src_manifest.read_text()).get("version")
                     if dst_ver == src_ver:
                         needs_update = False
-                except Exception as e:
+                except (OSError, json.JSONDecodeError) as e:
                     log_error(f"Nabu Casa remote: Failed to compare integration versions: {e}")
 
             if needs_update:
@@ -242,7 +242,7 @@ def setup_nabu_casa_remote(
                 configuration_yaml.write_text(yaml_content)
                 log_info("Nabu Casa remote: Added mcp_proxy to configuration.yaml")
                 first_install = True
-    except Exception as e:
+    except OSError as e:
         log_error(f"Nabu Casa remote: Failed to update configuration.yaml: {e}")
 
     if first_install:

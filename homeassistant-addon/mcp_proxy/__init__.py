@@ -142,10 +142,10 @@ async def _handle_webhook(
 
     except aiohttp.ClientError as err:
         _LOGGER.error("MCP Proxy: upstream request failed: %s", err)
-        return web.Response(status=502, text=f"MCP Proxy: upstream error: {err}")
+        return web.Response(status=502, text="MCP Proxy: upstream unavailable")
     except Exception as err:
         _LOGGER.exception("MCP Proxy: unexpected error: %s", err)
-        return web.Response(status=500, text=f"MCP Proxy: internal error: {err}")
+        return web.Response(status=500, text="MCP Proxy: internal error")
 
 
 async def async_unload(hass: HomeAssistant) -> bool:
