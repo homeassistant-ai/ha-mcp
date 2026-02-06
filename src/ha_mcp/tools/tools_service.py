@@ -6,12 +6,23 @@ This module provides service execution and WebSocket-enabled operation monitorin
 
 from typing import Any, cast
 
+import httpx
+
 from ..errors import (
     create_validation_error,
 )
 from ..client.rest_client import HomeAssistantConnectionError
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import coerce_bool_param, parse_json_param
+
+
+def _build_service_suggestions(domain: str, service: str, entity_id: str | None) -> list[str]:
+    """Build common error suggestions for service call failures."""
+    return [
+        f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
+        f"Check available services for {domain} domain using ha_get_domain_docs()",
+        "Use ha_search_entities() to find correct entity IDs",
+    ]
 
 
 def register_service_tools(mcp, client, **kwargs):
@@ -113,8 +124,7 @@ def register_service_tools(mcp, client, **kwargs):
             # Check if this is a timeout - for service calls, timeouts typically
             # mean the service was dispatched but HA didn't respond in time.
             # The operation is likely still running (e.g., update.install, long automations).
-            error_str = str(error).lower()
-            if "timeout" in error_str:
+            if isinstance(error.__cause__, httpx.TimeoutException):
                 return {
                     "success": True,
                     "partial": True,
@@ -146,11 +156,7 @@ def register_service_tools(mcp, client, **kwargs):
                 },
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
-                    f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
-                    f"Check available services for {domain} domain using ha_get_domain_docs()",
-                    "Use ha_search_entities() to find correct entity IDs",
-                ]
+                error_response["error"]["suggestions"] = _build_service_suggestions(domain, service, entity_id)
             return error_response
         except Exception as error:
             # Use structured error response
@@ -162,12 +168,7 @@ def register_service_tools(mcp, client, **kwargs):
                     "entity_id": entity_id,
                 },
             )
-            # Add service-specific suggestions
-            suggestions = [
-                f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
-                f"Check available services for {domain} domain using ha_get_domain_docs()",
-                "Use ha_search_entities() to find correct entity IDs",
-            ]
+            suggestions = _build_service_suggestions(domain, service, entity_id)
             if entity_id:
                 suggestions.extend([
                     f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
