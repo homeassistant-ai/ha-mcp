@@ -16,7 +16,7 @@ from ..errors import (
     create_validation_error,
 )
 from .helpers import exception_to_structured_error, log_tool_usage
-from .util_helpers import parse_json_param
+from .util_helpers import coerce_bool_param, parse_json_param, wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 default=None,
             ),
         ] = None,
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.
@@ -448,6 +455,15 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 )
 
             result = await client.upsert_automation_config(config_dict, identifier)
+
+            # Wait for automation to be queryable
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
+            entity_id = result.get("entity_id")
+            if wait_bool and entity_id:
+                registered = await wait_for_entity_registered(client, entity_id)
+                if not registered:
+                    result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
+
             return {
                 "success": True,
                 **result,
@@ -487,6 +503,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 description="Automation entity_id (e.g., 'automation.old_automation') or unique_id to delete"
             ),
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for automation to be fully removed before returning. Default: True.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Delete a Home Assistant automation.
@@ -498,7 +521,18 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         **WARNING:** Deleting an automation removes it permanently from your Home Assistant configuration.
         """
         try:
+            # Resolve entity_id for wait verification (identifier may be a unique_id)
+            entity_id_for_wait = identifier if identifier.startswith("automation.") else None
+
             result = await client.delete_automation_config(identifier)
+
+            # Wait for entity to be removed
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
+            if wait_bool and entity_id_for_wait:
+                removed = await wait_for_entity_removed(client, entity_id_for_wait)
+                if not removed:
+                    result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
+
             return {"success": True, "action": "delete", **result}
         except Exception as e:
             logger.error(f"Error deleting automation: {e}")
