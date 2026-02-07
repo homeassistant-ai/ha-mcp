@@ -88,8 +88,8 @@ def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: Literal[True] = True,
-) -> NoReturn: ...
+    raise_error: Literal[False] = False,
+) -> dict[str, Any]: ...
 
 
 @overload
@@ -97,34 +97,37 @@ def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: Literal[False],
-) -> dict[str, Any]: ...
+    raise_error: Literal[True],
+) -> NoReturn: ...
 
 
 def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: bool = True,
+    raise_error: bool = False,
 ) -> dict[str, Any] | NoReturn:
     """
     Convert an exception to a structured error response.
 
     This function maps common exception types to appropriate error codes
-    and creates informative error responses. By default, it raises a ToolError
-    to signal the error at the MCP protocol level (isError=true).
+    and creates informative error responses.
 
     Args:
         error: The exception to convert
         context: Additional context to include in the response
-        raise_error: If True (default), raises ToolError with the structured error.
-                    If False, returns the error dict for further modification.
+        raise_error: If True, raises ToolError with the structured error.
+                    If False (default), returns the error dict.
+
+                    NOTE: The default will change to True in a future PR once
+                    all tools are updated to use ToolError. New code should
+                    explicitly pass raise_error=True for forward compatibility.
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
 
     Raises:
-        ToolError: If raise_error=True (default), raises with JSON-serialized error
+        ToolError: If raise_error=True, raises with JSON-serialized error
     """
     error_str = str(error).lower()
     error_msg = str(error)
@@ -146,28 +149,29 @@ def exception_to_structured_error(
 
     elif isinstance(error, HomeAssistantAPIError):
         # Check for specific error patterns
-        if error.status_code == 404:
-            # Entity or resource not found
-            entity_id = context.get("entity_id") if context else None
-            if entity_id:
-                error_response = create_entity_not_found_error(entity_id, details=error_msg)
-            else:
+        match error.status_code:
+            case 404:
+                # Entity or resource not found
+                entity_id = context.get("entity_id") if context else None
+                if entity_id:
+                    error_response = create_entity_not_found_error(entity_id, details=error_msg)
+                else:
+                    error_response = create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        error_msg,
+                        context=context,
+                    )
+            case 401:
+                error_response = create_auth_error(error_msg)
+            case 400:
+                error_response = create_validation_error(error_msg, context=context)
+            case _:
+                # Generic API error
                 error_response = create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
+                    ErrorCode.SERVICE_CALL_FAILED,
                     error_msg,
                     context=context,
                 )
-        elif error.status_code == 401:
-            error_response = create_auth_error(error_msg)
-        elif error.status_code == 400:
-            error_response = create_validation_error(error_msg, context=context)
-        else:
-            # Generic API error
-            error_response = create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                error_msg,
-                context=context,
-            )
 
     elif isinstance(error, TimeoutError):
         operation = context.get("operation", "request") if context else "request"
