@@ -27,7 +27,7 @@ import uuid
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -94,11 +94,11 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
     """
     try:
         # Try calling ha_list_files - if component is not installed, it returns error
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_list_files",
             {"path": "www/"},
         )
-        data = parse_mcp_result(result)
 
         # Check if we got the "not installed" error
         if data.get("error_code") == "MCP_TOOLS_NOT_INSTALLED":
@@ -778,12 +778,11 @@ class TestMcpToolsComponentNotInstalled:
             # This is the expected case when component is not installed
             # The MCP tool should return a helpful error message
             async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-                result = await mcp.client.call_tool(
+                data = await safe_call_tool(
+                    mcp.client,
                     "ha_list_files",
                     {"path": "www/"},
                 )
-
-                data = parse_mcp_result(result)
 
                 # Should fail with helpful message about installing component
                 if data.get("success") is False or data.get("data", {}).get("success") is False:
