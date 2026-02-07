@@ -5,9 +5,12 @@ Centralized utilities that can be shared across multiple tool implementations.
 """
 
 import functools
+import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal, NoReturn, overload
+
+from fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -27,6 +30,34 @@ from ..errors import (
 from ..utils.usage_logger import log_tool_call
 
 logger = logging.getLogger(__name__)
+
+
+def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
+    """
+    Raise a ToolError with structured error information.
+
+    This function converts a structured error response dictionary into a ToolError
+    exception, which signals to MCP clients that the tool execution failed via
+    the isError flag in the protocol response.
+
+    The structured error information is preserved as JSON in the error message,
+    allowing AI agents to parse and act on the detailed error information.
+
+    Args:
+        error_response: Structured error response dictionary with 'success': False
+                       and 'error' containing code, message, suggestions, etc.
+
+    Raises:
+        ToolError: Always raises with the JSON-serialized error response
+
+    Example:
+        >>> error = create_error_response(
+        ...     ErrorCode.ENTITY_NOT_FOUND,
+        ...     "Entity light.nonexistent not found"
+        ... )
+        >>> raise_tool_error(error)  # Raises ToolError with isError=true
+    """
+    raise ToolError(json.dumps(error_response, indent=2, default=str))
 
 
 async def get_connected_ws_client(
@@ -52,9 +83,29 @@ async def get_connected_ws_client(
     return ws_client, None
 
 
+@overload
 def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
+    *,
+    raise_error: Literal[False] = False,
+) -> dict[str, Any]: ...
+
+
+@overload
+def exception_to_structured_error(
+    error: Exception,
+    context: dict[str, Any] | None = None,
+    *,
+    raise_error: Literal[True],
+) -> NoReturn: ...
+
+
+def exception_to_structured_error(
+    error: Exception,
+    context: dict[str, Any] | None = None,
+    *,
+    raise_error: bool = False,
 ) -> dict[str, Any]:
     """
     Convert an exception to a structured error response.
@@ -65,83 +116,105 @@ def exception_to_structured_error(
     Args:
         error: The exception to convert
         context: Additional context to include in the response
+        raise_error: If True, raises ToolError with the structured error.
+                    If False (default), returns the error dict.
+
+                    NOTE: The default will change to True in a future PR once
+                    all tools are updated to use ToolError. New code should
+                    explicitly pass raise_error=True for forward compatibility.
 
     Returns:
-        Structured error response dictionary
+        Structured error response dictionary (only if raise_error=False)
+
+    Raises:
+        ToolError: If raise_error=True, raises with JSON-serialized error
     """
     error_str = str(error).lower()
     error_msg = str(error)
 
+    error_response: dict[str, Any]
+
     # Handle specific exception types
     if isinstance(error, HomeAssistantConnectionError):
         if "timeout" in error_str:
-            return create_connection_error(error_msg, timeout=True)
-        return create_connection_error(error_msg)
+            error_response = create_connection_error(error_msg, timeout=True)
+        else:
+            error_response = create_connection_error(error_msg)
 
-    if isinstance(error, HomeAssistantAuthError):
+    elif isinstance(error, HomeAssistantAuthError):
         if "expired" in error_str:
-            return create_auth_error(error_msg, expired=True)
-        return create_auth_error(error_msg)
+            error_response = create_auth_error(error_msg, expired=True)
+        else:
+            error_response = create_auth_error(error_msg)
 
-    if isinstance(error, HomeAssistantAPIError):
+    elif isinstance(error, HomeAssistantAPIError):
         # Check for specific error patterns
-        if error.status_code == 404:
-            # Entity or resource not found
-            entity_id = context.get("entity_id") if context else None
-            if entity_id:
-                return create_entity_not_found_error(entity_id, details=error_msg)
-            return create_error_response(
+        match error.status_code:
+            case 404:
+                # Entity or resource not found
+                entity_id = context.get("entity_id") if context else None
+                if entity_id:
+                    error_response = create_entity_not_found_error(entity_id, details=error_msg)
+                else:
+                    error_response = create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        error_msg,
+                        context=context,
+                    )
+            case 401 | 403:
+                error_response = create_auth_error(error_msg)
+            case 400:
+                error_response = create_validation_error(error_msg, context=context)
+            case _:
+                # Generic API error
+                error_response = create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    error_msg,
+                    context=context,
+                )
+
+    elif isinstance(error, TimeoutError):
+        operation = context.get("operation", "request") if context else "request"
+        timeout_seconds = context.get("timeout_seconds", 30) if context else 30
+        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg)
+
+    elif isinstance(error, ValueError):
+        error_response = create_validation_error(error_msg)
+
+    # Check for common error patterns in error message
+    elif "not found" in error_str or "404" in error_str:
+        entity_id = context.get("entity_id") if context else None
+        if entity_id:
+            error_response = create_entity_not_found_error(entity_id, details=error_msg)
+        else:
+            error_response = create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 error_msg,
                 context=context,
             )
-        if error.status_code == 401:
-            return create_auth_error(error_msg)
-        if error.status_code == 400:
-            return create_validation_error(error_msg, context=context)
 
-        # Generic API error
-        return create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
+    elif "timeout" in error_str:
+        error_response = create_timeout_error("operation", 30, details=error_msg)
+
+    elif "connection" in error_str or "connect" in error_str:
+        error_response = create_connection_error(error_msg)
+
+    elif "auth" in error_str or "token" in error_str or "401" in error_str:
+        error_response = create_auth_error(error_msg)
+
+    else:
+        # Default to internal error
+        error_response = create_error_response(
+            ErrorCode.INTERNAL_ERROR,
             error_msg,
+            details="An unexpected error occurred",
             context=context,
         )
 
-    if isinstance(error, TimeoutError):
-        operation = context.get("operation", "request") if context else "request"
-        timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-        return create_timeout_error(operation, timeout_seconds, details=error_msg)
+    if raise_error:
+        raise_tool_error(error_response)
 
-    if isinstance(error, ValueError):
-        return create_validation_error(error_msg)
-
-    # Check for common error patterns in error message
-    if "not found" in error_str or "404" in error_str:
-        entity_id = context.get("entity_id") if context else None
-        if entity_id:
-            return create_entity_not_found_error(entity_id, details=error_msg)
-        return create_error_response(
-            ErrorCode.RESOURCE_NOT_FOUND,
-            error_msg,
-            context=context,
-        )
-
-    if "timeout" in error_str:
-        return create_timeout_error("operation", 30, details=error_msg)
-
-    if "connection" in error_str or "connect" in error_str:
-        return create_connection_error(error_msg)
-
-    if "auth" in error_str or "token" in error_str or "401" in error_str:
-        return create_auth_error(error_msg)
-
-    # Default to internal error
-    return create_error_response(
-        ErrorCode.INTERNAL_ERROR,
-        error_msg,
-        details="An unexpected error occurred",
-        context=context,
-    )
+    return error_response
 
 
 def log_tool_usage(func: Any) -> Any:

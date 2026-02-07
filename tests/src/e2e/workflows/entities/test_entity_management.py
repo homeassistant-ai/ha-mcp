@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
+from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
 from tests.src.e2e.utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
@@ -169,11 +169,11 @@ class TestEntityManagement:
 
     async def test_set_entity_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity in ha_set_entity."""
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {"entity_id": "sensor.nonexistent_entity_xyz", "name": "Test Name"},
         )
-        data = parse_mcp_result(result)
         assert not data.get("success", False), "Should fail for non-existent entity"
 
         logger.info("Non-existent entity error handling verified")
@@ -484,11 +484,11 @@ class TestEntityManagement:
 
     async def test_get_entity_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity in ha_get_entity."""
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_get_entity",
             {"entity_id": "sensor.nonexistent_entity_xyz"},
         )
-        data = parse_mcp_result(result)
 
         assert not data.get("success", True), "Should fail for non-existent entity"
         assert "error" in data, f"Missing error field: {data}"
