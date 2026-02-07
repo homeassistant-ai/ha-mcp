@@ -596,9 +596,7 @@ When a tool's functionality is fully covered by another tool, **remove** the red
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
 
-**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
-
-**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
+**Implementation (#381)**: Tools have an optional `wait` parameter (default `True`) that controls whether they poll for completion:
 
 ```python
 # Config operations wait by default
@@ -611,12 +609,15 @@ await _verify_all_created(entity_ids)  # Batch verification
 ```
 
 **Tool Categories**:
-- **Config ops** (automations, helpers, scripts): MUST wait by default
-- **Service calls** (lights, switches): SHOULD wait for state change
-- **Async ops** (automation triggers, external integrations): Return immediately, users poll
-- **Query ops** (get_state, search): Return immediately
+- **Config ops** (automations, helpers, scripts): Wait by default (poll until entity queryable/removed)
+- **Service calls** (lights, switches): Wait for state change on state-changing services (turn_on, turn_off, toggle, etc.)
+- **Async ops** (automation triggers, external integrations): Return immediately (not state-changing)
+- **Query ops** (get_state, search): Return immediately (no `wait` parameter)
 
-See issue #381 for implementation plan.
+**Shared utilities** in `src/ha_mcp/tools/util_helpers.py`:
+- `wait_for_entity_registered(client, entity_id)` — polls until entity accessible via state API
+- `wait_for_entity_removed(client, entity_id)` — polls until entity no longer accessible
+- `wait_for_state_change(client, entity_id, expected_state)` — polls until state changes
 
 ## Context Engineering & Progressive Disclosure
 
