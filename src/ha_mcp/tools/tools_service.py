@@ -6,11 +6,23 @@ This module provides service execution and WebSocket-enabled operation monitorin
 
 from typing import Any, cast
 
+import httpx
+
 from ..errors import (
     create_validation_error,
 )
-from .helpers import exception_to_structured_error
+from ..client.rest_client import HomeAssistantConnectionError
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import coerce_bool_param, parse_json_param
+
+
+def _build_service_suggestions(domain: str, service: str, entity_id: str | None) -> list[str]:
+    """Build common error suggestions for service call failures."""
+    return [
+        f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
+        f"Check available services for {domain} domain using ha_get_domain_docs()",
+        "Use ha_search_entities() to find correct entity IDs",
+    ]
 
 
 def register_service_tools(mcp, client, **kwargs):
@@ -20,6 +32,7 @@ def register_service_tools(mcp, client, **kwargs):
         raise ValueError("device_tools is required for service tools registration")
 
     @mcp.tool(annotations={"destructiveHint": True, "title": "Call Service"})
+    @log_tool_usage
     async def ha_call_service(
         domain: str,
         service: str,
@@ -107,6 +120,44 @@ def register_service_tools(mcp, client, **kwargs):
                 response["service_response"] = result.get("service_response", result)
 
             return response
+        except HomeAssistantConnectionError as error:
+            # Check if this is a timeout - for service calls, timeouts typically
+            # mean the service was dispatched but HA didn't respond in time.
+            # The operation is likely still running (e.g., update.install, long automations).
+            if isinstance(error.__cause__, httpx.TimeoutException):
+                return {
+                    "success": True,
+                    "partial": True,
+                    "domain": domain,
+                    "service": service,
+                    "entity_id": entity_id,
+                    "parameters": data,
+                    "message": (
+                        f"Service {domain}.{service} was dispatched but Home Assistant "
+                        f"did not respond within the timeout period. The operation is likely "
+                        f"still running in the background."
+                    ),
+                    "warning": (
+                        "Response timed out. This is normal for long-running services "
+                        f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
+                        "to check the current status."
+                        if entity_id
+                        else "Response timed out. This is normal for long-running services. "
+                        "The service was dispatched and may still be executing."
+                    ),
+                }
+            # Non-timeout connection errors are real failures
+            error_response = exception_to_structured_error(
+                error,
+                context={
+                    "domain": domain,
+                    "service": service,
+                    "entity_id": entity_id,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = _build_service_suggestions(domain, service, entity_id)
+            return error_response
         except Exception as error:
             # Use structured error response
             error_response = exception_to_structured_error(
@@ -117,12 +168,7 @@ def register_service_tools(mcp, client, **kwargs):
                     "entity_id": entity_id,
                 },
             )
-            # Add service-specific suggestions
-            suggestions = [
-                f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
-                f"Check available services for {domain} domain using ha_get_domain_docs()",
-                "Use ha_search_entities() to find correct entity IDs",
-            ]
+            suggestions = _build_service_suggestions(domain, service, entity_id)
             if entity_id:
                 suggestions.extend([
                     f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
@@ -134,6 +180,7 @@ def register_service_tools(mcp, client, **kwargs):
             return error_response
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @log_tool_usage
     async def ha_get_operation_status(
         operation_id: str, timeout_seconds: int = 10
     ) -> dict[str, Any]:
@@ -144,6 +191,7 @@ def register_service_tools(mcp, client, **kwargs):
         return cast(dict[str, Any], result)
 
     @mcp.tool(annotations={"destructiveHint": True, "title": "Bulk Control"})
+    @log_tool_usage
     async def ha_bulk_control(
         operations: str | list[dict[str, Any]], parallel: bool | str = True
     ) -> dict[str, Any]:
@@ -177,6 +225,7 @@ def register_service_tools(mcp, client, **kwargs):
         return cast(dict[str, Any], result)
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Bulk Operation Status"})
+    @log_tool_usage
     async def ha_get_bulk_status(operation_ids: list[str]) -> dict[str, Any]:
         """
         Check status of multiple device control operations.
