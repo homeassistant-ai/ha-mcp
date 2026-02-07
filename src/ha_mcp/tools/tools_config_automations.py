@@ -522,7 +522,20 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             # Resolve entity_id for wait verification (identifier may be a unique_id)
-            entity_id_for_wait = identifier if identifier.startswith("automation.") else None
+            entity_id_for_wait: str | None = None
+            if identifier.startswith("automation."):
+                entity_id_for_wait = identifier
+            else:
+                # Try to find entity_id by matching unique_id in automation states
+                try:
+                    states = await client.get_states()
+                    for state in states:
+                        eid = state.get("entity_id", "")
+                        if eid.startswith("automation.") and state.get("attributes", {}).get("id") == identifier:
+                            entity_id_for_wait = eid
+                            break
+                except Exception:
+                    pass  # Graceful degradation: wait will be skipped
 
             result = await client.delete_automation_config(identifier)
 

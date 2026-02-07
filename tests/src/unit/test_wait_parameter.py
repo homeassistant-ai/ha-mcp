@@ -36,6 +36,15 @@ class TestAutomationWaitParameter:
         client.get_entity_state = AsyncMock(
             return_value={"state": "on", "entity_id": "automation.test"}
         )
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "automation.test",
+                    "state": "on",
+                    "attributes": {"id": "12345", "friendly_name": "Test"},
+                }
+            ]
+        )
         return client
 
     @pytest.fixture
@@ -116,6 +125,20 @@ class TestAutomationWaitParameter:
             )
             assert result["success"] is True
             mock_wait.assert_not_called()
+
+    async def test_remove_automation_by_unique_id_still_waits(self, register_tools, mock_client):
+        """wait=True works even when identifier is a unique_id, not an entity_id."""
+        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+            mock_wait.return_value = True
+            result = await register_tools["ha_config_remove_automation"](
+                identifier="12345",  # unique_id, not entity_id
+            )
+            assert result["success"] is True
+            # Should resolve unique_id to entity_id via get_states and still wait
+            mock_wait.assert_called_once()
+            # Verify it resolved to the correct entity_id
+            call_args = mock_wait.call_args
+            assert call_args[0][1] == "automation.test"
 
 
 class TestScriptWaitParameter:
