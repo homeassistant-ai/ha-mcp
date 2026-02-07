@@ -241,6 +241,8 @@ async def wait_for_entity_registered(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id}: {e}")
             raise
+        except Exception as e:
+            logger.debug(f"Unexpected error polling {entity_id}: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} not registered within {timeout}s")
     return False
@@ -281,6 +283,8 @@ async def wait_for_entity_removed(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id} removal: {e}")
             raise
+        except Exception as e:
+            logger.debug(f"Unexpected error polling {entity_id} removal: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} still exists after {timeout}s")
     return False

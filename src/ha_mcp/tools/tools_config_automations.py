@@ -460,9 +460,12 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = result.get("entity_id")
             if wait_bool and entity_id:
-                registered = await wait_for_entity_registered(client, entity_id)
-                if not registered:
-                    result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
+                try:
+                    registered = await wait_for_entity_registered(client, entity_id)
+                    if not registered:
+                        result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
+                except Exception as e:
+                    result["warning"] = f"Automation created but verification failed: {e}"
 
             return {
                 "success": True,
@@ -542,9 +545,12 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Wait for entity to be removed
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             if wait_bool and entity_id_for_wait:
-                removed = await wait_for_entity_removed(client, entity_id_for_wait)
-                if not removed:
-                    result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
+                try:
+                    removed = await wait_for_entity_removed(client, entity_id_for_wait)
+                    if not removed:
+                        result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
+                except Exception as e:
+                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {"success": True, "action": "delete", **result}
         except Exception as e:

@@ -156,15 +156,18 @@ def register_service_tools(mcp, client, **kwargs):
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:
-                expected = _SERVICE_TO_STATE.get(service)
-                new_state = await wait_for_state_change(
-                    client, entity_id, expected_state=expected,
-                    initial_state=initial_state, timeout=10.0,
-                )
-                if new_state:
-                    response["verified_state"] = new_state.get("state")
-                else:
-                    response["warning"] = "Service executed but state change could not be verified within timeout."
+                try:
+                    expected = _SERVICE_TO_STATE.get(service)
+                    new_state = await wait_for_state_change(
+                        client, entity_id, expected_state=expected,
+                        initial_state=initial_state, timeout=10.0,
+                    )
+                    if new_state:
+                        response["verified_state"] = new_state.get("state")
+                    else:
+                        response["warning"] = "Service executed but state change could not be verified within timeout."
+                except Exception as e:
+                    response["warning"] = f"Service executed but state verification failed: {e}"
 
             return response
         except Exception as error:

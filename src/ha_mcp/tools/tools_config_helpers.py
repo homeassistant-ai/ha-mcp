@@ -592,9 +592,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Wait for entity to be properly registered before proceeding
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
                     if wait_bool and entity_id:
-                        registered = await wait_for_entity_registered(client, entity_id)
-                        if not registered:
-                            helper_data["warning"] = f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                helper_data["warning"] = f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
+                        except Exception as e:
+                            helper_data["warning"] = f"Helper created but verification failed: {e}"
 
                     # Update entity registry if area_id or labels specified
                     if (area_id or labels) and entity_id:
@@ -662,7 +665,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if result.get("success"):
                     entity_data = result.get("result", {}).get("entity_entry", {})
-                    return {
+
+                    # Wait for entity to reflect the update
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
@@ -670,6 +676,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "updated_data": entity_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
+                    if wait_bool:
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                response["warning"] = f"Update applied but {entity_id} not yet queryable."
+                        except Exception as e:
+                            response["warning"] = f"Update applied but verification failed: {e}"
+                    return response
                 else:
                     return {
                         "success": False,
@@ -846,9 +860,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
                     }
                     if wait_bool:
-                        removed = await wait_for_entity_removed(client, entity_id)
-                        if not removed:
-                            response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                        try:
+                            removed = await wait_for_entity_removed(client, entity_id)
+                            if not removed:
+                                response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                        except Exception as e:
+                            response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
                     return response
 
                 # Fallback strategy 2: Check if entity was already deleted
@@ -903,9 +920,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
                 }
                 if wait_bool:
-                    removed = await wait_for_entity_removed(client, entity_id)
-                    if not removed:
-                        response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                    try:
+                        removed = await wait_for_entity_removed(client, entity_id)
+                        if not removed:
+                            response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                    except Exception as e:
+                        response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
                 return response
             else:
                 error_msg = result.get("error", "Unknown error")

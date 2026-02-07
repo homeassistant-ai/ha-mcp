@@ -264,9 +264,12 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
             if wait_bool:
-                registered = await wait_for_entity_registered(client, entity_id)
-                if not registered:
-                    result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
+                try:
+                    registered = await wait_for_entity_registered(client, entity_id)
+                    if not registered:
+                        result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
+                except Exception as e:
+                    result["warning"] = f"Script created but verification failed: {e}"
 
             return {
                 "success": True,
@@ -334,9 +337,12 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
             if wait_bool:
-                removed = await wait_for_entity_removed(client, entity_id)
-                if not removed:
-                    result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                try:
+                    removed = await wait_for_entity_removed(client, entity_id)
+                    if not removed:
+                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                except Exception as e:
+                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {"success": True, "action": "delete", **result}
         except Exception as e:
