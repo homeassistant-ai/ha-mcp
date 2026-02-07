@@ -57,7 +57,7 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
         ... )
         >>> raise_tool_error(error)  # Raises ToolError with isError=true
     """
-    raise ToolError(json.dumps(error_response, indent=2))
+    raise ToolError(json.dumps(error_response, indent=2, default=str))
 
 
 async def get_connected_ws_client(
@@ -106,7 +106,7 @@ def exception_to_structured_error(
     context: dict[str, Any] | None = None,
     *,
     raise_error: bool = False,
-) -> dict[str, Any] | NoReturn:
+) -> dict[str, Any]:
     """
     Convert an exception to a structured error response.
 
@@ -161,7 +161,7 @@ def exception_to_structured_error(
                         error_msg,
                         context=context,
                     )
-            case 401:
+            case 401 | 403:
                 error_response = create_auth_error(error_msg)
             case 400:
                 error_response = create_validation_error(error_msg, context=context)

@@ -7,6 +7,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 from typing import Any, cast
 
 import httpx
+from fastmcp.exceptions import ToolError
 
 from ..errors import (
     create_validation_error,
@@ -159,6 +160,8 @@ def register_service_tools(mcp, client, **kwargs):
             if "error" in error_response and isinstance(error_response["error"], dict):
                 error_response["error"]["suggestions"] = _build_service_suggestions(domain, service, entity_id)
             raise_tool_error(error_response)
+        except ToolError:
+            raise
         except Exception as error:
             # Use structured error response
             error_response = exception_to_structured_error(

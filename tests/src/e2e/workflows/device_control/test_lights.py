@@ -473,8 +473,8 @@ class TestDeviceControl:
         )
 
         if not open_result.get("success", True) or open_result.get("error"):
-            # Cover service failed (e.g., 500 error) - skip test
-            pytest.skip(f"Cover service not available: {open_result.get('error')}")
+            # Cover service failed (e.g., 500 error) - mark as expected failure
+            pytest.xfail(f"Cover service not available: {open_result.get('error')}")
 
         logger.info("✅ Cover open command executed")
 

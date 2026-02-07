@@ -8,6 +8,7 @@ Home Assistant automation configurations.
 import logging
 from typing import Annotated, Any, cast
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import (
@@ -455,6 +456,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 "config_provided": config_dict,
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error upserting automation: {e}")
             error_response = exception_to_structured_error(
