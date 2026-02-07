@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, UTC
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -510,7 +510,9 @@ class TestGetStatistics:
         """Test statistics with invalid period."""
         logger.info("Testing ha_get_statistics with invalid period")
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail (invalid period)
+        data = await safe_call_tool(
+            mcp_client,
             "ha_get_statistics",
             {
                 "entity_ids": "sun.sun",
@@ -518,8 +520,6 @@ class TestGetStatistics:
                 "period": "invalid_period",
             },
         )
-
-        data = parse_mcp_result(result)
 
         # Statistics data may be nested in 'data' key
         inner_data = data.get("data", data)

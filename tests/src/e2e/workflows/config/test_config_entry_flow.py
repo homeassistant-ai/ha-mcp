@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
+from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,10 @@ class TestConfigEntryFlow:
 
     async def test_get_config_entry_nonexistent(self, mcp_client):
         """Test error handling for non-existent config entry."""
-        result = await mcp_client.call_tool(
-            "ha_get_integration", {"entry_id": "nonexistent_entry_id"}
+        data = await safe_call_tool(
+            mcp_client, "ha_get_integration", {"entry_id": "nonexistent_entry_id"}
         )
         # Should fail with 404 or similar error
-        data = parse_mcp_result(result)
         assert not data.get("success", False)
 
     async def test_get_helper_schema(self, mcp_client):
@@ -103,14 +102,14 @@ class TestConfigEntryFlow:
         # We don't actually call it because we don't know valid configs yet
 
         # Try to call with minimal/invalid config to verify tool exists
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_create_config_entry_helper",
             {"helper_type": "template", "config": {}},
         )
 
         # We expect this to fail (invalid config), but it proves tool exists
         # and validates the structure
-        data = parse_mcp_result(result)
         assert "success" in data, "Tool should return a result with success field"
 
         # If it succeeded unexpectedly, that's also fine - means empty config worked
