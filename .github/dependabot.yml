@@ -1,34 +1,7 @@
 version: 2
 updates:
-  # Update standalone Docker image base
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
-    commit-message:
-      prefix: "build"
-      include: "scope"
-
-  # Update add-on Docker image base
-  - package-ecosystem: "docker"
-    directory: "/homeassistant-addon"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-    labels:
-      - "dependencies"
-      - "docker"
-      - "addon"
-    commit-message:
-      prefix: "build"
-      include: "scope"
+  # Docker updates are now handled by Renovate (see renovate.json)
+  # Dependabot's Docker ecosystem removed to avoid duplicate PRs
 
   # Update GitHub Actions
   - package-ecosystem: "github-actions"
