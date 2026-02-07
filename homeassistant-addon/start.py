@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -142,13 +143,111 @@ def get_nabu_casa_url() -> str | None:
     return None
 
 
+def _ha_core_api(method: str, path: str, data: dict | None = None) -> dict | list | None:
+    """Make a request to HA Core API via Supervisor proxy.
+
+    Unlike _supervisor_api_get, this calls HA Core endpoints directly
+    (e.g. /config/config_entries) without unwrapping Supervisor envelope.
+    """
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        return None
+
+    url = f"http://supervisor/core/api{path}"
+    body = json.dumps(data).encode() if data else None
+
+    req = urllib.request.Request(
+        url,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {supervisor_token}",
+            "Content-Type": "application/json",
+        },
+        data=body,
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        log_error(f"HA Core API error ({method} {path}): {e.code} {e.reason}")
+        return None
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        log_error(f"HA Core API request failed ({method} {path}): {e}")
+        return None
+
+
+def _ensure_config_entry(retries: int = 3, delay: int = 5) -> bool:
+    """Ensure a config entry exists for the mcp_proxy integration.
+
+    Creates one via the HA config flow API if missing. Retries on failure
+    (HA Core may still be starting up).
+    """
+    for attempt in range(1, retries + 1):
+        # Check if entry already exists
+        entries = _ha_core_api("GET", "/config/config_entries")
+        if entries is not None:
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+                    log_info("Nabu Casa remote: mcp_proxy config entry exists")
+                    return True
+
+            # No existing entry — create one via config flow
+            log_info(f"Nabu Casa remote: Creating config entry (attempt {attempt}/{retries})...")
+            flow_result = _ha_core_api(
+                "POST", "/config/config_entries/flow", {"handler": "mcp_proxy"}
+            )
+            if flow_result is None:
+                if attempt < retries:
+                    time.sleep(delay)
+                continue
+
+            result_type = flow_result.get("type")
+
+            if result_type in ("abort", "create_entry"):
+                log_info("Nabu Casa remote: Config entry ready")
+                return True
+
+            # Flow returned a form step — complete it
+            flow_id = flow_result.get("flow_id")
+            if flow_id and result_type == "form":
+                complete = _ha_core_api(
+                    "POST", f"/config/config_entries/flow/{flow_id}", {}
+                )
+                if complete and complete.get("type") == "create_entry":
+                    log_info("Nabu Casa remote: Config entry created")
+                    return True
+
+        if attempt < retries:
+            log_info(f"Nabu Casa remote: HA not ready, retrying in {delay}s...")
+            time.sleep(delay)
+
+    return False
+
+
+def _remove_config_entry() -> None:
+    """Remove the mcp_proxy config entry if it exists."""
+    entries = _ha_core_api("GET", "/config/config_entries")
+    if entries is None:
+        return
+
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+            entry_id = entry.get("entry_id")
+            if entry_id:
+                result = _ha_core_api("DELETE", f"/config/config_entries/entry/{entry_id}")
+                if result is not None:
+                    log_info("Nabu Casa remote: Removed mcp_proxy config entry")
+
+
 def setup_nabu_casa_remote(
     secret_path: str, addon_info: dict | None, data_dir: Path
 ) -> str | None:
     """Set up the webhook proxy for Nabu Casa remote access.
 
     Installs the mcp_proxy custom integration into HA Core's config directory,
-    writes the proxy config, and ensures configuration.yaml has the entry.
+    writes the proxy config, and creates a config entry via the HA API.
+    Never modifies configuration.yaml.
 
     Returns the webhook URL path (e.g. /api/webhook/<id>), or None on failure.
     """
@@ -156,7 +255,6 @@ def setup_nabu_casa_remote(
     integration_src = Path("/opt/mcp_proxy")
     integration_dst = config_dir / "custom_components" / "mcp_proxy"
     proxy_config_file = config_dir / ".mcp_proxy_config.json"
-    configuration_yaml = config_dir / "configuration.yaml"
 
     # Verify we can access /config (requires map: config:rw in addon config)
     if not config_dir.exists():
@@ -231,27 +329,21 @@ def setup_nabu_casa_remote(
         log_error("Nabu Casa remote: Integration source not found at /opt/mcp_proxy")
         return None
 
-    # Ensure mcp_proxy: entry exists in configuration.yaml
-    try:
-        if configuration_yaml.exists():
-            yaml_content = configuration_yaml.read_text()
-            if "mcp_proxy:" not in yaml_content:
-                # Append the integration entry
-                separator = "\n" if yaml_content.endswith("\n") else "\n\n"
-                yaml_content += f"{separator}mcp_proxy:\n"
-                configuration_yaml.write_text(yaml_content)
-                log_info("Nabu Casa remote: Added mcp_proxy to configuration.yaml")
-                first_install = True
-    except OSError as e:
-        log_error(f"Nabu Casa remote: Failed to update configuration.yaml: {e}")
-
+    # Create config entry via HA API (never touches configuration.yaml)
     if first_install:
         log_info("")
         log_info("*" * 60)
-        log_info("  RESTART HOME ASSISTANT to activate remote access!")
+        log_info("  RESTART HOME ASSISTANT to load the new integration,")
+        log_info("  then restart this add-on to complete setup.")
         log_info("  (Settings > System > Restart)")
         log_info("*" * 60)
         log_info("")
+    else:
+        if not _ensure_config_entry():
+            log_info(
+                "Nabu Casa remote: Could not create config entry. "
+                "If this is a first install, restart HA then restart this add-on."
+            )
 
     return f"/api/webhook/{webhook_id}"
 
@@ -351,7 +443,7 @@ def main() -> int:
         log_info("Nabu Casa remote access: enabled")
         webhook_path = setup_nabu_casa_remote(secret_path, addon_info, data_dir)
     else:
-        # Clean up proxy config if remote was previously enabled then disabled
+        # Clean up if remote was previously enabled then disabled
         proxy_config_file = Path("/config/.mcp_proxy_config.json")
         if proxy_config_file.exists():
             try:
@@ -359,6 +451,8 @@ def main() -> int:
                 log_info("Nabu Casa remote access: disabled (cleaned up proxy config)")
             except Exception:
                 pass
+            # Also remove the config entry so the webhook is unregistered
+            _remove_config_entry()
 
     # Log URLs
     log_info("")

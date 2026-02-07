@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MCP Webhook Proxy",
+        "description": "This integration is managed by the Home Assistant MCP Server add-on. It proxies MCP requests via a Nabu Casa webhook for remote access."
+      }
+    },
+    "abort": {
+      "already_configured": "MCP Webhook Proxy is already configured."
+    }
+  }
+}

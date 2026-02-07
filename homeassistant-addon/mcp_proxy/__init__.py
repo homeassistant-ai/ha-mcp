@@ -5,8 +5,8 @@ access is enabled. It registers an unauthenticated webhook endpoint that
 proxies MCP requests to the addon, bypassing the ingress auth requirement.
 
 Configuration is read from /config/.mcp_proxy_config.json, which is written
-by the addon's startup script. No user configuration is needed in
-configuration.yaml beyond the bare `mcp_proxy:` entry.
+by the addon's startup script. No manual configuration is needed — the addon
+creates the config entry automatically via the HA API.
 """
 
 import json
@@ -20,6 +20,7 @@ from homeassistant.components.webhook import (
     async_register,
     async_unregister,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
@@ -30,8 +31,26 @@ CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the MCP Webhook Proxy integration."""
-    # Read config written by the ha-mcp addon
+    """Set up the MCP Webhook Proxy from configuration.yaml (migration only).
+
+    If the user has an old `mcp_proxy:` entry in configuration.yaml,
+    auto-migrate to a config entry so the YAML line can be removed.
+    """
+    if DOMAIN in config:
+        _LOGGER.info(
+            "MCP Proxy: Found YAML config — migrating to config entry. "
+            "You can safely remove 'mcp_proxy:' from configuration.yaml."
+        )
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": "import"}
+            )
+        )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up MCP Webhook Proxy from a config entry."""
     proxy_config = await hass.async_add_executor_job(_read_config)
     if proxy_config is None:
         _LOGGER.info(
@@ -148,8 +167,8 @@ async def _handle_webhook(
         return web.Response(status=500, text="MCP Proxy: internal error")
 
 
-async def async_unload(hass: HomeAssistant) -> bool:
-    """Unload the MCP Webhook Proxy."""
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload the MCP Webhook Proxy config entry."""
     data = hass.data.pop(DOMAIN, {})
     webhook_id = data.get("webhook_id")
     if webhook_id:
