@@ -175,6 +175,24 @@ class TestWaitForStateChange:
         assert result is not None
         assert result["state"] == "on"
 
+    async def test_initial_fetch_fails_then_detects_change(self, mock_client):
+        """When initial fetch fails, uses first successful poll as baseline and detects subsequent change."""
+        mock_client.get_entity_state.side_effect = [
+            # Initial state fetch fails (in the pre-loop section)
+            Exception("connection error"),
+            # First poll succeeds - becomes baseline (off)
+            {"state": "off", "entity_id": "light.test"},
+            # Second poll - state changed
+            {"state": "on", "entity_id": "light.test"},
+        ]
+        result = await wait_for_state_change(
+            mock_client, "light.test",
+            expected_state=None,  # No specific expected state
+            timeout=5.0, poll_interval=0.05,
+        )
+        assert result is not None
+        assert result["state"] == "on"
+
     async def test_handles_exceptions_gracefully(self, mock_client):
         """Handles get_entity_state exceptions without crashing."""
         mock_client.get_entity_state.side_effect = [

@@ -328,6 +328,9 @@ async def wait_for_state_change(
                         f"after {time.monotonic() - start:.1f}s"
                     )
                     return state_data
+                # If initial state fetch failed, use first successful poll as baseline
+                if expected_state is None and initial_state is None and current is not None:
+                    initial_state = current
         except Exception:
             pass
         await asyncio.sleep(poll_interval)
