@@ -9,11 +9,29 @@ import json
 import logging
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 logger = logging.getLogger(__name__)
 
 
 def parse_mcp_result(result) -> dict[str, Any]:
-    """Parse MCP tool result from FastMCP client response."""
+    """Parse MCP tool result from FastMCP client response.
+
+    Handles both success responses and error responses (isError=true).
+    When isError is true, the error content is parsed as JSON if possible.
+    """
+    # Check if this is an error response (isError=true from ToolError)
+    if hasattr(result, "isError") and result.isError:
+        if hasattr(result, "content") and result.content:
+            if hasattr(result.content[0], "text"):
+                error_text = result.content[0].text
+                try:
+                    # ToolError content is JSON-serialized structured error
+                    return json.loads(error_text)
+                except json.JSONDecodeError:
+                    return {"success": False, "error": error_text}
+        return {"success": False, "error": "Unknown error (isError=true)"}
+
     if hasattr(result, "content") and result.content:
         if hasattr(result.content[0], "text"):
             response_text = result.content[0].text
@@ -26,6 +44,50 @@ def parse_mcp_result(result) -> dict[str, Any]:
                     return {"raw_response": response_text}
         return {"content": str(result.content[0])}
     return {"error": "No content in result"}
+
+
+def tool_error_to_result(exc: ToolError) -> dict[str, Any]:
+    """Convert a ToolError exception to a parsed result dict.
+
+    When tools raise ToolError, FastMCP clients may raise instead of returning
+    a result with isError=true. This function converts the exception back to
+    a dict that can be used with the same assertion logic.
+
+    Args:
+        exc: The ToolError exception
+
+    Returns:
+        A dict with success=False and error information
+    """
+    error_msg = str(exc)
+    try:
+        # ToolError message is JSON-serialized structured error
+        return json.loads(error_msg)
+    except json.JSONDecodeError:
+        return {"success": False, "error": {"message": error_msg}}
+
+
+async def safe_call_tool(
+    mcp_client, tool_name: str, params: dict[str, Any]
+) -> dict[str, Any]:
+    """Call an MCP tool and return parsed result, handling ToolError exceptions.
+
+    This is useful for tests that expect tools to fail and want to inspect
+    the error response without catching exceptions manually.
+
+    Args:
+        mcp_client: The MCP client instance
+        tool_name: Name of the tool to call
+        params: Parameters to pass to the tool
+
+    Returns:
+        Parsed result dict (success or failure)
+    """
+    try:
+        result = await mcp_client.call_tool(tool_name, params)
+        return parse_mcp_result(result)
+    except ToolError as exc:
+        return tool_error_to_result(exc)
 
 
 def assert_mcp_success(result, operation_name: str = "operation"):
@@ -96,7 +158,13 @@ def assert_mcp_failure(
 
     # If expected error specified, check for it
     if expected_error:
-        error_msg = str(data.get("error", ""))
+        # Error can be a string or a dict with 'message' key
+        error_obj = data.get("error", "")
+        if isinstance(error_obj, dict):
+            error_msg = str(error_obj.get("message", ""))
+        else:
+            error_msg = str(error_obj)
+
         if expected_error.lower() not in error_msg.lower():
             raise AssertionError(
                 f"{operation_name} failed but error message doesn't contain '{expected_error}'. "
@@ -377,18 +445,53 @@ class MCPAssertions:
     async def call_tool_success(
         self, tool_name: str, params: dict[str, Any]
     ) -> dict[str, Any]:
-        """Call MCP tool and assert success."""
-        result = await self.client.call_tool(tool_name, params)
-        return assert_mcp_success(result, f"{tool_name}({list(params.keys())})")
+        """Call MCP tool and assert success.
+
+        If ToolError is raised, the assertion fails with the error details.
+        """
+        try:
+            result = await self.client.call_tool(tool_name, params)
+            return assert_mcp_success(result, f"{tool_name}({list(params.keys())})")
+        except ToolError as exc:
+            error_data = tool_error_to_result(exc)
+            raise AssertionError(
+                f"{tool_name}({list(params.keys())}) should have succeeded but raised ToolError: "
+                f"{error_data.get('error', str(exc))}"
+            ) from exc
 
     async def call_tool_failure(
         self, tool_name: str, params: dict[str, Any], expected_error: str | None = None
     ) -> dict[str, Any]:
-        """Call MCP tool and assert failure."""
-        result = await self.client.call_tool(tool_name, params)
-        return assert_mcp_failure(
-            result, f"{tool_name}({list(params.keys())})", expected_error
-        )
+        """Call MCP tool and assert failure.
+
+        Handles both legacy dict returns and new ToolError exceptions.
+        """
+        operation_name = f"{tool_name}({list(params.keys())})"
+        try:
+            result = await self.client.call_tool(tool_name, params)
+            return assert_mcp_failure(result, operation_name, expected_error)
+        except ToolError as exc:
+            # Convert ToolError to result dict and validate
+            data = tool_error_to_result(exc)
+            # Verify this is actually a failure
+            if data.get("success"):
+                raise AssertionError(
+                    f"{operation_name} should have failed but succeeded"
+                ) from exc
+            # Check expected error if specified
+            if expected_error:
+                error_obj = data.get("error", "")
+                if isinstance(error_obj, dict):
+                    error_msg = str(error_obj.get("message", ""))
+                else:
+                    error_msg = str(error_obj)
+                if expected_error.lower() not in error_msg.lower():
+                    raise AssertionError(
+                        f"{operation_name} failed but error message doesn't contain "
+                        f"'{expected_error}'. Actual error: {error_msg}"
+                    ) from exc
+            logger.debug(f"✅ {operation_name} failed as expected (via ToolError)")
+            return data
 
     def assert_entity_state(
         self, state_data: dict[str, Any], expected_state: str, entity_id: str
@@ -444,11 +547,12 @@ async def wait_for_automation(
     start_time = time.time()
 
     while time.time() - start_time < timeout:
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool to handle ToolError exceptions
+        parsed = await safe_call_tool(
+            mcp_client,
             "ha_config_get_automation",
             {"identifier": automation_id},
         )
-        parsed = parse_mcp_result(result)
 
         if parsed.get("success"):
             logger.debug(

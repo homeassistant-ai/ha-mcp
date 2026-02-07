@@ -19,6 +19,7 @@ import pytest
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    safe_call_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,12 +132,12 @@ class TestCalendarEvents:
         """
         logger.info("Testing ha_config_get_calendar_events with invalid entity...")
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_get_calendar_events",
             {"entity_id": "calendar.nonexistent_calendar_xyz"},
         )
-
-        data = parse_mcp_result(result)
 
         # Should fail gracefully
         assert data.get("success") is False, "Should fail for invalid calendar"
@@ -155,11 +156,12 @@ class TestCalendarEvents:
             "Testing ha_config_get_calendar_events with invalid entity format..."
         )
 
-        result = await mcp_client.call_tool(
-            "ha_config_get_calendar_events", {"entity_id": "not_a_calendar_entity"}
+        # Use safe_call_tool since we expect this to fail
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            {"entity_id": "not_a_calendar_entity"},
         )
-
-        data = parse_mcp_result(result)
 
         # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
@@ -292,7 +294,9 @@ class TestCalendarEventLifecycle:
         start = (now + timedelta(days=1)).isoformat()
         end = (now + timedelta(days=1, hours=1)).isoformat()
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_calendar_event",
             {
                 "entity_id": "not_a_valid_calendar",
@@ -301,8 +305,6 @@ class TestCalendarEventLifecycle:
                 "end": end,
             },
         )
-
-        data = parse_mcp_result(result)
 
         assert data.get("success") is False, "Should fail for invalid entity"
         assert "calendar." in str(
@@ -327,12 +329,12 @@ class TestCalendarEventLifecycle:
         )
 
         # Try to delete with a fake UID (will likely fail, but tests the API)
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_calendar_event",
             {"entity_id": calendar_entity, "uid": "nonexistent-event-uid-xyz"},
         )
-
-        data = parse_mcp_result(result)
 
         # This will likely fail since the event doesn't exist
         # We're mainly testing that the tool handles errors gracefully
@@ -352,12 +354,12 @@ class TestCalendarEventLifecycle:
         """
         logger.info("Testing ha_config_remove_calendar_event with invalid entity...")
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_calendar_event",
             {"entity_id": "not_a_valid_calendar", "uid": "some-event-uid"},
         )
-
-        data = parse_mcp_result(result)
 
         assert data.get("success") is False, "Should fail for invalid entity"
         assert "calendar." in str(

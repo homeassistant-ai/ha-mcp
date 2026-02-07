@@ -14,11 +14,12 @@ Key test scenarios:
 - Rename entity and device together (convenience wrapper)
 """
 
+import asyncio
 import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,8 @@ class TestEntityRename:
         logger.info(f"Testing entity rename: {original_name} -> {new_name}")
 
         # 1. CREATE: Helper entity to rename
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
@@ -48,7 +50,6 @@ class TestEntityRename:
             },
         )
 
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
@@ -56,20 +57,28 @@ class TestEntityRename:
         cleanup_tracker.track("input_boolean", new_entity_id)
         logger.info(f"Created helper: {original_entity_id}")
 
-        # Wait for entity to be registered
+        # Wait for entity to be registered (retry with backoff)
+        state_data = None
+        for attempt in range(10):
+            await asyncio.sleep(0.5)  # Wait before checking
+            state_data = await safe_call_tool(
+                mcp_client,
+                "ha_get_state",
+                {"entity_id": original_entity_id}
+            )
+            if "data" in state_data and state_data["data"].get("state"):
+                break
+            logger.info(f"Waiting for entity to register (attempt {attempt + 1}/10)...")
 
         # 2. VERIFY: Original entity exists
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": original_entity_id}
-        )
-        state_data = parse_mcp_result(state_result)
-        assert "data" in state_data and state_data["data"].get(
+        assert state_data and "data" in state_data and state_data["data"].get(
             "state"
-        ), f"Original entity not found: {state_data}"
+        ), f"Original entity not found after waiting: {state_data}"
         logger.info(f"Verified original entity exists: {original_entity_id}")
 
         # 3. RENAME: Change entity_id
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": original_entity_id,
@@ -77,29 +86,36 @@ class TestEntityRename:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
         assert rename_data.get("old_entity_id") == original_entity_id
         assert rename_data.get("new_entity_id") == new_entity_id
         logger.info(f"Renamed entity: {original_entity_id} -> {new_entity_id}")
 
-        # Wait for rename to propagate
+        # Wait for rename to propagate (retry with backoff)
+        new_state_data = None
+        for attempt in range(10):
+            await asyncio.sleep(0.5)
+            new_state_data = await safe_call_tool(
+                mcp_client,
+                "ha_get_state",
+                {"entity_id": new_entity_id}
+            )
+            if "data" in new_state_data and new_state_data["data"].get("state"):
+                break
+            logger.info(f"Waiting for renamed entity (attempt {attempt + 1}/10)...")
 
         # 4. VERIFY: New entity exists and works
-        new_state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": new_entity_id}
-        )
-        new_state_data = parse_mcp_result(new_state_result)
-        assert "data" in new_state_data and new_state_data["data"].get(
+        assert new_state_data and "data" in new_state_data and new_state_data["data"].get(
             "state"
-        ), f"New entity not accessible: {new_state_data}"
+        ), f"New entity not accessible after waiting: {new_state_data}"
         logger.info(f"Verified new entity exists: {new_entity_id}")
 
         # 5. VERIFY: Old entity_id no longer exists
-        old_state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": original_entity_id}
+        old_state_data = await safe_call_tool(
+            mcp_client,
+            "ha_get_state",
+            {"entity_id": original_entity_id}
         )
-        old_state_data = parse_mcp_result(old_state_result)
         # Should fail or return empty/unavailable
         old_exists = (
             "data" in old_state_data
@@ -110,14 +126,14 @@ class TestEntityRename:
         logger.info(f"Verified old entity no longer exists: {original_entity_id}")
 
         # 6. CLEANUP: Delete renamed entity
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {
                 "helper_type": "input_boolean",
                 "helper_id": new_name,
             },
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
         logger.info("Cleanup completed")
 
@@ -130,7 +146,8 @@ class TestEntityRename:
         logger.info("Testing rename with name and icon update")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
@@ -139,16 +156,18 @@ class TestEntityRename:
             },
         )
 
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. RENAME: With name and icon updates
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": original_entity_id,
@@ -158,30 +177,32 @@ class TestEntityRename:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
         logger.info("Renamed entity with name and icon update")
 
+        # Wait for rename to propagate
+        await asyncio.sleep(0.5)
 
         # 3. VERIFY: New entity has updated attributes
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": new_entity_id}
+        state_data = await safe_call_tool(
+            mcp_client,
+            "ha_get_state",
+            {"entity_id": new_entity_id}
         )
-        state_data = parse_mcp_result(state_result)
         assert "data" in state_data, f"Failed to get new entity state: {state_data}"
 
         # Note: The friendly_name might be set in registry, actual display may vary
         logger.info(f"New entity state: {state_data}")
 
         # 4. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {
                 "helper_type": "input_boolean",
                 "helper_id": new_name,
             },
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
         logger.info("Cleanup completed")
 
@@ -194,7 +215,8 @@ class TestEntityRename:
         logger.info("Testing domain mismatch rejection")
 
         # Attempt to rename with domain change
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": "input_boolean.some_entity",
@@ -202,10 +224,13 @@ class TestEntityRename:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert not rename_data.get("success"), "Domain change should be rejected"
+        # Error might be in error.message or just error string
+        error_msg = rename_data.get("error", "")
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", "")
         assert (
-            "domain" in rename_data.get("error", "").lower()
+            "domain" in str(error_msg).lower()
         ), f"Error should mention domain: {rename_data}"
         logger.info("Domain mismatch correctly rejected")
 
@@ -224,7 +249,8 @@ class TestEntityRename:
         ]
 
         for invalid_id in invalid_formats:
-            rename_result = await mcp_client.call_tool(
+            rename_data = await safe_call_tool(
+                mcp_client,
                 "ha_rename_entity",
                 {
                     "entity_id": "input_boolean.test",
@@ -232,7 +258,6 @@ class TestEntityRename:
                 },
             )
 
-            rename_data = parse_mcp_result(rename_result)
             assert not rename_data.get(
                 "success"
             ), f"Invalid format should be rejected: {invalid_id}"
@@ -244,7 +269,8 @@ class TestEntityRename:
         """
         logger.info("Testing non-existent entity rename")
 
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": "input_boolean.definitely_does_not_exist_12345",
@@ -252,7 +278,6 @@ class TestEntityRename:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert not rename_data.get("success"), "Non-existent entity rename should fail"
         logger.info(
             f"Non-existent entity correctly rejected: {rename_data.get('error')}"
@@ -269,7 +294,8 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
     logger.info("Running basic entity rename test")
 
     # Create helper
-    create_result = await mcp_client.call_tool(
+    create_data = await safe_call_tool(
+        mcp_client,
         "ha_config_set_helper",
         {
             "helper_type": "input_button",
@@ -277,35 +303,38 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
             "icon": "mdi:button-pointer",
         },
     )
-    create_data = parse_mcp_result(create_result)
     assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
     original_id = "input_button.test_quick_rename"
     new_id = "input_button.test_quick_renamed"
     cleanup_tracker.track("input_button", new_id)
 
+    # Wait for entity to be registered
+    await asyncio.sleep(1.0)
 
     # Rename
-    rename_result = await mcp_client.call_tool(
+    rename_data = await safe_call_tool(
+        mcp_client,
         "ha_rename_entity",
         {
             "entity_id": original_id,
             "new_entity_id": new_id,
         },
     )
-    rename_data = parse_mcp_result(rename_result)
     assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
+    # Wait for rename to propagate
+    await asyncio.sleep(0.5)
 
     # Cleanup
-    delete_result = await mcp_client.call_tool(
+    delete_data = await safe_call_tool(
+        mcp_client,
         "ha_config_remove_helper",
         {
             "helper_type": "input_button",
             "helper_id": "test_quick_renamed",
         },
     )
-    delete_data = parse_mcp_result(delete_result)
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
     logger.info("Basic entity rename test completed")
@@ -332,43 +361,45 @@ class TestEntityRenameVoiceExposure:
         logger.info("Testing rename with voice exposure migration")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": original_name,
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. EXPOSE: Entity to conversation assistant
-        expose_result = await mcp_client.call_tool(
+        expose_data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {
                 "entity_id": original_entity_id,
                 "expose_to": {"conversation": True},
             },
         )
-        expose_data = parse_mcp_result(expose_result)
         assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
         logger.info(f"Exposed {original_entity_id} to conversation")
 
 
         # 3. RENAME: Entity with exposure migration (default behavior)
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": original_entity_id,
                 "new_entity_id": new_entity_id,
             },
         )
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
 
         # Check voice exposure migration info in response
@@ -378,22 +409,24 @@ class TestEntityRenameVoiceExposure:
         migration_info = rename_data.get("voice_exposure_migration", {})
         logger.info(f"Voice exposure migration result: {migration_info}")
 
+        # Wait for rename to propagate
+        await asyncio.sleep(0.5)
 
         # 4. VERIFY: New entity has exposure settings
-        check_result = await mcp_client.call_tool(
+        check_data = await safe_call_tool(
+            mcp_client,
             "ha_get_entity_exposure",
             {"entity_id": new_entity_id},
         )
-        check_data = parse_mcp_result(check_result)
         assert check_data.get("success"), f"Failed to check exposure: {check_data}"
         logger.info(f"New entity exposure: {check_data.get('exposed_to')}")
 
         # 5. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
 
@@ -406,23 +439,26 @@ class TestEntityRenameVoiceExposure:
         logger.info("Testing rename without voice exposure migration")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": original_name,
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. RENAME: With preserve_voice_exposure=False
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity",
             {
                 "entity_id": original_entity_id,
@@ -430,7 +466,6 @@ class TestEntityRenameVoiceExposure:
                 "preserve_voice_exposure": False,
             },
         )
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
 
         # Should NOT have voice_exposure_migration in response
@@ -441,11 +476,11 @@ class TestEntityRenameVoiceExposure:
 
 
         # 3. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
 
@@ -465,23 +500,26 @@ class TestRenameEntityAndDevice:
         logger.info("Testing ha_rename_entity_and_device with helper entity")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": original_name,
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. RENAME: Using convenience wrapper
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity_and_device",
             {
                 "entity_id": original_entity_id,
@@ -490,7 +528,6 @@ class TestRenameEntityAndDevice:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename: {rename_data}"
         assert rename_data.get("old_entity_id") == original_entity_id
         assert rename_data.get("new_entity_id") == new_entity_id
@@ -503,20 +540,23 @@ class TestRenameEntityAndDevice:
         ), "Device rename should be skipped for helper entity"
         logger.info(f"Device rename result: {device_result}")
 
+        # Wait for rename to propagate
+        await asyncio.sleep(0.5)
 
         # 3. VERIFY: New entity exists
-        state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": new_entity_id}
+        state_data = await safe_call_tool(
+            mcp_client,
+            "ha_get_state",
+            {"entity_id": new_entity_id}
         )
-        state_data = parse_mcp_result(state_result)
         assert "data" in state_data, f"New entity not found: {state_data}"
 
         # 4. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
 
@@ -531,23 +571,26 @@ class TestRenameEntityAndDevice:
         logger.info("Testing ha_rename_entity_and_device without device name")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": original_name,
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. RENAME: Without new_device_name
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity_and_device",
             {
                 "entity_id": original_entity_id,
@@ -555,18 +598,17 @@ class TestRenameEntityAndDevice:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
         logger.info(f"Rename result: {rename_data.get('message')}")
 
 
         # 3. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
     async def test_rename_entity_and_device_with_friendly_name(
@@ -580,23 +622,26 @@ class TestRenameEntityAndDevice:
         logger.info("Testing ha_rename_entity_and_device with friendly name")
 
         # 1. CREATE: Helper entity
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": original_name,
             },
         )
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
         original_entity_id = f"input_boolean.{original_name}"
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
+        # Wait for entity to be registered
+        await asyncio.sleep(1.0)
 
         # 2. RENAME: With new entity friendly name
-        rename_result = await mcp_client.call_tool(
+        rename_data = await safe_call_tool(
+            mcp_client,
             "ha_rename_entity_and_device",
             {
                 "entity_id": original_entity_id,
@@ -605,18 +650,17 @@ class TestRenameEntityAndDevice:
             },
         )
 
-        rename_data = parse_mcp_result(rename_result)
         assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
         logger.info(f"Rename result: {rename_data}")
 
 
         # 3. CLEANUP
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_helper",
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
-        delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
 
@@ -628,42 +672,46 @@ async def test_rename_entity_and_device_basic(mcp_client, cleanup_tracker):
     logger.info("Running basic entity and device rename test")
 
     # Create helper
-    create_result = await mcp_client.call_tool(
+    create_data = await safe_call_tool(
+        mcp_client,
         "ha_config_set_helper",
         {
             "helper_type": "input_button",
             "name": "test_combo_quick",
         },
     )
-    create_data = parse_mcp_result(create_result)
     assert create_data.get("success"), f"Failed to create helper: {create_data}"
 
     original_id = "input_button.test_combo_quick"
     new_id = "input_button.test_combo_quick_new"
     cleanup_tracker.track("input_button", new_id)
 
+    # Wait for entity to be registered
+    await asyncio.sleep(1.0)
 
     # Rename using convenience wrapper
-    rename_result = await mcp_client.call_tool(
+    rename_data = await safe_call_tool(
+        mcp_client,
         "ha_rename_entity_and_device",
         {
             "entity_id": original_id,
             "new_entity_id": new_id,
         },
     )
-    rename_data = parse_mcp_result(rename_result)
     assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
+    # Wait for rename to propagate
+    await asyncio.sleep(0.5)
 
     # Cleanup
-    delete_result = await mcp_client.call_tool(
+    delete_data = await safe_call_tool(
+        mcp_client,
         "ha_config_remove_helper",
         {
             "helper_type": "input_button",
             "helper_id": "test_combo_quick_new",
         },
     )
-    delete_data = parse_mcp_result(delete_result)
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
     logger.info("Basic entity and device rename test completed")
