@@ -15,15 +15,14 @@ class TestDockerBuild:
         )
         assert result.returncode == 0, f"Build failed: {result.stderr}"
 
-    def test_uv_is_installed(self):
-        """Verify uv package manager is available in image."""
+    def test_uv_not_in_runtime(self):
+        """Verify uv is excluded from runtime image (multi-stage build)."""
         result = subprocess.run(
-            ["docker", "run", "--rm", "ha-mcp-test", "uv", "--version"],
+            ["docker", "run", "--rm", "ha-mcp-test", "which", "uv"],
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0
-        assert "uv" in result.stdout.lower()
+        assert result.returncode != 0, "uv should not be in the runtime image"
 
     def test_ha_mcp_command_exists(self):
         """Verify ha-mcp command is installed."""

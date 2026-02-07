@@ -37,17 +37,39 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        domain: Annotated[
+            str | None,
+            Field(
+                description="Filter by integration domain (e.g. 'template', 'group'). "
+                "When set, includes the full options/configuration for each entry.",
+                default=None,
+            ),
+        ] = None,
+        include_options: Annotated[
+            bool | str,
+            Field(
+                description="Include the options object for each entry. "
+                "Automatically enabled when domain filter is set. "
+                "Useful for auditing template definitions and helper configurations.",
+                default=False,
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get integration (config entry) information - list all or get a specific one.
 
-        Without an entry_id: Lists all configured integrations with optional fuzzy search.
-        With an entry_id: Returns detailed information about a specific config entry.
+        Without an entry_id: Lists all configured integrations with optional filters.
+        With an entry_id: Returns detailed information including full options/configuration.
+
+        Use this to audit existing configurations (e.g. template sensor Jinja code).
+        When creating new functionality, prefer UI-based helpers over templates when possible.
 
         EXAMPLES:
         - List all integrations: ha_get_integration()
         - Search integrations: ha_get_integration(query="zigbee")
         - Get specific entry: ha_get_integration(entry_id="abc123")
+        - List template entries with definitions: ha_get_integration(domain="template")
+        - List all with options: ha_get_integration(include_options=True)
 
         STATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
@@ -55,11 +77,17 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         RETURNS (when listing):
         - entries: List of integrations with domain, title, state, capabilities
         - state_summary: Count of entries in each state
+        - When domain filter or include_options is set, each entry includes the 'options' object
 
         RETURNS (when getting specific entry):
-        - entry: Full config entry details
+        - entry: Full config entry details including options/configuration
         """
         try:
+            include_opts = coerce_bool_param(include_options, "include_options", default=False)
+            # Auto-enable options when domain filter is set
+            if domain is not None:
+                include_opts = True
+
             # If entry_id provided, get specific config entry
             if entry_id is not None:
                 try:
@@ -91,6 +119,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             entries = response
 
+            # Apply domain filter before formatting
+            if domain:
+                domain_lower = domain.strip().lower()
+                entries = [e for e in entries if e.get("domain", "").lower() == domain_lower]
+
             # Format entries for response
             formatted_entries = []
             for entry in entries:
@@ -104,6 +137,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "supports_unload": entry.get("supports_unload", False),
                     "disabled_by": entry.get("disabled_by"),
                 }
+
+                # Include options when requested (for auditing template definitions, etc.)
+                if include_opts:
+                    formatted_entry["options"] = entry.get("options", {})
 
                 # Include pref_disable_new_entities and pref_disable_polling if present
                 if "pref_disable_new_entities" in entry:
@@ -152,13 +189,16 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 state = entry.get("state", "unknown")
                 state_summary[state] = state_summary.get(state, 0) + 1
 
-            return {
+            result_data: dict[str, Any] = {
                 "success": True,
                 "total": len(formatted_entries),
                 "entries": formatted_entries,
                 "state_summary": state_summary,
                 "query": query if query else None,
             }
+            if domain:
+                result_data["domain_filter"] = domain.strip().lower()
+            return result_data
 
         except Exception as e:
             logger.error(f"Failed to get integrations: {e}")

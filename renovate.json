@@ -8,7 +8,8 @@
     "after 3pm on tuesday"
   ],
   "enabledManagers": [
-    "custom.regex"
+    "custom.regex",
+    "dockerfile"
   ],
   "ignorePaths": [],
   "customManagers": [

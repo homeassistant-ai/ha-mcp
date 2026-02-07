@@ -237,6 +237,128 @@ class TestListIntegrations:
 
 
 @pytest.mark.integrations
+class TestIntegrationFiltering:
+    """Test integration domain filtering and options inclusion."""
+
+    async def test_filter_by_domain(self, mcp_client):
+        """
+        Test: Filter integrations by domain.
+
+        Verifies that the domain parameter filters entries correctly
+        and auto-includes the options object.
+        """
+        logger.info("Testing ha_get_integration with domain filter...")
+
+        # First get all integrations to find a valid domain
+        all_result = await mcp_client.call_tool("ha_get_integration", {})
+        all_data = assert_mcp_success(all_result, "get all integrations")
+
+        if all_data["total"] == 0:
+            pytest.skip("No integrations available to test domain filter")
+
+        # Pick a domain that exists
+        test_domain = all_data["entries"][0]["domain"]
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"domain": test_domain}
+        )
+        data = assert_mcp_success(result, f"filter by domain {test_domain}")
+
+        assert data["total"] > 0, f"Expected entries for domain {test_domain}"
+        assert data.get("domain_filter") == test_domain
+
+        # All entries should be the filtered domain
+        for entry in data["entries"]:
+            assert entry["domain"] == test_domain, (
+                f"Expected domain {test_domain}, got {entry['domain']}"
+            )
+
+        # Domain filter auto-enables options inclusion
+        for entry in data["entries"]:
+            assert "options" in entry, "Domain filter should include options"
+
+        logger.info(f"Domain filter test passed: {data['total']} {test_domain} entries")
+
+    async def test_filter_by_nonexistent_domain(self, mcp_client):
+        """
+        Test: Filter by domain that doesn't exist returns empty results.
+        """
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"domain": "nonexistent_domain_xyz"}
+        )
+        data = assert_mcp_success(result, "filter by nonexistent domain")
+
+        assert data["total"] == 0, "Should have 0 results for nonexistent domain"
+        assert len(data["entries"]) == 0
+
+    async def test_include_options_flag(self, mcp_client):
+        """
+        Test: include_options parameter includes options in list response.
+        """
+        logger.info("Testing ha_get_integration with include_options=True...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"include_options": True}
+        )
+        data = assert_mcp_success(result, "list with include_options")
+
+        if data["total"] == 0:
+            pytest.skip("No integrations available")
+
+        # All entries should have options field
+        for entry in data["entries"]:
+            assert "options" in entry, "include_options should add options field"
+
+        logger.info(f"include_options test passed: {data['total']} entries with options")
+
+    async def test_specific_entry_includes_options(self, mcp_client):
+        """
+        Test: Getting a specific entry by entry_id returns full data including options.
+
+        This validates the audit use case from issue #462 - being able to
+        retrieve template definitions and other config entry options.
+        """
+        logger.info("Testing specific entry includes options...")
+
+        # Find an entry that actually has options to validate the audit use case
+        list_result = await mcp_client.call_tool(
+            "ha_get_integration", {"include_options": True}
+        )
+        list_data = assert_mcp_success(list_result, "list with options")
+
+        target_entry = next(
+            (e for e in list_data["entries"] if e.get("options")), None
+        )
+        if not target_entry:
+            pytest.skip("No integrations with non-empty options found")
+
+        entry_id = target_entry["entry_id"]
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        data = assert_mcp_success(result, "get specific entry")
+
+        assert "entry" in data, "Should have entry data"
+        entry = data["entry"]
+
+        # The raw REST API response should include these fields
+        assert "entry_id" in entry
+        assert "domain" in entry
+
+        # Verify options are present and match what the list endpoint returned
+        assert "options" in entry, "Specific entry should include options"
+        assert entry["options"] == target_entry["options"], (
+            "Options from specific entry should match list endpoint"
+        )
+
+        logger.info(
+            f"Specific entry test passed: domain={entry.get('domain')}, "
+            f"options_keys={list(entry['options'].keys())}"
+        )
+
+
+@pytest.mark.integrations
 async def test_integration_discovery(mcp_client):
     """
     Test: Basic integration discovery
