@@ -14,7 +14,30 @@ from ..errors import (
 )
 from ..client.rest_client import HomeAssistantConnectionError
 from .helpers import exception_to_structured_error, log_tool_usage
-from .util_helpers import coerce_bool_param, parse_json_param
+from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
+
+logger = logging.getLogger(__name__)
+
+# Services that produce observable state changes on entities
+_STATE_CHANGING_SERVICES = {
+    "turn_on", "turn_off", "toggle", "open", "close", "lock", "unlock",
+    "set_temperature", "set_hvac_mode", "set_fan_mode", "set_speed",
+    "select_option", "set_value", "set_datetime", "set_cover_position",
+    "set_position", "play_media", "media_play", "media_pause", "media_stop",
+}
+
+# Domains where service calls don't produce entity state changes
+_NON_STATE_CHANGING_DOMAINS = {
+    "automation", "script", "homeassistant", "notify", "tts",
+    "persistent_notification", "logbook", "system_log",
+}
+
+# Mapping from service name to the expected resulting state
+_SERVICE_TO_STATE: dict[str, str] = {
+    "turn_on": "on", "turn_off": "off",
+    "open": "open", "close": "closed",
+    "lock": "locked", "unlock": "unlocked",
+}
 
 
 def _build_service_suggestions(domain: str, service: str, entity_id: str | None) -> list[str]:
