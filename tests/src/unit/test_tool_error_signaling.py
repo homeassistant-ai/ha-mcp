@@ -75,18 +75,10 @@ class TestRaiseToolError:
 class TestExceptionToStructuredError:
     """Tests for the exception_to_structured_error function."""
 
-    def test_returns_dict_by_default(self):
-        """exception_to_structured_error should return dict by default."""
-        result = exception_to_structured_error(ValueError("test error"))
-
-        assert isinstance(result, dict)
-        assert result["success"] is False
-        assert "error" in result
-
-    def test_raises_tool_error_when_explicit(self):
-        """exception_to_structured_error should raise ToolError when raise_error=True."""
+    def test_raises_tool_error_by_default(self):
+        """exception_to_structured_error should raise ToolError by default."""
         with pytest.raises(ToolError):
-            exception_to_structured_error(ValueError("test error"), raise_error=True)
+            exception_to_structured_error(ValueError("test error"))
 
     def test_returns_dict_when_raise_error_false(self):
         """exception_to_structured_error should return dict when raise_error=False."""
