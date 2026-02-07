@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +91,12 @@ async def test_get_state_nonexistent_entity(mcp_client):
     """Test retrieving state of a non-existent entity returns error."""
     logger.info("Testing ha_get_state with non-existent entity")
 
-    result = await mcp_client.call_tool(
+    # Use safe_call_tool since we expect this to fail (entity doesn't exist)
+    data = await safe_call_tool(
+        mcp_client,
         "ha_get_state",
         {"entity_id": "sensor.nonexistent_test_entity_xyz_12345"},
     )
-
-    data = parse_mcp_result(result)
 
     # State data may be nested in 'data' key
     inner_data = data.get("data", data)
