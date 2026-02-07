@@ -2,12 +2,28 @@
 Tests for ha_deep_search tool - searches within automation/script/helper configs.
 """
 
+import asyncio
 import logging
 
 import pytest
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import assert_mcp_success, parse_mcp_result
 
 logger = logging.getLogger(__name__)
+
+
+async def _wait_for_entity(mcp_client, entity_id: str, timeout: int = 15, poll_interval: float = 1.0) -> None:
+    """Poll until entity appears in HA state registry."""
+    import time
+
+    start = time.time()
+    while time.time() - start < timeout:
+        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+        data = parse_mcp_result(result)
+        if data.get("success"):
+            logger.info(f"✅ Entity {entity_id} registered after {time.time() - start:.1f}s")
+            return
+        await asyncio.sleep(poll_interval)
+    logger.warning(f"⚠️ Entity {entity_id} not registered within {timeout}s, proceeding anyway")
 
 
 @pytest.mark.asyncio
@@ -42,6 +58,7 @@ async def test_deep_search_automation(mcp_client):
     logger.info(f"✅ Created automation: {create_data}")
 
     # Wait for entity to register in HA before searching
+    await _wait_for_entity(mcp_client, "automation.deep_search_test_automation")
 
     try:
         # Test: Search for the sensor entity mentioned in the trigger
@@ -124,6 +141,7 @@ async def test_deep_search_script(mcp_client):
     logger.info(f"✅ Created script: {create_data}")
 
     # Wait for entity to register in HA before searching
+    await _wait_for_entity(mcp_client, "script.deep_search_test_script")
 
     try:
         # Test: Search for the unique message in the script
@@ -200,6 +218,7 @@ async def test_deep_search_helper(mcp_client):
     logger.info(f"✅ Created helper: {create_data}")
 
     # Wait for entity to register in HA before searching
+    await _wait_for_entity(mcp_client, "input_select.deep_search_test_select")
 
     try:
         # Test: Search for the unique option in the helper
