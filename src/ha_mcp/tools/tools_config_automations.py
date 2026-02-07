@@ -534,8 +534,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         if eid.startswith("automation.") and state.get("attributes", {}).get("id") == identifier:
                             entity_id_for_wait = eid
                             break
-                except Exception:
-                    pass  # Graceful degradation: wait will be skipped
+                except Exception as e:
+                    logger.warning(f"Could not resolve unique_id '{identifier}' to entity_id: {e} — wait verification will be skipped")
 
             result = await client.delete_automation_config(identifier)
 

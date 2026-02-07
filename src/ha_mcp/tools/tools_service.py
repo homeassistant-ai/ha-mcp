@@ -4,6 +4,7 @@ Service call and device operation tools for Home Assistant MCP server.
 This module provides service execution and WebSocket-enabled operation monitoring tools.
 """
 
+import logging
 from typing import Any, cast
 
 from ..errors import (
@@ -11,6 +12,8 @@ from ..errors import (
 )
 from .helpers import exception_to_structured_error
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
+
+logger = logging.getLogger(__name__)
 
 # Services that produce observable state changes on entities
 _STATE_CHANGING_SERVICES = {
@@ -132,8 +135,8 @@ def register_service_tools(mcp, client, **kwargs):
                 try:
                     state_data = await client.get_entity_state(entity_id)
                     initial_state = state_data.get("state") if state_data else None
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded")
 
             result = await client.call_service(domain, service, service_data, return_response=return_response_bool)
 
