@@ -585,15 +585,13 @@ class HomeAssistantClient:
                 )
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
-                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) As a fallback, disable the automation and rename it with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes).",
+                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked "
+                    f"by the Supervisor proxy (it only allows GET and POST). "
+                    f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' to a "
+                    f"token created at Settings > People > (your user) > Long-Lived Access Tokens. "
+                    f"This bypasses the proxy and enables DELETE operations. "
+                    f"ALTERNATIVE: As a fallback, disable the automation and rename it with a "
+                    f"'DELETE_' prefix so you can manually delete it via the HA UI.",
                     status_code=405,
                 )
             raise
@@ -900,17 +898,15 @@ class HomeAssistantClient:
                 )
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
-                    f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"It may also occur if the script is defined in YAML configuration files. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) If the script is YAML-defined, edit the configuration file directly. "
-                    f"(4) As a fallback, disable the script and rename it with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{script_id}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scripts).",
+                    f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked "
+                    f"by the Supervisor proxy (it only allows GET and POST). "
+                    f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' to a "
+                    f"token created at Settings > People > (your user) > Long-Lived Access Tokens. "
+                    f"This bypasses the proxy and enables DELETE operations. "
+                    f"This may also occur if the script is YAML-defined, in which case edit the "
+                    f"configuration file directly. "
+                    f"ALTERNATIVE: As a fallback, disable the script and rename it with a "
+                    f"'DELETE_' prefix so you can manually delete it via the HA UI.",
                     status_code=405,
                 )
             raise

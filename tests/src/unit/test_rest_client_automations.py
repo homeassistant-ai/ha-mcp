@@ -86,16 +86,17 @@ class TestDeleteAutomationConfig:
         error_message = str(error)
         assert "cannot delete" in error_message.lower()
 
-        # Verify it mentions the addon proxy limitation
-        assert "add-on" in error_message.lower()
+        # Verify it mentions the Supervisor proxy limitation
         assert "supervisor" in error_message.lower()
         assert "delete" in error_message.lower()
 
-        # Verify it provides workarounds
-        assert "workaround" in error_message.lower()
-        assert "pip" in error_message.lower() or "docker" in error_message.lower()
+        # Verify it provides the LLAT fix
+        assert "long-lived access token" in error_message.lower()
+        assert "configuration" in error_message.lower()
+
+        # Verify it provides the disable+rename fallback
         assert "delete_" in error_message.lower()  # Prefix suggestion
-        assert "home assistant ui" in error_message.lower()
+        assert "ha ui" in error_message.lower()
 
     @pytest.mark.asyncio
     async def test_delete_automation_other_error_propagates(self, mock_client):
