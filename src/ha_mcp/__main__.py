@@ -253,6 +253,19 @@ class _DeferredMCP:
 mcp = _DeferredMCP()
 
 
+_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _setup_logging(log_level_str: str, force: bool = False) -> None:
+    """Configure root logger with consistent timestamp format."""
+    logging.basicConfig(
+        level=getattr(logging, log_level_str),
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt=_LOG_DATE_FORMAT,
+        force=force,
+    )
+
+
 def _get_timestamped_uvicorn_log_config() -> dict:
     """Return a Uvicorn log config with human-readable timestamps added."""
     from uvicorn.config import LOGGING_CONFIG
@@ -261,11 +274,11 @@ def _get_timestamped_uvicorn_log_config() -> dict:
     log_config["formatters"]["default"]["fmt"] = (
         "%(asctime)s %(levelprefix)s %(message)s"
     )
-    log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["default"]["datefmt"] = _LOG_DATE_FORMAT
     log_config["formatters"]["access"]["fmt"] = (
         '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
     )
-    log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["access"]["datefmt"] = _LOG_DATE_FORMAT
     return log_config
 
 
@@ -438,11 +451,7 @@ def main() -> None:
         print(_STDIN_ERROR_MESSAGE, file=sys.stderr)
         sys.exit(1)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    _setup_logging(settings.log_level)
 
     # Set up signal handlers before running
     _setup_signal_handlers()
@@ -615,11 +624,7 @@ def main_web() -> None:
         )
         sys.exit(1)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    _setup_logging(settings.log_level)
 
     _run_http_server("streamable-http", default_port=8086)
 
@@ -652,11 +657,7 @@ def main_sse() -> None:
         )
         sys.exit(1)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    _setup_logging(settings.log_level)
 
     _run_http_server("sse", default_port=8087)
 
@@ -679,12 +680,7 @@ def main_oauth() -> None:
     """
     # Configure logging for OAuth mode
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        force=True,  # Force reconfiguration
-    )
+    _setup_logging(log_level, force=True)
     # Also configure all ha_mcp loggers
     for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))

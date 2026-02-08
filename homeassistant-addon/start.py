@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Home Assistant MCP Server Add-on startup script."""
 
-import copy
 import json
 import os
 import secrets
@@ -10,16 +9,20 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _log_with_timestamp(level: str, message: str, stream=None) -> None:
+    """Log a message with a timestamp."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} [{level}] {message}", file=stream, flush=True)
+
+
 def log_info(message: str) -> None:
     """Log info message."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{now} [INFO] {message}", flush=True)
+    _log_with_timestamp("INFO", message)
 
 
 def log_error(message: str) -> None:
     """Log error message."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{now} [ERROR] {message}", file=sys.stderr, flush=True)
+    _log_with_timestamp("ERROR", message, sys.stderr)
 
 
 def generate_secret_path() -> str:
@@ -132,20 +135,7 @@ def main() -> int:
     # Import and run MCP server directly
     try:
         log_info("Importing ha_mcp module...")
-        from ha_mcp.__main__ import mcp
-
-        # Build uvicorn log config with human-readable timestamps
-        from uvicorn.config import LOGGING_CONFIG
-
-        log_config = copy.deepcopy(LOGGING_CONFIG)
-        log_config["formatters"]["default"]["fmt"] = (
-            "%(asctime)s %(levelprefix)s %(message)s"
-        )
-        log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
-        log_config["formatters"]["access"]["fmt"] = (
-            '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
-        )
-        log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+        from ha_mcp.__main__ import mcp, _get_timestamped_uvicorn_log_config
 
         log_info("Starting MCP server...")
         mcp.run(
@@ -154,7 +144,7 @@ def main() -> int:
             port=port,
             path=secret_path,
             log_level="info",
-            uvicorn_config={"log_config": log_config},
+            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
     except Exception as e:
         log_error(f"Failed to start MCP server: {e}")
