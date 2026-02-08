@@ -90,7 +90,7 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
-            access_token = config.get("access_token", "")
+            access_token = config.get("access_token") or ""
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -102,12 +102,13 @@ def main() -> int:
     # Set up environment for ha-mcp
     os.environ["BACKUP_HINT"] = backup_hint
 
-    if access_token and access_token.strip():
+    stripped_token = access_token.strip()
+    if stripped_token:
         # Long-Lived Access Token provided: bypass Supervisor proxy and connect
         # directly to Home Assistant. This enables all HTTP methods (including
         # DELETE) which the Supervisor proxy blocks.
         os.environ["HOMEASSISTANT_URL"] = "http://homeassistant:8123"
-        os.environ["HOMEASSISTANT_TOKEN"] = access_token.strip()
+        os.environ["HOMEASSISTANT_TOKEN"] = stripped_token
         log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
         log_info("Authentication configured via Long-Lived Access Token (direct API access)")
     else:
