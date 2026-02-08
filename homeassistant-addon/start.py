@@ -114,31 +114,23 @@ def get_supervisor_addon_info() -> dict | None:
 def get_nabu_casa_url() -> str | None:
     """Get the Nabu Casa remote base URL (e.g. https://xyz.ui.nabu.casa).
 
-    Queries the HA Core cloud status API via the Supervisor proxy.
+    Reads the remote_domain from HA's cloud storage file at
+    /config/.storage/cloud (requires map: config:rw).
     Returns the remote URL string, or None if unavailable.
     """
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        return None
-
+    cloud_storage = Path("/config/.storage/cloud")
     try:
-        req = urllib.request.Request(
-            "http://supervisor/core/api/cloud/status",
-            headers={
-                "Authorization": f"Bearer {supervisor_token}",
-                "Content-Type": "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            cloud_data = json.loads(resp.read())
-            # Cloud status returns logged_in, remote_connected, etc.
-            if cloud_data.get("logged_in") and cloud_data.get("remote_connected"):
-                # The remote URL is typically in prefs or can be derived
-                remote_domain = cloud_data.get("remote_domain")
+        if cloud_storage.exists():
+            cloud_data = json.loads(cloud_storage.read_text())
+            data = cloud_data.get("data", {})
+            if data.get("remote_enabled"):
+                remote_domain = data.get("remote_domain")
                 if remote_domain:
                     return f"https://{remote_domain}"
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        log_info(f"Nabu Casa cloud status not available: {e}")
+            else:
+                log_info("Nabu Casa remote UI is not enabled in cloud settings")
+    except (OSError, json.JSONDecodeError) as e:
+        log_info(f"Nabu Casa cloud config not available: {e}")
 
     return None
 
