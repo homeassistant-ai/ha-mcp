@@ -483,16 +483,12 @@ async def run(args: argparse.Namespace) -> dict:
         log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
         log(f"Agents: {', '.join(active_agents)}")
 
-        # Run agents in parallel
-        tasks = {
-            name: asyncio.create_task(
-                run_agent_scenario(name, scenario, ha_url, ha_token, args.branch, args.timeout)
-            )
-            for name in active_agents
-        }
+        # Run agents sequentially to avoid resource contention
         agent_results = {}
-        for name, task in tasks.items():
-            agent_results[name] = await task
+        for name in active_agents:
+            agent_results[name] = await run_agent_scenario(
+                name, scenario, ha_url, ha_token, args.branch, args.timeout
+            )
 
         # Add unavailable agents
         for name, avail in agents.items():
