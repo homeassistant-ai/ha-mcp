@@ -20,5 +20,6 @@ options:
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
+  access_token: password?
 ports:
   9583/tcp: 9583

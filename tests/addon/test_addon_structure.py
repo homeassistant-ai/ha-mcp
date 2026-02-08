@@ -67,6 +67,13 @@ class TestAddonStructure:
         assert config["schema"]["secret_path"] == "str?", \
             "secret_path schema should be optional string (str?)"
 
+        # Verify access_token configuration (optional LLAT for direct API access)
+        assert "access_token" not in config["options"], \
+            "access_token should be optional and omitted so Supervisor treats it as advanced"
+        assert "access_token" in config["schema"], "schema must include access_token field"
+        assert config["schema"]["access_token"] == "password?", \
+            "access_token schema should be optional password (password?)"
+
         # Verify backup_hint configuration
         assert "backup_hint" in config["options"], "options must include backup_hint field"
         assert config["options"]["backup_hint"] == "normal", "default backup_hint should be normal"

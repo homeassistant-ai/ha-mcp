@@ -7,3 +7,7 @@ configuration:
     name: Secret path override
     description: |
       Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
+  access_token:
+    name: Long-Lived Access Token
+    description: |
+      Optional. Provide a Home Assistant Long-Lived Access Token to bypass the Supervisor proxy and connect directly to Home Assistant. This enables DELETE operations (removing automations and scripts) which are blocked by the Supervisor proxy. Create one in your HA profile at Settings > People > (your user) > Long-Lived Access Tokens.

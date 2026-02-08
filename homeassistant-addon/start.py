@@ -82,12 +82,15 @@ def main() -> int:
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
 
+    access_token = ""  # default (no LLAT)
+
     if config_file.exists():
         try:
             with open(config_file) as f:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
+            access_token = config.get("access_token", "")
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -97,19 +100,28 @@ def main() -> int:
     log_info(f"Backup hint mode: {backup_hint}")
 
     # Set up environment for ha-mcp
-    os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
     os.environ["BACKUP_HINT"] = backup_hint
 
-    # Validate Supervisor token
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
-        return 1
+    if access_token and access_token.strip():
+        # Long-Lived Access Token provided: bypass Supervisor proxy and connect
+        # directly to Home Assistant. This enables all HTTP methods (including
+        # DELETE) which the Supervisor proxy blocks.
+        os.environ["HOMEASSISTANT_URL"] = "http://homeassistant:8123"
+        os.environ["HOMEASSISTANT_TOKEN"] = access_token.strip()
+        log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
+        log_info("Authentication configured via Long-Lived Access Token (direct API access)")
+    else:
+        # Default: use Supervisor proxy with auto-injected token
+        os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
 
-    os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
+        supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+        if not supervisor_token:
+            log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
+            return 1
 
-    log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
-    log_info("Authentication configured via Supervisor token")
+        os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
+        log_info(f"Home Assistant URL: {os.environ['HOMEASSISTANT_URL']}")
+        log_info("Authentication configured via Supervisor token")
 
     # Fixed port (internal container port)
     port = 9583

@@ -26,6 +26,7 @@ options:
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
+  access_token: password?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
