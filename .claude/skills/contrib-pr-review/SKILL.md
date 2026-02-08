@@ -225,35 +225,67 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 
 ## Final Review Summary
 
-Provide a **concise summary** for the reviewer:
+After completing the analysis, draft a comment for the PR following these guidelines:
 
+**Comment Length:**
+- **Good to merge:** 10-15 lines
+- **Changes needed:** Max 25 lines
+
+**Style:**
+- No emojis
+- Markdown formatting OK (bold, lists, code blocks)
+- Present inline in chat (not in a file)
+- Always ask user before posting
+
+**Structure for "Good to Merge" (10-15 lines):**
 ```
-📋 PR #$ARGUMENTS Review Summary
+[Positive opening line about the contribution]
 
-👤 Contributor: [name] ([X] contributions)
-📊 Size: [lines] lines ([appropriate/large/too large])
+[1-2 sentences on what works well]
 
-🔒 Security: [SAFE / NEEDS REVIEW - concerns]
-🧪 Tests: [well-tested / partially tested / untested]
-🎯 Intent: [clear & aligned / unclear / scope issues]
-✨ Quality: [good / needs work / excellent]
+[Any minor suggestions or notes - optional]
 
-**Recommendation:**
-- ✅ APPROVE - Ready for merge after CI passes
-- 💬 REQUEST CHANGES - [specific issues to address]
-- 🤔 COMMENT - Needs discussion on [topic]
-- 🔴 BLOCK - Security concerns require maintainer review
+[Closing line about readiness to merge]
+```
 
-**Key Points for Reviewer:**
-1. [Most important thing to check]
-2. [Second concern]
-3. [Nice to have improvement]
+**Structure for "Changes Needed" (max 25 lines):**
+```
+[Positive opening line acknowledging the work]
 
-**Next Steps:**
-- [ ] Enable workflows (if not enabled)
-- [ ] Review security concerns (if any)
-- [ ] Check test coverage
-- [ ] Validate intent alignment
+[Brief summary of the issue being solved]
+
+**[Concern 1]:**
+[1-2 lines explanation + suggestion]
+
+**[Concern 2]:** (if applicable)
+[1-2 lines explanation + suggestion]
+
+**[Concern 3]:** (if applicable)
+[1-2 lines explanation + suggestion]
+
+[Closing line about next steps]
+```
+
+**Example - Good to Merge:**
+```
+Great work on [feature/fix]. [Performance/quality metric] is impressive.
+
+The implementation follows existing patterns and the [specific aspect] is well-designed. [Optional: Minor note about something noticed].
+
+Ready to merge once CI passes.
+```
+
+**Example - Changes Needed:**
+```
+Thanks for tackling [problem]. [Metric/impact] shows this addresses a real need.
+
+**Test coverage:**
+Missing tests for the new [feature]. Please add at least one E2E test validating [behavior]. Performance tests not required.
+
+**[Second concern if applicable]:**
+[Brief explanation and request]
+
+Once [change 1] and [change 2] are addressed, this should be good to merge.
 ```
 
 ## Important Notes
