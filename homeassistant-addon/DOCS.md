@@ -193,11 +193,28 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
 
+### access_token (Advanced)
+
+**Default:** Empty (uses Supervisor token)
+
+Optional Home Assistant Long-Lived Access Token. When provided, the add-on bypasses the Supervisor proxy and connects directly to Home Assistant's API.
+
+**Why use this?** The Supervisor proxy only allows GET and POST HTTP methods, which blocks DELETE operations. If you need to delete automations or scripts via MCP tools (`ha_config_remove_automation`, `ha_config_remove_script`), you must configure a Long-Lived Access Token.
+
+**How to create a Long-Lived Access Token:**
+1. Go to your Home Assistant profile: **Settings > People > (your user)**
+2. Scroll down to **Long-Lived Access Tokens**
+3. Click **Create Token**, give it a name (e.g., "MCP Server")
+4. Copy the token and paste it into this field
+
+**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
+
 **Example Configuration:**
 
 ```yaml
 backup_hint: normal
 secret_path: ""  # Leave empty for auto-generation
+access_token: "your_long_lived_access_token_here"
 ```
 
 ---
@@ -214,7 +231,9 @@ The add-on automatically generates a unique secret path on first startup using 1
 
 ### Authentication
 
-The add-on uses Home Assistant Supervisor's built-in authentication. No tokens or credentials are needed - the add-on automatically authenticates with your Home Assistant instance.
+The add-on uses Home Assistant Supervisor's built-in authentication by default. No tokens or credentials are needed - the add-on automatically authenticates with your Home Assistant instance.
+
+**Optional:** If you configure a [Long-Lived Access Token](#access_token-advanced), the add-on connects directly to Home Assistant, bypassing the Supervisor proxy. This enables full API access including DELETE operations.
 
 ### Network Exposure
 
@@ -252,6 +271,12 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 2. Restart the add-on (logs will show the URL again)
 3. Read directly from `/data/secret_path.txt` using the Terminal & SSH add-on
 4. Generate a new secret by deleting `/data/secret_path.txt` and restarting
+
+### Cannot delete automations or scripts (405 error)
+
+If `ha_config_remove_automation` or `ha_config_remove_script` returns **405 Method Not Allowed**, this is because the Supervisor proxy only supports GET and POST HTTP methods.
+
+**Solution:** Configure a [Long-Lived Access Token](#access_token-advanced) in the add-on settings. This bypasses the Supervisor proxy and connects directly to Home Assistant's API, enabling DELETE operations.
 
 ### Operations failing
 

@@ -14,6 +14,7 @@ The dev add-on uses the same configuration as the stable version. See the main a
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
+| `access_token` | Long-Lived Access Token for direct API access (optional, enables DELETE operations) | empty |
 
 ## Updates
 
