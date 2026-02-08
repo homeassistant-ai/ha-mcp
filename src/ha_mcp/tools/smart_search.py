@@ -747,7 +747,7 @@ class SmartSearchTools:
                             )
                             all_automation_configs[unique_id] = config
                         except Exception as e:
-                            logger.debug(f"Automation individual config fetch ({auto_id}) failed: {e}")
+                            logger.debug(f"Automation individual config fetch ({unique_id}) failed: {e}")
 
                 # Phase 3: Score with whatever configs we have
                 for entity_id, friendly_name, name_score, unique_id in name_scored:
