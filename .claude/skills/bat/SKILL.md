@@ -35,13 +35,27 @@ The runner returns a **concise summary** to stdout (saves context when all passe
   "agents": {
     "gemini": {
       "all_passed": true,
-      "test": { "completed": true, "duration_ms": 8100 }
+      "test": {
+        "completed": true,
+        "duration_ms": 8100,
+        "exit_code": 0,
+        "num_turns": 5,
+        "tool_stats": { "totalCalls": 4, "totalSuccess": 4, "totalFail": 0 }
+      },
+      "aggregate": {
+        "total_duration_ms": 15300,
+        "total_turns": 12,
+        "total_tool_calls": 9,
+        "total_tool_success": 9,
+        "total_tool_fail": 0
+      }
     }
   }
 }
 ```
 
-- **On success**: only `completed`, `duration_ms`, `exit_code`, `tool_stats`
+- **Phase stats**: `num_turns`, `tool_stats` (per phase) for fine-grained comparison
+- **Aggregate stats**: Total counts across all phases for overall efficiency comparison
 - **On failure**: also includes `output` and `stderr` for diagnosis
 - **Full results**: raw JSON, complete output always available at `results_file`
 
@@ -65,7 +79,22 @@ cat <<'EOF' | python tests/uat/run_uat.py --agents gemini
 EOF
 ```
 
-## Regression Comparison
+## Regression Comparison Workflow
+
+**Full BAT comparison** (recommended):
+
+1. **Pull latest master**: `git fetch origin master && git checkout master && git pull`
+2. **Run on master**: Save scenario to file, run and save results
+3. **Switch to branch**: `git checkout feat/my-branch`
+4. **Run on branch**: Run same scenario, compare stats
+
+**Compare these metrics:**
+- **Task completion**: Did both pass? Any new failures?
+- **Accuracy**: Check agent output quality - did it understand the task correctly?
+- **Efficiency**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns`, `aggregate.total_duration_ms`
+- **Variation testing**: Ask the same task in different ways to test robustness
+
+**Quick comparison** (single command):
 
 ```bash
 # Test the PR branch

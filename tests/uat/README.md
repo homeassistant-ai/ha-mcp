@@ -90,13 +90,44 @@ The calling agent receives a compact summary. On success, phase outputs are omit
     "gemini": {
       "available": true,
       "all_passed": true,
-      "setup": { "completed": true, "duration_ms": 5200, "exit_code": 0 },
-      "test": { "completed": true, "duration_ms": 8100, "exit_code": 0, "tool_stats": {...} },
-      "teardown": { "completed": true, "duration_ms": 2100, "exit_code": 0 }
+      "setup": {
+        "completed": true,
+        "duration_ms": 5200,
+        "exit_code": 0,
+        "num_turns": 3,
+        "tool_stats": { "totalCalls": 2, "totalSuccess": 2, "totalFail": 0 }
+      },
+      "test": {
+        "completed": true,
+        "duration_ms": 8100,
+        "exit_code": 0,
+        "num_turns": 5,
+        "tool_stats": { "totalCalls": 4, "totalSuccess": 4, "totalFail": 0 }
+      },
+      "teardown": {
+        "completed": true,
+        "duration_ms": 2100,
+        "exit_code": 0,
+        "num_turns": 2,
+        "tool_stats": { "totalCalls": 1, "totalSuccess": 1, "totalFail": 0 }
+      },
+      "aggregate": {
+        "total_duration_ms": 15400,
+        "total_turns": 10,
+        "total_tool_calls": 7,
+        "total_tool_success": 7,
+        "total_tool_fail": 0
+      }
     }
   }
 }
 ```
+
+**Aggregate stats** provide overall efficiency metrics for comparing branches:
+- `total_duration_ms` - Total wall clock time across all phases
+- `total_turns` - Total agentic turns (available for Claude, Gemini)
+- `total_tool_calls` - Total MCP tool invocations
+- `total_tool_success` / `total_tool_fail` - Success/failure counts
 
 On failure, `output` and `stderr` are included in the summary for the failed phase:
 

@@ -355,7 +355,7 @@ async def run_agent_scenario(
 # Summary Generation
 # ---------------------------------------------------------------------------
 def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
-    """Extract concise summary from a phase result (no raw_json, no stderr, no full output)."""
+    """Extract concise summary from a phase result (no raw_json, no full output on success)."""
     summary: dict = {
         "completed": phase_result["completed"],
         "duration_ms": phase_result["duration_ms"],
@@ -367,11 +367,46 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
         stderr = phase_result.get("stderr", "")
         if stderr:
             summary["stderr"] = stderr
+    # Always include stats (for comparison between branches)
     if phase_result.get("num_turns") is not None:
         summary["num_turns"] = phase_result["num_turns"]
     if phase_result.get("tool_stats") is not None:
         summary["tool_stats"] = phase_result["tool_stats"]
     return summary
+
+
+def aggregate_agent_stats(agent_data: dict) -> dict:
+    """Calculate aggregate stats across all phases for an agent."""
+    total_duration = 0
+    total_turns = 0
+    total_tool_calls = 0
+    total_tool_success = 0
+    total_tool_fail = 0
+
+    for phase_key in ("setup", "test", "teardown"):
+        if phase_key not in agent_data:
+            continue
+        phase = agent_data[phase_key]
+        total_duration += phase.get("duration_ms", 0)
+        total_turns += phase.get("num_turns", 0)
+
+        # Extract tool call counts from tool_stats
+        tool_stats = phase.get("tool_stats")
+        if tool_stats:
+            # Gemini format: {totalCalls, totalSuccess, totalFail, ...}
+            if "totalCalls" in tool_stats:
+                total_tool_calls += tool_stats.get("totalCalls", 0)
+                total_tool_success += tool_stats.get("totalSuccess", 0)
+                total_tool_fail += tool_stats.get("totalFail", 0)
+            # Claude format might differ - handle if needed
+
+    return {
+        "total_duration_ms": total_duration,
+        "total_turns": total_turns if total_turns > 0 else None,
+        "total_tool_calls": total_tool_calls if total_tool_calls > 0 else None,
+        "total_tool_success": total_tool_success if total_tool_success > 0 else None,
+        "total_tool_fail": total_tool_fail if total_tool_fail > 0 else None,
+    }
 
 
 def make_summary(full_results: dict) -> dict:
@@ -394,6 +429,10 @@ def make_summary(full_results: dict) -> dict:
             agent_summary[phase_key] = phase_summary
             if not phase_summary["completed"]:
                 agent_summary["all_passed"] = False
+
+        # Add aggregate stats
+        agg_stats = aggregate_agent_stats(agent_data)
+        agent_summary["aggregate"] = agg_stats
 
         summary["agents"][agent_name] = agent_summary
 
