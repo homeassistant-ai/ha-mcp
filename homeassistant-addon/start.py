@@ -177,7 +177,7 @@ def _ha_core_api(method: str, path: str, data: dict | None = None) -> dict | lis
         return None
 
 
-def _ensure_config_entry(retries: int = 3, delay: int = 5) -> bool:
+def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
     """Ensure a config entry exists for the mcp_proxy integration.
 
     Creates one via the HA config flow API if missing. Retries on failure
@@ -185,7 +185,7 @@ def _ensure_config_entry(retries: int = 3, delay: int = 5) -> bool:
     """
     for attempt in range(1, retries + 1):
         # Check if entry already exists
-        entries = _ha_core_api("GET", "/config/config_entries")
+        entries = _ha_core_api("GET", "/config/config_entries/entry")
         if entries is not None:
             for entry in entries:
                 if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
@@ -227,7 +227,7 @@ def _ensure_config_entry(retries: int = 3, delay: int = 5) -> bool:
 
 def _remove_config_entry() -> None:
     """Remove the mcp_proxy config entry if it exists."""
-    entries = _ha_core_api("GET", "/config/config_entries")
+    entries = _ha_core_api("GET", "/config/config_entries/entry")
     if entries is None:
         return
 
