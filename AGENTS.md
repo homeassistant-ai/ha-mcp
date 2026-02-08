@@ -776,9 +776,18 @@ Located in `.claude/agents/`:
 | `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
 | `pr-checker` | Review PR comments, resolve threads, monitor CI |
 
-## BAT (Bot Acceptance Testing)
+## Skills
 
-**Run bot acceptance tests with `/bat [scenario-description]`** or see `.claude/skills/bat/SKILL.md` for full documentation.
+Located in `.claude/skills/`:
+
+| Skill | Command | Purpose | When to Use |
+|-------|---------|---------|-------------|
+| `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
+| `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
+
+### BAT (Bot Acceptance Testing)
+
+**Usage:** `/bat [scenario-description]`
 
 Quick summary:
 - Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
@@ -786,7 +795,22 @@ Quick summary:
 - Use for PR validation, regression detection, and end-to-end integration verification
 - Progressive disclosure: only read `results_file` when you need to dig deeper
 
-For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read the skill documentation.
+For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read `.claude/skills/bat/SKILL.md`.
+
+### Contributor PR Review
+
+**Usage:** `/contrib-pr-review <pr-number>`
+
+Review external contributor PRs with comprehensive security-first analysis:
+- **Security assessment** - prompt injection, AGENTS.md changes, workflow modifications
+- **Test coverage** - checks for pre-existing tests and new tests (uses both naming conventions and grep for function/class names)
+- **Contributor experience** - assesses both project contributions and overall GitHub experience
+- **PR size appropriateness** - validates size matches contributor experience level
+- **Intent alignment** - checks issue linkage and scope
+
+**When to use:** Reviewing PRs from external contributors (not your own PRs). Provides structured review framework focusing on safety and quality.
+
+See `.claude/skills/contrib-pr-review/SKILL.md` for full documentation.
 
 ## Documentation Updates
 
