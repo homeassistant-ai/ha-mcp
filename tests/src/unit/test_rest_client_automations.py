@@ -89,6 +89,7 @@ class TestDeleteAutomationConfig:
         result = await mock_client.delete_automation_config("automation.test_automation")
 
         assert result["operation"] == "marked_for_deletion"
+        assert result["result"] == "marked_for_deletion"
         assert "warning" in result
 
         # Verify the automation was renamed with DELETE_ prefix
@@ -109,6 +110,36 @@ class TestDeleteAutomationConfig:
         assert "delete_my automation" in warning.lower()
         assert "ha ui" in warning.lower()
         assert "long-lived access token" in warning.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_automation_405_with_unique_id_still_disables(self, mock_client):
+        """405 fallback should construct entity_id when given a unique_id."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="12345")
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 405 - Method Not Allowed",
+                status_code=405,
+            )
+        )
+        mock_client.get_automation_config = AsyncMock(return_value={
+            "alias": "My Automation",
+            "trigger": [{"platform": "state"}],
+            "action": [{"service": "light.turn_on"}],
+        })
+        mock_client.upsert_automation_config = AsyncMock(return_value={
+            "unique_id": "12345",
+            "operation": "updated",
+        })
+        mock_client.call_service = AsyncMock(return_value=[])
+
+        result = await mock_client.delete_automation_config("12345")
+
+        assert result["operation"] == "marked_for_deletion"
+        # Should construct entity_id as automation.<unique_id>
+        mock_client.call_service.assert_called_once_with(
+            "automation", "turn_off",
+            {"entity_id": "automation.12345"},
+        )
 
     @pytest.mark.asyncio
     async def test_delete_automation_405_fallback_failure_raises_error(self, mock_client):

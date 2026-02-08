@@ -610,23 +610,21 @@ class HomeAssistantClient:
             if not alias.startswith("DELETE_"):
                 config["alias"] = f"DELETE_{alias}"
             await self.upsert_automation_config(config, identifier)
-            # Disable by calling automation.turn_off (POST, works through proxy)
             entity_id = (
                 identifier
                 if identifier.startswith("automation.")
-                else None
+                else f"automation.{identifier}"
             )
-            if entity_id:
-                try:
-                    await self.call_service(
-                        "automation", "turn_off",
-                        {"entity_id": entity_id},
-                    )
-                except Exception:
-                    pass  # Best-effort disable; rename alone is sufficient
+            try:
+                await self.call_service(
+                    "automation", "turn_off", {"entity_id": entity_id}
+                )
+            except Exception:
+                pass  # Best-effort disable; rename alone is sufficient
             return {
                 "identifier": identifier,
                 "unique_id": unique_id,
+                "result": "marked_for_deletion",
                 "operation": "marked_for_deletion",
                 "warning": (
                     f"Could not fully delete automation '{identifier}' because the "
@@ -957,13 +955,12 @@ class HomeAssistantClient:
         can easily find and remove it from the HA UI.
         """
         try:
-            result = await self.get_script_config(script_id)
-            config = result.get("config", {})
+            get_result = await self.get_script_config(script_id)
+            config = get_result.get("config", {})
             alias = config.get("alias", script_id)
             if not alias.startswith("DELETE_"):
                 config["alias"] = f"DELETE_{alias}"
             await self.upsert_script_config(config, script_id)
-            # Disable via homeassistant.turn_off (POST, works through proxy)
             try:
                 await self.call_service(
                     "homeassistant", "turn_off",
@@ -974,6 +971,7 @@ class HomeAssistantClient:
             return {
                 "success": True,
                 "script_id": script_id,
+                "result": "marked_for_deletion",
                 "operation": "marked_for_deletion",
                 "warning": (
                     f"Could not fully delete script '{script_id}' because the "

@@ -91,6 +91,7 @@ class TestDeleteScriptConfig:
         result = await mock_client.delete_script_config("test_script")
 
         assert result["operation"] == "marked_for_deletion"
+        assert result["result"] == "marked_for_deletion"
         assert "warning" in result
 
         # Verify the script was renamed with DELETE_ prefix
