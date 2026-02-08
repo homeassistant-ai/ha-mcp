@@ -695,8 +695,8 @@ class SmartSearchTools:
                             if uid:
                                 all_automation_configs[uid] = item
                         bulk_fetched = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Automation REST bulk fetch failed: {e}")
 
                 # Attempt B: WebSocket bulk endpoints
                 if not bulk_fetched:
@@ -717,8 +717,8 @@ class SmartSearchTools:
                                     if uid:
                                         all_automation_configs[uid] = item
                                 bulk_fetched = True
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Automation WebSocket bulk fetch ({ws_type}) failed: {e}")
 
                 # Attempt C: Individual REST calls with time budget (LAST RESORT)
                 # Prioritize name-matched automations so we at least get their configs
@@ -746,8 +746,8 @@ class SmartSearchTools:
                                 timeout=5.0,
                             )
                             all_automation_configs[unique_id] = config
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Automation individual config fetch ({auto_id}) failed: {e}")
 
                 # Phase 3: Score with whatever configs we have
                 for entity_id, friendly_name, name_score, unique_id in name_scored:
@@ -774,7 +774,7 @@ class SmartSearchTools:
                         )
 
             # ================================================================
-            # SCRIPT SEARCH (same bulk-first strategy)
+            # SCRIPT SEARCH (same 3-tier strategy: REST bulk -> WS bulk -> individual)
             # ================================================================
             if "script" in search_types:
                 script_entities = [
@@ -816,10 +816,34 @@ class SmartSearchTools:
                             if sid:
                                 all_script_configs[sid] = item
                         script_bulk_fetched = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Script REST bulk fetch failed: {e}")
 
-                # Attempt B: Individual fetch with budget
+                # Attempt B: WebSocket bulk endpoints
+                if not script_bulk_fetched:
+                    for ws_type in [
+                        "config/script/config/list",
+                        "script/config/list",
+                    ]:
+                        if script_bulk_fetched:
+                            break
+                        try:
+                            ws_resp = await asyncio.wait_for(
+                                self.client.send_websocket_message({"type": ws_type}),
+                                timeout=3.0,
+                            )
+                            if isinstance(ws_resp, dict) and ws_resp.get("success"):
+                                for item in ws_resp.get("result", []):
+                                    sid = item.get("id") or item.get(
+                                        "alias", ""
+                                    ).lower().replace(" ", "_")
+                                    if sid:
+                                        all_script_configs[sid] = item
+                                script_bulk_fetched = True
+                        except Exception as e:
+                            logger.debug(f"Script WebSocket bulk fetch ({ws_type}) failed: {e}")
+
+                # Attempt C: Individual fetch with budget
                 if not script_bulk_fetched:
                     budget_start = time.perf_counter()
                     SCRIPT_BUDGET = 10.0
@@ -844,8 +868,8 @@ class SmartSearchTools:
                             all_script_configs[script_id] = config_resp.get(
                                 "config", {}
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Script individual config fetch ({script_id}) failed: {e}")
 
                 # Phase 3: Score scripts
                 for (
