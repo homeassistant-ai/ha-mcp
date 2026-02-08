@@ -4,6 +4,7 @@ Smart search tools for Home Assistant MCP server.
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from ..client.rest_client import HomeAssistantClient
@@ -13,7 +14,7 @@ from ..utils.fuzzy_search import calculate_partial_ratio, create_fuzzy_searcher
 logger = logging.getLogger(__name__)
 
 # Default concurrency limit for parallel operations
-DEFAULT_CONCURRENCY_LIMIT = 5
+DEFAULT_CONCURRENCY_LIMIT = 20
 
 
 class SmartSearchTools:
@@ -36,7 +37,11 @@ class SmartSearchTools:
         self.fuzzy_searcher = create_fuzzy_searcher(threshold=fuzzy_threshold)
 
     async def smart_entity_search(
-        self, query: str, limit: int = 10, include_attributes: bool = False, domain_filter: str | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        include_attributes: bool = False,
+        domain_filter: str | None = None,
     ) -> dict[str, Any]:
         """
         Advanced entity search with fuzzy matching and typo tolerance.
@@ -58,12 +63,15 @@ class SmartSearchTools:
             # This ensures fuzzy search only looks at entities in the target domain
             if domain_filter:
                 entities = [
-                    e for e in entities
+                    e
+                    for e in entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
                 ]
 
             # Perform fuzzy search - returns (limited_results, total_count)
-            matches, total_matches = self.fuzzy_searcher.search_entities(entities, query, limit)
+            matches, total_matches = self.fuzzy_searcher.search_entities(
+                entities, query, limit
+            )
 
             # Format results
             results = []
@@ -121,7 +129,10 @@ class SmartSearchTools:
 
             # Add hint if results are truncated
             if response["is_truncated"]:
-                response["usage_tips"].insert(0, f"Showing {len(results)} of {total_matches} matches. Increase 'limit' parameter to see more.")
+                response["usage_tips"].insert(
+                    0,
+                    f"Showing {len(results)} of {total_matches} matches. Increase 'limit' parameter to see more.",
+                )
 
             return response
 
@@ -213,11 +224,16 @@ class SmartSearchTools:
             for area_id, area_info in area_registry.items():
                 area_name = area_info.get("name", "")
                 # Exact match on area_id or name (case-insensitive)
-                if area_query_lower == area_id.lower() or area_query_lower == area_name.lower():
+                if (
+                    area_query_lower == area_id.lower()
+                    or area_query_lower == area_name.lower()
+                ):
                     matched_area_ids.add(area_id)
                     continue
                 # Fuzzy match on area name
-                name_score = calculate_partial_ratio(area_query_lower, area_name.lower())
+                name_score = calculate_partial_ratio(
+                    area_query_lower, area_name.lower()
+                )
                 id_score = calculate_partial_ratio(area_query_lower, area_id.lower())
                 best_score = max(name_score, id_score)
                 if best_score >= 80:
@@ -304,7 +320,9 @@ class SmartSearchTools:
                     area_data["entities"] = [
                         {
                             "entity_id": entity_id,
-                            "friendly_name": (state_info := state_map.get(entity_id, {}))
+                            "friendly_name": (
+                                state_info := state_map.get(entity_id, {})
+                            )
                             .get("attributes", {})
                             .get("friendly_name", entity_id),
                             "domain": entity_id.split(".")[0],
@@ -520,10 +538,15 @@ class SmartSearchTools:
                 all_entities = stats["all_entities"]
 
                 # Apply max_entities_per_domain limit
-                if max_entities_per_domain and len(all_entities) > max_entities_per_domain:
+                if (
+                    max_entities_per_domain
+                    and len(all_entities) > max_entities_per_domain
+                ):
                     # Random selection for minimal
                     if detail_level == "minimal":
-                        selected_entities = random.sample(all_entities, max_entities_per_domain)
+                        selected_entities = random.sample(
+                            all_entities, max_entities_per_domain
+                        )
                     else:
                         # Take first N for other levels
                         selected_entities = all_entities[:max_entities_per_domain]
@@ -613,130 +636,246 @@ class SmartSearchTools:
             # Fetch all entities once at the beginning to avoid repeated calls
             all_entities = await self.client.get_states()
 
+            # Pre-resolve unique_ids from cached entity states to avoid redundant API calls
+            automation_unique_id_map = {}
+            for e in all_entities:
+                eid = e.get("entity_id", "")
+                if eid.startswith("automation."):
+                    uid = e.get("attributes", {}).get("id")
+                    if uid:
+                        automation_unique_id_map[eid] = uid
+
             # Create semaphore for limiting concurrent API calls
             semaphore = asyncio.Semaphore(concurrency_limit)
 
-            # Search automations with parallel config fetching
+            # ================================================================
+            # AUTOMATION SEARCH
+            # Uses a 3-tier strategy to fetch configs within the MCP timeout:
+            #   A) Try REST bulk endpoint (single call for all configs)
+            #   B) Try WebSocket bulk endpoints
+            #   C) Fall back to individual REST calls with a time budget,
+            #      prioritizing automations that best match the query by name
+            # ================================================================
             if "automation" in search_types:
                 automation_entities = [
-                    e for e in all_entities if e.get("entity_id", "").startswith("automation.")
+                    e
+                    for e in all_entities
+                    if e.get("entity_id", "").startswith("automation.")
                 ]
 
-                async def fetch_automation_config(entity: dict[str, Any]) -> dict[str, Any] | None:
-                    """Fetch automation config with semaphore-controlled concurrency."""
+                # Phase 1: Score ALL automations by name (instant, no API calls)
+                name_scored: list[tuple[str, str, int, str | None]] = []
+                for entity in automation_entities:
                     entity_id = entity.get("entity_id", "")
-                    friendly_name = entity.get("attributes", {}).get("friendly_name", entity_id)
-
-                    # Check if query matches in name first
-                    name_match_score = self.fuzzy_searcher._calculate_entity_score(
+                    friendly_name = entity.get("attributes", {}).get(
+                        "friendly_name", entity_id
+                    )
+                    name_score = self.fuzzy_searcher._calculate_entity_score(
                         entity_id, friendly_name, "automation", query_lower
                     )
-
-                    # Get automation config with concurrency control
-                    async with semaphore:
-                        try:
-                            config_response = await self.client.get_automation_config(entity_id)
-                            config_match_score = self._search_in_dict(config_response, query_lower)
-
-                            total_score = max(name_match_score, config_match_score)
-
-                            if total_score >= self.settings.fuzzy_threshold:
-                                return {
-                                    "entity_id": entity_id,
-                                    "friendly_name": friendly_name,
-                                    "score": total_score,
-                                    "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
-                                    "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
-                                    "config": config_response,
-                                }
-                        except Exception as e:
-                            logger.debug(f"Could not get config for {entity_id}: {e}")
-                            # Still include if name matches
-                            if name_match_score >= self.settings.fuzzy_threshold:
-                                return {
-                                    "entity_id": entity_id,
-                                    "friendly_name": friendly_name,
-                                    "score": name_match_score,
-                                    "match_in_name": True,
-                                    "match_in_config": False,
-                                }
-                    return None
-
-                # Fetch all automation configs in parallel
-                automation_results = await asyncio.gather(
-                    *[fetch_automation_config(e) for e in automation_entities],
-                    return_exceptions=True,
-                )
-
-                # Filter out None results and exceptions
-                for result in automation_results:
-                    if isinstance(result, dict):
-                        results["automations"].append(result)
-                    elif isinstance(result, Exception):
-                        logger.debug(f"Automation config fetch failed: {result}")
-
-            # Search scripts with parallel config fetching
-            if "script" in search_types:
-                script_entities = [
-                    e for e in all_entities if e.get("entity_id", "").startswith("script.")
-                ]
-
-                async def fetch_script_config(entity: dict[str, Any]) -> dict[str, Any] | None:
-                    """Fetch script config with semaphore-controlled concurrency."""
-                    entity_id = entity.get("entity_id", "")
-                    friendly_name = entity.get("attributes", {}).get("friendly_name", entity_id)
-                    script_id = entity_id.replace("script.", "")
-
-                    # Check if query matches in name
-                    name_match_score = self.fuzzy_searcher._calculate_entity_score(
-                        entity_id, friendly_name, "script", query_lower
+                    unique_id = automation_unique_id_map.get(entity_id)
+                    name_scored.append(
+                        (entity_id, friendly_name, name_score, unique_id)
                     )
 
-                    # Get script config with concurrency control
-                    async with semaphore:
+                # Phase 2: Try to bulk-fetch ALL automation configs with a single API call
+                all_automation_configs: dict[str, dict[str, Any]] = {}
+                bulk_fetched = False
+                CONFIG_BUDGET = 15.0  # seconds allowed for individual config fetching
+
+                # Attempt A: REST bulk endpoint /config/automation/config (no ID)
+                try:
+                    resp = await asyncio.wait_for(
+                        self.client._request("GET", "/config/automation/config"),
+                        timeout=5.0,
+                    )
+                    if isinstance(resp, list):
+                        for item in resp:
+                            uid = item.get("id")
+                            if uid:
+                                all_automation_configs[uid] = item
+                        bulk_fetched = True
+                except Exception:
+                    pass
+
+                # Attempt B: WebSocket bulk endpoints
+                if not bulk_fetched:
+                    for ws_type in [
+                        "config/automation/config/list",
+                        "automation/config/list",
+                    ]:
+                        if bulk_fetched:
+                            break
                         try:
-                            config_response = await self.client.get_script_config(script_id)
-                            script_config = config_response.get("config", {})
-                            config_match_score = self._search_in_dict(script_config, query_lower)
+                            ws_resp = await asyncio.wait_for(
+                                self.client.send_websocket_message({"type": ws_type}),
+                                timeout=3.0,
+                            )
+                            if isinstance(ws_resp, dict) and ws_resp.get("success"):
+                                for item in ws_resp.get("result", []):
+                                    uid = item.get("id")
+                                    if uid:
+                                        all_automation_configs[uid] = item
+                                bulk_fetched = True
+                        except Exception:
+                            pass
 
-                            total_score = max(name_match_score, config_match_score)
+                # Attempt C: Individual REST calls with time budget (LAST RESORT)
+                # Prioritize name-matched automations so we at least get their configs
+                if not bulk_fetched:
+                    budget_start = time.perf_counter()
+                    sorted_by_score = sorted(
+                        name_scored, key=lambda x: x[2], reverse=True
+                    )
 
-                            if total_score >= self.settings.fuzzy_threshold:
-                                return {
-                                    "entity_id": entity_id,
-                                    "script_id": script_id,
-                                    "friendly_name": friendly_name,
-                                    "score": total_score,
-                                    "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
-                                    "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
-                                    "config": script_config,
-                                }
-                        except Exception as e:
-                            logger.debug(f"Could not get config for {script_id}: {e}")
-                            # Still include if name matches
-                            if name_match_score >= self.settings.fuzzy_threshold:
-                                return {
-                                    "entity_id": entity_id,
-                                    "script_id": script_id,
-                                    "friendly_name": friendly_name,
-                                    "score": name_match_score,
-                                    "match_in_name": True,
-                                    "match_in_config": False,
-                                }
-                    return None
+                    for (
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        unique_id,
+                    ) in sorted_by_score:
+                        if time.perf_counter() - budget_start > CONFIG_BUDGET:
+                            break
+                        if not unique_id or unique_id in all_automation_configs:
+                            continue
+                        try:
+                            config = await asyncio.wait_for(
+                                self.client._request(
+                                    "GET", f"/config/automation/config/{unique_id}"
+                                ),
+                                timeout=5.0,
+                            )
+                            all_automation_configs[unique_id] = config
+                        except Exception:
+                            pass
 
-                # Fetch all script configs in parallel
-                script_results = await asyncio.gather(
-                    *[fetch_script_config(e) for e in script_entities],
-                    return_exceptions=True,
-                )
+                # Phase 3: Score with whatever configs we have
+                for entity_id, friendly_name, name_score, unique_id in name_scored:
+                    config = (
+                        all_automation_configs.get(unique_id, {}) if unique_id else {}
+                    )
+                    config_match_score = (
+                        self._search_in_dict(config, query_lower) if config else 0
+                    )
+                    total_score = max(name_score, config_match_score)
 
-                # Filter out None results and exceptions
-                for result in script_results:
-                    if isinstance(result, dict):
-                        results["scripts"].append(result)
-                    elif isinstance(result, Exception):
-                        logger.debug(f"Script config fetch failed: {result}")
+                    if total_score >= self.settings.fuzzy_threshold:
+                        results["automations"].append(
+                            {
+                                "entity_id": entity_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": name_score
+                                >= self.settings.fuzzy_threshold,
+                                "match_in_config": config_match_score
+                                >= self.settings.fuzzy_threshold,
+                                "config": config if config else None,
+                            }
+                        )
+
+            # ================================================================
+            # SCRIPT SEARCH (same bulk-first strategy)
+            # ================================================================
+            if "script" in search_types:
+                script_entities = [
+                    e
+                    for e in all_entities
+                    if e.get("entity_id", "").startswith("script.")
+                ]
+
+                # Phase 1: Score all scripts by name (instant)
+                script_name_scored: list[tuple[str, str, str, int]] = []
+                for entity in script_entities:
+                    entity_id = entity.get("entity_id", "")
+                    friendly_name = entity.get("attributes", {}).get(
+                        "friendly_name", entity_id
+                    )
+                    script_id = entity_id.replace("script.", "")
+                    name_score = self.fuzzy_searcher._calculate_entity_score(
+                        entity_id, friendly_name, "script", query_lower
+                    )
+                    script_name_scored.append(
+                        (entity_id, friendly_name, script_id, name_score)
+                    )
+
+                # Phase 2: Try bulk fetch for scripts
+                all_script_configs: dict[str, dict[str, Any]] = {}
+                script_bulk_fetched = False
+
+                # Attempt A: REST bulk endpoint
+                try:
+                    resp = await asyncio.wait_for(
+                        self.client._request("GET", "/config/script/config"),
+                        timeout=5.0,
+                    )
+                    if isinstance(resp, list):
+                        for item in resp:
+                            sid = item.get("id") or item.get(
+                                "alias", ""
+                            ).lower().replace(" ", "_")
+                            if sid:
+                                all_script_configs[sid] = item
+                        script_bulk_fetched = True
+                except Exception:
+                    pass
+
+                # Attempt B: Individual fetch with budget
+                if not script_bulk_fetched:
+                    budget_start = time.perf_counter()
+                    SCRIPT_BUDGET = 10.0
+                    sorted_scripts = sorted(
+                        script_name_scored, key=lambda x: x[3], reverse=True
+                    )
+                    for (
+                        entity_id,
+                        friendly_name,
+                        script_id,
+                        name_score,
+                    ) in sorted_scripts:
+                        if time.perf_counter() - budget_start > SCRIPT_BUDGET:
+                            break
+                        if script_id in all_script_configs:
+                            continue
+                        try:
+                            config_resp = await asyncio.wait_for(
+                                self.client.get_script_config(script_id),
+                                timeout=5.0,
+                            )
+                            all_script_configs[script_id] = config_resp.get(
+                                "config", {}
+                            )
+                        except Exception:
+                            pass
+
+                # Phase 3: Score scripts
+                for (
+                    entity_id,
+                    friendly_name,
+                    script_id,
+                    name_score,
+                ) in script_name_scored:
+                    script_config = all_script_configs.get(script_id, {})
+                    config_match_score = (
+                        self._search_in_dict(script_config, query_lower)
+                        if script_config
+                        else 0
+                    )
+                    total_score = max(name_score, config_match_score)
+
+                    if total_score >= self.settings.fuzzy_threshold:
+                        results["scripts"].append(
+                            {
+                                "entity_id": entity_id,
+                                "script_id": script_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": name_score
+                                >= self.settings.fuzzy_threshold,
+                                "match_in_config": config_match_score
+                                >= self.settings.fuzzy_threshold,
+                                "config": script_config if script_config else None,
+                            }
+                        )
 
             # Search helpers with parallel WebSocket calls
             if "helper" in search_types:
@@ -754,7 +893,9 @@ class SmartSearchTools:
                     async with semaphore:
                         try:
                             message = {"type": f"{helper_type}/list"}
-                            helper_list_response = await self.client.send_websocket_message(message)
+                            helper_list_response = (
+                                await self.client.send_websocket_message(message)
+                            )
 
                             if not helper_list_response.get("success"):
                                 return []
@@ -768,23 +909,31 @@ class SmartSearchTools:
                                 name = helper.get("name", helper_id)
 
                                 # Check if query matches in name or config
-                                name_match_score = self.fuzzy_searcher._calculate_entity_score(
-                                    entity_id, name, helper_type, query_lower
+                                name_match_score = (
+                                    self.fuzzy_searcher._calculate_entity_score(
+                                        entity_id, name, helper_type, query_lower
+                                    )
                                 )
-                                config_match_score = self._search_in_dict(helper, query_lower)
+                                config_match_score = self._search_in_dict(
+                                    helper, query_lower
+                                )
 
                                 total_score = max(name_match_score, config_match_score)
 
                                 if total_score >= self.settings.fuzzy_threshold:
-                                    helper_results.append({
-                                        "entity_id": entity_id,
-                                        "helper_type": helper_type,
-                                        "name": name,
-                                        "score": total_score,
-                                        "match_in_name": name_match_score >= self.settings.fuzzy_threshold,
-                                        "match_in_config": config_match_score >= self.settings.fuzzy_threshold,
-                                        "config": helper,
-                                    })
+                                    helper_results.append(
+                                        {
+                                            "entity_id": entity_id,
+                                            "helper_type": helper_type,
+                                            "name": name,
+                                            "score": total_score,
+                                            "match_in_name": name_match_score
+                                            >= self.settings.fuzzy_threshold,
+                                            "match_in_config": config_match_score
+                                            >= self.settings.fuzzy_threshold,
+                                            "config": helper,
+                                        }
+                                    )
 
                             return helper_results
                         except Exception as e:
@@ -837,7 +986,9 @@ class SmartSearchTools:
                 "search_types": search_types,
                 "search_metadata": {
                     "fuzzy_threshold": self.settings.fuzzy_threshold,
-                    "best_match_score": limited_results[0]["score"] if limited_results else 0,
+                    "best_match_score": limited_results[0]["score"]
+                    if limited_results
+                    else 0,
                     "truncated": len(all_results) > limit,
                 },
                 "usage_tips": [
@@ -864,7 +1015,9 @@ class SmartSearchTools:
                 ],
             }
 
-    def _search_in_dict(self, data: dict[str, Any] | list[Any] | Any, query: str) -> int:
+    def _search_in_dict(
+        self, data: dict[str, Any] | list[Any] | Any, query: str
+    ) -> int:
         """
         Recursively search for query string in nested dictionary/list structures.
 
