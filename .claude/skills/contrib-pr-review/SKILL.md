@@ -1,6 +1,6 @@
 ---
 name: contrib-pr-review
-description: Review a contribution PR for safety, quality, and readiness. Checks for security concerns, test coverage, size appropriateness, and intent alignment. Use when reviewing external contributions.
+description: Review a contribution PR for safety, quality, and readiness. Checks for security concerns, test coverage, size appropriateness, and intent alignment. Use when reviewing external contributions. Review PRs sequentially, not in parallel.
 argument-hint: "<pr-number>"
 allowed-tools: Bash, Read, Grep, Glob, WebFetch
 ---
@@ -8,6 +8,8 @@ allowed-tools: Bash, Read, Grep, Glob, WebFetch
 # Contribution PR Review
 
 Review PR #$ARGUMENTS from external contributor for safety, quality, and readiness.
+
+**IMPORTANT:** Review PRs one at a time. Do not launch multiple review agents in parallel to avoid resource contention.
 
 ## Context
 
