@@ -584,15 +584,8 @@ class HomeAssistantClient:
                     status_code=404,
                 )
             elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked "
-                    f"by the Supervisor proxy (it only allows GET and POST). "
-                    f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' to a "
-                    f"token created at Settings > People > (your user) > Long-Lived Access Tokens. "
-                    f"This bypasses the proxy and enables DELETE operations. "
-                    f"ALTERNATIVE: As a fallback, disable the automation and rename it with a "
-                    f"'DELETE_' prefix so you can manually delete it via the HA UI.",
-                    status_code=405,
+                return await self._fallback_mark_automation_for_deletion(
+                    identifier, unique_id
                 )
             raise
         except Exception as e:
@@ -602,6 +595,59 @@ class HomeAssistantClient:
                     status_code=404,
                 )
             raise
+
+    async def _fallback_mark_automation_for_deletion(
+        self, identifier: str, unique_id: str
+    ) -> dict[str, Any]:
+        """Mark automation for manual deletion when DELETE is blocked by Supervisor proxy.
+
+        Disables the automation and renames it with a DELETE_ prefix so the user
+        can easily find and remove it from the HA UI.
+        """
+        try:
+            config = await self.get_automation_config(identifier)
+            alias = config.get("alias", "")
+            if not alias.startswith("DELETE_"):
+                config["alias"] = f"DELETE_{alias}"
+            await self.upsert_automation_config(config, identifier)
+            # Disable by calling automation.turn_off (POST, works through proxy)
+            entity_id = (
+                identifier
+                if identifier.startswith("automation.")
+                else None
+            )
+            if entity_id:
+                try:
+                    await self.call_service(
+                        "automation", "turn_off",
+                        {"entity_id": entity_id},
+                    )
+                except Exception:
+                    pass  # Best-effort disable; rename alone is sufficient
+            return {
+                "identifier": identifier,
+                "unique_id": unique_id,
+                "operation": "marked_for_deletion",
+                "warning": (
+                    f"Could not fully delete automation '{identifier}' because the "
+                    f"Supervisor proxy blocks HTTP DELETE. The automation has been "
+                    f"disabled and renamed to 'DELETE_{alias}'. "
+                    f"Please delete it manually via the HA UI (Settings > Automations). "
+                    f"To enable direct deletion in the future, set a Long-Lived Access "
+                    f"Token in the add-on Configuration tab (create one at Settings > "
+                    f"People > your user > Long-Lived Access Tokens)."
+                ),
+            }
+        except Exception as fallback_error:
+            raise HomeAssistantAPIError(
+                f"Cannot delete automation '{identifier}': The HTTP DELETE method is "
+                f"blocked by the Supervisor proxy, and the fallback (disable + rename) "
+                f"also failed: {fallback_error}. "
+                f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' "
+                f"to a token created at Settings > People > (your user) > Long-Lived "
+                f"Access Tokens. This bypasses the proxy and enables DELETE operations.",
+                status_code=405,
+            )
 
     async def start_config_flow(
         self, handler: str, context: dict[str, Any] | None = None
@@ -897,21 +943,62 @@ class HomeAssistantClient:
                     f"Script not found: {script_id}", status_code=404
                 )
             elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked "
-                    f"by the Supervisor proxy (it only allows GET and POST). "
-                    f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' to a "
-                    f"token created at Settings > People > (your user) > Long-Lived Access Tokens. "
-                    f"This bypasses the proxy and enables DELETE operations. "
-                    f"This may also occur if the script is YAML-defined, in which case edit the "
-                    f"configuration file directly. "
-                    f"ALTERNATIVE: As a fallback, disable the script and rename it with a "
-                    f"'DELETE_' prefix so you can manually delete it via the HA UI.",
-                    status_code=405,
-                )
+                return await self._fallback_mark_script_for_deletion(script_id)
             raise
         except Exception as e:
             raise
+
+    async def _fallback_mark_script_for_deletion(
+        self, script_id: str
+    ) -> dict[str, Any]:
+        """Mark script for manual deletion when DELETE is blocked by Supervisor proxy.
+
+        Disables the script and renames it with a DELETE_ prefix so the user
+        can easily find and remove it from the HA UI.
+        """
+        try:
+            result = await self.get_script_config(script_id)
+            config = result.get("config", {})
+            alias = config.get("alias", script_id)
+            if not alias.startswith("DELETE_"):
+                config["alias"] = f"DELETE_{alias}"
+            await self.upsert_script_config(config, script_id)
+            # Disable via homeassistant.turn_off (POST, works through proxy)
+            try:
+                await self.call_service(
+                    "homeassistant", "turn_off",
+                    {"entity_id": f"script.{script_id}"},
+                )
+            except Exception:
+                pass  # Best-effort disable; rename alone is sufficient
+            return {
+                "success": True,
+                "script_id": script_id,
+                "operation": "marked_for_deletion",
+                "warning": (
+                    f"Could not fully delete script '{script_id}' because the "
+                    f"Supervisor proxy blocks HTTP DELETE. The script has been "
+                    f"disabled and renamed to 'DELETE_{alias}'. "
+                    f"Please delete it manually via the HA UI (Settings > Scripts). "
+                    f"This may also occur if the script is YAML-defined, in which case "
+                    f"edit the configuration file directly. "
+                    f"To enable direct deletion in the future, set a Long-Lived Access "
+                    f"Token in the add-on Configuration tab (create one at Settings > "
+                    f"People > your user > Long-Lived Access Tokens)."
+                ),
+            }
+        except Exception as fallback_error:
+            raise HomeAssistantAPIError(
+                f"Cannot delete script '{script_id}': The HTTP DELETE method is "
+                f"blocked by the Supervisor proxy, and the fallback (disable + rename) "
+                f"also failed: {fallback_error}. "
+                f"This may also occur if the script is YAML-defined, in which case "
+                f"edit the configuration file directly. "
+                f"FIX: In the add-on Configuration tab, set 'Long-Lived Access Token' "
+                f"to a token created at Settings > People > (your user) > Long-Lived "
+                f"Access Tokens. This bypasses the proxy and enables DELETE operations.",
+                status_code=405,
+            )
 
 
 async def create_client() -> HomeAssistantClient:

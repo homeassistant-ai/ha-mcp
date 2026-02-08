@@ -59,8 +59,8 @@ class TestDeleteScriptConfig:
         assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_delete_script_405_addon_proxy_limitation(self, mock_client):
-        """405 error should raise HomeAssistantAPIError with helpful message.
+    async def test_delete_script_405_falls_back_to_disable_and_rename(self, mock_client):
+        """405 error should automatically disable and rename the script.
 
         This tests the fix for issues #261 and #414 where scripts cannot be
         deleted via the API due to:
@@ -73,30 +73,129 @@ class TestDeleteScriptConfig:
                 status_code=405,
             )
         )
+        mock_client.get_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "config": {
+                "alias": "My Script",
+                "sequence": [{"delay": {"seconds": 1}}],
+            },
+        })
+        mock_client.upsert_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "operation": "updated",
+        })
+        mock_client.call_service = AsyncMock(return_value=[])
+
+        result = await mock_client.delete_script_config("test_script")
+
+        assert result["operation"] == "marked_for_deletion"
+        assert "warning" in result
+
+        # Verify the script was renamed with DELETE_ prefix
+        upsert_call = mock_client.upsert_script_config.call_args
+        config_arg = upsert_call[0][0]
+        assert config_arg["alias"] == "DELETE_My Script"
+
+        # Verify homeassistant.turn_off was called to disable
+        mock_client.call_service.assert_called_once_with(
+            "homeassistant", "turn_off",
+            {"entity_id": "script.test_script"},
+        )
+
+        # Verify warning mentions key information
+        warning = result["warning"]
+        assert "supervisor" in warning.lower()
+        assert "disabled" in warning.lower()
+        assert "delete_my script" in warning.lower()
+        assert "ha ui" in warning.lower()
+        assert "yaml" in warning.lower()
+        assert "long-lived access token" in warning.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_script_405_fallback_failure_raises_error(self, mock_client):
+        """If the fallback also fails, raise a helpful error."""
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 405 - Method Not Allowed",
+                status_code=405,
+            )
+        )
+        mock_client.get_script_config = AsyncMock(
+            side_effect=Exception("Failed to get config")
+        )
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:
             await mock_client.delete_script_config("test_script")
 
         error = exc_info.value
         assert error.status_code == 405
+        error_message = str(error).lower()
+        assert "fallback" in error_message
+        assert "long-lived access token" in error_message
+        assert "yaml" in error_message
 
-        # Verify the error message is helpful
-        error_message = str(error)
-        assert "cannot delete" in error_message.lower()
+    @pytest.mark.asyncio
+    async def test_delete_script_405_disable_failure_still_succeeds(self, mock_client):
+        """If disable fails but rename succeeds, still return marked_for_deletion."""
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 405 - Method Not Allowed",
+                status_code=405,
+            )
+        )
+        mock_client.get_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "config": {
+                "alias": "My Script",
+                "sequence": [{"delay": {"seconds": 1}}],
+            },
+        })
+        mock_client.upsert_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "operation": "updated",
+        })
+        # Disable call fails
+        mock_client.call_service = AsyncMock(side_effect=Exception("Service failed"))
 
-        # Verify it mentions the Supervisor proxy limitation
-        assert "supervisor" in error_message.lower()
+        result = await mock_client.delete_script_config("test_script")
 
-        # Verify it mentions YAML as a possible cause
-        assert "yaml" in error_message.lower()
+        # Should still succeed - rename is sufficient
+        assert result["operation"] == "marked_for_deletion"
 
-        # Verify it provides the LLAT fix
-        assert "long-lived access token" in error_message.lower()
-        assert "configuration" in error_message.lower()
+    @pytest.mark.asyncio
+    async def test_delete_script_405_already_prefixed(self, mock_client):
+        """If already prefixed with DELETE_, don't double-prefix."""
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "API error: 405 - Method Not Allowed",
+                status_code=405,
+            )
+        )
+        mock_client.get_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "config": {
+                "alias": "DELETE_Already Marked",
+                "sequence": [{"delay": {"seconds": 1}}],
+            },
+        })
+        mock_client.upsert_script_config = AsyncMock(return_value={
+            "success": True,
+            "script_id": "test_script",
+            "operation": "updated",
+        })
+        mock_client.call_service = AsyncMock(return_value=[])
 
-        # Verify it provides the disable+rename fallback
-        assert "delete_" in error_message.lower()  # Prefix suggestion
-        assert "ha ui" in error_message.lower()
+        result = await mock_client.delete_script_config("test_script")
+
+        # Verify alias was NOT double-prefixed
+        upsert_call = mock_client.upsert_script_config.call_args
+        config_arg = upsert_call[0][0]
+        assert config_arg["alias"] == "DELETE_Already Marked"
 
     @pytest.mark.asyncio
     async def test_delete_script_other_error_propagates(self, mock_client):
