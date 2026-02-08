@@ -1,4 +1,4 @@
-# UAT Framework - Agent-Driven Acceptance Testing
+# BAT Framework - Bot Acceptance Testing
 
 Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini) against a Home Assistant test instance. Designed to be driven by a calling agent that generates scenarios dynamically, runs them, and evaluates results.
 
@@ -13,22 +13,25 @@ Calling Agent (Claude Code)          run_uat.py              Agent CLIs
   |                                    |-- runs agents -------->|
   |                                    |                        |-- uses MCP tools
   |                                    |<-- collects output ----|
-  |<-- returns results JSON -----------|                        |
+  |<-- returns summary JSON -----------|                        |
+  |    (full results in temp file)     |                        |
   |                                                             |
   |-- evaluates pass/fail                                       |
+  |-- reads full results only if needed                         |
 ```
 
 - **No pre-built scenarios** - The calling agent generates them based on what it's testing
 - **The runner is a dumb executor** - Takes JSON, runs agents, returns raw results
 - **The calling agent is the brain** - Designs tests, evaluates results, decides regressions
+- **Progressive disclosure** - Summary on stdout, full results in a temp file
 
 ## Scenario Format
 
 ```json
 {
-  "setup_prompt": "Create a test automation called 'uat_test' with action to turn on light.bed_light.",
-  "test_prompt": "Get automation 'automation.uat_test'. Report the result.",
-  "teardown_prompt": "Delete automation 'uat_test' if it exists."
+  "setup_prompt": "Create a test automation called 'bat_test' with action to turn on light.bed_light.",
+  "test_prompt": "Get automation 'automation.bat_test'. Report the result.",
+  "teardown_prompt": "Delete automation 'bat_test' if it exists."
 }
 ```
 
@@ -74,30 +77,46 @@ python tests/uat/run_uat.py --branch pr-551    # uses: uvx --from git+...@pr-551
 
 ## Output Format
 
-JSON to stdout (logs go to stderr):
+### Stdout: Concise Summary
+
+The calling agent receives a compact summary. On success, phase outputs are omitted to save context:
 
 ```json
 {
-  "scenario": { "setup_prompt": "...", "test_prompt": "...", "teardown_prompt": "..." },
-  "ha_url": "http://localhost:54321",
   "mcp_source": "local",
   "branch": null,
-  "results": {
-    "claude": {
-      "available": true,
-      "setup": { "completed": true, "output": "...", "duration_ms": 5200, "exit_code": 0 },
-      "test": { "completed": true, "output": "...", "duration_ms": 8100, "exit_code": 0 },
-      "teardown": { "completed": true, "output": "...", "duration_ms": 2100, "exit_code": 0 }
-    },
+  "results_file": "/tmp/bat_results_abc123.json",
+  "agents": {
     "gemini": {
       "available": true,
-      "test": { "completed": true, "output": "...", "duration_ms": 6300, "exit_code": 0 }
+      "all_passed": true,
+      "setup": { "completed": true, "duration_ms": 5200, "exit_code": 0 },
+      "test": { "completed": true, "duration_ms": 8100, "exit_code": 0, "tool_stats": {...} },
+      "teardown": { "completed": true, "duration_ms": 2100, "exit_code": 0 }
     }
   }
 }
 ```
 
-### Phase Result Fields
+On failure, `output` and `stderr` are included in the summary for the failed phase:
+
+```json
+{
+  "test": {
+    "completed": false,
+    "duration_ms": 120000,
+    "exit_code": -1,
+    "output": "",
+    "stderr": "Timed out after 120s"
+  }
+}
+```
+
+### Full Results File
+
+The `results_file` path points to a temp file with everything: full agent output, raw JSON, stderr, scenario. The calling agent reads this only when it needs to dig deeper (e.g. inspecting exact tool responses on failure).
+
+### Phase Result Fields (full results)
 
 | Field | Description |
 |-------|-------------|

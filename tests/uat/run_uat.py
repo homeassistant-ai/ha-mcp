@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-UAT Runner - Agent-driven acceptance testing for ha-mcp.
+BAT Runner - Bot acceptance testing for ha-mcp.
 
 Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini) against a
 Home Assistant test instance. The calling agent generates scenarios dynamically
 and evaluates results - this script is a dumb executor.
+
+Full results are written to a temp file. Stdout gets a concise summary with
+the file path — the calling agent only reads the full file when needed.
 
 Usage:
     echo '{"test_prompt":"Search for light entities."}' | python tests/uat/run_uat.py --agents gemini
@@ -54,7 +57,7 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 def setup_config_directory() -> Path:
     """Copy initial_test_state to a temp dir for the HA container."""
-    config_dir = Path(tempfile.mkdtemp(prefix="ha_uat_"))
+    config_dir = Path(tempfile.mkdtemp(prefix="ha_bat_"))
     initial_state = TESTS_DIR / "initial_test_state"
     if not initial_state.exists():
         raise FileNotFoundError(f"initial_test_state not found at {initial_state}")
@@ -231,6 +234,9 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
                 output_text = raw_json.get("response", stdout_text)
             num_turns = raw_json.get("num_turns")
             tool_stats = raw_json.get("tool_stats")
+            # Gemini stats
+            if "stats" in raw_json and isinstance(raw_json["stats"], dict):
+                tool_stats = raw_json["stats"].get("tools")
 
         result: dict = {
             "completed": proc.returncode == 0,
@@ -305,7 +311,7 @@ async def run_agent_scenario(
     if agent_name == "claude":
         claude_config_path = write_claude_mcp_config(ha_url, ha_token, branch)
     elif agent_name == "gemini":
-        gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_uat_"))
+        gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
         write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir)
 
     try:
@@ -346,10 +352,59 @@ async def run_agent_scenario(
 
 
 # ---------------------------------------------------------------------------
+# Summary Generation
+# ---------------------------------------------------------------------------
+def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
+    """Extract concise summary from a phase result (no raw_json, no stderr, no full output)."""
+    summary: dict = {
+        "completed": phase_result["completed"],
+        "duration_ms": phase_result["duration_ms"],
+        "exit_code": phase_result["exit_code"],
+    }
+    if not phase_result["completed"]:
+        # Include output and stderr only on failure — the calling agent needs them to diagnose
+        summary["output"] = phase_result.get("output", "")
+        stderr = phase_result.get("stderr", "")
+        if stderr:
+            summary["stderr"] = stderr
+    if phase_result.get("num_turns") is not None:
+        summary["num_turns"] = phase_result["num_turns"]
+    if phase_result.get("tool_stats") is not None:
+        summary["tool_stats"] = phase_result["tool_stats"]
+    return summary
+
+
+def make_summary(full_results: dict) -> dict:
+    """Build a concise summary from full results (for stdout)."""
+    summary: dict = {
+        "mcp_source": full_results["mcp_source"],
+        "branch": full_results.get("branch"),
+        "agents": {},
+    }
+    for agent_name, agent_data in full_results["results"].items():
+        if not agent_data.get("available", False):
+            summary["agents"][agent_name] = {"available": False}
+            continue
+
+        agent_summary: dict = {"available": True, "all_passed": True}
+        for phase_key in ("setup", "test", "teardown"):
+            if phase_key not in agent_data:
+                continue
+            phase_summary = make_phase_summary(phase_key, agent_data[phase_key])
+            agent_summary[phase_key] = phase_summary
+            if not phase_summary["completed"]:
+                agent_summary["all_passed"] = False
+
+        summary["agents"][agent_name] = agent_summary
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 async def run(args: argparse.Namespace) -> dict:
-    """Execute the UAT scenario and return results."""
+    """Execute the BAT scenario and return results."""
     # Read scenario
     if args.scenario_file:
         scenario = json.loads(Path(args.scenario_file).read_text())
@@ -419,7 +474,7 @@ async def run(args: argparse.Namespace) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="UAT Runner - Execute MCP test scenarios on AI agent CLIs",
+        description="BAT Runner - Execute MCP test scenarios on AI agent CLIs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -459,11 +514,22 @@ Examples:
     args = parser.parse_args()
 
     try:
-        output = asyncio.run(run(args))
+        full_results = asyncio.run(run(args))
     except ValueError as e:
         log(f"ERROR: {e}")
         sys.exit(1)
-    json.dump(output, sys.stdout, indent=2)
+
+    # Write full results to temp file
+    results_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="bat_results_", delete=False
+    )
+    json.dump(full_results, results_file, indent=2)
+    results_file.close()
+
+    # Output concise summary + file path to stdout
+    summary = make_summary(full_results)
+    summary["results_file"] = results_file.name
+    json.dump(summary, sys.stdout, indent=2)
     print()  # trailing newline
 
 

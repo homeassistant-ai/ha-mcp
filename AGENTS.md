@@ -776,11 +776,11 @@ Located in `.claude/agents/`:
 | `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
 | `pr-checker` | Review PR comments, resolve threads, monitor CI |
 
-## UAT (User Acceptance Testing)
+## BAT (Bot Acceptance Testing)
 
-Agent-driven acceptance testing validates that MCP tools work correctly from a real AI agent's perspective. The calling agent (you) designs test scenarios, runs them via `tests/uat/run_uat.py`, and evaluates results.
+Bot acceptance testing validates that MCP tools work correctly from a real AI agent's perspective. The calling agent (you) designs test scenarios, runs them via `tests/uat/run_uat.py`, and evaluates results.
 
-### When to Use UAT
+### When to Use BAT
 
 - **PR validation**: Test that tool changes work correctly from an agent's perspective
 - **Regression detection**: Compare behavior between branches
@@ -791,8 +791,24 @@ Agent-driven acceptance testing validates that MCP tools work correctly from a r
 1. **Analyze the change**: Read the diff, identify which tools are affected
 2. **Design scenario**: Generate a scenario JSON with setup/test/teardown prompts
 3. **Run the script**: Pipe the scenario to `python tests/uat/run_uat.py`
-4. **Evaluate results**: Read the JSON output, check if agents behaved correctly
-5. **Regression check**: If test fails, re-run with `--branch master` to compare
+4. **Evaluate summary**: Check `all_passed` per agent. If true, you're done.
+5. **Dig deeper on failure**: Read `results_file` for full output, stderr, raw JSON
+6. **Regression check**: If test fails, re-run with `--branch master` to compare
+
+### Output Structure
+
+The runner returns a **concise summary** to stdout (saves context when all passes):
+```json
+{
+  "results_file": "/tmp/bat_results_abc123.json",
+  "agents": {
+    "gemini": { "all_passed": true, "test": { "completed": true, "duration_ms": 8100 } }
+  }
+}
+```
+- On success: only `completed`, `duration_ms`, `exit_code`, `tool_stats`
+- On failure: also includes `output` and `stderr` for diagnosis
+- Full results (raw JSON, complete output) always available at `results_file`
 
 ### Scenario Design Guidelines
 
@@ -807,9 +823,9 @@ Agent-driven acceptance testing validates that MCP tools work correctly from a r
 ```bash
 cat <<'EOF' | python tests/uat/run_uat.py --agents gemini
 {
-  "setup_prompt": "Create a test automation called 'uat_error_test' with a time trigger at 23:59 and action to turn on light.bed_light.",
-  "test_prompt": "Try to get automation 'automation.nonexistent_xyz'. Report if the tool signaled an error or returned a normal response. Then get automation 'automation.uat_error_test' and report its structure.",
-  "teardown_prompt": "Delete automation 'uat_error_test' if it exists."
+  "setup_prompt": "Create a test automation called 'bat_error_test' with a time trigger at 23:59 and action to turn on light.bed_light.",
+  "test_prompt": "Try to get automation 'automation.nonexistent_xyz'. Report if the tool signaled an error or returned a normal response. Then get automation 'automation.bat_error_test' and report its structure.",
+  "teardown_prompt": "Delete automation 'bat_error_test' if it exists."
 }
 EOF
 ```
