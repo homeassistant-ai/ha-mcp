@@ -56,7 +56,7 @@ ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json"]
 
 [tool.black]
 line-length = 88
-target-version = ['py311']
+target-version = ['py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -100,7 +100,7 @@ ignore_missing_imports = true
 
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
@@ -125,7 +125,6 @@ ignore = [
     "W291",  # trailing whitespace
     "F821",  # undefined name (often false positives in complex imports)
     "E722",  # bare except (temporary for cleanup)
-    "UP038", # isinstance union syntax (non-critical)
     "I001",  # import sorting handled by isort
 ]
 

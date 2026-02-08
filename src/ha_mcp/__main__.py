@@ -1,9 +1,11 @@
 """Home Assistant MCP Server."""
 
 import truststore
+
 truststore.inject_into_ssl()
 
 import asyncio  # noqa: E402
+import copy  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import signal  # noqa: E402
@@ -251,6 +253,22 @@ class _DeferredMCP:
 mcp = _DeferredMCP()
 
 
+def _get_timestamped_uvicorn_log_config() -> dict:
+    """Return a Uvicorn log config with human-readable timestamps added."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    log_config["formatters"]["default"]["fmt"] = (
+        "%(asctime)s %(levelprefix)s %(message)s"
+    )
+    log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["access"]["fmt"] = (
+        '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    )
+    log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    return log_config
+
+
 async def _cleanup_resources() -> None:
     """Clean up all server resources gracefully."""
     global _server
@@ -330,6 +348,7 @@ async def _run_with_graceful_shutdown() -> None:
     # Respect FastMCP's show_cli_banner setting
     # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Create a task for the MCP server
@@ -382,6 +401,7 @@ def main() -> None:
     # Handle --version flag early, before server creation requires config
     if "--version" in sys.argv or "-V" in sys.argv:
         from importlib.metadata import version
+
         print(f"ha-mcp {version('ha-mcp')}")
         sys.exit(0)
 
@@ -393,6 +413,7 @@ def main() -> None:
 
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # In standard mode (not OAuth), validate that real credentials are provided
@@ -419,7 +440,8 @@ def main() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     # Set up signal handlers before running
@@ -443,6 +465,7 @@ def main() -> None:
 def main_dev() -> None:
     """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
     import os
+
     os.environ["LOG_LEVEL"] = "DEBUG"
     main()
 
@@ -474,6 +497,7 @@ async def _run_http_with_graceful_shutdown(
     # Respect FastMCP's show_cli_banner setting
     # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Create a task for the MCP server
@@ -485,6 +509,7 @@ async def _run_http_with_graceful_shutdown(
             path=path,
             show_banner=show_banner,
             stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
+            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
     )
 
@@ -573,6 +598,7 @@ def main_web() -> None:
     """
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # Validate credentials (required in non-OAuth HTTP mode)
@@ -591,7 +617,8 @@ def main_web() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     _run_http_server("streamable-http", default_port=8086)
@@ -608,6 +635,7 @@ def main_sse() -> None:
     """
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
     # Validate credentials (required in non-OAuth SSE mode)
@@ -626,7 +654,8 @@ def main_sse() -> None:
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     _run_http_server("sse", default_port=8087)
@@ -652,11 +681,12 @@ def main_oauth() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
-        force=True  # Force reconfiguration
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,  # Force reconfiguration
     )
     # Also configure all ha_mcp loggers
-    for logger_name in ['ha_mcp', 'ha_mcp.auth', 'ha_mcp.auth.provider']:
+    for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
     logger.info(f"OAuth mode logging configured at {log_level} level")
 
@@ -666,7 +696,9 @@ def main_oauth() -> None:
 
     if not base_url:
         logger.error("MCP_BASE_URL environment variable is required for OAuth mode")
-        logger.error("Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com")
+        logger.error(
+            "Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com"
+        )
         sys.exit(1)
 
     # Set up signal handlers
@@ -726,10 +758,13 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
 
     # Get tool count (get_tools is async, but we can count registered tools)
     tools = await mcp.get_tools()
-    logger.info(f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}")
+    logger.info(
+        f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
+    )
 
     # Respect FastMCP's show_cli_banner setting for consistency
     import fastmcp
+
     show_banner = fastmcp.settings.show_cli_banner
 
     # Run server
@@ -741,6 +776,7 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
             path=path,
             show_banner=show_banner,
             stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
+            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
     )
 

@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """Home Assistant MCP Server Add-on startup script."""
 
+import copy
 import json
 import os
 import secrets
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
 def log_info(message: str) -> None:
     """Log info message."""
-    print(f"[INFO] {message}", flush=True)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} [INFO] {message}", flush=True)
 
 
 def log_error(message: str) -> None:
     """Log error message."""
-    print(f"[ERROR] {message}", file=sys.stderr, flush=True)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} [ERROR] {message}", file=sys.stderr, flush=True)
 
 
 def generate_secret_path() -> str:
@@ -44,7 +48,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         path = custom_path.strip()
         if not path.startswith("/"):
             path = "/" + path
-        log_info(f"Using custom secret path from configuration")
+        log_info("Using custom secret path from configuration")
         # Update stored path for consistency
         secret_file.write_text(path)
         return path
@@ -54,7 +58,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         try:
             stored_path = secret_file.read_text().strip()
             if stored_path:
-                log_info(f"Using existing auto-generated secret path")
+                log_info("Using existing auto-generated secret path")
                 return stored_path
         except Exception as e:
             log_error(f"Failed to read stored secret path: {e}")
@@ -130,6 +134,19 @@ def main() -> int:
         log_info("Importing ha_mcp module...")
         from ha_mcp.__main__ import mcp
 
+        # Build uvicorn log config with human-readable timestamps
+        from uvicorn.config import LOGGING_CONFIG
+
+        log_config = copy.deepcopy(LOGGING_CONFIG)
+        log_config["formatters"]["default"]["fmt"] = (
+            "%(asctime)s %(levelprefix)s %(message)s"
+        )
+        log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+        log_config["formatters"]["access"]["fmt"] = (
+            '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+        )
+        log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+
         log_info("Starting MCP server...")
         mcp.run(
             transport="streamable-http",
@@ -137,6 +154,7 @@ def main() -> int:
             port=port,
             path=secret_path,
             log_level="info",
+            uvicorn_config={"log_config": log_config},
         )
     except Exception as e:
         log_error(f"Failed to start MCP server: {e}")
