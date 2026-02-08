@@ -86,10 +86,20 @@ gh api -X PUT /repos/homeassistant-ai/ha-mcp/actions/workflows/pr.yml/enable 2>/
 ```bash
 # For each modified source file, check if tests exist
 gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/files --jq '.[] | select(.filename | startswith("src/")) | .filename' | while read file; do
-  # Convert src/ha_mcp/foo.py → tests/*/test_foo.py
   basename=$(basename "$file" .py)
   echo "Checking tests for: $file"
+
+  # Method 1: Look for test files by naming convention
   find tests/ -name "test_${basename}.py" -o -name "test_*${basename}*.py" 2>/dev/null | head -3
+
+  # Method 2: Grep for function/class names from the modified file
+  # Extract function/class names and search for them in tests
+  grep -E '^(def|class|async def) [a-zA-Z_]' "$file" 2>/dev/null | head -5 | while read line; do
+    name=$(echo "$line" | sed -E 's/.*(def|class) ([a-zA-Z_][a-zA-Z0-9_]*).*/\2/')
+    if [ -n "$name" ]; then
+      grep -r "$name" tests/ 2>/dev/null | head -1
+    fi
+  done
 done
 ```
 
@@ -117,19 +127,34 @@ gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/files --jq '.[] | select(
 total_lines=$(gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json additions,deletions --jq '.additions + .deletions')
 echo "Total lines changed: $total_lines"
 
-# Get contribution count (from earlier command)
+# Get contributor experience
+author=$(gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json author --jq -r '.author.login')
+
+# Check 1: Contributions to this project
+project_contributions=$(gh api /repos/homeassistant-ai/ha-mcp/contributors --jq ".[] | select(.login == \"$author\") | .contributions" || echo "0")
+
+# Check 2: Total GitHub commits (overall experience)
+total_commits=$(gh api /users/$author --jq '.public_repos + .total_private_repos' 2>/dev/null || echo "unknown")
+
+echo "Contributor: $author"
+echo "Project contributions: $project_contributions"
+echo "GitHub experience: $total_commits repos"
 ```
 
 **Assess:**
-- **First-time contributor** (0-2 contributions):
+- **First-time to project** (0-2 project contributions):
+  - Check overall GitHub experience (repos, total commits)
   - < 200 lines: ✅ Excellent size
   - 200-500 lines: ⚠️ Large for first PR - may need extra guidance
-  - > 500 lines: 🔴 Too large - suggest splitting or more experienced contributor help
+  - > 500 lines: 🔴 Too large - suggest splitting
 
-- **Regular contributor** (3+ contributions):
+- **Regular contributor** (3+ project contributions):
   - < 500 lines: ✅ Reasonable
   - 500-1000 lines: ⚠️ Large - ensure good test coverage
   - > 1000 lines: 🔴 Very large - suggest splitting
+
+- **Experienced GitHub user** (many repos/commits overall):
+  - Adjust expectations - they may be new to this project but experienced overall
 
 **Output Size Summary:**
 ```
