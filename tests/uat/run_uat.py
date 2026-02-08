@@ -112,12 +112,16 @@ class HAContainer:
             .with_kwargs(privileged=True)
         )
         self.container.start()
-        port = self.container.get_exposed_port(8123)
-        self.url = f"http://localhost:{port}"
-        log(f"HA container started on {self.url}")
-        time.sleep(5)  # initial stabilization
-        wait_for_ha(self.url, self.token)
-        time.sleep(10)  # component stabilization
+        try:
+            port = self.container.get_exposed_port(8123)
+            self.url = f"http://localhost:{port}"
+            log(f"HA container started on {self.url}")
+            time.sleep(5)  # initial stabilization
+            wait_for_ha(self.url, self.token)
+            time.sleep(10)  # component stabilization
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -211,7 +215,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         raw_json = None
         try:
             raw_json = json.loads(stdout_text)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError:
             pass
 
         # Extract fields from JSON if available
@@ -243,6 +247,12 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["raw_json"] = raw_json
         return result
     except TimeoutError:
+        # Terminate the orphaned process
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except (TimeoutError, ProcessLookupError):
+            proc.kill()
         duration_ms = int((time.time() - start) * 1000)
         return {
             "completed": False,
@@ -347,8 +357,7 @@ async def run(args: argparse.Namespace) -> dict:
         scenario = json.loads(sys.stdin.read())
 
     if "test_prompt" not in scenario:
-        log("ERROR: scenario must contain 'test_prompt'")
-        sys.exit(1)
+        raise ValueError("scenario must contain 'test_prompt'")
 
     # Determine agents
     requested_agents = [a.strip() for a in args.agents.split(",")]
@@ -361,8 +370,7 @@ async def run(args: argparse.Namespace) -> dict:
 
     active_agents = [name for name, avail in agents.items() if avail]
     if not active_agents:
-        log("ERROR: No agents available")
-        sys.exit(1)
+        raise ValueError("No agents available")
 
     # Start HA (container or external)
     ha_url = args.ha_url
@@ -450,7 +458,11 @@ Examples:
     )
     args = parser.parse_args()
 
-    output = asyncio.run(run(args))
+    try:
+        output = asyncio.run(run(args))
+    except ValueError as e:
+        log(f"ERROR: {e}")
+        sys.exit(1)
     json.dump(output, sys.stdout, indent=2)
     print()  # trailing newline
 
