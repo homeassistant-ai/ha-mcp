@@ -776,6 +776,63 @@ Located in `.claude/agents/`:
 | `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
 | `pr-checker` | Review PR comments, resolve threads, monitor CI |
 
+## UAT (User Acceptance Testing)
+
+Agent-driven acceptance testing validates that MCP tools work correctly from a real AI agent's perspective. The calling agent (you) designs test scenarios, runs them via `tests/uat/run_uat.py`, and evaluates results.
+
+### When to Use UAT
+
+- **PR validation**: Test that tool changes work correctly from an agent's perspective
+- **Regression detection**: Compare behavior between branches
+- **Integration verification**: Ensure MCP tools work end-to-end with real agent CLIs
+
+### Workflow
+
+1. **Analyze the change**: Read the diff, identify which tools are affected
+2. **Design scenario**: Generate a scenario JSON with setup/test/teardown prompts
+3. **Run the script**: Pipe the scenario to `python tests/uat/run_uat.py`
+4. **Evaluate results**: Read the JSON output, check if agents behaved correctly
+5. **Regression check**: If test fails, re-run with `--branch master` to compare
+
+### Scenario Design Guidelines
+
+- **setup_prompt**: Create any entities/state the test needs
+- **test_prompt**: Exercise the tools being tested, ask the agent to report results clearly
+- **teardown_prompt**: Clean up created entities
+- Keep prompts focused - each scenario tests ONE behavior
+- Ask the agent to report: what succeeded, what failed, any unexpected behavior
+
+### Example: Testing Error Signaling
+
+```bash
+cat <<'EOF' | python tests/uat/run_uat.py --agents gemini
+{
+  "setup_prompt": "Create a test automation called 'uat_error_test' with a time trigger at 23:59 and action to turn on light.bed_light.",
+  "test_prompt": "Try to get automation 'automation.nonexistent_xyz'. Report if the tool signaled an error or returned a normal response. Then get automation 'automation.uat_error_test' and report its structure.",
+  "teardown_prompt": "Delete automation 'uat_error_test' if it exists."
+}
+EOF
+```
+
+### Regression Comparison
+
+```bash
+# Test the PR branch
+echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+
+# Compare against master
+echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch master --agents gemini
+```
+
+### Cost Awareness
+
+Each scenario invocation costs API credits (one per agent per phase). Design scenarios efficiently:
+- Combine related checks in a single test_prompt when possible
+- Only use setup/teardown when the test needs specific state
+- Start with one agent, expand to both only when cross-agent comparison matters
+
+See `tests/uat/README.md` for full CLI reference and output format.
+
 ## Documentation Updates
 
 Update this file when:
