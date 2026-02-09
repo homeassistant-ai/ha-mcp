@@ -975,6 +975,92 @@ class TestScheduleCRUD:
         )
         logger.info("Schedule cleanup complete")
 
+    async def test_schedule_with_data_field(self, mcp_client, cleanup_tracker):
+        """Test creating a schedule with additional data attributes on time blocks."""
+        logger.info("Testing schedule with data field on time blocks")
+
+        helper_name = "E2E Test Schedule Data"
+
+        # CREATE schedule with 'data' field on time blocks
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "schedule",
+                "name": helper_name,
+                "icon": "mdi:calendar-clock",
+                "monday": [
+                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                    {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
+                ],
+                "tuesday": [
+                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                ],
+            },
+        )
+
+        create_data = assert_mcp_success(create_result, "Create schedule with data")
+        entity_id = get_entity_id_from_response(create_data, "schedule")
+        assert entity_id, f"Missing entity_id: {create_data}"
+        cleanup_tracker.track("schedule", entity_id)
+        logger.info(f"Created schedule with data: {entity_id}")
+
+        # Verify the helper_data includes the data field in time blocks
+        helper_data = create_data.get("helper_data", {})
+        monday_blocks = helper_data.get("monday", [])
+        assert len(monday_blocks) == 2, f"Expected 2 Monday blocks, got {len(monday_blocks)}"
+
+        # Check that data field is preserved in the response
+        first_block = monday_blocks[0]
+        assert "data" in first_block, f"Missing 'data' in first block: {first_block}"
+        assert first_block["data"].get("mode") == "comfort", (
+            f"Expected mode='comfort', got: {first_block['data']}"
+        )
+
+        second_block = monday_blocks[1]
+        assert "data" in second_block, f"Missing 'data' in second block: {second_block}"
+        assert second_block["data"].get("mode") == "sleep", (
+            f"Expected mode='sleep', got: {second_block['data']}"
+        )
+        logger.info("Schedule data field verified in creation response")
+
+        # Wait for entity to be registered
+        async def check_schedule_exists():
+            result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+            data = parse_mcp_result(result)
+            if 'data' in data and data['data'] is not None:
+                state = data.get("data", {}).get("state")
+                return state in ["on", "off"]
+            return False
+
+        state_reached = await wait_for_condition(
+            check_schedule_exists, timeout=10, condition_name=f"schedule {entity_id} registration"
+        )
+        assert state_reached, f"Schedule {entity_id} not registered within timeout"
+
+        # If schedule is currently active (on), verify data attributes are exposed
+        state_result = await mcp_client.call_tool(
+            "ha_get_state",
+            {"entity_id": entity_id},
+        )
+        state_data = parse_mcp_result(state_result)
+        if 'data' in state_data and state_data['data'] is not None:
+            entity_state = state_data["data"].get("state")
+            attrs = state_data["data"].get("attributes", {})
+            logger.info(f"Schedule state: {entity_state}, attributes: {attrs}")
+            if entity_state == "on":
+                # When active, the 'mode' from data should be an attribute
+                assert "mode" in attrs, (
+                    f"Expected 'mode' attribute when schedule is on: {attrs}"
+                )
+                logger.info(f"Schedule 'mode' attribute verified: {attrs['mode']}")
+
+        # DELETE
+        await mcp_client.call_tool(
+            "ha_config_remove_helper",
+            {"helper_type": "schedule", "helper_id": entity_id},
+        )
+        logger.info("Schedule with data cleanup complete")
+
 
 @pytest.mark.asyncio
 @pytest.mark.config

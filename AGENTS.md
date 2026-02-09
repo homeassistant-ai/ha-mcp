@@ -30,6 +30,8 @@ This repository uses a worktree-based development workflow.
 - All worktrees automatically inherit `.claude/agents/` workflows
 - Easy cleanup: `git worktree prune` removes stale references
 
+**Quick command:** Use `/wt <branch-name>` skill to create worktree automatically.
+
 ## Worktree Workflow
 
 ### Creating Worktrees
@@ -100,6 +102,23 @@ When implementing features or debugging, consult these resources:
 | **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
 
 ## Issue & PR Management
+
+### Automated Code Review (Gemini Code Assist)
+
+**Gemini Code Assist** runs automatically on all PRs, providing immediate feedback on:
+- Code quality (correctness, efficiency, maintainability)
+- Test coverage (enforces `src/` modifications must have tests)
+- Security patterns (eval/exec, SQL injection, credentials)
+- Tool naming conventions and MCP patterns
+- Safety annotation accuracy
+- Return value consistency
+
+**Configuration**: `.gemini/styleguide.md` and `.gemini/config.yaml`
+
+**Division of Labor:**
+- **Gemini (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **Claude `contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
+- **Claude `my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 | Label | Meaning |
@@ -192,12 +211,19 @@ gh api graphql -f query='mutation($threadId: ID!) {
 
 ## Git & PR Policies
 
-**Never commit directly to master.** Always create feature/fix branches:
+**CRITICAL - Never commit directly to master.**
+
+You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
+
 ```bash
-git checkout -b feature/description
-git add . && git commit -m "feat: description"
-# ASK USER before pushing or creating PRs
+# Use /wt skill or manually:
+git worktree add worktree/<branch-name> -b <branch-name>
+cd worktree/<branch-name>
 ```
+
+**Before any commit, verify:**
+1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
+2. In worktree: `pwd` (must be in `worktree/` subdirectory)
 
 **Never push or create PRs without user permission.**
 
@@ -470,6 +496,13 @@ uv run ha-mcp              # Run MCP server (80+ tools)
 cp .env.example .env       # Configure HA connection
 ```
 
+### Claude Code Hooks
+
+**Post-Push Reminder** (`.claude/settings.local.json`):
+- Reminds to update PR description after `git push`
+- Appears in Claude Code output
+- Personal workflow helper (gitignored, not committed)
+
 ### Testing
 E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
 
@@ -591,6 +624,24 @@ return create_error_response(
 
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
+
+### Breaking Changes Definition
+
+A change is **BREAKING** only if it removes functionality that users depend on without providing an alternative.
+
+**Breaking Changes (require major version bump):**
+- Deleting a tool without providing alternative functionality elsewhere
+- Removing a feature that has no replacement in any other tool
+- Making something impossible that was previously possible
+
+**NOT Breaking Changes (these are improvements):**
+- Tool consolidation (combining multiple tools into one) — **encouraged**
+- Tool refactoring (restructuring how tools work internally)
+- Parameter changes (as long as same outcome achievable via other means)
+- Return value restructuring (as long as data still accessible)
+- Tool renaming with functionality preserved
+
+**Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only mark as breaking when functionality is genuinely lost forever, not when it's restructured or consolidated.
 
 ## Tool Waiting Behavior
 
@@ -784,6 +835,7 @@ Located in `.claude/skills/`:
 |-------|---------|---------|-------------|
 | `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
+| `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
 ### BAT (Bot Acceptance Testing)
 
