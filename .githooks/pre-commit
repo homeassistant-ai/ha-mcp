@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Git pre-commit hook for ha-mcp
+# ================================
+#
+# Enforces worktree-based workflow for feature branches.
+# Worktrees keep the main repo clean and provide isolation.
+#
+
+CURRENT_DIR=$(pwd)
+REPO_ROOT=$(git rev-parse --show-toplevel)
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Check if we're in the main repo (has .git directory, not .git file)
+IN_MAIN_REPO=false
+if [[ -d "$REPO_ROOT/.git" ]] && [[ "$CURRENT_DIR" == "$REPO_ROOT" || "$CURRENT_DIR" == "$REPO_ROOT"/* ]]; then
+    # Check if we're directly in repo root or not in worktree/ subdirectory
+    if [[ "$CURRENT_DIR" != "$REPO_ROOT/worktree/"* ]]; then
+        IN_MAIN_REPO=true
+    fi
+fi
+
+# Allow commits on master/main from main repo (for hotfixes, urgent fixes)
+if [[ "$BRANCH" == "master" || "$BRANCH" == "main" ]]; then
+    exit 0
+fi
+
+# If on feature/fix/etc branch and in main repo, warn
+if [[ "$IN_MAIN_REPO" == true ]] && [[ "$BRANCH" =~ ^(feat|feature|fix|hotfix|chore|docs|test|refactor|perf|improve)/ ]]; then
+    echo "⚠️  WARNING: Committing to feature branch from main repository"
+    echo ""
+    echo "Best practice: Use worktrees for feature branches"
+    echo "  git worktree add worktree/$BRANCH -b $BRANCH"
+    echo "  cd worktree/$BRANCH"
+    echo ""
+    echo "Benefits:"
+    echo "  - Keeps main repo clean"
+    echo "  - Isolated environment per feature"
+    echo "  - Inherits .claude/agents/ workflows"
+    echo ""
+    echo "To proceed anyway, use: git commit --no-verify"
+    echo "To comply, stash changes and use worktree workflow (see AGENTS.md)"
+    echo ""
+    exit 1
+fi
+
+# Allow all other commits (in worktrees, non-feature branches)
+exit 0

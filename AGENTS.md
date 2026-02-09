@@ -31,7 +31,15 @@ This repository uses a worktree-based development workflow.
 - Easy cleanup: `git worktree prune` removes stale references
 
 **Enforcement:**
-A pre-commit hook (`.git/hooks/pre-commit`) blocks commits to feature branches from the main repo, ensuring worktree usage. To bypass when necessary: `git commit --no-verify`
+A pre-commit hook (`.githooks/pre-commit`) blocks commits to feature branches from the main repo, ensuring worktree usage.
+
+**First-time setup:**
+```bash
+# Configure git to use project hooks
+git config core.hooksPath .githooks
+```
+
+To bypass when necessary: `git commit --no-verify`
 
 ## Worktree Workflow
 
@@ -488,6 +496,7 @@ NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified c
 uv sync --group dev        # Install with dev dependencies
 uv run ha-mcp              # Run MCP server (80+ tools)
 cp .env.example .env       # Configure HA connection
+git config core.hooksPath .githooks  # Enable git hooks (worktree enforcement)
 ```
 
 ### Testing
