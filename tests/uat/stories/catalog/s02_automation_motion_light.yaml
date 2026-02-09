@@ -1,0 +1,50 @@
+id: s02
+title: "Create motion-activated light with timeout"
+category: automation
+weight: 5
+description: >
+  User wants a motion-activated light that turns off after inactivity.
+  This is the second most common automation pattern. Tests the agent's
+  ability to use state triggers, conditions or timers, and delayed actions.
+
+tags:
+  - automation
+  - create
+  - triggers
+  - state
+  - delay
+
+setup:
+  # Create an input_boolean to simulate a motion sensor
+  - tool: ha_create_config_entry_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Kitchen Motion Sensor Test"
+
+prompt: >
+  I have a motion sensor (input_boolean.kitchen_motion_sensor_test - it turns on
+  when motion is detected). Create an automation called "Kitchen Motion Light" that:
+  1. Turns on light.kitchen_lights when motion is detected (the boolean turns on)
+  2. Turns off the light 5 minutes after the last motion (when the boolean turns off)
+  Make sure it handles repeated motion correctly (restarts the timer).
+  Show me what you created.
+
+teardown:
+  - tool: ha_config_remove_automation
+    args:
+      automation_id: "kitchen_motion_light"
+  - tool: ha_call_service
+    args:
+      domain: "input_boolean"
+      service: "remove"
+      service_data:
+        entity_id: "input_boolean.kitchen_motion_sensor_test"
+
+expected:
+  tools_should_use:
+    - ha_search_entities
+    - ha_config_set_automation
+  description: >
+    Agent should create an automation with state trigger on the motion sensor,
+    and use a delay or wait_for_trigger pattern for the timeout. Mode should
+    be 'restart' or 'single' to handle repeated triggers correctly.

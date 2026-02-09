@@ -1,0 +1,46 @@
+id: s09
+title: "Create vacation mode toggle with automation"
+category: helper
+weight: 3
+description: >
+  User wants a vacation mode system - a toggle that triggers automations
+  when enabled. Tests the agent's ability to create a helper AND an
+  automation that depends on it. This combo pattern (helper + automation)
+  is very common in real HA setups.
+
+tags:
+  - helper
+  - automation
+  - create
+  - combo
+
+setup: []
+
+prompt: >
+  I'm going on vacation and want to set up a "Vacation Mode" system:
+  1. Create an input_boolean toggle called "Vacation Mode"
+  2. Create an automation that, when Vacation Mode is turned ON, turns on
+     light.bed_light every day at 7pm and turns it off at 11pm to simulate
+     someone being home
+  Show me both the helper and the automation you created.
+
+teardown:
+  - tool: ha_config_remove_automation
+    args:
+      automation_id: "vacation_mode_lights"
+  - tool: ha_call_service
+    args:
+      domain: "input_boolean"
+      service: "remove"
+      service_data:
+        entity_id: "input_boolean.vacation_mode"
+
+expected:
+  tools_should_use:
+    - ha_create_config_entry_helper
+    - ha_config_set_automation
+  description: >
+    Agent should create an input_boolean helper first, then an automation
+    that uses a time trigger (7pm) with a state condition checking if
+    vacation mode is on, and actions to turn lights on/off. May create
+    one or two automations (on at 7pm, off at 11pm).

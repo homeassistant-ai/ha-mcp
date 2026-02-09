@@ -1,0 +1,37 @@
+id: s11
+title: "Analyze entity history and patterns"
+category: troubleshoot
+weight: 3
+description: >
+  User wants to understand usage patterns from entity history. Tests the
+  agent's ability to use history and statistics tools to extract insights.
+  History analysis is a key troubleshooting and optimization workflow.
+
+tags:
+  - troubleshoot
+  - history
+  - statistics
+  - analysis
+
+setup: []
+  # Uses existing demo entities with built-in history
+
+prompt: >
+  I want to understand how my lights are being used. Check the history for
+  light.bed_light over the last 24 hours. Tell me:
+  1. How many times was it turned on and off?
+  2. What was the longest period it stayed on?
+  3. Is there any pattern you can see (e.g., regular on/off times)?
+  Also check the logbook for any interesting events related to this light.
+
+teardown: []
+
+expected:
+  tools_should_use:
+    - ha_get_history
+    - ha_get_logbook
+  description: >
+    Agent should call ha_get_history with the entity_id and a time range,
+    then analyze the state changes. Should also check the logbook for
+    context (what triggered the changes). A good agent will identify
+    patterns and present them clearly.

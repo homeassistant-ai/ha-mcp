@@ -1,0 +1,66 @@
+id: s07
+title: "Update existing automation - add condition"
+category: automation
+weight: 4
+description: >
+  User wants to modify an existing automation by adding a condition.
+  This is a read-modify-write workflow that tests the agent's ability to
+  fetch existing config, understand its structure, and update it without
+  breaking it. A critical pattern for automation management.
+
+tags:
+  - automation
+  - update
+  - conditions
+  - read-modify-write
+
+setup:
+  # Create the automation to be modified
+  - tool: ha_config_set_automation
+    args:
+      config:
+        alias: "Evening Lights Test"
+        description: "Turn on lights at 6pm"
+        trigger:
+          - platform: time
+            at: "18:00:00"
+        action:
+          - service: light.turn_on
+            target:
+              entity_id: light.bed_light
+            data:
+              brightness_pct: 80
+        mode: single
+  # Create a presence indicator
+  - tool: ha_create_config_entry_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Someone Home Test"
+
+prompt: >
+  I have an automation called "Evening Lights Test" that turns on lights at 6pm.
+  I want to update it so it only triggers when someone is home. There's an
+  input_boolean called "Someone Home Test" (input_boolean.someone_home_test) that
+  indicates presence. Add a condition to the automation that checks if this boolean
+  is on. Don't change anything else about the automation. Show me the updated config.
+
+teardown:
+  - tool: ha_config_remove_automation
+    args:
+      automation_id: "evening_lights_test"
+  - tool: ha_call_service
+    args:
+      domain: "input_boolean"
+      service: "remove"
+      service_data:
+        entity_id: "input_boolean.someone_home_test"
+
+expected:
+  tools_should_use:
+    - ha_config_get_automation
+    - ha_config_set_automation
+  description: >
+    Agent should first get the existing automation config, then add a state
+    condition checking input_boolean.someone_home_test is "on", and update
+    the automation while preserving the existing trigger, action, and other
+    settings. Should NOT recreate from scratch.

@@ -1,0 +1,35 @@
+id: s05
+title: "Discover and explore available entities"
+category: entity
+weight: 4
+description: >
+  User asks for an overview of their smart home setup. This tests the agent's
+  ability to search, categorize, and summarize entities. A common first
+  interaction when users connect an AI to their HA instance.
+
+tags:
+  - entity
+  - search
+  - discovery
+  - areas
+
+setup: []
+  # Uses existing demo entities
+
+prompt: >
+  I just connected you to my Home Assistant. Can you give me an overview of
+  what's available? List all areas, then for each area tell me what devices
+  and entities are there. Also tell me how many automations and scripts I
+  have set up. Give me a nice organized summary.
+
+teardown: []
+
+expected:
+  tools_should_use:
+    - ha_config_list_areas
+    - ha_search_entities
+  description: >
+    Agent should use area listing and entity search to build a comprehensive
+    overview. Should report on multiple domains (lights, sensors, climate,
+    automations, scripts). A good agent will organize the output by area
+    and provide counts.

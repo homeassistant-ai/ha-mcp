@@ -1,0 +1,54 @@
+id: s03
+title: "Debug why automation didn't fire"
+category: troubleshoot
+weight: 5
+description: >
+  User reports their automation didn't work as expected and asks the agent
+  to investigate. This is a critical troubleshooting workflow that tests the
+  agent's ability to check traces, history, and logbook to diagnose issues.
+  From research: debugging is one of the top 3 use cases for HA+AI.
+
+tags:
+  - troubleshoot
+  - automation
+  - traces
+  - history
+  - logbook
+
+setup:
+  # Create a disabled automation (simulates "didn't fire" scenario)
+  - tool: ha_config_set_automation
+    args:
+      config:
+        alias: "Morning Bedroom Lights Test"
+        description: "Turn on bedroom lights at 7am"
+        trigger:
+          - platform: time
+            at: "07:00:00"
+        action:
+          - service: light.turn_on
+            target:
+              entity_id: light.bed_light
+        initial_state: false
+        mode: single
+
+prompt: >
+  My "Morning Bedroom Lights Test" automation was supposed to turn on the bedroom
+  lights at 7am this morning but it didn't work. Can you investigate what went wrong?
+  Check the automation config, its traces, and the relevant history. Tell me what
+  you found and what might be causing the issue.
+
+teardown:
+  - tool: ha_config_remove_automation
+    args:
+      automation_id: "morning_bedroom_lights_test"
+
+expected:
+  tools_should_use:
+    - ha_config_get_automation
+    - ha_get_automation_traces
+  description: >
+    Agent should check the automation configuration and notice it's disabled
+    (initial_state: false). Should also check traces to see if it was triggered.
+    A good agent will identify the disabled state as the root cause and suggest
+    enabling it.
