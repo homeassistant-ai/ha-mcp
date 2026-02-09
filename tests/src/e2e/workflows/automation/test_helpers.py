@@ -14,12 +14,13 @@ This test suite validates:
 - Field validation and constraints
 """
 
+import asyncio
 import logging
 from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 async def wait_for_entity_state(
     mcp_client,
     entity_id: str,
-    max_retries: int = 5,
+    max_retries: int = 10,
     delay: float = 1.0,
     expected_state: str | None = None,
 ) -> dict[str, Any] | None:
@@ -36,7 +37,7 @@ async def wait_for_entity_state(
     Args:
         mcp_client: MCP client instance
         entity_id: Entity ID to check
-        max_retries: Maximum number of retries
+        max_retries: Maximum number of retries (default: 10 for CI robustness)
         delay: Delay between retries in seconds
         expected_state: If provided, wait for this specific state
 
@@ -45,10 +46,10 @@ async def wait_for_entity_state(
     """
     for attempt in range(max_retries):
         try:
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": entity_id}
+            # Use safe_call_tool to handle ToolError exceptions
+            state_data = await safe_call_tool(
+                mcp_client, "ha_get_state", {"entity_id": entity_id}
             )
-            state_data = parse_mcp_result(state_result)
 
             # Check if we have valid entity data
             if "data" in state_data and "state" in state_data["data"]:
@@ -113,17 +114,17 @@ class TestHelperIntegration:
         logger.info(f"🔘 Testing input_boolean lifecycle: {helper_name}")
 
         # 1. CREATE: Basic boolean helper
-        create_result = await mcp_client.call_tool(
+        # Use safe_call_tool to handle ToolError exceptions gracefully
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "name": helper_name,
                 "icon": "mdi:toggle-switch",
-                "initial": "false",  # String representation for boolean initial value
+                "initial": False,  # Native boolean type
             },
         )
-
-        create_data = parse_mcp_result(create_result)
         assert create_data.get("success"), (
             f"Failed to create input_boolean: {create_data}"
         )
@@ -133,8 +134,9 @@ class TestHelperIntegration:
         logger.info(f"✅ Created input_boolean: {helper_entity}")
 
         # 2. VERIFY: Helper exists and has correct initial state
+        # Use longer wait times for CI robustness (entity registration can be slow)
         state_data = await wait_for_entity_state(
-            mcp_client, helper_entity, max_retries=6, delay=0.5
+            mcp_client, helper_entity, max_retries=12, delay=1.0
         )
         assert state_data is not None, (
             f"Helper {helper_entity} was not created or not accessible after retries"
@@ -194,10 +196,10 @@ class TestHelperIntegration:
         logger.info("✅ Helper deleted successfully")
 
         # 5. VERIFY: Helper is gone - wait a moment for deletion to propagate
-        final_state_result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": helper_entity}
+        # Use safe_call_tool since we expect this to fail (entity deleted)
+        final_state_data = await safe_call_tool(
+            mcp_client, "ha_get_state", {"entity_id": helper_entity}
         )
-        final_state_data = parse_mcp_result(final_state_result)
         # Should fail or return error since helper no longer exists
         has_error = (
             not final_state_data.get("success")
@@ -228,7 +230,7 @@ class TestHelperIntegration:
                 "min_value": 0,
                 "max_value": 100,
                 "step": 5,
-                "initial": "25",
+                "initial": 25,
                 "mode": "slider",
                 "unit_of_measurement": "%",
                 "icon": "mdi:brightness-percent"},
@@ -850,17 +852,17 @@ class TestHelperIntegration:
             (
                 "input_boolean",
                 "bulk_bool_1",
-                {"name": "bulk_bool_1", "initial": "true"},
+                {"name": "bulk_bool_1", "initial": True},
             ),
             (
                 "input_boolean",
                 "bulk_bool_2",
-                {"name": "bulk_bool_2", "initial": "false"},
+                {"name": "bulk_bool_2", "initial": False},
             ),
             (
                 "input_number",
                 "bulk_num_1",
-                {"name": "bulk_num_1", "min_value": 0, "max_value": 10, "initial": "5"},
+                {"name": "bulk_num_1", "min_value": 0, "max_value": 10, "initial": 5},
             ),
             (
                 "input_select",
@@ -1078,7 +1080,7 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
             "name": "test_list_num",
             "min_value": 0,
             "max_value": 100,
-            "initial": "50",
+            "initial": 50,
             "icon": "mdi:test-tube",
         },
     )
