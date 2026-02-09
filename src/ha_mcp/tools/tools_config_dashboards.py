@@ -16,8 +16,12 @@ import httpx
 from pydantic import Field
 
 from ..config import get_global_settings
-from ..utils.python_sandbox import PythonSandboxError, get_security_documentation, safe_execute
-from .helpers import log_tool_usage
+from ..utils.python_sandbox import (
+    PythonSandboxError,
+    get_security_documentation,
+    safe_execute,
+)
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Try to import jq - it's not available on Windows ARM64
 try:
     import jq  # noqa: F401 - Used to check availability, re-imported in function
+
     JQ_AVAILABLE = True
 except ImportError:
     JQ_AVAILABLE = False
@@ -98,7 +103,9 @@ async def _verify_config_unchanged(
         get_data["url_path"] = url_path
 
     result = await client.send_websocket_message(get_data)
-    current_config = result.get("result", result) if isinstance(result, dict) else result
+    current_config = (
+        result.get("result", result) if isinstance(result, dict) else result
+    )
 
     if not isinstance(current_config, dict):
         return {"success": True}  # Can't verify, proceed anyway
@@ -193,14 +200,16 @@ def _find_cards_in_config(
                     if not isinstance(card, dict):
                         continue
                     if _card_matches(card, entity_id, card_type, heading):
-                        matches.append({
-                            "view_index": view_idx,
-                            "section_index": section_idx,
-                            "card_index": card_idx,
-                            "jq_path": f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
-                            "card_type": card.get("type"),
-                            "card_config": card,
-                        })
+                        matches.append(
+                            {
+                                "view_index": view_idx,
+                                "section_index": section_idx,
+                                "card_index": card_idx,
+                                "jq_path": f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
+                                "card_type": card.get("type"),
+                                "card_config": card,
+                            }
+                        )
         else:
             # Flat view (masonry, panel, sidebar)
             cards = view.get("cards", [])
@@ -208,14 +217,16 @@ def _find_cards_in_config(
                 if not isinstance(card, dict):
                     continue
                 if _card_matches(card, entity_id, card_type, heading):
-                    matches.append({
-                        "view_index": view_idx,
-                        "section_index": None,
-                        "card_index": card_idx,
-                        "jq_path": f".views[{view_idx}].cards[{card_idx}]",
-                        "card_type": card.get("type"),
-                        "card_config": card,
-                    })
+                    matches.append(
+                        {
+                            "view_index": view_idx,
+                            "section_index": None,
+                            "card_index": card_idx,
+                            "jq_path": f".views[{view_idx}].cards[{card_idx}]",
+                            "card_type": card.get("type"),
+                            "card_config": card,
+                        }
+                    )
 
     return matches
 
@@ -239,8 +250,7 @@ def _card_matches(
         card_entities = card.get("entities", [])
         if isinstance(card_entities, list):
             all_entities = [card_entity] + [
-                e.get("entity", e) if isinstance(e, dict) else e
-                for e in card_entities
+                e.get("entity", e) if isinstance(e, dict) else e for e in card_entities
             ]
         else:
             all_entities = [card_entity]
@@ -362,7 +372,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             config = response.get("result") if isinstance(response, dict) else response
 
             # Compute hash for optimistic locking in subsequent operations
-            config_hash = _compute_config_hash(config) if isinstance(config, dict) else None
+            config_hash = (
+                _compute_config_hash(config) if isinstance(config, dict) else None
+            )
 
             # Calculate config size for progressive disclosure hint
             config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
@@ -430,7 +442,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 description="jq expression to transform existing dashboard config. "
                 "Mutually exclusive with config and python_transform. Requires config_hash for validation. "
                 "Examples: '.views[0].sections[1].cards[0].icon = \"mdi:thermometer\"', "
-                "'.views[0].cards += [{\"type\": \"button\", \"entity\": \"light.bedroom\"}]', "
+                '\'.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]\', '
                 "'del(.views[0].sections[0].cards[2])'. "
                 "MULTI-OP: Chain with '|': 'del(.views[0].cards[2]) | .views[0].cards[0].icon = \"mdi:new\"'. "
                 "Use ha_dashboard_find_card() to get jq_path for targeted edits."
@@ -447,8 +459,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" "
                 "Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" "
                 "Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" "
-                "\n\n"
-                + get_security_documentation(),
+                "\n\n" + get_security_documentation(),
             ),
         ] = None,
         config_hash: Annotated[
@@ -728,7 +739,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 save_result = await client.send_websocket_message(save_data)
 
-                if isinstance(save_result, dict) and not save_result.get("success", True):
+                if isinstance(save_result, dict) and not save_result.get(
+                    "success", True
+                ):
                     error_msg = save_result.get("error", {})
                     if isinstance(error_msg, dict):
                         error_msg = error_msg.get("message", str(error_msg))
@@ -793,14 +806,18 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         ],
                     }
 
-                current_config = response.get("result") if isinstance(response, dict) else response
+                current_config = (
+                    response.get("result") if isinstance(response, dict) else response
+                )
                 if not isinstance(current_config, dict):
                     return {
                         "success": False,
                         "action": "jq_transform",
                         "url_path": url_path,
                         "error": "Current dashboard config is invalid",
-                        "suggestions": ["Initialize dashboard with 'config' parameter first"],
+                        "suggestions": [
+                            "Initialize dashboard with 'config' parameter first"
+                        ],
                     }
 
                 # Validate config_hash for optimistic locking
@@ -819,7 +836,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     }
 
                 # Apply jq transformation
-                transformed_config, error = _apply_jq_transform(current_config, jq_transform)
+                transformed_config, error = _apply_jq_transform(
+                    current_config, jq_transform
+                )
                 if error:
                     return {
                         "success": False,
@@ -843,7 +862,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 save_result = await client.send_websocket_message(save_data)
 
-                if isinstance(save_result, dict) and not save_result.get("success", True):
+                if isinstance(save_result, dict) and not save_result.get(
+                    "success", True
+                ):
                     error_msg = save_result.get("error", {})
                     if isinstance(error_msg, dict):
                         error_msg = error_msg.get("message", str(error_msg))
@@ -860,7 +881,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 # Compute new hash for potential chaining
                 # transformed_config is guaranteed to be a dict here (validated above)
-                new_config_hash = _compute_config_hash(cast(dict[str, Any], transformed_config))
+                new_config_hash = _compute_config_hash(
+                    cast(dict[str, Any], transformed_config)
+                )
 
                 return {
                     "success": True,
@@ -950,7 +973,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # For existing dashboards, optionally validate config_hash and warn on large replacement
                 if dashboard_exists:
                     # Fetch current config for validation/comparison
-                    get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+                    get_data: dict[str, Any] = {
+                        "type": "lovelace/config",
+                        "force": True,
+                    }
                     if url_path:
                         get_data["url_path"] = url_path
                     current_response = await client.send_websocket_message(get_data)
@@ -1446,7 +1472,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "error": str(e),
             }
 
-
     # =========================================================================
     # Dashboard Resource Management Tools
     # =========================================================================
@@ -1483,7 +1508,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     async def ha_dashboard_find_card(
         url_path: Annotated[
             str | None,
-            Field(description="Dashboard URL path, e.g. 'lovelace-home'. Omit for default."),
+            Field(
+                description="Dashboard URL path, e.g. 'lovelace-home'. Omit for default."
+            ),
         ] = None,
         entity_id: Annotated[
             str | None,
@@ -1505,7 +1532,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ] = None,
         include_config: Annotated[
             bool,
-            Field(description="Include full card configuration in results (increases output size)."),
+            Field(
+                description="Include full card configuration in results (increases output size)."
+            ),
         ] = False,
     ) -> dict[str, Any]:
         """
@@ -1590,7 +1619,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "action": "find_card",
                     "url_path": url_path,
                     "error": "Dashboard config is empty or invalid",
-                    "suggestions": ["Initialize dashboard with ha_config_set_dashboard"],
+                    "suggestions": [
+                        "Initialize dashboard with ha_config_set_dashboard"
+                    ],
                 }
 
             # Check for strategy dashboard
@@ -1630,7 +1661,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "matches": matches,
                 "match_count": len(matches),
                 "hint": "Use jq_path with ha_config_set_dashboard(jq_transform=...) for targeted updates"
-                if matches else "No matches found. Try broader search criteria.",
+                if matches
+                else "No matches found. Try broader search criteria.",
             }
 
         except asyncio.CancelledError:
@@ -1642,15 +1674,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 f"error={e}",
                 exc_info=True,
             )
-            return {
-                "success": False,
-                "action": "find_card",
-                "url_path": url_path,
-                "error": str(e) if str(e) else f"{type(e).__name__} (no details)",
-                "error_type": type(e).__name__,
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "entity_id": entity_id,
+                    "card_type": card_type,
+                    "heading": heading,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
-                ],
-            }
-
+                ]
+            return error_response

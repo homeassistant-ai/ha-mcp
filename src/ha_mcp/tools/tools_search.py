@@ -11,7 +11,11 @@ from pydantic import Field
 
 from ..errors import create_entity_not_found_error
 from .helpers import exception_to_structured_error, log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
+from .util_helpers import (
+    add_timezone_metadata,
+    coerce_bool_param,
+    parse_string_list_param,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +44,19 @@ async def _exact_match_search(
 
         # Check for exact substring match in entity_id or friendly_name
         if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
-            results.append({
-                "entity_id": entity_id,
-                "friendly_name": friendly_name,
-                "domain": domain,
-                "state": entity.get("state", "unknown"),
-                "score": 100 if query_lower == entity_id.lower() or query_lower == friendly_name.lower() else 80,
-                "match_type": "exact_match",
-            })
+            results.append(
+                {
+                    "entity_id": entity_id,
+                    "friendly_name": friendly_name,
+                    "domain": domain,
+                    "state": entity.get("state", "unknown"),
+                    "score": 100
+                    if query_lower == entity_id.lower()
+                    or query_lower == friendly_name.lower()
+                    else 80,
+                    "match_type": "exact_match",
+                }
+            )
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -84,14 +93,16 @@ async def _partial_results_search(
         if domain_filter and domain != domain_filter:
             continue
 
-        results.append({
-            "entity_id": entity_id,
-            "friendly_name": friendly_name,
-            "domain": domain,
-            "state": entity.get("state", "unknown"),
-            "score": 0,  # No match score for partial results
-            "match_type": "partial_listing",
-        })
+        results.append(
+            {
+                "entity_id": entity_id,
+                "friendly_name": friendly_name,
+                "domain": domain,
+                "state": entity.get("state", "unknown"),
+                "score": 0,  # No match score for partial results
+                "match_type": "partial_listing",
+            }
+        )
 
     total_matches = len(results)
     limited_results = results[:limit]
@@ -112,7 +123,14 @@ def register_search_tools(mcp, client, **kwargs):
     if not smart_tools:
         raise ValueError("smart_tools is required for search tools registration")
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Search Entities"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Search Entities",
+        }
+    )
     @log_tool_usage
     async def ha_search_entities(
         query: str,
@@ -140,7 +158,10 @@ def register_search_tools(mcp, client, **kwargs):
         - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
         - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
         # Coerce boolean parameter that may come as string from XML-style calls
-        group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
+        group_by_domain_bool = (
+            coerce_bool_param(group_by_domain, "group_by_domain", default=False)
+            or False
+        )
 
         try:
             # If area_filter is provided, use area-based search
@@ -159,7 +180,9 @@ def register_search_tools(mcp, client, **kwargs):
                                 if isinstance(
                                     area_data["entities"], dict
                                 ):  # grouped by domain
-                                    for domain_entities in area_data["entities"].values():
+                                    for domain_entities in area_data[
+                                        "entities"
+                                    ].values():
                                         all_area_entities.extend(domain_entities)
                                 else:  # flat list
                                     all_area_entities.extend(area_data["entities"])
@@ -275,7 +298,8 @@ def register_search_tools(mcp, client, **kwargs):
 
                 # Filter by domain
                 filtered_entities = [
-                    e for e in all_entities
+                    e
+                    for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
                 ]
 
@@ -284,14 +308,16 @@ def register_search_tools(mcp, client, **kwargs):
                 for entity in filtered_entities[:limit]:
                     entity_id = entity.get("entity_id", "")
                     attributes = entity.get("attributes", {})
-                    results.append({
-                        "entity_id": entity_id,
-                        "friendly_name": attributes.get("friendly_name", entity_id),
-                        "domain": domain_filter,
-                        "state": entity.get("state", "unknown"),
-                        "score": 100,  # Perfect match since we're listing by domain
-                        "match_type": "domain_listing",
-                    })
+                    results.append(
+                        {
+                            "entity_id": entity_id,
+                            "friendly_name": attributes.get("friendly_name", entity_id),
+                            "domain": domain_filter,
+                            "state": entity.get("state", "unknown"),
+                            "score": 100,  # Perfect match since we're listing by domain
+                            "match_type": "domain_listing",
+                        }
+                    )
 
                 total_filtered = len(filtered_entities)
                 # Build response data (avoid duplication by conditionally adding by_domain)
@@ -321,22 +347,32 @@ def register_search_tools(mcp, client, **kwargs):
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
+                result = await smart_tools.smart_entity_search(
+                    query, limit, domain_filter=domain_filter
+                )
                 search_type = "fuzzy_search"
             except Exception as fuzzy_error:
-                logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
+                logger.warning(
+                    f"Fuzzy search failed, trying exact match: {fuzzy_error}"
+                )
 
                 # Step 2: Try exact match fallback
                 try:
-                    result = await _exact_match_search(client, query, domain_filter, limit)
+                    result = await _exact_match_search(
+                        client, query, domain_filter, limit
+                    )
                     warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
                 except Exception as exact_error:
-                    logger.warning(f"Exact match failed, trying partial results: {exact_error}")
+                    logger.warning(
+                        f"Exact match failed, trying partial results: {exact_error}"
+                    )
 
                     # Step 3: Try partial results fallback
                     try:
-                        result = await _partial_results_search(client, query, domain_filter, limit)
+                        result = await _partial_results_search(
+                            client, query, domain_filter, limit
+                        )
                         warning = "Search degraded, returning partial results"
                         search_type = "partial_listing"
                     except Exception as partial_error:
@@ -358,7 +394,9 @@ def register_search_tools(mcp, client, **kwargs):
             # Ensure is_truncated field exists in result
             if "is_truncated" not in result:
                 # For backward compatibility, calculate if not present
-                result["is_truncated"] = result.get("total_matches", 0) > len(result.get("results", []))
+                result["is_truncated"] = result.get("total_matches", 0) > len(
+                    result.get("results", [])
+                )
 
             # Group by domain if requested
             if group_by_domain_bool and "results" in result:
@@ -397,7 +435,14 @@ def register_search_tools(mcp, client, **kwargs):
                 ]
             return await add_timezone_metadata(client, error_response)
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Get System Overview",
+        }
+    )
     @log_tool_usage
     async def ha_get_overview(
         detail_level: Annotated[
@@ -441,11 +486,18 @@ def register_search_tools(mcp, client, **kwargs):
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
-        include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
-        include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
+        include_state_bool = coerce_bool_param(
+            include_state, "include_state", default=None
+        )
+        include_entity_id_bool = coerce_bool_param(
+            include_entity_id, "include_entity_id", default=None
+        )
 
         result = await smart_tools.get_system_overview(
-            detail_level, max_entities_per_domain, include_state_bool, include_entity_id_bool
+            detail_level,
+            max_entities_per_domain,
+            include_state_bool,
+            include_entity_id_bool,
         )
         result = cast(dict[str, Any], result)
 
@@ -480,7 +532,14 @@ def register_search_tools(mcp, client, **kwargs):
 
         return result
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Deep Search"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Deep Search",
+        }
+    )
     @log_tool_usage
     async def ha_deep_search(
         query: str,
@@ -525,25 +584,32 @@ def register_search_tools(mcp, client, **kwargs):
         parsed_search_types = parse_string_list_param(search_types, "search_types")
         try:
             result = await smart_tools.deep_search(query, parsed_search_types, limit)
-            return cast(dict[str, Any], result)
+            return await add_timezone_metadata(client, cast(dict[str, Any], result))
         except Exception as e:
-            import traceback
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "query": query,
-                "search_types": parsed_search_types,
-                "limit": limit,
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "query": query,
+                    "search_types": parsed_search_types,
+                    "limit": limit,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check search_types are valid: 'automation', 'script', 'helper'",
-                ],
-            }
+                ]
+            return await add_timezone_metadata(client, error_response)
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get Entity State"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Get Entity State",
+        }
+    )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
         """Get detailed state information for a Home Assistant entity with timezone metadata."""
