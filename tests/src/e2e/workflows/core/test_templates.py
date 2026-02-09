@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -188,14 +188,14 @@ class TestEvalTemplate:
         """Test evaluating template with invalid syntax."""
         logger.info("Testing ha_eval_template with invalid syntax")
 
-        result = await mcp_client.call_tool(
+        # Use safe_call_tool since we expect this to fail (invalid template)
+        data = await safe_call_tool(
+            mcp_client,
             "ha_eval_template",
             {
                 "template": "{{ invalid_function_xyz() }}",
             },
         )
-
-        data = parse_mcp_result(result)
 
         # Should return error for invalid template
         assert data.get("success") is False or "error" in data, (
