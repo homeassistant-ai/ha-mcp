@@ -420,6 +420,59 @@ async def wait_for_state_change(
     return None
 
 
+async def wait_for_tool_result(
+    mcp_client,
+    tool_name: str,
+    arguments: dict[str, Any],
+    predicate: Callable[[dict[str, Any]], bool],
+    timeout: int = 15,
+    poll_interval: float = 1.0,
+    description: str = "tool result",
+) -> dict[str, Any]:
+    """
+    Poll an MCP tool until the result satisfies a predicate.
+
+    Useful when an entity was just created and needs time to be registered
+    in Home Assistant before it becomes visible to search/query tools.
+
+    Args:
+        mcp_client: FastMCP client instance
+        tool_name: MCP tool to call repeatedly
+        arguments: Arguments to pass to the tool
+        predicate: Function that receives parsed tool result and returns
+                   True when the desired condition is met
+        timeout: Maximum wait time in seconds
+        poll_interval: Time between calls in seconds
+        description: Human-readable description for logging
+
+    Returns:
+        The parsed tool result that satisfied the predicate, or the last
+        result if timeout was reached.
+    """
+    start_time = time.time()
+    last_data: dict[str, Any] = {}
+
+    logger.info(f"⏳ Waiting for {description} (timeout: {timeout}s)")
+
+    while time.time() - start_time < timeout:
+        try:
+            result = await mcp_client.call_tool(tool_name, arguments)
+            last_data = parse_mcp_result(result)
+
+            if predicate(last_data):
+                elapsed = time.time() - start_time
+                logger.info(f"✅ {description} satisfied after {elapsed:.1f}s")
+                return last_data
+        except Exception as e:
+            logger.debug(f"⚠️ Error polling {tool_name}: {e}")
+
+        await asyncio.sleep(poll_interval)
+
+    elapsed = time.time() - start_time
+    logger.warning(f"⚠️ {description} not satisfied within {elapsed:.1f}s")
+    return last_data
+
+
 class WaitHelper:
     """
     Helper class for common waiting patterns with a specific MCP client.
@@ -481,3 +534,16 @@ class WaitHelper:
     ) -> bool:
         """Wait for custom condition."""
         return await wait_for_condition(condition_func, timeout, condition_name=name)
+
+    async def tool_result(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        predicate: Callable[[dict[str, Any]], bool],
+        timeout: int = 15,
+        description: str = "tool result",
+    ) -> dict[str, Any]:
+        """Wait for tool result to satisfy predicate."""
+        return await wait_for_tool_result(
+            self.client, tool_name, arguments, predicate, timeout=timeout, description=description
+        )
