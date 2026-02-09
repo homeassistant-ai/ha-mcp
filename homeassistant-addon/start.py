@@ -181,11 +181,11 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
         if entries is not None:
             for entry in entries:
                 if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
-                    log_info("Nabu Casa remote: mcp_proxy config entry exists")
+                    log_info("Webhook proxy: mcp_proxy config entry exists")
                     return True
 
             # No existing entry — create one via config flow
-            log_info(f"Nabu Casa remote: Creating config entry (attempt {attempt}/{retries})...")
+            log_info(f"Webhook proxy: Creating config entry (attempt {attempt}/{retries})...")
             flow_result = _ha_core_api(
                 "POST", "/config/config_entries/flow", {"handler": "mcp_proxy"}
             )
@@ -197,7 +197,7 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
             result_type = flow_result.get("type")
 
             if result_type in ("abort", "create_entry"):
-                log_info("Nabu Casa remote: Config entry ready")
+                log_info("Webhook proxy: Config entry ready")
                 return True
 
             # Flow returned a form step — complete it
@@ -207,11 +207,11 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
                     "POST", f"/config/config_entries/flow/{flow_id}", {}
                 )
                 if complete and complete.get("type") == "create_entry":
-                    log_info("Nabu Casa remote: Config entry created")
+                    log_info("Webhook proxy: Config entry created")
                     return True
 
         if attempt < retries:
-            log_info(f"Nabu Casa remote: HA not ready, retrying in {delay}s...")
+            log_info(f"Webhook proxy: HA not ready, retrying in {delay}s...")
             time.sleep(delay)
 
     return False
@@ -229,17 +229,39 @@ def _remove_config_entry() -> None:
             if entry_id:
                 result = _ha_core_api("DELETE", f"/config/config_entries/entry/{entry_id}")
                 if result is not None:
-                    log_info("Nabu Casa remote: Removed mcp_proxy config entry")
+                    log_info("Webhook proxy: Removed mcp_proxy config entry")
 
 
-def setup_nabu_casa_remote(
+def _resolve_remote_url(remote_url: str) -> str | None:
+    """Resolve the remote base URL for logging.
+
+    Priority:
+    1. User-provided remote_url from addon config (for Cloudflare, DuckDNS, etc.)
+    2. Auto-detected Nabu Casa URL from cloud storage
+
+    Returns the base URL (e.g. https://example.com), or None if unavailable.
+    """
+    # User-provided URL takes priority
+    if remote_url and remote_url.strip():
+        url = remote_url.strip().rstrip("/")
+        if not url.startswith("http"):
+            url = "https://" + url
+        return url
+
+    # Fall back to Nabu Casa auto-detection
+    return get_nabu_casa_url()
+
+
+def setup_webhook_proxy(
     secret_path: str, addon_info: dict | None, data_dir: Path
 ) -> str | None:
-    """Set up the webhook proxy for Nabu Casa remote access.
+    """Set up the webhook proxy for remote access.
 
     Installs the mcp_proxy custom integration into HA Core's config directory,
     writes the proxy config, and creates a config entry via the HA API.
     Never modifies configuration.yaml.
+
+    Works with any reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.)
 
     Returns the webhook URL path (e.g. /api/webhook/<id>), or None on failure.
     """
@@ -251,7 +273,7 @@ def setup_nabu_casa_remote(
     # Verify we can access /config (requires map: config:rw in addon config)
     if not config_dir.exists():
         log_error(
-            "Nabu Casa remote: /config not accessible. "
+            "Webhook proxy: /config not accessible. "
             "Ensure 'map: config:rw' is in addon config."
         )
         return None
@@ -261,7 +283,7 @@ def setup_nabu_casa_remote(
     if addon_info:
         addon_ip = addon_info.get("ip_address")
     if not addon_ip:
-        log_error("Nabu Casa remote: Could not determine addon IP address")
+        log_error("Webhook proxy: Could not determine addon IP address")
         return None
 
     # Get or create persistent webhook ID
@@ -271,13 +293,13 @@ def setup_nabu_casa_remote(
         try:
             webhook_id = webhook_id_file.read_text().strip()
         except Exception as e:
-            log_error(f"Nabu Casa remote: Failed to read webhook ID: {e}")
+            log_error(f"Webhook proxy: Failed to read webhook ID: {e}")
     if not webhook_id:
         webhook_id = f"mcp_{secrets.token_hex(16)}"
         try:
             webhook_id_file.write_text(webhook_id)
         except Exception as e:
-            log_error(f"Nabu Casa remote: Failed to save webhook ID: {e}")
+            log_error(f"Webhook proxy: Failed to save webhook ID: {e}")
 
     # Write proxy config for the mcp_proxy integration to read
     target_url = f"http://{addon_ip}:9583{secret_path}"
@@ -285,7 +307,7 @@ def setup_nabu_casa_remote(
     try:
         proxy_config_file.write_text(json.dumps(proxy_config))
     except Exception as e:
-        log_error(f"Nabu Casa remote: Failed to write proxy config: {e}")
+        log_error(f"Webhook proxy: Failed to write proxy config: {e}")
         return None
 
     # Install/update the mcp_proxy integration
@@ -304,21 +326,21 @@ def setup_nabu_casa_remote(
                     if dst_ver == src_ver:
                         needs_update = False
                 except (OSError, json.JSONDecodeError) as e:
-                    log_error(f"Nabu Casa remote: Failed to compare integration versions: {e}")
+                    log_error(f"Webhook proxy: Failed to compare integration versions: {e}")
 
             if needs_update:
                 first_install = not integration_dst.exists()
                 if integration_dst.exists():
                     shutil.rmtree(integration_dst)
                 shutil.copytree(integration_src, integration_dst)
-                log_info("Nabu Casa remote: Installed mcp_proxy integration")
+                log_info("Webhook proxy: Installed mcp_proxy integration")
             else:
-                log_info("Nabu Casa remote: mcp_proxy integration up to date")
+                log_info("Webhook proxy: mcp_proxy integration up to date")
         except Exception as e:
-            log_error(f"Nabu Casa remote: Failed to install integration: {e}")
+            log_error(f"Webhook proxy: Failed to install integration: {e}")
             return None
     else:
-        log_error("Nabu Casa remote: Integration source not found at /opt/mcp_proxy")
+        log_error("Webhook proxy: Integration source not found at /opt/mcp_proxy")
         return None
 
     # Create config entry via HA API (never touches configuration.yaml)
@@ -333,7 +355,7 @@ def setup_nabu_casa_remote(
     else:
         if not _ensure_config_entry():
             log_info(
-                "Nabu Casa remote: Could not create config entry. "
+                "Webhook proxy: Could not create config entry. "
                 "If this is a first install, restart HA then restart this add-on."
             )
 
@@ -383,7 +405,8 @@ def main() -> int:
     data_dir = Path("/data")
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
-    nabu_casa_remote = False  # default
+    enable_webhook_proxy = False  # default
+    remote_url = ""  # default (auto-detect Nabu Casa)
 
     if config_file.exists():
         try:
@@ -391,7 +414,8 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
-            nabu_casa_remote = config.get("nabu_casa_remote", False)
+            enable_webhook_proxy = config.get("enable_webhook_proxy", False)
+            remote_url = config.get("remote_url", "")
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -429,18 +453,18 @@ def main() -> int:
         ingress_port = addon_info.get("ingress_port")
         ingress_url = addon_info.get("ingress_url")  # e.g. /api/hassio_ingress/<token>
 
-    # Set up Nabu Casa remote access if enabled
+    # Set up webhook proxy for remote access if enabled
     webhook_path = None
-    if nabu_casa_remote:
-        log_info("Nabu Casa remote access: enabled")
-        webhook_path = setup_nabu_casa_remote(secret_path, addon_info, data_dir)
+    if enable_webhook_proxy:
+        log_info("Remote webhook proxy: enabled")
+        webhook_path = setup_webhook_proxy(secret_path, addon_info, data_dir)
     else:
-        # Clean up if remote was previously enabled then disabled
+        # Clean up if proxy was previously enabled then disabled
         proxy_config_file = Path("/config/.mcp_proxy_config.json")
         if proxy_config_file.exists():
             try:
                 proxy_config_file.unlink()
-                log_info("Nabu Casa remote access: disabled (cleaned up proxy config)")
+                log_info("Remote webhook proxy: disabled (cleaned up proxy config)")
             except Exception:
                 pass
             # Also remove the config entry so the webhook is unregistered
@@ -451,13 +475,13 @@ def main() -> int:
     log_info("=" * 80)
     log_info(f"  MCP Server URL (local): http://<home-assistant-ip>:9583{secret_path}")
     log_info("")
-    if nabu_casa_remote and webhook_path:
-        nabu_casa_base = get_nabu_casa_url()
-        if nabu_casa_base:
-            log_info(f"  MCP Server URL (remote): {nabu_casa_base}{webhook_path}")
+    if enable_webhook_proxy and webhook_path:
+        remote_base = _resolve_remote_url(remote_url)
+        if remote_base:
+            log_info(f"  MCP Server URL (remote): {remote_base}{webhook_path}")
         else:
-            log_info(f"  MCP Server URL (remote): https://<your-nabu-casa-id>.ui.nabu.casa{webhook_path}")
-            log_info("    (Enable Nabu Casa cloud remote to auto-detect your URL)")
+            log_info(f"  MCP Server URL (remote): https://<your-external-url>{webhook_path}")
+            log_info("    (Set 'remote_url' in addon config, or enable Nabu Casa for auto-detection)")
         log_info("")
     log_info(f"   Secret Path: {secret_path}")
     log_info("")

@@ -1,8 +1,9 @@
 """MCP Webhook Proxy - routes MCP requests to the ha-mcp addon via webhook.
 
-This integration is auto-installed by the ha-mcp addon when Nabu Casa remote
-access is enabled. It registers an unauthenticated webhook endpoint that
-proxies MCP requests to the addon, bypassing the ingress auth requirement.
+This integration is auto-installed by the ha-mcp addon when the webhook proxy
+is enabled. It registers an unauthenticated webhook endpoint that proxies MCP
+requests to the addon, allowing remote access via any reverse proxy (Nabu Casa,
+Cloudflare, DuckDNS, nginx, etc.).
 
 Configuration is read from /config/.mcp_proxy_config.json, which is written
 by the addon's startup script. No manual configuration is needed — the addon
@@ -55,7 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if proxy_config is None:
         _LOGGER.info(
             "MCP Proxy: No config found at %s. "
-            "Enable 'nabu_casa_remote' in the ha-mcp addon to activate.",
+            "Enable 'enable_webhook_proxy' in the ha-mcp addon to activate.",
             CONFIG_FILE,
         )
         return True
