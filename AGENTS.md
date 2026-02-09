@@ -30,16 +30,7 @@ This repository uses a worktree-based development workflow.
 - All worktrees automatically inherit `.claude/agents/` workflows
 - Easy cleanup: `git worktree prune` removes stale references
 
-**Enforcement:**
-A pre-commit hook (`.githooks/pre-commit`) blocks commits to feature branches from the main repo, ensuring worktree usage.
-
-**First-time setup:**
-```bash
-# Configure git to use project hooks
-git config core.hooksPath .githooks
-```
-
-To bypass when necessary: `git commit --no-verify`
+**Quick command:** Use `/wt <branch-name>` skill to create worktree automatically.
 
 ## Worktree Workflow
 
@@ -220,12 +211,19 @@ gh api graphql -f query='mutation($threadId: ID!) {
 
 ## Git & PR Policies
 
-**Never commit directly to master.** Always create feature/fix branches:
+**CRITICAL - Never commit directly to master.**
+
+You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
+
 ```bash
-git checkout -b feature/description
-git add . && git commit -m "feat: description"
-# ASK USER before pushing or creating PRs
+# Use /wt skill or manually:
+git worktree add worktree/<branch-name> -b <branch-name>
+cd worktree/<branch-name>
 ```
+
+**Before any commit, verify:**
+1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
+2. In worktree: `pwd` (must be in `worktree/` subdirectory)
 
 **Never push or create PRs without user permission.**
 
@@ -496,7 +494,6 @@ NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified c
 uv sync --group dev        # Install with dev dependencies
 uv run ha-mcp              # Run MCP server (80+ tools)
 cp .env.example .env       # Configure HA connection
-git config core.hooksPath .githooks  # Enable git hooks (worktree enforcement)
 ```
 
 ### Testing
@@ -831,6 +828,7 @@ Located in `.claude/skills/`:
 |-------|---------|---------|-------------|
 | `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
+| `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
 ### BAT (Bot Acceptance Testing)
 
