@@ -496,6 +496,13 @@ uv run ha-mcp              # Run MCP server (80+ tools)
 cp .env.example .env       # Configure HA connection
 ```
 
+### Claude Code Hooks
+
+**Post-Push Reminder** (`.claude/settings.local.json`):
+- Reminds to update PR description after `git push`
+- Appears in Claude Code output
+- Personal workflow helper (gitignored, not committed)
+
 ### Testing
 E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
 
