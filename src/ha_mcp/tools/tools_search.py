@@ -725,11 +725,6 @@ def register_search_tools(mcp, client, **kwargs):
                     state = await client.get_entity_state(entity_id)
                     return {"success": True, "entity_id": entity_id, "state": state}
                 except Exception as e:
-                    error_str = str(e).lower()
-                    if "404" in error_str or "not found" in error_str:
-                        return create_entity_not_found_error(
-                            entity_id, details=str(e)
-                        )
                     return exception_to_structured_error(
                         e, context={"entity_id": entity_id}
                     )

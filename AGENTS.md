@@ -632,16 +632,13 @@ except Exception as e:
     return exception_to_structured_error(e, context={"entity_id": entity_id})
 ```
 
-**Pattern for tools**: Prefer specific error helpers inside the try block, with `exception_to_structured_error` as the outer catch-all:
+**Pattern for tools**: Use `exception_to_structured_error` as the catch-all — it already classifies 404s, auth errors, timeouts, etc. based on exception type and message. Pass `context={"entity_id": ...}` so it can produce `ENTITY_NOT_FOUND` for 404 errors automatically. No manual 404 string matching needed:
 ```python
 try:
     result = await client.get_entity_state(entity_id)
     return await add_timezone_metadata(client, result)
 except Exception as e:
-    if "404" in str(e).lower() or "not found" in str(e).lower():
-        error_response = create_entity_not_found_error(entity_id, details=str(e))
-    else:
-        error_response = exception_to_structured_error(e, context={"entity_id": entity_id})
+    error_response = exception_to_structured_error(e, context={"entity_id": entity_id})
     return await add_timezone_metadata(client, error_response)
 ```
 
