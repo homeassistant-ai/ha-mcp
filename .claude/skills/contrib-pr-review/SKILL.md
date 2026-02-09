@@ -197,12 +197,15 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 
 ### 6. Code Quality Overview
 
-**Note:** Gemini Code Assist already provides code review. Focus on high-level concerns:
+**Note:** Gemini Code Assist provides automated code review on all PRs. This step focuses on what Gemini cannot assess:
 
-- **Consistency with codebase patterns**: Does it follow existing conventions?
-- **Architecture alignment**: Does it fit the project structure?
-- **Breaking changes**: Any API changes that affect users?
-- **Documentation**: Are docstrings/comments appropriate?
+- **Architecture alignment**: Does it fit the project structure? (service layer usage, etc.)
+- **Breaking changes**: Does it remove functionality without replacement? (Tool consolidation/refactoring is NOT breaking)
+- **Repo-specific patterns**: Context engineering, progressive disclosure, MCP-specific conventions
+
+**Breaking change assessment:**
+- ✅ NOT Breaking: Tool consolidation, refactoring, parameter changes with same outcome achievable
+- ⚠️ BREAKING: Removes functionality with no alternative, makes previously possible actions impossible
 
 **Quick checks:**
 
@@ -217,10 +220,9 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 **Output Quality Summary:**
 ```
 ✨ Code Quality:
-- Pattern consistency: [assessment]
-- Architecture fit: [assessment]
-- Breaking changes: ✅ None / ⚠️ Detected - [describe]
-- Documentation: [assessment]
+- Architecture fit: [assessment - service layer, context engineering]
+- Breaking changes: ✅ None / ⚠️ Detected - [describe what's genuinely lost]
+- Gemini reviews: [check if Gemini flagged anything critical]
 ```
 
 ## Final Review Summary

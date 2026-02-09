@@ -101,6 +101,23 @@ When implementing features or debugging, consult these resources:
 
 ## Issue & PR Management
 
+### Automated Code Review (Gemini Code Assist)
+
+**Gemini Code Assist** runs automatically on all PRs, providing immediate feedback on:
+- Code quality (correctness, efficiency, maintainability)
+- Test coverage (enforces `src/` modifications must have tests)
+- Security patterns (eval/exec, SQL injection, credentials)
+- Tool naming conventions and MCP patterns
+- Safety annotation accuracy
+- Return value consistency
+
+**Configuration**: `.gemini/styleguide.md` and `.gemini/config.yaml`
+
+**Division of Labor:**
+- **Gemini (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **Claude `contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
+- **Claude `my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
+
 ### Issue Labels
 | Label | Meaning |
 |-------|---------|
@@ -591,6 +608,24 @@ return create_error_response(
 
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
+
+### Breaking Changes Definition
+
+A change is **BREAKING** only if it removes functionality that users depend on without providing an alternative.
+
+**Breaking Changes (require major version bump):**
+- Deleting a tool without providing alternative functionality elsewhere
+- Removing a feature that has no replacement in any other tool
+- Making something impossible that was previously possible
+
+**NOT Breaking Changes (these are improvements):**
+- Tool consolidation (combining multiple tools into one) — **encouraged**
+- Tool refactoring (restructuring how tools work internally)
+- Parameter changes (as long as same outcome achievable via other means)
+- Return value restructuring (as long as data still accessible)
+- Tool renaming with functionality preserved
+
+**Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only mark as breaking when functionality is genuinely lost forever, not when it's restructured or consolidated.
 
 ## Tool Waiting Behavior
 
