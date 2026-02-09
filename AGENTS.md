@@ -76,7 +76,7 @@ Custom agent workflows are located in `.claude/agents/`:
 |-------|------|-------|---------|
 | **issue-analysis** | `issue-analysis.md` | Opus | Deep issue analysis - comprehensive codebase exploration, implementation planning, architectural assessment, complexity evaluation. Complements automated Gemini triage with human-directed deep analysis. |
 | **issue-to-pr-resolver** | `issue-to-pr-resolver.md` | Sonnet | End-to-end issue implementation: pre-flight checks → worktree creation → implementation with tests → pre-PR checkpoint → PR creation → iterative CI/review resolution until merge-ready. |
-| **pr-checker** | `pr-checker.md` | Sonnet | Review and manage existing PRs - check comments, CI status, resolve review threads, monitor until all checks pass. |
+| **my-pr-checker** | `my-pr-checker.md` | Sonnet | Review and manage YOUR OWN PRs - check comments, CI status, resolve review threads, monitor until all checks pass. Use for your PRs, not external contributions. |
 
 ## Project Overview
 
@@ -774,7 +774,7 @@ Located in `.claude/agents/`:
 |-------|---------|
 | `issue-analysis` | Deep issue analysis: codebase exploration, implementation planning, complexity assessment |
 | `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
-| `pr-checker` | Review PR comments, resolve threads, monitor CI |
+| `my-pr-checker` | Review YOUR OWN PRs: comments, CI status, resolve threads, monitor until ready |
 
 ## Skills
 
