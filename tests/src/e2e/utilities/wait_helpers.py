@@ -421,7 +421,7 @@ async def wait_for_state_change(
 
 
 async def wait_for_tool_result(
-    mcp_client,
+    mcp_client: Any,
     tool_name: str,
     arguments: dict[str, Any],
     predicate: Callable[[dict[str, Any]], bool],
