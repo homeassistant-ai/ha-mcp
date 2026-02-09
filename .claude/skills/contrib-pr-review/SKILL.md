@@ -58,13 +58,12 @@ gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/files --jq '.[].filename'
   - **Critical**: Check for `pull_request_target` (runs in base repo context - dangerous)
   - **Block if suspicious** - maintainer must review
 
-**Output Security Summary:**
-```
-🔒 Security Assessment:
-- Prompt Injection: ✅ None detected / ⚠️ FOUND - [describe]
-- AGENTS.md: ✅ No changes / ⚠️ Modified - [reason to review]
-- Workflows: ✅ Safe / ⚠️ NEEDS REVIEW - [concerns]
-```
+**Internal Assessment (do not include in PR comment unless issues found):**
+
+If security issues found:
+- Immediately comment on PR with specific concerns
+- Do NOT approve until maintainer reviews
+- Example: "⚠️ This PR modifies workflow files with secrets access. Needs maintainer review before merge."
 
 ### 2. Enable Workflows (If Safe)
 
@@ -243,12 +242,14 @@ After completing the analysis, draft a comment for the PR following these guidel
 ```
 [Positive opening line about the contribution]
 
-[1-2 sentences on what works well]
+[1-2 sentences on what works well - focus on functionality, tests, architecture]
 
-[Any minor suggestions or notes - optional]
+[Any minor suggestions or notes - optional, technical only]
 
 [Closing line about readiness to merge]
 ```
+
+**Note:** Do NOT mention security assessment in comment unless issues were found. Security checks are internal.
 
 **Structure for "Changes Needed" (max 25 lines):**
 ```
@@ -257,7 +258,7 @@ After completing the analysis, draft a comment for the PR following these guidel
 [Brief summary of the issue being solved]
 
 **[Concern 1]:**
-[1-2 lines explanation + suggestion]
+[1-2 lines explanation + suggestion - focus on: tests, functionality, architecture, breaking changes]
 
 **[Concern 2]:** (if applicable)
 [1-2 lines explanation + suggestion]
@@ -267,6 +268,8 @@ After completing the analysis, draft a comment for the PR following these guidel
 
 [Closing line about next steps]
 ```
+
+**Note:** Security concerns should be raised immediately when found, not in final structured comment.
 
 **Example - Good to Merge:**
 ```
@@ -292,7 +295,7 @@ Once [change 1] and [change 2] are addressed, this should be good to merge.
 
 ## Important Notes
 
-- **Security first**: Always flag security concerns immediately
+- **Security is checked, not publicized**: Always check security (step 1), but only mention in comment if issues found
 - **Be constructive**: Contributors are donating their time - be welcoming
 - **Focus on intent**: Code quality can be iterated; intent misalignment is harder to fix
 - **Consider contributor experience**: Adjust expectations based on contribution history

@@ -30,6 +30,9 @@ This repository uses a worktree-based development workflow.
 - All worktrees automatically inherit `.claude/agents/` workflows
 - Easy cleanup: `git worktree prune` removes stale references
 
+**Enforcement:**
+A pre-commit hook (`.git/hooks/pre-commit`) blocks commits to feature branches from the main repo, ensuring worktree usage. To bypass when necessary: `git commit --no-verify`
+
 ## Worktree Workflow
 
 ### Creating Worktrees
