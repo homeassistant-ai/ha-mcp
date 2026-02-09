@@ -5,17 +5,24 @@ import json
 import os
 import secrets
 import sys
+from datetime import datetime
 from pathlib import Path
+
+
+def _log_with_timestamp(level: str, message: str, stream=None) -> None:
+    """Log a message with a timestamp."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} [{level}] {message}", file=stream, flush=True)
 
 
 def log_info(message: str) -> None:
     """Log info message."""
-    print(f"[INFO] {message}", flush=True)
+    _log_with_timestamp("INFO", message)
 
 
 def log_error(message: str) -> None:
     """Log error message."""
-    print(f"[ERROR] {message}", file=sys.stderr, flush=True)
+    _log_with_timestamp("ERROR", message, sys.stderr)
 
 
 def generate_secret_path() -> str:
@@ -44,7 +51,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         path = custom_path.strip()
         if not path.startswith("/"):
             path = "/" + path
-        log_info(f"Using custom secret path from configuration")
+        log_info("Using custom secret path from configuration")
         # Update stored path for consistency
         secret_file.write_text(path)
         return path
@@ -54,7 +61,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         try:
             stored_path = secret_file.read_text().strip()
             if stored_path:
-                log_info(f"Using existing auto-generated secret path")
+                log_info("Using existing auto-generated secret path")
                 return stored_path
         except Exception as e:
             log_error(f"Failed to read stored secret path: {e}")
@@ -128,7 +135,7 @@ def main() -> int:
     # Import and run MCP server directly
     try:
         log_info("Importing ha_mcp module...")
-        from ha_mcp.__main__ import mcp
+        from ha_mcp.__main__ import mcp, _get_timestamped_uvicorn_log_config
 
         log_info("Starting MCP server...")
         mcp.run(
@@ -137,6 +144,7 @@ def main() -> int:
             port=port,
             path=secret_path,
             log_level="info",
+            uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
     except Exception as e:
         log_error(f"Failed to start MCP server: {e}")

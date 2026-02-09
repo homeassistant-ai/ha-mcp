@@ -3,12 +3,12 @@
 
 # Register the idna codec (required for httpx URL parsing)
 try:
-    import idna.codec  # This registers the 'idna' codec
+    import idna.codec  # noqa: F401 - This registers the 'idna' codec
 except ImportError:
     pass
 
 # Ensure encodings are available
 try:
-    import encodings.idna
+    import encodings.idna  # noqa: F401
 except ImportError:
     pass
