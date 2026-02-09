@@ -28,43 +28,25 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 
 ## Review Protocol
 
-### 1. Security Assessment (CRITICAL - Do First)
+### 1. Check Gemini's Security Review
 
-**Check for dangerous changes:**
+**Note:** Gemini Code Assist now handles security assessment automatically. Check if Gemini flagged any security concerns.
 
 ```bash
-# Get full diff
-gh pr diff $ARGUMENTS --repo homeassistant-ai/ha-mcp > /tmp/pr_$ARGUMENTS.diff
-
-# Check for sensitive file changes
-gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/files --jq '.[].filename' | grep -E '(AGENTS\.md|CLAUDE\.md|\.github/|\.claude/)'
+# Check if Gemini posted security-related comments
+gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.author.login == "gemini-code-assist" or .body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
-**Assess each category:**
+**If Gemini flagged security issues:**
+- Review Gemini's findings carefully
+- Verify if concerns are valid
+- Do NOT approve until issues addressed or confirmed false positives
 
-- **Prompt Injection Risks**:
-  - Search diff for suspicious patterns: user input → prompts/tools/descriptions
-  - Check for: `f"..."`, string interpolation in tool descriptions, eval/exec, unescaped user content
-  - **Flag immediately if found** - requires maintainer review
-
-- **AGENTS.md/CLAUDE.md Changes**:
-  - Are changes necessary for the PR's purpose?
-  - Do they add backdoors, change security policies, or modify review processes?
-  - **Warn reviewer** if changes seem unrelated to PR intent
-
-- **.github/ Workflow Changes**:
-  - Are workflow files modified?
-  - Do they add secrets access, change permissions, or execute untrusted code?
-  - **Critical**: Check for `pull_request_target` (runs in base repo context - dangerous)
-  - **Block if suspicious** - maintainer must review
-
-**Output Security Summary:**
-```
-🔒 Security Assessment:
-- Prompt Injection: ✅ None detected / ⚠️ FOUND - [describe]
-- AGENTS.md: ✅ No changes / ⚠️ Modified - [reason to review]
-- Workflows: ✅ Safe / ⚠️ NEEDS REVIEW - [concerns]
-```
+**If NO Gemini security flags but you notice concerning patterns:**
+- Unusual AGENTS.md/CLAUDE.md changes unrelated to PR purpose
+- `.github/` workflow modifications with `pull_request_target`
+- `.claude/` agent/skill changes that could affect behavior
+- Comment immediately with specific concerns
 
 ### 2. Enable Workflows (If Safe)
 
@@ -197,12 +179,15 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 
 ### 6. Code Quality Overview
 
-**Note:** Gemini Code Assist already provides code review. Focus on high-level concerns:
+**Note:** Gemini Code Assist provides automated code review on all PRs. This step focuses on what Gemini cannot assess:
 
-- **Consistency with codebase patterns**: Does it follow existing conventions?
-- **Architecture alignment**: Does it fit the project structure?
-- **Breaking changes**: Any API changes that affect users?
-- **Documentation**: Are docstrings/comments appropriate?
+- **Architecture alignment**: Does it fit the project structure? (service layer usage, etc.)
+- **Breaking changes**: Does it remove functionality without replacement? (Tool consolidation/refactoring is NOT breaking)
+- **Repo-specific patterns**: Context engineering, progressive disclosure, MCP-specific conventions
+
+**Breaking change assessment:**
+- ✅ NOT Breaking: Tool consolidation, refactoring, parameter changes with same outcome achievable
+- ⚠️ BREAKING: Removes functionality with no alternative, makes previously possible actions impossible
 
 **Quick checks:**
 
@@ -217,10 +202,9 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 **Output Quality Summary:**
 ```
 ✨ Code Quality:
-- Pattern consistency: [assessment]
-- Architecture fit: [assessment]
-- Breaking changes: ✅ None / ⚠️ Detected - [describe]
-- Documentation: [assessment]
+- Architecture fit: [assessment - service layer, context engineering]
+- Breaking changes: ✅ None / ⚠️ Detected - [describe what's genuinely lost]
+- Gemini reviews: [check if Gemini flagged anything critical]
 ```
 
 ## Final Review Summary
@@ -241,12 +225,14 @@ After completing the analysis, draft a comment for the PR following these guidel
 ```
 [Positive opening line about the contribution]
 
-[1-2 sentences on what works well]
+[1-2 sentences on what works well - focus on functionality, tests, architecture]
 
-[Any minor suggestions or notes - optional]
+[Any minor suggestions or notes - optional, technical only]
 
 [Closing line about readiness to merge]
 ```
+
+**Note:** Do NOT mention security assessment in comment unless issues were found. Security checks are internal.
 
 **Structure for "Changes Needed" (max 25 lines):**
 ```
@@ -255,7 +241,7 @@ After completing the analysis, draft a comment for the PR following these guidel
 [Brief summary of the issue being solved]
 
 **[Concern 1]:**
-[1-2 lines explanation + suggestion]
+[1-2 lines explanation + suggestion - focus on: tests, functionality, architecture, breaking changes]
 
 **[Concern 2]:** (if applicable)
 [1-2 lines explanation + suggestion]
@@ -265,6 +251,8 @@ After completing the analysis, draft a comment for the PR following these guidel
 
 [Closing line about next steps]
 ```
+
+**Note:** Security concerns should be raised immediately when found, not in final structured comment.
 
 **Example - Good to Merge:**
 ```
@@ -290,7 +278,7 @@ Once [change 1] and [change 2] are addressed, this should be good to merge.
 
 ## Important Notes
 
-- **Security first**: Always flag security concerns immediately
+- **Security is checked, not publicized**: Always check security (step 1), but only mention in comment if issues found
 - **Be constructive**: Contributors are donating their time - be welcoming
 - **Focus on intent**: Code quality can be iterated; intent misalignment is harder to fix
 - **Consider contributor experience**: Adjust expectations based on contribution history
