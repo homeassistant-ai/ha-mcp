@@ -8,10 +8,15 @@ to complete, and other asynchronous conditions in Home Assistant.
 import asyncio
 import logging
 import time
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .assertions import parse_mcp_result
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +426,7 @@ async def wait_for_state_change(
 
 
 async def wait_for_tool_result(
-    mcp_client: Any,
+    mcp_client: Client,
     tool_name: str,
     arguments: dict[str, Any],
     predicate: Callable[[dict[str, Any]], bool],
