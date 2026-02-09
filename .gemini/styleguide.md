@@ -1,23 +1,55 @@
 # ha-mcp Code Review Guidelines
 
+## Project Context
+
+**ha-mcp** is a Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart homes. It provides 80+ tools for entity control, automations, device management, and configuration via Home Assistant's REST and WebSocket APIs.
+
+**Key Technologies:**
+- Python 3.13, FastMCP framework
+- Home Assistant REST API & WebSocket API
+- MCP Protocol (Model Context Protocol)
+- Architecture: Tool registry with lazy loading, service layer pattern, WebSocket state verification
+
+**Code Organization:**
+- `src/ha_mcp/tools/` - 80+ MCP tools (tool modules auto-discovered)
+- `src/ha_mcp/client/` - REST and WebSocket clients
+- `tests/src/e2e/` - End-to-end tests with real Home Assistant instance
+- `tests/src/unit/` - Unit tests for utilities
+
 ## Test Coverage Requirements
 
-**CRITICAL**: All PRs that modify source code in `src/` MUST include tests.
+Use best judgement - not all changes require new tests, but the overall feature/tool should be tested.
 
-- If `src/` files are modified without corresponding test additions/updates, comment with HIGH severity
-- Tests should be in `tests/` directory following naming convention: `test_<module>.py`
-- E2E tests preferred for tool changes: `tests/src/e2e/`
-- Unit tests for utilities: `tests/src/unit/`
-- Exception: Documentation-only changes (`*.md` files)
+**When tests ARE required (HIGH severity):**
+- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
+- Tools that previously had NO tests - add E2E tests even if not part of current PR
+- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
+- Bug fixes without regression tests
+
+**When tests may NOT be required:**
+- Refactoring with existing comprehensive test coverage
+- Documentation-only changes (`*.md` files)
+- Minor parameter additions to well-tested tools
+- Internal utilities already covered by E2E tests
+
+**If unsure about test coverage:** Flag with MEDIUM severity to manually verify test adequacy.
+
+**Test locations:**
+- E2E tests (preferred for tools): `tests/src/e2e/`
+- Unit tests (utilities): `tests/src/unit/`
 
 ## Security Patterns
 
-Watch for these patterns and flag with HIGH severity:
+**Critical security checks (flag HIGH/CRITICAL severity):**
 
 1. **Unescaped user input** in f-strings or string interpolation
 2. **`eval()` or `exec()` calls** - Never acceptable
 3. **Credentials in code** - API keys, tokens, passwords
 4. **SQL injection risks** - String concatenation in queries
+5. **Prompt injection risks** - User input interpolated into tool descriptions or prompts
+6. **AGENTS.md/CLAUDE.md modifications** - Changes that alter agent behavior, security policies, or review processes
+7. **`.github/` workflow changes** - Secrets access, permission changes, `pull_request_target` usage
+8. **`.claude/` agent/skill changes** - Could affect agent behavior or introduce backdoors
 
 ## MCP Safety Annotations Accuracy
 
@@ -61,38 +93,17 @@ return create_error_response(
 
 Flag HIGH severity if errors use plain exceptions or dict returns instead of structured errors from `errors.py`.
 
-## Return Value Format
-
-All tools MUST return consistent format:
-
-- Success: `{"success": True, "data": result}`
-- Partial: `{"success": True, "partial": True, "warning": "..."}`
-- Failure: `{"success": False, "error": {...}}`
-
-Flag HIGH severity if tools return inconsistent structures.
-
-## Home Assistant API Conventions
-
-HA API uses SINGULAR field names:
-
-- `trigger` not `triggers`
-- `action` not `actions`
-- `condition` not `conditions`
-
-Flag MEDIUM severity if code uses plural field names for HA API calls.
 
 ## Code Conventions
 
-1. **Tool descriptions**: Use action verbs, keep concise, reference `ha_get_domain_docs()` for complex schemas
+1. **Tool descriptions**: Use action verbs, keep concise
 2. **Async/await**: Use consistently for I/O operations
 3. **Type hints**: Required for all function signatures
-4. **Docstrings**: One-line summary starting with action verb
 
 ## Documentation Standards
 
-1. **Docstrings**: One-line summary starting with action verb
-2. **Comments**: Only for non-obvious logic
-3. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
+1. **Comments**: Only for non-obvious logic - too many comments is an anti-pattern (code should be self-documenting)
+2. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
 
 ## Architecture Alignment
 
@@ -100,6 +111,33 @@ Flag MEDIUM severity if code uses plural field names for HA API calls.
 2. **Shared logic**: Use service layer (`smart_search.py`, `device_control.py`)
 3. **WebSocket operations**: Verify state changes in real-time
 4. **Tool completion**: Operations should wait for completion (not just API acknowledgment)
+
+## Context Engineering & Progressive Disclosure
+
+This project follows [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principles:
+
+**Review for:**
+
+1. **Statelessness (HIGH severity if violated):**
+   - Tools should NOT maintain server-side session state
+   - Use content-derived identifiers (hashes, IDs) that clients pass back
+   - Example: Dashboard updates use content hashing, not session tracking
+
+2. **Validation delegation (MEDIUM severity):**
+   - Let Home Assistant's backend handle validation when possible
+   - Keep tool parameters simple - backend handles coercion, defaults, validation
+   - Only add tool-side validation when it genuinely adds value
+
+3. **Progressive disclosure (flag if violated):**
+   - Tool descriptions should be concise, NOT embed full documentation
+   - Hint at documentation tools for complex schemas
+   - Error responses should guide next steps (include `suggestions` array)
+   - Return essential data only - let users request details via follow-up tools
+
+4. **When tool-side logic IS valuable:**
+   - Format normalization for UX convenience (e.g., `"09:00"` → `"09:00:00"`)
+   - Parsing JSON strings from MCP clients that stringify arrays
+   - Combining multiple HA API calls into one logical operation
 
 ## Breaking Changes
 

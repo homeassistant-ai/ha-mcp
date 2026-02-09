@@ -28,42 +28,25 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 
 ## Review Protocol
 
-### 1. Security Assessment (CRITICAL - Do First)
+### 1. Check Gemini's Security Review
 
-**Check for dangerous changes:**
+**Note:** Gemini Code Assist now handles security assessment automatically. Check if Gemini flagged any security concerns.
 
 ```bash
-# Get full diff
-gh pr diff $ARGUMENTS --repo homeassistant-ai/ha-mcp > /tmp/pr_$ARGUMENTS.diff
-
-# Check for sensitive file changes
-gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/files --jq '.[].filename' | grep -E '(AGENTS\.md|CLAUDE\.md|\.github/|\.claude/)'
+# Check if Gemini posted security-related comments
+gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.author.login == "gemini-code-assist" or .body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
-**Assess each category:**
+**If Gemini flagged security issues:**
+- Review Gemini's findings carefully
+- Verify if concerns are valid
+- Do NOT approve until issues addressed or confirmed false positives
 
-- **Prompt Injection Risks**:
-  - Search diff for suspicious patterns: user input → prompts/tools/descriptions
-  - Check for: `f"..."`, string interpolation in tool descriptions, eval/exec, unescaped user content
-  - **Flag immediately if found** - requires maintainer review
-
-- **AGENTS.md/CLAUDE.md Changes**:
-  - Are changes necessary for the PR's purpose?
-  - Do they add backdoors, change security policies, or modify review processes?
-  - **Warn reviewer** if changes seem unrelated to PR intent
-
-- **.github/ Workflow Changes**:
-  - Are workflow files modified?
-  - Do they add secrets access, change permissions, or execute untrusted code?
-  - **Critical**: Check for `pull_request_target` (runs in base repo context - dangerous)
-  - **Block if suspicious** - maintainer must review
-
-**Internal Assessment (do not include in PR comment unless issues found):**
-
-If security issues found:
-- Immediately comment on PR with specific concerns
-- Do NOT approve until maintainer reviews
-- Example: "⚠️ This PR modifies workflow files with secrets access. Needs maintainer review before merge."
+**If NO Gemini security flags but you notice concerning patterns:**
+- Unusual AGENTS.md/CLAUDE.md changes unrelated to PR purpose
+- `.github/` workflow modifications with `pull_request_target`
+- `.claude/` agent/skill changes that could affect behavior
+- Comment immediately with specific concerns
 
 ### 2. Enable Workflows (If Safe)
 

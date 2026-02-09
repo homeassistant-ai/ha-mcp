@@ -1,24 +1,23 @@
 # Gemini Code Assist configuration for ha-mcp
 
-# Require MEDIUM severity or higher to post comments
-# This ensures test coverage and security issues are surfaced
-comment_severity_threshold: MEDIUM
+# Enable persistent memory to improve responses over time
+memory_config:
+  disabled: false
 
-# Limit comments to avoid overwhelming contributors
-max_review_comments: 15
+# Code review configuration
+code_review:
+  # Require MEDIUM severity or higher to post comments
+  # This ensures test coverage and security issues are surfaced
+  comment_severity_threshold: MEDIUM
 
-# Skip generated or vendored files
-ignore_patterns:
-  - "tests/uat/run_uat.py"  # Large generated file
-  - "*.lock"
-  - "*.pyc"
-  - "__pycache__/**"
+  # Limit comments to avoid overwhelming contributors
+  max_review_comments: 15
 
-# Enable automated PR features
-pull_request_opened:
-  summary: true          # Provide PR summary
-  code_review: true      # Perform code review
-  draft_handling: true   # Review drafts when marked ready
+  # Enable automated PR features
+  pull_request_opened:
+    summary: true          # Provide PR summary
+    code_review: true      # Perform code review
+    include_drafts: true   # Review draft PRs too
 
 # No playful elements in professional project
 have_fun: false
