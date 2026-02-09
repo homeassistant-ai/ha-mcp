@@ -13,7 +13,13 @@ import stat  # noqa: E402
 import sys  # noqa: E402
 from typing import Any  # noqa: E402
 
+from cachetools import TTLCache  # noqa: E402
+
 logger = logging.getLogger(__name__)
+
+# OAuth client cache configuration
+_OAUTH_CACHE_MAXSIZE = 100
+_OAUTH_CACHE_TTL = 3600  # 1 hour, matching typical token expiry
 
 
 class OAuthProxyClient:
@@ -21,11 +27,39 @@ class OAuthProxyClient:
 
     This class is necessary because tools capture a reference to the client at registration time.
     The proxy allows us to inject different credentials per-request based on OAuth token claims.
+
+    Uses a bounded TTL cache to prevent unbounded memory growth from token rotation.
+    Evicted clients have their HTTP connections closed asynchronously.
     """
 
     def __init__(self, auth_provider):
         self._auth_provider = auth_provider
-        self._oauth_clients = {}
+        self._oauth_clients = TTLCache(
+            maxsize=_OAUTH_CACHE_MAXSIZE, ttl=_OAUTH_CACHE_TTL
+        )
+        # Track all live clients so we can detect evictions and close HTTP connections.
+        # Uses a TTLCache with 2x the TTL so entries are cleaned up even if no further
+        # requests arrive for that key, while still giving _close_evicted_clients time
+        # to detect the eviction from _oauth_clients.
+        self._all_clients = TTLCache(
+            maxsize=_OAUTH_CACHE_MAXSIZE * 2, ttl=_OAUTH_CACHE_TTL * 2
+        )
+
+    def _close_evicted_clients(self):
+        """Close HTTP connections for clients evicted from the cache by TTL or maxsize."""
+        # Iterating the TTLCache triggers lazy expiry of stale entries
+        evicted_keys = set(self._all_clients) - set(self._oauth_clients)
+        for key in evicted_keys:
+            client = self._all_clients.pop(key, None)
+            if client is None:
+                continue
+            try:
+                asyncio.get_running_loop().create_task(client.close())
+                logger.debug("Scheduled cleanup for evicted OAuth client")
+            except RuntimeError:
+                logger.debug(
+                    "No running event loop, cannot close evicted OAuth client"
+                )
 
     def _get_oauth_client(self):
         """Get the OAuth client for the current request context."""
@@ -49,16 +83,37 @@ class OAuthProxyClient:
         ha_url = claims["ha_url"]
         ha_token = claims["ha_token"]
 
-        # Create or reuse client for these credentials
+        # Close HTTP connections for any clients evicted since last access
+        self._close_evicted_clients()
+
+        # Create or reuse client for these credentials.
+        # Use .get() to avoid a TOCTOU race between the `in` check and the return:
+        # TTLCache lazily evicts on access, so a key present during `in` could be
+        # expired by the time __getitem__ runs.
         client_key = f"{ha_url}:{ha_token}"
-        if client_key not in self._oauth_clients:
-            self._oauth_clients[client_key] = HomeAssistantClient(
+        client = self._oauth_clients.get(client_key)
+        if client is None:
+            client = HomeAssistantClient(
                 base_url=ha_url,
                 token=ha_token,
             )
+            # __setitem__ may evict an old entry when maxsize is reached
+            self._oauth_clients[client_key] = client
+            self._all_clients[client_key] = client
+            self._close_evicted_clients()
             logger.info(f"Created OAuth client for {ha_url}")
 
-        return self._oauth_clients[client_key]
+        return client
+
+    async def close(self):
+        """Close all cached OAuth clients and release HTTP connections."""
+        for client in self._all_clients.values():
+            try:
+                await client.close()
+            except Exception as e:
+                logger.debug(f"Error closing OAuth client: {e}")
+        self._all_clients.clear()
+        self._oauth_clients.clear()
 
     def __getattr__(self, name):
         """Forward all attribute access to the OAuth client."""

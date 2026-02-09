@@ -24,6 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "cachetools>=5.0.0",
     "fastmcp>=2.11.0",
     "httpx[socks]>=0.27.0,<1.0",
     'jq>=1.8.0; sys_platform != "win32"',

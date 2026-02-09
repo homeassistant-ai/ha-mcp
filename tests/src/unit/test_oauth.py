@@ -1,8 +1,10 @@
 """Unit tests for OAuth 2.1 authentication."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from ha_mcp.auth.provider import (
     HomeAssistantOAuthProvider,
@@ -827,11 +829,14 @@ class TestOAuthProxyClient:
 
     def test_oauth_proxy_client_initialization(self, mock_auth_provider):
         """Test OAuthProxyClient initialization."""
+        from cachetools import TTLCache
+
         from ha_mcp.__main__ import OAuthProxyClient
 
         proxy = OAuthProxyClient(mock_auth_provider)
         assert proxy._auth_provider == mock_auth_provider
-        assert proxy._oauth_clients == {}
+        assert isinstance(proxy._oauth_clients, TTLCache)
+        assert len(proxy._oauth_clients) == 0
 
     def test_oauth_proxy_client_attribute_forwarding(self, mock_auth_provider, mock_access_token):
         """Test that OAuthProxyClient forwards attributes to HA client."""
@@ -906,3 +911,78 @@ class TestOAuthProxyClient:
         with patch("fastmcp.server.dependencies.get_access_token", return_value=token_no_claims):
             with pytest.raises(RuntimeError, match="No Home Assistant credentials"):
                 _ = proxy.get_state
+
+    def test_oauth_proxy_client_cache_is_bounded(self, mock_auth_provider):
+        """Test that the OAuth client cache has a maximum size."""
+        from ha_mcp.__main__ import OAuthProxyClient, _OAUTH_CACHE_MAXSIZE
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+        assert proxy._oauth_clients.maxsize == _OAUTH_CACHE_MAXSIZE
+
+    def test_oauth_proxy_client_cache_has_ttl(self, mock_auth_provider):
+        """Test that the OAuth client cache has a TTL."""
+        from ha_mcp.__main__ import OAuthProxyClient, _OAUTH_CACHE_TTL
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+        assert proxy._oauth_clients.ttl == _OAUTH_CACHE_TTL
+
+    @pytest.mark.asyncio
+    async def test_oauth_proxy_client_closes_evicted_clients(self, mock_auth_provider):
+        """Test that evicted OAuth clients get their HTTP connections closed."""
+        from cachetools import TTLCache
+
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+        # Use a tiny cache to force evictions
+        proxy._oauth_clients = TTLCache(maxsize=1, ttl=3600)
+        proxy._all_clients = TTLCache(maxsize=2, ttl=7200)
+
+        mock_client_1 = MagicMock()
+        mock_client_1.close = AsyncMock()
+        mock_client_2 = MagicMock()
+        mock_client_2.close = AsyncMock()
+
+        # Simulate two different tokens creating two clients
+        token_1 = MagicMock()
+        token_1.claims = {"ha_url": "http://ha1.local:8123", "ha_token": "token1"}
+        token_2 = MagicMock()
+        token_2.claims = {"ha_url": "http://ha2.local:8123", "ha_token": "token2"}
+
+        with patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
+            mock_ha_client.side_effect = [mock_client_1, mock_client_2]
+
+            # First access creates client 1
+            with patch(
+                "fastmcp.server.dependencies.get_access_token", return_value=token_1
+            ):
+                _ = proxy.get_state
+
+            assert len(proxy._oauth_clients) == 1
+            assert len(proxy._all_clients) == 1
+
+            # Second access with different creds should evict client 1 (maxsize=1)
+            # and schedule its close via asyncio.create_task
+            with patch(
+                "fastmcp.server.dependencies.get_access_token",
+                return_value=token_2,
+            ):
+                _ = proxy.get_state
+
+            # Allow the scheduled close task to run
+            await asyncio.sleep(0)
+
+            # Client 1 should have been closed
+            mock_client_1.close.assert_awaited_once()
+            # Client 2 should still be active
+            mock_client_2.close.assert_not_awaited()
+
+    def test_oauth_proxy_client_all_clients_is_bounded(self, mock_auth_provider):
+        """Test that the tracking dict is also bounded to prevent memory leaks."""
+        from cachetools import TTLCache
+
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+        assert isinstance(proxy._all_clients, TTLCache)
+        assert proxy._all_clients.maxsize >= proxy._oauth_clients.maxsize
