@@ -298,9 +298,11 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                 raise_error=False,
             )
             if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions = [
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check Home Assistant logs for errors",
                     "Ensure GitHub is accessible",
                 ]
+                error_response["error"]["suggestions"] = suggestions
+                error_response["error"]["suggestion"] = suggestions[0]
             raise_tool_error(error_response)
