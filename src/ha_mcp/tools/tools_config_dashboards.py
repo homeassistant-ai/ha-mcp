@@ -908,16 +908,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if not dashboard_exists:
                 # New dashboards require a hyphenated url_path (HA constraint)
                 if "-" not in url_path:
-                    return {
-                        "success": False,
-                        "action": "set",
-                        "error": "New dashboard url_path must contain a hyphen (-)",
-                        "suggestions": [
+                    return create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message="New dashboard url_path must contain a hyphen (-)",
+                        suggestions=[
                             f"Try '{url_path.replace('_', '-')}' instead",
                             "Use format like 'my-dashboard' or 'mobile-view'",
                             "Use 'lovelace' or 'default' to edit the default dashboard",
                         ],
-                    }
+                        context={"action": "set"},
+                    )
 
                 # Use provided title or generate from url_path
                 dashboard_title = title or url_path.replace("-", " ").title()
