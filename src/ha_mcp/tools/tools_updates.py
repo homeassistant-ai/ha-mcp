@@ -531,7 +531,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             }
 
-        except (httpx.RequestError, ValueError, KeyError) as e:
+        except httpx.RequestError as e:
             logger.error(f"Failed to check update notes: {e}")
             return create_error_response(
                 code=ErrorCode.CONNECTION_FAILED,
