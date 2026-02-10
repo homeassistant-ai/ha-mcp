@@ -11,7 +11,8 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from ..errors import create_validation_error
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,11 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         }
     )
     @log_tool_usage
-    async def ha_config_entry_list() -> dict[str, Any]:
+    async def ha_list_config_entries() -> dict[str, Any]:
         """List all config entries (integrations).
 
         Returns entry_id, domain, title, and state for each integration.
-        Use entry_id with ha_config_entry_options_start to configure an integration.
+        Use entry_id with ha_start_config_entry_options_flow to configure an integration.
         """
         try:
             entries = await client.get_config_entries()
@@ -62,16 +63,16 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         }
     )
     @log_tool_usage
-    async def ha_config_entry_options_start(
+    async def ha_start_config_entry_options_flow(
         entry_id: Annotated[
             str,
-            Field(description="Config entry ID (from ha_config_entry_list)"),
+            Field(description="Config entry ID (from ha_list_config_entries)"),
         ],
     ) -> dict[str, Any]:
         """Start options flow for a config entry.
 
         Returns flow_id and first step info (menu_options or data_schema).
-        Use the flow_id with ha_config_entry_options_submit to navigate the flow.
+        Use the flow_id with ha_submit_config_entry_options_step to navigate the flow.
 
         Flow types:
         - "menu": Use {"next_step_id": "option_name"} to navigate
@@ -100,10 +101,10 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         }
     )
     @log_tool_usage
-    async def ha_config_entry_options_submit(
+    async def ha_submit_config_entry_options_step(
         flow_id: Annotated[
             str,
-            Field(description="Flow ID from ha_config_entry_options_start"),
+            Field(description="Flow ID from ha_start_config_entry_options_flow"),
         ],
         data: Annotated[
             str | dict,
@@ -118,17 +119,18 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         For form steps: {"field1": "value1", "field2": true, ...}
 
         Returns next step info or completion status.
-        Repeat until you're back at the main menu, then use ha_config_entry_options_finish.
+        Repeat until you're back at the main menu, then use ha_finish_config_entry_options_flow.
         """
         try:
             # Parse data if string
             if isinstance(data, str):
                 parsed_data = parse_json_param(data)
                 if not isinstance(parsed_data, dict):
-                    return {
-                        "success": False,
-                        "error": "Data must be a dictionary/object",
-                    }
+                    raise_tool_error(
+                        create_validation_error(
+                            "Data must be a dictionary/object", parameter="data"
+                        )
+                    )
                 data_dict: dict[str, Any] = parsed_data
             else:
                 data_dict = data
@@ -156,7 +158,7 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         }
     )
     @log_tool_usage
-    async def ha_config_entry_options_finish(
+    async def ha_finish_config_entry_options_flow(
         flow_id: Annotated[
             str,
             Field(description="Flow ID to complete"),
