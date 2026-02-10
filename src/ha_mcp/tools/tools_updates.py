@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 _ALERTS_URL = "https://alerts.home-assistant.io/alerts.json"
 _ALERT_DETAIL_URL = "https://alerts.home-assistant.io/alerts/{alert_id}.json"
+_GITHUB_CORE_RELEASE_URL = (
+    "https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
+)
+
+# Maximum number of monthly releases to check for breaking changes
+_MAX_MONTHLY_VERSIONS = 12
 
 
 def _parse_version(version_str: str) -> tuple[int, ...] | None:
@@ -33,6 +39,219 @@ def _parse_version(version_str: str) -> tuple[int, ...] | None:
         return tuple(int(x) for x in version_str.split("."))
     except (ValueError, AttributeError):
         return None
+
+
+def _get_monthly_versions_between(
+    current: str, target: str
+) -> list[str]:
+    """Get .0 monthly release versions between current (exclusive) and target (inclusive).
+
+    For example, current="2025.10.3" target="2026.2.1" returns:
+    ["2025.11.0", "2025.12.0", "2026.1.0", "2026.2.0"]
+    """
+    current_parts = _parse_version(current)
+    target_parts = _parse_version(target)
+    if (
+        not current_parts
+        or not target_parts
+        or len(current_parts) < 2
+        or len(target_parts) < 2
+    ):
+        # Can't determine range — just return target as .0
+        if target_parts and len(target_parts) >= 2:
+            return [f"{target_parts[0]}.{target_parts[1]}.0"]
+        return []
+
+    versions: list[str] = []
+    year = current_parts[0]
+    month = current_parts[1] + 1  # start from the month after current
+
+    target_year = target_parts[0]
+    target_month = target_parts[1]
+
+    while (year, month) <= (target_year, target_month):
+        versions.append(f"{year}.{month}.0")
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+        if len(versions) >= _MAX_MONTHLY_VERSIONS:
+            break
+
+    return versions
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML tags and normalise whitespace for readable plain text."""
+    text = re.sub(r"<br\s*/?>", "\n", html)
+    text = re.sub(r"<p[^>]*>", "\n", text)
+    text = re.sub(r"</p>", "\n", text)
+    text = re.sub(r"<li[^>]*>", "\n- ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    # collapse runs of whitespace while keeping paragraph breaks
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _parse_breaking_changes_html(
+    html: str, source_url: str
+) -> dict[str, Any] | None:
+    """Extract the 'Backward-incompatible changes' section from a HA blog post.
+
+    Each entry is an ``<h3>IntegrationName</h3>`` block followed by description
+    paragraphs until the next ``<h3>`` or section end.
+    """
+    # Locate the section between the backward-incompatible-changes h2 and
+    # whatever comes next (another h2, or end-of-article).
+    section_match = re.search(
+        r'id="backward-incompatible-changes"[^>]*>.*?</h2>'
+        r"(.*?)"
+        r"(?=<h2[ >]|</article>|</main>)",
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not section_match:
+        return None
+
+    section = section_match.group(1)
+
+    # Each entry: <h3>Name</h3> ... content ... (until next <h3> or end)
+    entries: list[dict[str, str]] = []
+    for match in re.finditer(
+        r"<h3[^>]*>(.*?)</h3>(.*?)(?=<h3[^>]*>|$)", section, re.DOTALL
+    ):
+        name = _strip_html(match.group(1)).strip()
+        description = _strip_html(match.group(2)).strip()
+        if name:
+            entries.append({"integration": name, "description": description})
+
+    if not entries:
+        # Fallback: return raw text if h3 parsing finds nothing
+        raw_text = _strip_html(section).strip()
+        if raw_text:
+            return {
+                "entries": [],
+                "raw_text": raw_text,
+                "count": 0,
+                "source_url": source_url,
+            }
+        return None
+
+    return {"entries": entries, "count": len(entries), "source_url": source_url}
+
+
+def _parse_patch_breaking_changes(
+    body: str, version: str
+) -> dict[str, Any] | None:
+    """Parse ``(breaking-change)`` items from a GitHub patch-release body."""
+    entries: list[dict[str, str]] = []
+    for line in body.split("\n"):
+        if "(breaking-change)" not in line.lower():
+            continue
+        clean = re.sub(r"\(breaking-change\)", "", line, flags=re.IGNORECASE)
+        clean = clean.lstrip("-*").strip()
+        if not clean:
+            continue
+
+        # Try to extract integration from docs link: ([name docs])
+        doc_match = re.search(
+            r"\[([^\]]+?)\s+(?:docs|documentation)\]", clean, re.IGNORECASE
+        )
+        integration = doc_match.group(1).strip() if doc_match else "unknown"
+        entries.append({"integration": integration, "description": clean})
+
+    if not entries:
+        return None
+
+    return {
+        "entries": entries,
+        "count": len(entries),
+        "source_url": f"https://github.com/home-assistant/core/releases/tag/{version}",
+    }
+
+
+async def _fetch_bc_for_version(
+    http_client: httpx.AsyncClient, version: str
+) -> dict[str, Any] | None:
+    """Fetch breaking changes for a single HA Core version.
+
+    For .0 (monthly) releases the GitHub release body is a blog URL; we fetch
+    the blog post and parse the 'Backward-incompatible changes' section.
+
+    For patch releases the body is a changelog where some lines are tagged
+    ``(breaking-change)``.
+    """
+    try:
+        api_url = _GITHUB_CORE_RELEASE_URL.format(version=version)
+        response = await http_client.get(api_url)
+        if response.status_code != 200:
+            logger.debug(
+                f"GitHub API returned {response.status_code} for {version}"
+            )
+            return None
+
+        body = response.json().get("body", "").strip()
+
+        # .0 releases: body IS the blog URL
+        if body.startswith("https://www.home-assistant.io/blog/"):
+            blog_resp = await http_client.get(body)
+            if blog_resp.status_code == 200:
+                return _parse_breaking_changes_html(blog_resp.text, body)
+
+        # Patch releases: check inline (breaking-change) tags
+        if "(breaking-change)" in body.lower():
+            return _parse_patch_breaking_changes(body, version)
+
+        return None
+    except Exception as e:
+        logger.debug(f"Failed to fetch breaking changes for {version}: {e}")
+        return None
+
+
+async def _fetch_breaking_changes(
+    current_version: str, target_version: str
+) -> dict[str, Any]:
+    """Fetch breaking changes for all monthly versions between current and target."""
+    monthly_versions = _get_monthly_versions_between(
+        current_version, target_version
+    )
+
+    if not monthly_versions:
+        return {"entries": [], "count": 0, "versions_checked": []}
+
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            "User-Agent": "HomeAssistant-MCP-Server",
+            "Accept": "application/vnd.github+json",
+        },
+    ) as http_client:
+        results = await asyncio.gather(
+            *[_fetch_bc_for_version(http_client, v) for v in monthly_versions],
+            return_exceptions=True,
+        )
+
+    all_entries: list[dict[str, Any]] = []
+    versions_checked: list[str] = []
+    source_urls: list[str] = []
+
+    for version, result in zip(monthly_versions, results, strict=True):
+        if isinstance(result, dict) and result.get("entries"):
+            versions_checked.append(version)
+            source_urls.append(result.get("source_url", ""))
+            for entry in result["entries"]:
+                entry_with_version: dict[str, Any] = {**entry, "version": version}
+                all_entries.append(entry_with_version)
+
+    return {
+        "entries": all_entries,
+        "count": len(all_entries),
+        "versions_checked": versions_checked,
+        "source_urls": [u for u in source_urls if u],
+    }
 
 
 def _filter_alerts(
@@ -394,27 +613,31 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         version: Annotated[
             str | None,
             Field(
-                description="Target HA Core version to check (e.g., '2025.11.0'). "
+                description="Target HA Core version to check (e.g., '2026.2.0'). "
                 "If omitted, uses the latest available Core update version.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        Check for breaking changes and alerts before updating Home Assistant Core.
+        Check for breaking changes before updating Home Assistant Core.
 
-        Gathers release notes, HA alerts, and installed integrations in one call
-        to assess update impact. Alerts from alerts.home-assistant.io are
-        cross-referenced with your installed integrations to surface only the
-        ones that affect your setup.
+        Fetches the actual HA release blog posts for every monthly version
+        between the current installed version and the target, extracts the
+        "Backward-incompatible changes" section, and returns structured
+        entries with integration names and descriptions.
+
+        Also fetches alerts from alerts.home-assistant.io and the list of
+        installed integrations so you can cross-reference which breaking
+        changes affect your setup.
 
         WORKFLOW: Call this before update.install to understand what may break.
 
         RETURNS:
         - current_version / latest_version: Version range being checked
-        - release_notes: Full Core release notes (contains breaking changes section)
-        - alerts.relevant: Alerts matching integrations you have installed
-        - alerts.other: Remaining alerts (not matching your installation)
+        - breaking_changes.entries[]: Each has integration, description, version
+        - breaking_changes.versions_checked: Which .0 releases were checked
+        - alerts.relevant: alerts.home-assistant.io alerts matching your integrations
         - installed_integrations: Your integration domains (for cross-referencing)
         """
         try:
@@ -422,7 +645,6 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             current_version = None
             target_version = version
             core_entity_id = None
-            core_release_url = None
 
             states = await client.get_states()
             for state in states:
@@ -433,7 +655,6 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     core_entity_id = eid
                     attrs = state.get("attributes", {})
                     current_version = attrs.get("installed_version")
-                    core_release_url = attrs.get("release_url")
                     if not target_version:
                         target_version = attrs.get("latest_version")
                     break
@@ -458,42 +679,17 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ],
                 }
 
-            # Step 2: Fetch release notes, alerts, and integrations in parallel
-            async def _fetch_release_notes() -> tuple[str | None, str | None]:
-                """Fetch release notes for the core update."""
-                # Try WebSocket first
-                if core_entity_id:
-                    try:
-                        ws_result = await client.send_websocket_message(
-                            {
-                                "type": "update/release_notes",
-                                "entity_id": core_entity_id,
-                            }
-                        )
-                        if ws_result.get("success") and ws_result.get("result"):
-                            return ws_result["result"], "websocket"
-                    except Exception:
-                        pass
-
-                # Fallback to GitHub
-                core_result = await _fetch_core_release_notes(target_version)
-                if core_result:
-                    return core_result["notes"], core_result["source"]
-
-                return None, None
-
+            # Step 2: Fetch breaking changes, alerts, and integrations in parallel
             results = await asyncio.gather(
-                _fetch_release_notes(),
+                _fetch_breaking_changes(current_version, target_version),
                 _fetch_alerts(),
                 _get_installed_integration_domains(client),
                 return_exceptions=True,
             )
 
-            release_notes_result = results[0] if not isinstance(results[0], Exception) else (None, None)
+            bc_data = results[0] if not isinstance(results[0], Exception) else {}
             alerts_data = results[1] if not isinstance(results[1], Exception) else []
             installed_domains = results[2] if not isinstance(results[2], Exception) else set()
-
-            release_notes, release_notes_source = release_notes_result
 
             # Step 3: Filter alerts by version range and installed integrations
             current_v = _parse_version(current_version)
@@ -520,12 +716,19 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Step 5: Build response
             sorted_domains = sorted(installed_domains) if isinstance(installed_domains, set) else []
+            bc_result = bc_data if isinstance(bc_data, dict) else {}
 
             response: dict[str, Any] = {
                 "success": True,
                 "current_version": current_version,
                 "latest_version": target_version,
                 "installed_integrations": sorted_domains,
+                "breaking_changes": {
+                    "entries": bc_result.get("entries", []),
+                    "count": bc_result.get("count", 0),
+                    "versions_checked": bc_result.get("versions_checked", []),
+                    "source_urls": bc_result.get("source_urls", []),
+                },
                 "alerts": {
                     "relevant": filtered["relevant"],
                     "relevant_count": len(filtered["relevant"]),
@@ -534,21 +737,28 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             }
 
-            if release_notes:
-                response["release_notes"] = release_notes
-                response["release_notes_source"] = release_notes_source
-            elif core_release_url:
-                response["release_notes_url"] = core_release_url
-                response["release_notes_hint"] = (
-                    "Release notes could not be fetched automatically. "
-                    f"View them at: {core_release_url}"
-                )
+            # Add raw_text fallback if blog parsing found text but no structured entries
+            if bc_result.get("raw_text") and not bc_result.get("entries"):
+                response["breaking_changes"]["raw_text"] = bc_result["raw_text"]
 
-            if filtered["relevant"]:
-                response["warning"] = (
-                    f"{len(filtered['relevant'])} alert(s) affect integrations "
-                    "you have installed. Review before updating."
+            # Warnings
+            bc_count = bc_result.get("count", 0)
+            alert_count = len(filtered["relevant"])
+            warnings: list[str] = []
+            if bc_count:
+                warnings.append(
+                    f"{bc_count} breaking change(s) found across "
+                    f"{len(bc_result.get('versions_checked', []))} release(s). "
+                    "Cross-reference with installed_integrations to assess impact."
                 )
+            if alert_count:
+                warnings.append(
+                    f"{alert_count} alert(s) affect integrations you have installed."
+                )
+            if not bc_count and not alert_count:
+                response["message"] = "No breaking changes or relevant alerts found."
+            if warnings:
+                response["warnings"] = warnings
 
             return response
 
