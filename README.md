@@ -127,7 +127,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (98 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (97 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
