@@ -1,6 +1,5 @@
 """Unit tests for tools_traces detailed trace formatting."""
 
-import pytest
 from ha_mcp.tools.tools_traces import _format_detailed_trace
 
 class TestFormatDetailedTrace:

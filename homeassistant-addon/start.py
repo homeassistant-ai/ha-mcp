@@ -10,17 +10,24 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
+
+
+def _log_with_timestamp(level: str, message: str, stream=None) -> None:
+    """Log a message with a timestamp."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} [{level}] {message}", file=stream, flush=True)
 
 
 def log_info(message: str) -> None:
     """Log info message."""
-    print(f"[INFO] {message}", flush=True)
+    _log_with_timestamp("INFO", message)
 
 
 def log_error(message: str) -> None:
     """Log error message."""
-    print(f"[ERROR] {message}", file=sys.stderr, flush=True)
+    _log_with_timestamp("ERROR", message, sys.stderr)
 
 
 def generate_secret_path() -> str:
@@ -362,26 +369,30 @@ def setup_webhook_proxy(
     return f"/api/webhook/{webhook_id}"
 
 
-async def run_dual_servers(mcp_instance, main_port: int, ingress_port: int, secret_path: str) -> None:
+async def run_dual_servers(mcp_instance, main_port: int, ingress_port: int, secret_path: str, uvicorn_log_config: dict | None = None) -> None:
     """Run MCP server on both the main port and ingress port concurrently."""
     log_info(f"Starting dual listeners: port {main_port} (direct) + port {ingress_port} (ingress)")
 
+    run_kwargs: dict = {
+        "transport": "streamable-http",
+        "host": "0.0.0.0",
+        "stateless_http": True,
+    }
+    if uvicorn_log_config is not None:
+        run_kwargs["uvicorn_config"] = {"log_config": uvicorn_log_config}
+
     main_task = asyncio.create_task(
         mcp_instance.run_async(
-            transport="streamable-http",
-            host="0.0.0.0",
             port=main_port,
             path=secret_path,
-            stateless_http=True,
+            **run_kwargs,
         )
     )
     ingress_task = asyncio.create_task(
         mcp_instance.run_async(
-            transport="streamable-http",
-            host="0.0.0.0",
             port=ingress_port,
             path=secret_path,
-            stateless_http=True,
+            **run_kwargs,
         )
     )
 
@@ -502,11 +513,13 @@ def main() -> int:
     # Import and run MCP server
     try:
         log_info("Importing ha_mcp module...")
-        from ha_mcp.__main__ import mcp
+        from ha_mcp.__main__ import mcp, _get_timestamped_uvicorn_log_config
+
+        uvicorn_log_config = _get_timestamped_uvicorn_log_config()
 
         if use_dual:
             log_info("Starting MCP server (dual-port mode)...")
-            asyncio.run(run_dual_servers(mcp, port, ingress_port, secret_path))
+            asyncio.run(run_dual_servers(mcp, port, ingress_port, secret_path, uvicorn_log_config))
         else:
             if ingress_enabled and ingress_port == port:
                 log_info("Ingress port matches main port - single listener serves both")
@@ -517,6 +530,7 @@ def main() -> int:
                 port=port,
                 path=secret_path,
                 stateless_http=True,
+                uvicorn_config={"log_config": uvicorn_log_config},
             )
     except Exception as e:
         log_error(f"Failed to start MCP server: {e}")

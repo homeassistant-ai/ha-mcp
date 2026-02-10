@@ -286,7 +286,7 @@ def ha_container_with_fresh_config():
 @pytest.fixture(scope="session")
 async def ha_client(
     ha_container_with_fresh_config,
-) -> AsyncGenerator[HomeAssistantClient, None]:
+) -> AsyncGenerator[HomeAssistantClient]:
     """Create Home Assistant client connected to the container."""
     container_info = ha_container_with_fresh_config
     base_url = container_info["base_url"]
@@ -314,7 +314,7 @@ async def ha_client(
 @pytest.fixture
 async def mcp_server(
     ha_container_with_fresh_config,
-) -> AsyncGenerator[HomeAssistantSmartMCPServer, None]:
+) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
     """Create MCP server instance connected to the container."""
     logger.info("🚀 Creating MCP server instance...")
 
@@ -336,7 +336,7 @@ async def mcp_server(
 
 
 @pytest.fixture
-async def mcp_client(mcp_server) -> AsyncGenerator[Client, None]:
+async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
     """Create FastMCP client connected to our server."""
     client = Client(mcp_server.mcp)
 
