@@ -245,51 +245,51 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         monday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
                 default=None,
             ),
         ] = None,
         tuesday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         wednesday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         thursday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         friday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         saturday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         sunday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
@@ -376,6 +376,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
         - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
+        - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
 
         PREFER BUILT-IN HELPERS OVER TEMPLATE SENSORS:
         Before creating a template sensor, check if a built-in helper/integration exists:
@@ -530,6 +531,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 elif helper_type == "schedule":
                     # Schedule parameters: monday-sunday with time ranges
                     # Each day is a list of {"from": "HH:MM:SS", "to": "HH:MM:SS"}
+                    # with optional "data" dict for additional attributes
                     day_params = {
                         "monday": monday,
                         "tuesday": tuesday,
@@ -552,6 +554,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                         if time_val.count(":") == 1:
                                             time_val = f"{time_val}:00"
                                         formatted_range[key] = time_val
+                                # Pass through the optional 'data' dict
+                                # for additional attributes (e.g. mode, brightness)
+                                if "data" in time_range:
+                                    formatted_range["data"] = time_range["data"]
                                 formatted_ranges.append(formatted_range)
                             message[day_name] = formatted_ranges
 

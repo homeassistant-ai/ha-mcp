@@ -1,0 +1,23 @@
+# Gemini Code Assist configuration for ha-mcp
+
+# Enable persistent memory to improve responses over time
+memory_config:
+  disabled: false
+
+# Code review configuration
+code_review:
+  # Require MEDIUM severity or higher to post comments
+  # This ensures test coverage and security issues are surfaced
+  comment_severity_threshold: MEDIUM
+
+  # Limit comments to avoid overwhelming contributors
+  max_review_comments: 15
+
+  # Enable automated PR features
+  pull_request_opened:
+    summary: true          # Provide PR summary
+    code_review: true      # Perform code review
+    include_drafts: true   # Review draft PRs too
+
+# No playful elements in professional project
+have_fun: false
