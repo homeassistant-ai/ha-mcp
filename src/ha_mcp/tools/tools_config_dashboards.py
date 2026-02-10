@@ -917,6 +917,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 d.get("url_path") == url_path for d in existing_dashboards
             )
 
+            # The built-in default dashboard ("lovelace") is always present
+            # but isn't listed by lovelace/dashboards/list on fresh installs
+            if url_path == "lovelace":
+                dashboard_exists = True
+
             # If dashboard doesn't exist, create it
             dashboard_id = None
             if not dashboard_exists:
