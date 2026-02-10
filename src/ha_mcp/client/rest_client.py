@@ -864,7 +864,8 @@ class HomeAssistantClient:
                     return str(unique_id)
         except Exception:
             logger.debug(
-                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}"
+                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
+                exc_info=True # Log full traceback for better debugging
             )
         return bare_id
 
