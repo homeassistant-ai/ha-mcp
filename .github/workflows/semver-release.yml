@@ -55,9 +55,27 @@ jobs:
             echo "No releasable changes since $LATEST_TAG"
           fi
 
+  # Validate Docker build before committing to a release
+  validate-docker:
+    name: Validate Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build addon image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./homeassistant-addon/Dockerfile
+          push: false
+          platforms: linux/amd64
+
   # Semantic versioning and release creation
   semantic-release:
-    needs: check-changes
+    needs: [check-changes, validate-docker]
     if: needs.check-changes.outputs.has_changes == 'true'
     name: Semantic Release
     runs-on: ubuntu-latest
@@ -157,3 +175,14 @@ jobs:
       is_prerelease: false
     permissions:
       contents: write
+
+  # Build and push addon Docker images
+  build-addon:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    uses: ./.github/workflows/addon-publish.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
