@@ -95,6 +95,31 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _extract_blog_content(html: str) -> str:
+    """Extract the article body from an HA blog post as readable plain text.
+
+    Tries ``<article>`` first, then falls back to the content area between
+    the first heading and the Discourse comments / footer.
+    """
+    # Prefer <article> tag (contains only the post body)
+    article = re.search(r"<article[^>]*>(.*?)</article>", html, re.DOTALL)
+    if article:
+        return _strip_html(article.group(1))
+
+    # Fallback: content between first heading and discourse/footer
+    content = re.search(
+        r"(<h[12][^>]*>.*?)"
+        r'(?=<div[^>]*id="discourse|<footer[^>]*>|</body>)',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if content:
+        return _strip_html(content.group(1))
+
+    # Last resort: strip the whole page
+    return _strip_html(html)
+
+
 def _parse_breaking_changes_html(
     html: str, source_url: str
 ) -> dict[str, Any] | None:
@@ -172,13 +197,14 @@ def _parse_patch_breaking_changes(
     }
 
 
-async def _fetch_bc_for_version(
+async def _fetch_release_data_for_version(
     http_client: httpx.AsyncClient, version: str
 ) -> dict[str, Any] | None:
-    """Fetch breaking changes for a single HA Core version.
+    """Fetch release notes and breaking changes for a single HA Core version.
 
     For .0 (monthly) releases the GitHub release body is a blog URL; we fetch
-    the blog post and parse the 'Backward-incompatible changes' section.
+    the blog post, extract the full article text and parse the
+    'Backward-incompatible changes' section into structured entries.
 
     For patch releases the body is a changelog where some lines are tagged
     ``(breaking-change)``.
@@ -198,7 +224,15 @@ async def _fetch_bc_for_version(
         if body.startswith("https://www.home-assistant.io/blog/"):
             blog_resp = await http_client.get(body)
             if blog_resp.status_code == 200:
-                return _parse_breaking_changes_html(blog_resp.text, body)
+                blog_html = blog_resp.text
+                bc = _parse_breaking_changes_html(blog_html, body)
+                release_notes = _extract_blog_content(blog_html)
+                return {
+                    "entries": bc["entries"] if bc else [],
+                    "count": bc["count"] if bc else 0,
+                    "source_url": body,
+                    "release_notes": release_notes,
+                }
 
         # Patch releases: check inline (breaking-change) tags
         if "(breaking-change)" in body.lower():
@@ -206,20 +240,25 @@ async def _fetch_bc_for_version(
 
         return None
     except Exception as e:
-        logger.debug(f"Failed to fetch breaking changes for {version}: {e}")
+        logger.debug(f"Failed to fetch release data for {version}: {e}")
         return None
 
 
-async def _fetch_breaking_changes(
+async def _fetch_release_data(
     current_version: str, target_version: str
 ) -> dict[str, Any]:
-    """Fetch breaking changes for all monthly versions between current and target."""
+    """Fetch release notes and breaking changes for all monthly versions in range."""
     monthly_versions = _get_monthly_versions_between(
         current_version, target_version
     )
 
     if not monthly_versions:
-        return {"entries": [], "count": 0, "versions_checked": []}
+        return {
+            "entries": [],
+            "count": 0,
+            "versions_checked": [],
+            "release_notes": [],
+        }
 
     async with httpx.AsyncClient(
         timeout=20.0,
@@ -230,27 +269,47 @@ async def _fetch_breaking_changes(
         },
     ) as http_client:
         results = await asyncio.gather(
-            *[_fetch_bc_for_version(http_client, v) for v in monthly_versions],
+            *[
+                _fetch_release_data_for_version(http_client, v)
+                for v in monthly_versions
+            ],
             return_exceptions=True,
         )
 
     all_entries: list[dict[str, Any]] = []
     versions_checked: list[str] = []
     source_urls: list[str] = []
+    release_notes: list[dict[str, str]] = []
 
     for version, result in zip(monthly_versions, results, strict=True):
-        if isinstance(result, dict) and result.get("entries"):
-            versions_checked.append(version)
-            source_urls.append(result.get("source_url", ""))
-            for entry in result["entries"]:
-                entry_with_version: dict[str, Any] = {**entry, "version": version}
-                all_entries.append(entry_with_version)
+        if not isinstance(result, dict):
+            continue
+
+        versions_checked.append(version)
+        source_url = result.get("source_url", "")
+        if source_url:
+            source_urls.append(source_url)
+
+        # Collect structured breaking change entries
+        for entry in result.get("entries", []):
+            entry_with_version: dict[str, Any] = {**entry, "version": version}
+            all_entries.append(entry_with_version)
+
+        # Collect full release notes text
+        notes_text = result.get("release_notes", "")
+        if notes_text:
+            release_notes.append({
+                "version": version,
+                "content": notes_text,
+                "source_url": source_url,
+            })
 
     return {
         "entries": all_entries,
         "count": len(all_entries),
         "versions_checked": versions_checked,
         "source_urls": [u for u in source_urls if u],
+        "release_notes": release_notes,
     }
 
 
@@ -575,7 +634,8 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Category and installation status
 
         TIP: Before updating, use ha_check_breaking_changes() to assess impact.
-        It cross-references alerts and release notes with your installed integrations.
+        It fetches full release notes, breaking changes, and alerts, then
+        provides your installed integrations list for cross-referencing.
         """
         try:
             if entity_id is None:
@@ -620,25 +680,28 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Check for breaking changes before updating Home Assistant Core.
+        Check for changes that may affect the user before updating HA Core.
 
         Fetches the actual HA release blog posts for every monthly version
-        between the current installed version and the target, extracts the
-        "Backward-incompatible changes" section, and returns structured
-        entries with integration names and descriptions.
+        between the current installed version and the target. Returns:
 
-        Also fetches alerts from alerts.home-assistant.io and the list of
-        installed integrations so you can cross-reference which breaking
-        changes affect your setup.
+        1. Full release notes text for each version (feature changes,
+           integration additions/removals, behavior changes, deprecations,
+           renamed entities, UI changes — everything in the blog post).
+        2. Structured breaking_changes entries (parsed from the
+           "Backward-incompatible changes" section) for quick reference.
+        3. Active alerts from alerts.home-assistant.io filtered by relevance.
+        4. The user's installed integration domains for cross-referencing.
 
-        WORKFLOW: Call this before update.install to understand what may break.
+        WORKFLOW: Call this before update.install to understand the full
+        impact — not just breaking changes, but any change that may require
+        the user to adjust automations, dashboards, or integrations.
 
         RETURNS:
-        - current_version / latest_version: Version range being checked
+        - release_notes[]: Full text per version {version, content, source_url}
         - breaking_changes.entries[]: Each has integration, description, version
-        - breaking_changes.versions_checked: Which .0 releases were checked
-        - alerts.relevant: alerts.home-assistant.io alerts matching your integrations
-        - installed_integrations: Your integration domains (for cross-referencing)
+        - alerts.relevant: alerts matching your installed integrations
+        - installed_integrations: Your integration domains
         """
         try:
             # Step 1: Find core update entity and determine versions
@@ -679,15 +742,15 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ],
                 }
 
-            # Step 2: Fetch breaking changes, alerts, and integrations in parallel
+            # Step 2: Fetch release data, alerts, and integrations in parallel
             results = await asyncio.gather(
-                _fetch_breaking_changes(current_version, target_version),
+                _fetch_release_data(current_version, target_version),
                 _fetch_alerts(),
                 _get_installed_integration_domains(client),
                 return_exceptions=True,
             )
 
-            bc_data = results[0] if not isinstance(results[0], Exception) else {}
+            rd = results[0] if not isinstance(results[0], Exception) else {}
             alerts_data = results[1] if not isinstance(results[1], Exception) else []
             installed_domains = results[2] if not isinstance(results[2], Exception) else set()
 
@@ -716,18 +779,19 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Step 5: Build response
             sorted_domains = sorted(installed_domains) if isinstance(installed_domains, set) else []
-            bc_result = bc_data if isinstance(bc_data, dict) else {}
+            release_data = rd if isinstance(rd, dict) else {}
 
             response: dict[str, Any] = {
                 "success": True,
                 "current_version": current_version,
                 "latest_version": target_version,
                 "installed_integrations": sorted_domains,
+                "release_notes": release_data.get("release_notes", []),
                 "breaking_changes": {
-                    "entries": bc_result.get("entries", []),
-                    "count": bc_result.get("count", 0),
-                    "versions_checked": bc_result.get("versions_checked", []),
-                    "source_urls": bc_result.get("source_urls", []),
+                    "entries": release_data.get("entries", []),
+                    "count": release_data.get("count", 0),
+                    "versions_checked": release_data.get("versions_checked", []),
+                    "source_urls": release_data.get("source_urls", []),
                 },
                 "alerts": {
                     "relevant": filtered["relevant"],
@@ -737,28 +801,30 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             }
 
-            # Add raw_text fallback if blog parsing found text but no structured entries
-            if bc_result.get("raw_text") and not bc_result.get("entries"):
-                response["breaking_changes"]["raw_text"] = bc_result["raw_text"]
-
-            # Warnings
-            bc_count = bc_result.get("count", 0)
+            # Summary
+            notes_count = len(release_data.get("release_notes", []))
+            bc_count = release_data.get("count", 0)
             alert_count = len(filtered["relevant"])
-            warnings: list[str] = []
+            hints: list[str] = []
+            if notes_count:
+                hints.append(
+                    f"Full release notes included for {notes_count} version(s). "
+                    "Review for feature changes, deprecations, integration "
+                    "additions/removals, and behavior changes."
+                )
             if bc_count:
-                warnings.append(
-                    f"{bc_count} breaking change(s) found across "
-                    f"{len(bc_result.get('versions_checked', []))} release(s). "
-                    "Cross-reference with installed_integrations to assess impact."
+                hints.append(
+                    f"{bc_count} explicit breaking change(s) found. "
+                    "See breaking_changes.entries for structured details."
                 )
             if alert_count:
-                warnings.append(
+                hints.append(
                     f"{alert_count} alert(s) affect integrations you have installed."
                 )
-            if not bc_count and not alert_count:
-                response["message"] = "No breaking changes or relevant alerts found."
-            if warnings:
-                response["warnings"] = warnings
+            if not notes_count and not bc_count and not alert_count:
+                response["message"] = "No release data or relevant alerts found."
+            if hints:
+                response["hints"] = hints
 
             return response
 

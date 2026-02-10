@@ -3,6 +3,7 @@
 
 from ha_mcp.tools.tools_updates import (
     _categorize_update,
+    _extract_blog_content,
     _filter_alerts,
     _get_monthly_versions_between,
     _parse_breaking_changes_html,
@@ -254,6 +255,40 @@ class TestStripHtml:
     def test_no_html(self):
         """Plain text passes through unchanged."""
         assert _strip_html("just plain text") == "just plain text"
+
+
+class TestExtractBlogContent:
+    """Test _extract_blog_content function."""
+
+    def test_extracts_article_content(self):
+        """Extracts content from article tag."""
+        html = (
+            "<nav>Navigation</nav>"
+            "<article><h2>Release 2026.2</h2><p>Great stuff</p></article>"
+            "<footer>Footer</footer>"
+        )
+        result = _extract_blog_content(html)
+        assert "Great stuff" in result
+        assert "Navigation" not in result
+        assert "Footer" not in result
+
+    def test_fallback_to_heading_content(self):
+        """Falls back to content between heading and footer when no article tag."""
+        html = (
+            "<div>Nav</div>"
+            "<h1>Release</h1><p>Content here</p>"
+            '<footer class="site-footer">Footer</footer>'
+        )
+        result = _extract_blog_content(html)
+        assert "Content here" in result
+
+    def test_strips_html_tags(self):
+        """Result is plain text with no HTML tags."""
+        html = "<article><h2>Title</h2><p><b>Bold</b> text</p></article>"
+        result = _extract_blog_content(html)
+        assert "<" not in result
+        assert "Bold" in result
+        assert "text" in result
 
 
 class TestParseBreakingChangesHtml:
