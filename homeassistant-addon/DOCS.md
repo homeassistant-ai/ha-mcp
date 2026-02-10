@@ -323,6 +323,7 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - `ha_check_config`, `ha_restart`, `ha_reload_core`
 - `ha_get_system_info`, `ha_get_system_health`
 - `ha_get_updates` - List updates or get details for a specific update entity
+- `ha_check_update_notes` - Review release notes and breaking changes before updating HA Core
 
 ### Blueprints
 - `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint`
