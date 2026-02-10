@@ -831,18 +831,57 @@ class HomeAssistantClient:
                 "template": message.get("template"),
             }
 
+    async def _resolve_script_id(self, identifier: str) -> str:
+        """
+        Resolve a script identifier to its storage key via the entity registry.
+
+        Scripts may be renamed in the HA UI, changing the entity_id but keeping
+        the original storage key. This method looks up the entity registry via
+        WebSocket to find the actual storage key (unique_id).
+
+        Unlike automations (which expose their storage key in state attributes),
+        scripts require a WebSocket entity registry lookup.
+
+        Args:
+            identifier: Script ID (with or without 'script.' prefix)
+
+        Returns:
+            The storage key for the configuration API
+        """
+        bare_id = identifier.removeprefix("script.")
+        entity_id = f"script.{bare_id}"
+        try:
+            result = await self.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": entity_id}
+            )
+            if result.get("success") is not False:
+                unique_id = result.get("result", {}).get("unique_id")
+                if unique_id:
+                    if unique_id != bare_id:
+                        logger.debug(
+                            f"Resolved script entity_id {entity_id} to storage key {unique_id}"
+                        )
+                    return str(unique_id)
+        except Exception:
+            logger.debug(
+                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}"
+            )
+        return bare_id
+
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
         """Get Home Assistant script configuration by script_id."""
+        resolved_id = await self._resolve_script_id(script_id)
         try:
-            endpoint = f"config/script/config/{script_id}"
+            endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("GET", endpoint)
 
-            return {"success": True, "script_id": script_id, "config": response}
+            return {"success": True, "script_id": resolved_id, "config": response}
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                raise HomeAssistantAPIError(
-                    f"Script not found: {script_id}", status_code=404
-                ) from e
+                msg = f"Script not found: {script_id}"
+                if resolved_id != script_id:
+                    msg += f" (resolved storage key: {resolved_id})"
+                raise HomeAssistantAPIError(msg, status_code=404) from e
             raise
         except Exception as e:
             logger.error(f"Failed to get script config for {script_id}: {e}")
@@ -852,8 +891,9 @@ class HomeAssistantClient:
         self, config: dict[str, Any], script_id: str
     ) -> dict[str, Any]:
         """Create or update Home Assistant script configuration."""
+        resolved_id = await self._resolve_script_id(script_id)
         try:
-            endpoint = f"config/script/config/{script_id}"
+            endpoint = f"config/script/config/{resolved_id}"
 
             # Validate required fields
             if "alias" not in config:
@@ -870,7 +910,7 @@ class HomeAssistantClient:
 
             return {
                 "success": True,
-                "script_id": script_id,
+                "script_id": resolved_id,
                 "result": response.get("result", "ok"),
                 "operation": "created" if response.get("result") == "ok" else "updated",
             }
@@ -880,21 +920,23 @@ class HomeAssistantClient:
 
     async def delete_script_config(self, script_id: str) -> dict[str, Any]:
         """Delete Home Assistant script configuration."""
+        resolved_id = await self._resolve_script_id(script_id)
         try:
-            endpoint = f"config/script/config/{script_id}"
+            endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)
 
             return {
                 "success": True,
-                "script_id": script_id,
+                "script_id": resolved_id,
                 "result": response.get("result", "ok"),
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                raise HomeAssistantAPIError(
-                    f"Script not found: {script_id}", status_code=404
-                ) from e
+                msg = f"Script not found: {script_id}"
+                if resolved_id != script_id:
+                    msg += f" (resolved storage key: {resolved_id})"
+                raise HomeAssistantAPIError(msg, status_code=404) from e
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
                     f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked. "
