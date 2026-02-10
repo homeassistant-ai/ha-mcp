@@ -13,6 +13,7 @@ from typing import Annotated, Any
 import httpx
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 from .util_helpers import coerce_bool_param
 
@@ -150,7 +151,7 @@ async def _fetch_release_data_for_version(
         if "(breaking-change)" in body.lower():
             return _parse_patch_breaking_changes(body, version)
         return None
-    except Exception as e:
+    except (httpx.RequestError, ValueError, KeyError) as e:
         logger.debug(f"Failed to fetch release data for {version}: {e}")
         return None
 
@@ -198,7 +199,7 @@ async def _get_installed_integration_domains(client: Any) -> set[str]:
         if isinstance(entries, list):
             return {e.get("domain", "") for e in entries} - {""}
         return set()
-    except Exception:
+    except (httpx.RequestError, ValueError, KeyError):
         return set()
 
 
@@ -494,11 +495,11 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     break
 
             if not current_version:
-                return {
-                    "success": False,
-                    "error": "Could not determine current HA Core version",
-                    "suggestions": ["Ensure Home Assistant Core update entity exists"],
-                }
+                return create_error_response(
+                    code=ErrorCode.ENTITY_NOT_FOUND,
+                    message="Could not determine current HA Core version",
+                    suggestions=["Ensure Home Assistant Core update entity exists"],
+                )
 
             if not target_version:
                 return {
@@ -530,13 +531,18 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             }
 
-        except Exception as e:
+        except (httpx.RequestError, ValueError, KeyError) as e:
             logger.error(f"Failed to check update notes: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to check update notes: {e}",
-                "suggestions": ["Check Home Assistant connection"],
-            }
+            return create_error_response(
+                code=ErrorCode.CONNECTION_FAILED,
+                message=f"Failed to check update notes: {e}",
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error checking update notes: {e}")
+            return create_error_response(
+                code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error checking update notes: {e}",
+            )
 
 
 def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
