@@ -584,7 +584,7 @@ def register_search_tools(mcp, client, **kwargs):
         parsed_search_types = parse_string_list_param(search_types, "search_types")
         try:
             result = await smart_tools.deep_search(query, parsed_search_types, limit)
-            return await add_timezone_metadata(client, cast(dict[str, Any], result))
+            return cast(dict[str, Any], result)
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
