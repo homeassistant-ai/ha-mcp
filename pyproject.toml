@@ -172,6 +172,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
+    "pre-commit>=4.0.0",
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
 ]
