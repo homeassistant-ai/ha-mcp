@@ -818,6 +818,25 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 
 **HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
 
+**E2E tests: poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
+```python
+from ..utilities.wait_helpers import wait_for_tool_result
+
+# BAD: entity may not be registered yet
+create_result = await mcp_client.call_tool("ha_config_set_automation", {"config": config})
+result = await mcp_client.call_tool("ha_deep_search", {"query": "my_sensor"})  # may return empty
+
+# GOOD: poll until the entity appears in results
+data = await wait_for_tool_result(
+    mcp_client,
+    tool_name="ha_deep_search",
+    arguments={"query": "my_sensor", "search_types": ["automation"], "limit": 10},
+    predicate=lambda d: len(d.get("automations", [])) > 0,
+    description="deep search finds new automation",
+)
+```
+Other available helpers: `wait_for_entity_state()`, `wait_for_entity_attribute()`, `wait_for_condition()`. See `wait_helpers.py` for the full set.
+
 ## Release Process
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
