@@ -3,6 +3,14 @@
 <!-- version list -->
 
 
+## v6.6.1 (2026-02-10)
+
+### Fixed
+
+- Sync uv.lock with v6.6.0 version bump (#594)
+  ([#599](https://github.com/homeassistant-ai/ha-mcp/pull/599))
+
+
 ## v6.6.0 (2026-02-10)
 
 ### Added

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "6.6.0"
+version = "6.6.1"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -185,7 +185,8 @@ version_variables = [
 build_command = """
 VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = \"\\(.*\\)\"/\\1/')
 sed -i "s/^version: \\\".*\\\"/version: \\\"$VERSION\\\"/" homeassistant-addon/config.yaml
-git add homeassistant-addon/config.yaml
+pip install uv && uv lock
+git add homeassistant-addon/config.yaml uv.lock
 """
 dist_path = "dist/"
 upload_to_PyPI = true
