@@ -186,3 +186,36 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+  # Update addon config.yaml after images are published
+  update-addon-config:
+    needs: [semantic-release, build-addon]
+    if: needs.semantic-release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Update config.yaml with release version
+        run: |
+          VERSION="${{ needs.semantic-release.outputs.version }}"
+          echo "Updating addon config.yaml to version $VERSION"
+
+          sed -i "s/^version: .*/version: \"$VERSION\"/" homeassistant-addon/config.yaml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add homeassistant-addon/config.yaml
+
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to config.yaml, skipping commit"
+          else
+            git commit -m "chore(addon): publish version $VERSION [skip ci]"
+            git push
+            echo "✓ Updated addon config.yaml to $VERSION"
+          fi

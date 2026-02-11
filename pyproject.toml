@@ -183,10 +183,8 @@ version_variables = [
     "src/ha_mcp/__init__.py:__version__",
 ]
 build_command = """
-VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = \"\\(.*\\)\"/\\1/')
-sed -i "s/^version: \\\".*\\\"/version: \\\"$VERSION\\\"/" homeassistant-addon/config.yaml
 pip install uv && uv lock
-git add homeassistant-addon/config.yaml uv.lock
+git add uv.lock
 """
 dist_path = "dist/"
 upload_to_PyPI = true
