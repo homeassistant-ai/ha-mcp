@@ -3,6 +3,92 @@
 <!-- version list -->
 
 
+## v6.6.1 (2026-02-10)
+
+### Fixed
+
+- Sync uv.lock with v6.6.0 version bump (#594)
+  ([#599](https://github.com/homeassistant-ai/ha-mcp/pull/599))
+
+
+## v6.6.0 (2026-02-10)
+
+### Added
+
+- Add human-readable timestamps to logs, apply ruff fixes (#574)
+  ([#580](https://github.com/homeassistant-ai/ha-mcp/pull/580))
+- Add Gemini Code Assist configuration and update documentation
+  ([#582](https://github.com/homeassistant-ai/ha-mcp/pull/582))
+- Add contrib-pr-review skill for external contribution review
+  ([`0618bf9`](https://github.com/homeassistant-ai/ha-mcp/commit/0618bf9270b9db944b4a0a52ca2ae28e7af61e1d))
+- Add aggregate stats to BAT summary for branch comparison
+  ([`8fe8ab8`](https://github.com/homeassistant-ai/ha-mcp/commit/8fe8ab815ae7a62ce0418d81860f5f5fc8f1b479))
+- Add /bat skill for bot acceptance testing
+  ([`906e22f`](https://github.com/homeassistant-ai/ha-mcp/commit/906e22f076ed0b310e2d06343b08296a3ee65cd1))
+- Add UAT framework for agent-driven acceptance testing
+  ([`b561ad4`](https://github.com/homeassistant-ai/ha-mcp/commit/b561ad447cb3b780715899bac8ae9ea6220e57ad))
+- Add domain filter and options support to ha_get_integration
+  ([#542](https://github.com/homeassistant-ai/ha-mcp/pull/542))
+
+### Changed
+
+- Add comment formatting guidelines to contrib-pr-review
+  ([`c014e8a`](https://github.com/homeassistant-ai/ha-mcp/commit/c014e8a08be26421d55e00299648b68f7689d1fb))
+- Add contrib-pr-review skill to AGENTS.md
+  ([`4aa29c3`](https://github.com/homeassistant-ai/ha-mcp/commit/4aa29c3662942c005336288613a207177091b2c7))
+- Add warning to review PRs sequentially, not in parallel
+  ([`d69c576`](https://github.com/homeassistant-ai/ha-mcp/commit/d69c576c09b2214a6c5fbf6112bfccfb3d7bd4ae))
+
+### Fixed
+
+- Address review comments on UAT runner
+  ([`6a2bf04`](https://github.com/homeassistant-ai/ha-mcp/commit/6a2bf0430261e6a07b0738e3a5e98532bccfb636))
+- Handle service call timeouts gracefully and add missing @log_tool usage (fixes #550)
+  ([#555](https://github.com/homeassistant-ai/ha-mcp/pull/555))
+- Optimize Dockerfiles with multi-stage builds
+  ([#546](https://github.com/homeassistant-ai/ha-mcp/pull/546))
+
+### Performance Improvements
+
+- Run agents sequentially instead of in parallel
+  ([`b3032f4`](https://github.com/homeassistant-ai/ha-mcp/commit/b3032f4fb745516e184ee2278cd900b440afd964))
+
+### Refactoring
+
+- Rename pr-checker to my-pr-checker for clarity
+  ([`a02533c`](https://github.com/homeassistant-ai/ha-mcp/commit/a02533c16a1b7ea8f4f3f0f51cd949f0b1bc01a3))
+- Rename UAT to BAT and add progressive disclosure output
+  ([`8a6d43e`](https://github.com/homeassistant-ai/ha-mcp/commit/8a6d43e9cd2e20a3d7ca6fbd1be5b986901bd8cf))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Changed
+
+- Clarify worktree workflow and symlink convention in AGENTS.md
+  ([`9946be5`](https://github.com/homeassistant-ai/ha-mcp/commit/9946be57ee69a267054a7ac31ffb6b408cc3a99b))
+- Restructure worktree workflow and documentation
+  ([#547](https://github.com/homeassistant-ai/ha-mcp/pull/547))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv
+  ([#535](https://github.com/homeassistant-ai/ha-mcp/pull/535))
+
+### Chores
+
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026
+  ([#508](https://github.com/homeassistant-ai/ha-mcp/pull/508))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.2.6 to 46.0.1
+  ([#536](https://github.com/homeassistant-ai/ha-mcp/pull/536))
+</details>
+
+
 ## v6.5.0 (2026-02-03)
 
 ### Added
