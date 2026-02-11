@@ -195,12 +195,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Generate GitHub App token with bypass permissions
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        continue-on-error: true
+
       - uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Update config.yaml with release version
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.semantic-release.outputs.version }}"
           echo "Updating addon config.yaml to version $VERSION"
