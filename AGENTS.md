@@ -619,7 +619,7 @@ return create_entity_not_found_error(entity_id, details=str(e))
 return create_validation_error("Invalid format", parameter="entity_ids", details=str(e))
 
 # Service call failures
-return create_service_error(domain, service, details=str(e))
+return create_service_error(domain, service, message=f"Service call failed: {e}", details=str(e))
 ```
 
 Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.

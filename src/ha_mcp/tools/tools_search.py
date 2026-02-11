@@ -587,6 +587,7 @@ def register_search_tools(mcp, client, **kwargs):
             result = await smart_tools.deep_search(query, parsed_search_types, limit)
             return cast(dict[str, Any], result)
         except Exception as e:
+            logger.error(f"Deep search failed for query '{query}': {e}", exc_info=True)
             error_response = exception_to_structured_error(
                 e,
                 context={
@@ -706,31 +707,25 @@ def register_search_tools(mcp, client, **kwargs):
             )
 
         # Deduplicate while preserving order
-        seen: set[str] = set()
-        unique_ids: list[str] = []
-        for eid in entity_ids:
-            if eid not in seen:
-                seen.add(eid)
-                unique_ids.append(eid)
+        unique_ids = list(dict.fromkeys(entity_ids))
         if len(unique_ids) < len(entity_ids):
             logger.debug(
                 f"Deduplicated entity_ids: {len(entity_ids)} -> {len(unique_ids)}"
             )
 
         try:
-
             async def _fetch_state(entity_id: str) -> dict[str, Any]:
-                """Fetch state for a single entity, returning a result dict."""
                 try:
                     state = await client.get_entity_state(entity_id)
                     return {"success": True, "entity_id": entity_id, "state": state}
                 except Exception as e:
+                    logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
                     return exception_to_structured_error(
                         e, context={"entity_id": entity_id}
                     )
 
             results = await asyncio.gather(
-                *[_fetch_state(eid) for eid in unique_ids],
+                *(_fetch_state(eid) for eid in unique_ids)
             )
 
             states: dict[str, Any] = {}
@@ -740,9 +735,12 @@ def register_search_tools(mcp, client, **kwargs):
                 if result.get("success") is True and "state" in result:
                     states[eid] = result["state"]
                 else:
+                    error_detail = result.get("error")
+                    if error_detail is None:
+                        error_detail = {"code": "INTERNAL_ERROR", "message": "Unknown error"}
                     errors.append({
                         "entity_id": result.get("entity_id", eid),
-                        "error": result.get("error", "Unknown error"),
+                        "error": error_detail,
                     })
 
             response: dict[str, Any] = {
@@ -764,7 +762,7 @@ def register_search_tools(mcp, client, **kwargs):
             return await add_timezone_metadata(client, response)
 
         except Exception as e:
-            logger.error(f"Error getting bulk states: {e}")
+            logger.error(f"Error getting bulk states: {e}", exc_info=True)
             error_response = exception_to_structured_error(
                 e, context={"entity_ids": entity_ids}
             )
