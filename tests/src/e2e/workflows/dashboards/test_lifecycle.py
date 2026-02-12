@@ -51,7 +51,9 @@ def parse_mcp_result(result) -> dict[str, Any]:
                     return {"raw_response": response_text, "parse_error": True}
 
         return {
-            "content": str(result.content[0]) if hasattr(result, "content") else str(result)
+            "content": str(result.content[0])
+            if hasattr(result, "content")
+            else str(result)
         }
     except Exception as e:
         logger.warning(f"Failed to parse MCP result: {e}")
@@ -76,14 +78,20 @@ class TestDashboardLifecycle:
                 "icon": "mdi:test-tube",
                 "config": {
                     "views": [
-                        {"title": "Test View", "cards": [{"type": "markdown", "content": "Test"}]}
+                        {
+                            "title": "Test View",
+                            "cards": [{"type": "markdown", "content": "Test"}],
+                        }
                     ]
                 },
             },
         )
         assert create_data["success"] is True
         assert create_data["action"] in ["create", "set"]
-        assert create_data.get("dashboard_created") is True or create_data.get("action") == "create"
+        assert (
+            create_data.get("dashboard_created") is True
+            or create_data.get("action") == "create"
+        )
 
         # Extract dashboard ID for later operations
         dashboard_id = create_data.get("dashboard_id")
@@ -93,10 +101,13 @@ class TestDashboardLifecycle:
 
         # 2. List dashboards - verify exists
         logger.info("Listing dashboards...")
-        list_data = await mcp.call_tool_success("ha_config_get_dashboard", {"list_only": True})
+        list_data = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"list_only": True}
+        )
         assert list_data["success"] is True
         assert any(
-            d.get("url_path") == "test-e2e-dashboard" for d in list_data.get("dashboards", [])
+            d.get("url_path") == "test-e2e-dashboard"
+            for d in list_data.get("dashboards", [])
         )
 
         # 3. Get dashboard config
@@ -145,7 +156,9 @@ class TestDashboardLifecycle:
         assert delete_data["success"] is True
 
         # 7. Verify deletion
-        list_after_data = await mcp.call_tool_success("ha_config_get_dashboard", {"list_only": True})
+        list_after_data = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"list_only": True}
+        )
         assert not any(
             d.get("url_path") == "test-e2e-dashboard"
             for d in list_after_data.get("dashboards", [])
@@ -171,9 +184,10 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-
         # Verify it exists
-        list_data = await mcp.call_tool_success("ha_config_get_dashboard", {"list_only": True})
+        list_data = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"list_only": True}
+        )
         assert any(
             d.get("url_path") == "test-strategy-dashboard"
             for d in list_data.get("dashboards", [])
@@ -187,10 +201,34 @@ class TestDashboardLifecycle:
         logger.info("Strategy-based dashboard test completed successfully")
 
     async def test_url_path_validation(self, mcp_client):
-        """Test that url_path must contain hyphen."""
-        logger.info("Starting url_path validation test")
+        """Test that 'lovelace' and 'default' are not rejected by hyphen validation (#591)."""
+        logger.info("Starting default dashboard hyphen validation test")
 
-        # Try to create dashboard without hyphen
+        # "lovelace" should NOT be rejected by the hyphen validation
+        # (it may fail for other reasons on fresh HA, but not the hyphen check)
+        result = await mcp_client.call_tool(
+            "ha_config_set_dashboard",
+            {"url_path": "lovelace", "title": "Default Dashboard"},
+        )
+        data = parse_mcp_result(result)
+        # The key assertion: error must NOT be about hyphens
+        if not data.get("success", False):
+            assert "hyphen" not in data.get("error", "").lower(), (
+                f"'lovelace' should not be rejected by hyphen validation, got: {data['error']}"
+            )
+
+        # "default" alias should also not be rejected by hyphen validation
+        result = await mcp_client.call_tool(
+            "ha_config_set_dashboard",
+            {"url_path": "default", "title": "Default Dashboard"},
+        )
+        data = parse_mcp_result(result)
+        if not data.get("success", False):
+            assert "hyphen" not in data.get("error", "").lower(), (
+                f"'default' should not be rejected by hyphen validation, got: {data['error']}"
+            )
+
+        # "nodash" (non-existent, no hyphen) SHOULD still be rejected
         result = await mcp_client.call_tool(
             "ha_config_set_dashboard",
             {"url_path": "nodash", "title": "Invalid Dashboard"},
@@ -199,7 +237,7 @@ class TestDashboardLifecycle:
         assert data["success"] is False
         assert "hyphen" in data.get("error", "").lower()
 
-        logger.info("url_path validation test completed successfully")
+        logger.info("Default dashboard hyphen validation test completed successfully")
 
     async def test_partial_metadata_update(self, mcp_client):
         """Test updating only some metadata fields."""
@@ -213,7 +251,6 @@ class TestDashboardLifecycle:
         )
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
-
 
         # Update only title
         meta_data = await mcp.call_tool_success(
@@ -244,10 +281,14 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-
         # Verify it exists
-        list_data = await mcp.call_tool_success("ha_config_get_dashboard", {"list_only": True})
-        assert any(d.get("url_path") == "test-no-config" for d in list_data.get("dashboards", []))
+        list_data = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"list_only": True}
+        )
+        assert any(
+            d.get("url_path") == "test-no-config"
+            for d in list_data.get("dashboards", [])
+        )
 
         # Cleanup
         await mcp.call_tool_success(
@@ -292,7 +333,8 @@ class TestDashboardErrorHandling:
         logger.info("Starting delete nonexistent dashboard test")
 
         result = await mcp_client.call_tool(
-            "ha_config_delete_dashboard", {"dashboard_id": "nonexistent-dashboard-67890"}
+            "ha_config_delete_dashboard",
+            {"dashboard_id": "nonexistent-dashboard-67890"},
         )
         data = parse_mcp_result(result)
         # Home Assistant handles delete as idempotent - deleting nonexistent item succeeds
@@ -319,7 +361,7 @@ class TestDashboardDocumentationTools:
 
         # Verify guide contains key sections
         guide_content = data["guide"]
-        assert "url_path MUST contain hyphen" in guide_content
+        assert "url_path must contain hyphen" in guide_content.lower()
         assert "Dashboard Structure" in guide_content
         assert "Card Categories" in guide_content
 
@@ -362,7 +404,9 @@ class TestDashboardDocumentationTools:
         logger.info("ha_get_card_documentation (invalid) test passed")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="jq library not available on Windows")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="jq library not available on Windows"
+)
 class TestJqTransformAndFindCard:
     """E2E tests for jq_transform and ha_dashboard_find_card."""
 
@@ -382,8 +426,12 @@ class TestJqTransformAndFindCard:
                         {
                             "title": "Test View",
                             "cards": [
-                                {"type": "tile", "entity": "sensor.temperature", "icon": "mdi:old"},
-                            ]
+                                {
+                                    "type": "tile",
+                                    "entity": "sensor.temperature",
+                                    "icon": "mdi:old",
+                                },
+                            ],
                         }
                     ]
                 },
@@ -416,7 +464,10 @@ class TestJqTransformAndFindCard:
                 "ha_config_get_dashboard",
                 {"url_path": "test-jq-update"},
             )
-            assert verify_result["config"]["views"][0]["cards"][0]["icon"] == "mdi:thermometer"
+            assert (
+                verify_result["config"]["views"][0]["cards"][0]["icon"]
+                == "mdi:thermometer"
+            )
 
             logger.info("jq_transform update field test passed")
 
@@ -443,7 +494,7 @@ class TestJqTransformAndFindCard:
                             "title": "Test View",
                             "cards": [
                                 {"type": "tile", "entity": "sensor.temperature"},
-                            ]
+                            ],
                         }
                     ]
                 },
@@ -482,7 +533,7 @@ class TestJqTransformAndFindCard:
                 {
                     "url_path": "test-jq-ops",
                     "config_hash": config_hash,
-                    "jq_transform": 'del(.views[0].cards[0])',
+                    "jq_transform": "del(.views[0].cards[0])",
                 },
             )
             assert delete_result["success"] is True
@@ -518,7 +569,7 @@ class TestJqTransformAndFindCard:
                     "views": [
                         {
                             "title": "Test View",
-                            "cards": [{"type": "tile", "entity": "sensor.temperature"}]
+                            "cards": [{"type": "tile", "entity": "sensor.temperature"}],
                         }
                     ]
                 },
@@ -542,7 +593,7 @@ class TestJqTransformAndFindCard:
                         "views": [
                             {
                                 "title": "Modified View",
-                                "cards": [{"type": "markdown", "content": "Changed"}]
+                                "cards": [{"type": "markdown", "content": "Changed"}],
                             }
                         ]
                     },
@@ -560,7 +611,10 @@ class TestJqTransformAndFindCard:
             )
             parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert "conflict" in parsed["error"].lower() or "modified" in parsed["error"].lower()
+            assert (
+                "conflict" in parsed["error"].lower()
+                or "modified" in parsed["error"].lower()
+            )
 
             logger.info("config_hash validation test passed")
 
@@ -626,11 +680,14 @@ class TestJqTransformAndFindCard:
                                 {
                                     "title": "Section 1",
                                     "cards": [
-                                        {"type": "tile", "entity": "sensor.temperature"},
+                                        {
+                                            "type": "tile",
+                                            "entity": "sensor.temperature",
+                                        },
                                         {"type": "tile", "entity": "sensor.humidity"},
-                                    ]
+                                    ],
                                 }
-                            ]
+                            ],
                         }
                     ]
                 },
@@ -727,8 +784,16 @@ class TestJqTransformAndFindCard:
                     "views": [
                         {
                             "cards": [
-                                {"type": "tile", "entity": "light.living_room", "icon": "mdi:lamp"},
-                                {"type": "tile", "entity": "light.bedroom", "icon": "mdi:bed"},
+                                {
+                                    "type": "tile",
+                                    "entity": "light.living_room",
+                                    "icon": "mdi:lamp",
+                                },
+                                {
+                                    "type": "tile",
+                                    "entity": "light.bedroom",
+                                    "icon": "mdi:bed",
+                                },
                             ]
                         }
                     ]
@@ -767,7 +832,10 @@ class TestJqTransformAndFindCard:
                 "ha_config_get_dashboard",
                 {"url_path": "test-workflow"},
             )
-            assert verify_result["config"]["views"][0]["cards"][1]["icon"] == "mdi:lightbulb"
+            assert (
+                verify_result["config"]["views"][0]["cards"][1]["icon"]
+                == "mdi:lightbulb"
+            )
 
             logger.info("find_card + jq_transform workflow test passed")
 
