@@ -6,6 +6,7 @@ import logging
 
 import pytest
 from ..utilities.assertions import assert_mcp_success
+from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +42,19 @@ async def test_deep_search_automation(mcp_client):
     create_data = assert_mcp_success(create_result, "Create test automation")
     logger.info(f"✅ Created automation: {create_data}")
 
-    # Wait for entity to register in HA before searching
-
     try:
-        # Test: Search for the sensor entity mentioned in the trigger
-        result = await mcp_client.call_tool(
-            "ha_deep_search",
-            {
+        # Poll until HA registers the automation and deep search can find it
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
                 "query": "deep_search_test_sensor",
                 "search_types": ["automation"],
                 "limit": 10,
             },
+            predicate=lambda d: len(d.get("automations", [])) > 0,
+            description="deep search finds test automation",
         )
-        data = assert_mcp_success(result, "Deep search for sensor in automation")
 
         # Verify we found the automation
         automations = data.get("automations", [])
@@ -123,19 +124,19 @@ async def test_deep_search_script(mcp_client):
     create_data = assert_mcp_success(create_result, "Create test script")
     logger.info(f"✅ Created script: {create_data}")
 
-    # Wait for entity to register in HA before searching
-
     try:
-        # Test: Search for the unique message in the script
-        result = await mcp_client.call_tool(
-            "ha_deep_search",
-            {
+        # Poll until HA registers the script and deep search can find it
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
                 "query": "deep_search_unique_message",
                 "search_types": ["script"],
                 "limit": 10,
             },
+            predicate=lambda d: len(d.get("scripts", [])) > 0,
+            description="deep search finds test script",
         )
-        data = assert_mcp_success(result, "Deep search for message in script")
 
         # Verify we found the script
         scripts = data.get("scripts", [])
@@ -199,19 +200,19 @@ async def test_deep_search_helper(mcp_client):
     create_data = assert_mcp_success(create_result, "Create test helper")
     logger.info(f"✅ Created helper: {create_data}")
 
-    # Wait for entity to register in HA before searching
-
     try:
-        # Test: Search for the unique option in the helper
-        result = await mcp_client.call_tool(
-            "ha_deep_search",
-            {
+        # Poll until HA registers the helper and deep search can find it
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
                 "query": "deep_search_option_a",
                 "search_types": ["helper"],
                 "limit": 10,
             },
+            predicate=lambda d: len(d.get("helpers", [])) > 0,
+            description="deep search finds test helper",
         )
-        data = assert_mcp_success(result, "Deep search for option in helper")
 
         # Verify we found the helper
         helpers = data.get("helpers", [])
