@@ -32,8 +32,8 @@ jobs:
           # Extract PR number from commit message
           # GitHub merge commits have format: "Merge pull request #123 from user/branch"
           # GitHub squash merges have format: "Title with (#123)" in first line
-          # Take only the first match to avoid capturing PR references in the title
-          PR_NUM=$(echo "$COMMIT_MSG" | head -1 | grep -oP '(?:Merge pull request #|[[(]#)\K\d+' | head -1 || echo "")
+          # When multiple PR references exist like "(#591) (#592)", the last one is the merged PR
+          PR_NUM=$(echo "$COMMIT_MSG" | head -1 | grep -oP '(?:Merge pull request #|[[(]#)\K\d+' | tail -1 || echo "")
 
           if [ -z "$PR_NUM" ]; then
             echo "No PR number found in commit message. Skipping notification."
