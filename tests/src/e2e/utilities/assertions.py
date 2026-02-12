@@ -14,6 +14,17 @@ from fastmcp.exceptions import ToolError
 logger = logging.getLogger(__name__)
 
 
+def _extract_error_message(data: dict[str, Any]) -> str:
+    """Extract error message string from a failure result dict.
+
+    Handles both string errors and dict errors with a 'message' key.
+    """
+    error_obj = data.get("error", "")
+    if isinstance(error_obj, dict):
+        return str(error_obj.get("message", ""))
+    return str(error_obj)
+
+
 def parse_mcp_result(result) -> dict[str, Any]:
     """Parse MCP tool result from FastMCP client response.
 
@@ -158,13 +169,7 @@ def assert_mcp_failure(
 
     # If expected error specified, check for it
     if expected_error:
-        # Error can be a string or a dict with 'message' key
-        error_obj = data.get("error", "")
-        if isinstance(error_obj, dict):
-            error_msg = str(error_obj.get("message", ""))
-        else:
-            error_msg = str(error_obj)
-
+        error_msg = _extract_error_message(data)
         if expected_error.lower() not in error_msg.lower():
             raise AssertionError(
                 f"{operation_name} failed but error message doesn't contain '{expected_error}'. "
@@ -480,11 +485,7 @@ class MCPAssertions:
                 ) from exc
             # Check expected error if specified
             if expected_error:
-                error_obj = data.get("error", "")
-                if isinstance(error_obj, dict):
-                    error_msg = str(error_obj.get("message", ""))
-                else:
-                    error_msg = str(error_obj)
+                error_msg = _extract_error_message(data)
                 if expected_error.lower() not in error_msg.lower():
                     raise AssertionError(
                         f"{operation_name} failed but error message doesn't contain "
