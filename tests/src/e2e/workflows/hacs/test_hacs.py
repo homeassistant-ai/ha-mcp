@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -373,11 +373,12 @@ class TestHacsRepositoryInfo:
         """
         logger.info("Testing ha_hacs_repository_info with nonexistent repo...")
 
-        result = await mcp_client.call_tool(
+        parsed = await safe_call_tool(
+            mcp_client,
             "ha_hacs_repository_info",
-            {"repository_id": "nonexistent/repo12345"}
+            {"repository_id": "nonexistent/repo12345"},
         )
-        data = extract_hacs_data(result)
+        data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -464,11 +465,12 @@ class TestHacsWriteOperations:
         """
         logger.info("Testing ha_hacs_add_repository with invalid format...")
 
-        result = await mcp_client.call_tool(
+        parsed = await safe_call_tool(
+            mcp_client,
             "ha_hacs_add_repository",
-            {"repository": "invalid-format-no-slash", "category": "integration"}
+            {"repository": "invalid-format-no-slash", "category": "integration"},
         )
-        data = extract_hacs_data(result)
+        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -490,11 +492,12 @@ class TestHacsWriteOperations:
         """
         logger.info("Testing ha_hacs_download with nonexistent repo...")
 
-        result = await mcp_client.call_tool(
+        parsed = await safe_call_tool(
+            mcp_client,
             "ha_hacs_download",
-            {"repository_id": "nonexistent/fake-repo-12345"}
+            {"repository_id": "nonexistent/fake-repo-12345"},
         )
-        data = extract_hacs_data(result)
+        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
