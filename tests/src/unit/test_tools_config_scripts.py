@@ -30,6 +30,9 @@ class TestScriptToolsValidation:
         client.delete_script_config = AsyncMock(
             return_value={"success": True, "script_id": "test_script"}
         )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "off", "entity_id": "script.test_script"}
+        )
         return client
 
     @pytest.fixture

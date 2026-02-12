@@ -11,7 +11,7 @@ from typing import Annotated, Any, cast
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import parse_json_param
+from .util_helpers import coerce_bool_param, parse_json_param, wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
             ),
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant script.
@@ -252,6 +259,18 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             result = await client.upsert_script_config(config_dict, script_id)
+
+            # Wait for script to be queryable
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
+            entity_id = f"script.{script_id}"
+            if wait_bool:
+                try:
+                    registered = await wait_for_entity_registered(client, entity_id)
+                    if not registered:
+                        result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
+                except Exception as e:
+                    result["warning"] = f"Script created but verification failed: {e}"
+
             return {
                 "success": True,
                 **result,
@@ -287,6 +306,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         script_id: Annotated[
             str, Field(description="Script identifier to delete (e.g., 'old_script')")
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for script to be fully removed before returning. Default: True.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Delete a Home Assistant script.
@@ -306,6 +332,18 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             result = await client.delete_script_config(script_id)
+
+            # Wait for script to be removed
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
+            entity_id = f"script.{script_id}"
+            if wait_bool:
+                try:
+                    removed = await wait_for_entity_removed(client, entity_id)
+                    if not removed:
+                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                except Exception as e:
+                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+
             return {"success": True, "action": "delete", **result}
         except Exception as e:
             logger.error(f"Error deleting script: {e}")
