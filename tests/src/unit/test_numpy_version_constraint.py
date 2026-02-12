@@ -35,7 +35,7 @@ def test_numpy_version_constraint_for_cpu_compatibility():
         pytest.skip("NumPy version pin only applies to x86_64 platforms")
 
     try:
-        import numpy
+        import numpy  # noqa: F401
 
         numpy_version = version("numpy")
     except ImportError:

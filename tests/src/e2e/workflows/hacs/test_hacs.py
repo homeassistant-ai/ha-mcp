@@ -378,7 +378,7 @@ class TestHacsRepositoryInfo:
             "ha_hacs_repository_info",
             {"repository_id": "nonexistent/repo12345"},
         )
-        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
+        data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:

@@ -30,7 +30,7 @@ def extract_tools_from_file(file_path: Path) -> list[dict]:
                 if isinstance(decorator, ast.Call):
                     for keyword in decorator.keywords:
                         if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
-                            for k, v in zip(keyword.value.keys, keyword.value.values):
+                            for k, v in zip(keyword.value.keys, keyword.value.values, strict=False):
                                 if isinstance(k, ast.Constant) and k.value == "title":
                                     if isinstance(v, ast.Constant):
                                         title = v.value

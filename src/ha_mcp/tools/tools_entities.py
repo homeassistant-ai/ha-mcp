@@ -586,7 +586,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
             eid_context = entity_id if isinstance(entity_id, str) else entity_ids
-            exception_to_structured_error(e, context={"entity_id": eid_context})
+            exception_to_structured_error(e, context={"entity_id": eid_context}, raise_error=True)
 
     @mcp.tool(
         annotations={
@@ -773,5 +773,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.error(f"Error getting entity: {e}")
             exception_to_structured_error(
-                e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids}
+                e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids},
+                raise_error=True,
             )
