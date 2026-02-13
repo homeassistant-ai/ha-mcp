@@ -19,7 +19,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import safe_call_tool
 
 logger = logging.getLogger(__name__)
 

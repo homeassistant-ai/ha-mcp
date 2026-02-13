@@ -10,11 +10,11 @@ The structured error format enables AI agents to:
 - Understand the context and details of failures
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     """
     Standard error codes for Home Assistant MCP operations.
 
