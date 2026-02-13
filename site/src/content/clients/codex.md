@@ -61,6 +61,30 @@ codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env 
 codex mcp add home-assistant --url {{MCP_SERVER_URL}}
 ```
 
+## Quick Setup with Codex Desktop UI
+
+Codex Desktop supports MCP servers via **STDIO** or **Streamable HTTP**.
+For local machine setup with `ha-mcp`, use **STDIO** so Codex launches `ha-mcp` as a subprocess.
+
+### Local Machine (STDIO)
+
+1. Open Codex Desktop
+2. Go to **Settings** → **MCP**
+3. Click **Add Server**
+4. Set:
+   - **Type:** `STDIO`
+   - **Name:** `homeassistant` (or `ha-mcp`)
+   - **Command:** `uvx`
+   - **Args:** `ha-mcp@latest`
+5. Add environment variables:
+   - `HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}`
+   - `HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}`
+
+### When to Use Streamable HTTP
+
+Use **Streamable HTTP** only when `ha-mcp` is running as a network HTTP server (for example behind a reverse proxy or tunnel).
+For local machine setup, use **STDIO**.
+
 ## Management Commands
 
 ```bash
