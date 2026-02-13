@@ -20,6 +20,8 @@ permissions:
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
+  HA_IMAGE: "ghcr.io/home-assistant/home-assistant:2026.1.3"
+  HA_IMAGE_DOCKERHUB: "homeassistant/home-assistant:2026.1.3"
 
 jobs:
   # Comprehensive E2E validation for main branch
@@ -47,13 +49,34 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev
 
-    - name: Pre-pull Home Assistant image
-      uses: nick-invision/retry@v3
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@v4
       with:
-        timeout_minutes: 5
-        max_attempts: 5
-        retry_wait_seconds: 30
-        command: docker pull ghcr.io/home-assistant/home-assistant:2026.1.3
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        for registry in "$HA_IMAGE" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE" ]; then
+              docker tag "$registry" "$HA_IMAGE"
+            fi
+            docker save "$HA_IMAGE" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
 
     - name: Run full E2E test suite
       run: |
