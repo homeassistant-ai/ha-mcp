@@ -295,8 +295,8 @@ class TestAreaMatchingLogic:
         assert result["total_areas_found"] == 0
         assert result["total_entities"] == 0
         assert result["areas"] == {}
-        # Should include available areas in metadata
-        available = result["search_metadata"]["available_areas"]
+        # Should include available areas
+        available = result["available_areas"]
         area_ids = [a["area_id"] for a in available]
         assert "living_room" in area_ids
         assert "kitchen" in area_ids

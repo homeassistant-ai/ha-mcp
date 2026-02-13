@@ -403,15 +403,14 @@ def register_search_tools(mcp, client, **kwargs):
         detail_level: Annotated[
             Literal["minimal", "standard", "full"],
             Field(
-                default="standard",
+                default="minimal",
                 description=(
-                    "Level of detail - "
-                    "'minimal': 10 random entities per domain (friendly_name only); "
-                    "'standard': ALL entities per domain (friendly_name only, default); "
-                    "'full': ALL entities with entity_id + friendly_name + state"
+                    "'minimal': 10 entities per domain sample (default); "
+                    "'standard': ALL entities per domain (friendly_name only); "
+                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
                 ),
             ),
-        ] = "standard",
+        ] = "minimal",
         max_entities_per_domain: Annotated[
             int | None,
             Field(
@@ -449,32 +448,32 @@ def register_search_tools(mcp, client, **kwargs):
         )
         result = cast(dict[str, Any], result)
 
-        # Include comprehensive system info in the overview
-        # This replaces the deprecated ha_get_system_info and ha_get_system_version tools
+        # Include system info - essential fields always, full details at "full" level
         try:
             config = await client.get_config()
-            result["system_info"] = {
+            system_info: dict[str, Any] = {
                 "base_url": client.base_url,
                 "version": config.get("version"),
                 "location_name": config.get("location_name"),
                 "time_zone": config.get("time_zone"),
                 "language": config.get("language"),
-                "country": config.get("country"),
-                "currency": config.get("currency"),
-                "unit_system": config.get("unit_system", {}),
-                "latitude": config.get("latitude"),
-                "longitude": config.get("longitude"),
-                "elevation": config.get("elevation"),
-                "config_dir": config.get("config_dir"),
-                "allowlist_external_dirs": config.get("allowlist_external_dirs", []),
-                "allowlist_external_urls": config.get("allowlist_external_urls", []),
-                "components": config.get("components", []),
-                "components_loaded": len(config.get("components", [])),
                 "state": config.get("state"),
-                "safe_mode": config.get("safe_mode", False),
-                "internal_url": config.get("internal_url"),
-                "external_url": config.get("external_url"),
             }
+            # Full detail level adds extended system info
+            if detail_level == "full":
+                system_info.update({
+                    "country": config.get("country"),
+                    "currency": config.get("currency"),
+                    "unit_system": config.get("unit_system", {}),
+                    "latitude": config.get("latitude"),
+                    "longitude": config.get("longitude"),
+                    "elevation": config.get("elevation"),
+                    "components_loaded": len(config.get("components", [])),
+                    "safe_mode": config.get("safe_mode", False),
+                    "internal_url": config.get("internal_url"),
+                    "external_url": config.get("external_url"),
+                })
+            result["system_info"] = system_info
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
 
@@ -489,12 +488,23 @@ def register_search_tools(mcp, client, **kwargs):
             Field(
                 default=None,
                 description=(
-                    "Types to search in: 'automation', 'script', 'helper'. Pass as a list of strings, "
-                    "e.g. ['automation'], or a JSON array string '[\"automation\"]'. Default: all types"
+                    "Types to search: 'automation', 'script', 'helper'. "
+                    "Pass as list or JSON array string. Default: all types."
                 ),
             ),
         ] = None,
-        limit: int = 20,
+        limit: int = 5,
+        offset: int = 0,
+        include_config: Annotated[
+            bool | str,
+            Field(
+                default=False,
+                description=(
+                    "Include full config in results. Default: False (returns summary only). "
+                    "Use ha_config_get_automation/ha_config_get_script for individual configs."
+                ),
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Deep search across automation, script, and helper definitions.
 
@@ -523,23 +533,20 @@ def register_search_tools(mcp, client, **kwargs):
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
+        include_config_bool = coerce_bool_param(include_config, "include_config", default=False) or False
         try:
-            result = await smart_tools.deep_search(query, parsed_search_types, limit)
+            result = await smart_tools.deep_search(
+                query, parsed_search_types, limit, offset, include_config_bool
+            )
             return cast(dict[str, Any], result)
         except Exception as e:
-            import traceback
             return {
                 "success": False,
                 "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
                 "query": query,
-                "search_types": parsed_search_types,
-                "limit": limit,
                 "suggestions": [
                     "Check Home Assistant connection",
                     "Try simpler search terms",
-                    "Check search_types are valid: 'automation', 'script', 'helper'",
                 ],
             }
 

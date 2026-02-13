@@ -197,7 +197,7 @@ async def test_bulk_fetch_finds_automation_by_config_content(
 
     result = await mcp_client.call_tool(
         "ha_deep_search",
-        {"query": search_term, "search_types": ["automation"], "limit": 20},
+        {"query": search_term, "search_types": ["automation"], "limit": 20, "include_config": True},
     )
     data = assert_mcp_success(result, "Bulk fetch automation config search")
 
@@ -243,7 +243,7 @@ async def test_bulk_fetch_finds_script_by_config_content(
 
     result = await mcp_client.call_tool(
         "ha_deep_search",
-        {"query": search_term, "search_types": ["script"], "limit": 20},
+        {"query": search_term, "search_types": ["script"], "limit": 20, "include_config": True},
     )
     data = assert_mcp_success(result, "Bulk fetch script config search")
 
@@ -287,7 +287,7 @@ async def test_bulk_fetch_populates_config_for_multiple_results(
     # The marker appears in every automation's action message and trigger entity
     result = await mcp_client.call_tool(
         "ha_deep_search",
-        {"query": f"{_MARKER}_payload", "search_types": ["automation"], "limit": 20},
+        {"query": f"{_MARKER}_payload", "search_types": ["automation"], "limit": 20, "include_config": True},
     )
     data = assert_mcp_success(result, "Bulk fetch multi-result search")
 
@@ -364,7 +364,7 @@ async def test_bulk_fetch_result_structure_integrity(
     """
     result = await mcp_client.call_tool(
         "ha_deep_search",
-        {"query": f"{_MARKER}_trigger", "search_types": ["automation"], "limit": 20},
+        {"query": f"{_MARKER}_trigger", "search_types": ["automation"], "limit": 20, "include_config": True},
     )
     data = assert_mcp_success(result, "Bulk fetch structure check")
 
@@ -395,3 +395,146 @@ async def test_bulk_fetch_result_structure_integrity(
             )
 
     logger.info(f"Structure validation passed for {len(automations)} results")
+
+
+# ---------------------------------------------------------------------------
+# Pagination Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
+    """
+    Verify that offset/limit pagination returns correct slices and metadata.
+
+    With 10 test automations sharing the marker in config, requesting limit=3
+    should return 3 results with has_more=True, and offset=3 should return
+    the next slice.
+    """
+    # First page: limit=3, offset=0
+    result_page1 = await mcp_client.call_tool(
+        "ha_deep_search",
+        {
+            "query": _MARKER,
+            "search_types": ["automation"],
+            "limit": 3,
+            "offset": 0,
+        },
+    )
+    page1 = assert_mcp_success(result_page1, "Pagination page 1")
+
+    assert page1.get("returned") == 3, (
+        f"Expected 3 results on page 1, got {page1.get('returned')}"
+    )
+    assert page1.get("has_more") is True, (
+        "has_more should be True when more results exist"
+    )
+    assert page1.get("next_offset") == 3, (
+        f"next_offset should be 3, got {page1.get('next_offset')}"
+    )
+    total = page1.get("total_matches", 0)
+    assert total >= _AUTOMATION_COUNT, (
+        f"total_matches should be >= {_AUTOMATION_COUNT}, got {total}"
+    )
+
+    # Second page: limit=3, offset=3
+    result_page2 = await mcp_client.call_tool(
+        "ha_deep_search",
+        {
+            "query": _MARKER,
+            "search_types": ["automation"],
+            "limit": 3,
+            "offset": 3,
+        },
+    )
+    page2 = assert_mcp_success(result_page2, "Pagination page 2")
+
+    assert page2.get("returned") == 3, (
+        f"Expected 3 results on page 2, got {page2.get('returned')}"
+    )
+    # total_matches should be the same across pages
+    assert page2.get("total_matches") == total, (
+        "total_matches should be consistent across pages"
+    )
+
+    # Verify no overlap between pages
+    page1_ids = {a["entity_id"] for a in page1.get("automations", [])}
+    page2_ids = {a["entity_id"] for a in page2.get("automations", [])}
+    assert page1_ids.isdisjoint(page2_ids), (
+        f"Pages should not overlap. Common IDs: {page1_ids & page2_ids}"
+    )
+
+    logger.info(
+        f"Pagination test passed: {total} total, page1={len(page1_ids)}, page2={len(page2_ids)}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
+    """
+    Verify that requesting beyond available results returns has_more=False
+    and next_offset=None.
+    """
+    # First get total count
+    result_all = await mcp_client.call_tool(
+        "ha_deep_search",
+        {
+            "query": _MARKER,
+            "search_types": ["automation"],
+            "limit": 50,
+        },
+    )
+    all_data = assert_mcp_success(result_all, "Get total count")
+    total = all_data.get("total_matches", 0)
+
+    # Request with offset past all results
+    result_past = await mcp_client.call_tool(
+        "ha_deep_search",
+        {
+            "query": _MARKER,
+            "search_types": ["automation"],
+            "limit": 5,
+            "offset": total,
+        },
+    )
+    past_data = assert_mcp_success(result_past, "Pagination past end")
+
+    assert past_data.get("returned") == 0, (
+        f"Expected 0 results past end, got {past_data.get('returned')}"
+    )
+    assert past_data.get("has_more") is False, (
+        "has_more should be False when offset >= total"
+    )
+    assert past_data.get("next_offset") is None, (
+        "next_offset should be None on last page"
+    )
+
+    logger.info(f"Last page test passed: total={total}, returned=0, has_more=False")
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_deep_search_default_excludes_config(mcp_client, bulk_automations):
+    """
+    Verify that the default include_config=False strips config from results.
+    This confirms the response slimming behavior.
+    """
+    result = await mcp_client.call_tool(
+        "ha_deep_search",
+        {"query": _MARKER, "search_types": ["automation"], "limit": 5},
+    )
+    data = assert_mcp_success(result, "Default config exclusion check")
+
+    automations = data.get("automations", [])
+    assert len(automations) > 0, "Should find at least one automation"
+
+    for auto in automations:
+        assert "config" not in auto, (
+            f"Config should be stripped by default, but found config in {auto.get('entity_id')}"
+        )
+
+    logger.info(
+        f"Config exclusion test passed: {len(automations)} results, all without config"
+    )
