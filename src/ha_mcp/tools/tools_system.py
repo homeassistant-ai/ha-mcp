@@ -168,8 +168,9 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             error_msg = str(e)
             # Connection errors after restart initiated are expected
             # (HA closes connections during restart)
-            if restart_initiated and (
-                "connect" in error_msg.lower() or "closed" in error_msg.lower()
+            if restart_initiated and any(
+                pattern in error_msg.lower()
+                for pattern in ("connect", "closed", "504")
             ):
                 return {
                     "success": True,
