@@ -90,11 +90,29 @@ async def bulk_automations(mcp_client):
             {"config": _automation_config(i)},
         )
         data = assert_mcp_success(result, f"Create bulk automation {i}")
-        created_ids.append(f"automation.{_MARKER}_automation_{i}")
-        logger.info(f"Created automation {i}/{_AUTOMATION_COUNT}")
+        # Use the actual entity_id returned by HA (handles conflicts with _2 suffix)
+        entity_id = data.get("entity_id")
+        if not entity_id:
+            # Fallback to predicted ID if not returned (shouldn't happen)
+            entity_id = f"automation.{_MARKER}_automation_{i}"
+            logger.warning(f"No entity_id returned for automation {i}, using predicted: {entity_id}")
+        created_ids.append(entity_id)
+        logger.info(f"Created automation {i}/{_AUTOMATION_COUNT}: {entity_id}")
 
-    # Give HA a moment to register all entities
-    await asyncio.sleep(2)
+    # Poll until all entities are registered (more robust than fixed sleep)
+    from ..utilities.wait_helpers import wait_for_condition
+
+    async def all_entities_registered():
+        states = await mcp_client.call_tool("ha_list_states", {})
+        state_data = assert_mcp_success(states, "Get states for polling")
+        registered_ids = {s.get("entity_id") for s in state_data.get("states", [])}
+        return all(eid in registered_ids for eid in created_ids)
+
+    await wait_for_condition(
+        all_entities_registered,
+        description=f"All {len(created_ids)} bulk automations registered",
+        timeout=10.0,
+    )
 
     yield created_ids
 
@@ -123,9 +141,26 @@ async def bulk_scripts(mcp_client):
         )
         assert_mcp_success(result, f"Create bulk script {i}")
         created_ids.append(script_id)
-        logger.info(f"Created script {i}/{_SCRIPT_COUNT}")
+        logger.info(f"Created script {i}/{_SCRIPT_COUNT}: {script_id}")
 
-    await asyncio.sleep(2)
+    # Poll until all script entities are registered (more robust than fixed sleep)
+    from ..utilities.wait_helpers import wait_for_condition
+
+    async def all_scripts_registered():
+        states = await mcp_client.call_tool("ha_list_states", {})
+        state_data = assert_mcp_success(states, "Get states for script polling")
+        registered_ids = {
+            s.get("entity_id") for s in state_data.get("states", [])
+            if s.get("entity_id", "").startswith("script.")
+        }
+        expected_entity_ids = {f"script.{sid}" for sid in created_ids}
+        return expected_entity_ids.issubset(registered_ids)
+
+    await wait_for_condition(
+        all_scripts_registered,
+        description=f"All {len(created_ids)} bulk scripts registered",
+        timeout=10.0,
+    )
 
     yield created_ids
 
