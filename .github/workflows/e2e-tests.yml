@@ -16,7 +16,6 @@ on:
 # Limit GITHUB_TOKEN permissions to minimum required
 permissions:
   contents: read
-  packages: read
 
 env:
   PYTHON_VERSION: "3.13"
@@ -47,13 +46,6 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
-
-    - name: Login to GHCR
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Pre-pull Home Assistant image
       uses: nick-invision/retry@v3
