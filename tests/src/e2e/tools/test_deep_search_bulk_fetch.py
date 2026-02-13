@@ -110,7 +110,7 @@ async def bulk_automations(mcp_client):
 
     await wait_for_condition(
         all_entities_registered,
-        description=f"All {len(created_ids)} bulk automations registered",
+        condition_name=f"All {len(created_ids)} bulk automations registered",
         timeout=10.0,
     )
 
@@ -158,7 +158,7 @@ async def bulk_scripts(mcp_client):
 
     await wait_for_condition(
         all_scripts_registered,
-        description=f"All {len(created_ids)} bulk scripts registered",
+        condition_name=f"All {len(created_ids)} bulk scripts registered",
         timeout=10.0,
     )
 

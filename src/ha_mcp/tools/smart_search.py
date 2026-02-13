@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 # Default concurrency limit for parallel operations
 DEFAULT_CONCURRENCY_LIMIT = 20
 
+# Bulk fetch timeouts (in seconds)
+BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
+BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
+INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
+
+# Time budgets for fallback individual fetching (in seconds)
+AUTOMATION_CONFIG_TIME_BUDGET = 15.0  # Max time for fetching automation configs individually
+SCRIPT_CONFIG_TIME_BUDGET = 10.0  # Max time for fetching script configs individually
+
 
 class SmartSearchTools:
     """Smart search tools with fuzzy matching and AI optimization."""
@@ -681,13 +690,12 @@ class SmartSearchTools:
                 # Phase 2: Try to bulk-fetch ALL automation configs with a single API call
                 all_automation_configs: dict[str, dict[str, Any]] = {}
                 bulk_fetched = False
-                CONFIG_BUDGET = 15.0  # seconds allowed for individual config fetching
 
                 # Attempt A: REST bulk endpoint /config/automation/config (no ID)
                 try:
                     resp = await asyncio.wait_for(
                         self.client._request("GET", "/config/automation/config"),
-                        timeout=5.0,
+                        timeout=BULK_REST_TIMEOUT,
                     )
                     if isinstance(resp, list):
                         for item in resp:
@@ -709,7 +717,7 @@ class SmartSearchTools:
                         try:
                             ws_resp = await asyncio.wait_for(
                                 self.client.send_websocket_message({"type": ws_type}),
-                                timeout=3.0,
+                                timeout=BULK_WEBSOCKET_TIMEOUT,
                             )
                             if isinstance(ws_resp, dict) and ws_resp.get("success"):
                                 for item in ws_resp.get("result", []):
@@ -734,7 +742,7 @@ class SmartSearchTools:
                         name_score,
                         unique_id,
                     ) in sorted_by_score:
-                        if time.perf_counter() - budget_start > CONFIG_BUDGET:
+                        if time.perf_counter() - budget_start > AUTOMATION_CONFIG_TIME_BUDGET:
                             break
                         if not unique_id or unique_id in all_automation_configs:
                             continue
@@ -743,7 +751,7 @@ class SmartSearchTools:
                                 self.client._request(
                                     "GET", f"/config/automation/config/{unique_id}"
                                 ),
-                                timeout=5.0,
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                             )
                             all_automation_configs[unique_id] = config
                         except Exception as e:
@@ -806,7 +814,7 @@ class SmartSearchTools:
                 try:
                     resp = await asyncio.wait_for(
                         self.client._request("GET", "/config/script/config"),
-                        timeout=5.0,
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
                     if isinstance(resp, list):
                         for item in resp:
@@ -830,7 +838,7 @@ class SmartSearchTools:
                         try:
                             ws_resp = await asyncio.wait_for(
                                 self.client.send_websocket_message({"type": ws_type}),
-                                timeout=3.0,
+                                timeout=BULK_WEBSOCKET_TIMEOUT,
                             )
                             if isinstance(ws_resp, dict) and ws_resp.get("success"):
                                 for item in ws_resp.get("result", []):
@@ -846,7 +854,6 @@ class SmartSearchTools:
                 # Attempt C: Individual fetch with budget
                 if not script_bulk_fetched:
                     budget_start = time.perf_counter()
-                    SCRIPT_BUDGET = 10.0
                     sorted_scripts = sorted(
                         script_name_scored, key=lambda x: x[3], reverse=True
                     )
@@ -856,14 +863,14 @@ class SmartSearchTools:
                         script_id,
                         name_score,
                     ) in sorted_scripts:
-                        if time.perf_counter() - budget_start > SCRIPT_BUDGET:
+                        if time.perf_counter() - budget_start > SCRIPT_CONFIG_TIME_BUDGET:
                             break
                         if script_id in all_script_configs:
                             continue
                         try:
                             config_resp = await asyncio.wait_for(
                                 self.client.get_script_config(script_id),
-                                timeout=5.0,
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                             )
                             all_script_configs[script_id] = config_resp.get(
                                 "config", {}
