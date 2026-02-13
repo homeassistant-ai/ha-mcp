@@ -28,6 +28,23 @@ jobs:
     - name: Run ruff check
       run: uv run ruff check src/ tests/
 
+  # Fast unit tests (no Docker, no HA instance needed)
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run unit tests
+      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
   # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})
