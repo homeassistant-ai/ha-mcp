@@ -1,6 +1,7 @@
 name: PR Validation Pipeline
 permissions:
   contents: read
+  packages: read
 
 on:
   pull_request:
@@ -80,6 +81,13 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
+
+    - name: Login to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Pre-pull Home Assistant image
       uses: nick-invision/retry@v3
