@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# Valid guide_response for tools requiring ha_get_tool_guide()
+_GR = {"success": True}
+
 
 class TestScriptToolsValidation:
     """Test input validation for script configuration tools."""
@@ -62,6 +65,7 @@ class TestScriptToolsValidation:
         """Test that config without sequence or use_blueprint is rejected."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config={"alias": "Test Script"},  # Missing both sequence and use_blueprint
         )
 
@@ -73,6 +77,7 @@ class TestScriptToolsValidation:
         """Test that regular script with sequence is accepted."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config={
                 "alias": "Test Script",
                 "sequence": [{"delay": {"seconds": 5}}],
@@ -86,6 +91,7 @@ class TestScriptToolsValidation:
         """Test that blueprint-based script is accepted."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config={
                 "alias": "My Blueprint Script",
                 "use_blueprint": {
@@ -110,6 +116,7 @@ class TestScriptToolsValidation:
         """Test that empty sequence is stripped from blueprint scripts."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config={
                 "alias": "My Blueprint Script",
                 "use_blueprint": {
@@ -133,6 +140,7 @@ class TestScriptToolsValidation:
         """Test that non-empty sequence is kept even with blueprint."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config={
                 "alias": "My Blueprint Script",
                 "use_blueprint": {
@@ -155,6 +163,7 @@ class TestScriptToolsValidation:
         """Test that invalid JSON config is rejected."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config='{"invalid": json}',  # Invalid JSON string
         )
 
@@ -165,6 +174,7 @@ class TestScriptToolsValidation:
         """Test that non-dict config is rejected."""
         result = await register_tools["ha_config_set_script"](
             script_id="test_script",
+            guide_response=_GR,
             config="not a dict",
         )
 

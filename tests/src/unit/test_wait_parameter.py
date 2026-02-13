@@ -12,6 +12,9 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 
+# Valid guide_response for tools requiring ha_get_tool_guide()
+_GR = {"success": True}
+
 
 class TestAutomationWaitParameter:
     """Test wait parameter on automation config tools."""
@@ -76,6 +79,7 @@ class TestAutomationWaitParameter:
                     "trigger": [{"platform": "time", "at": "07:00:00"}],
                     "action": [{"service": "light.turn_on"}],
                 },
+                guide_response=_GR,
             )
             assert result["success"] is True
             mock_wait.assert_called_once()
@@ -89,6 +93,7 @@ class TestAutomationWaitParameter:
                     "trigger": [{"platform": "time", "at": "07:00:00"}],
                     "action": [{"service": "light.turn_on"}],
                 },
+                guide_response=_GR,
                 wait=False,
             )
             assert result["success"] is True
@@ -104,6 +109,7 @@ class TestAutomationWaitParameter:
                     "trigger": [{"platform": "time", "at": "07:00:00"}],
                     "action": [{"service": "light.turn_on"}],
                 },
+                guide_response=_GR,
             )
             assert result["success"] is True
             assert "warning" in result
@@ -163,6 +169,7 @@ class TestAutomationWaitParameter:
                     "trigger": [{"platform": "time", "at": "07:00:00"}],
                     "action": [{"service": "light.turn_on"}],
                 },
+                guide_response=_GR,
             )
             assert result["success"] is True
             assert "warning" in result
@@ -209,6 +216,7 @@ class TestScriptWaitParameter:
             result = await register_tools["ha_config_set_script"](
                 script_id="test_script",
                 config={"alias": "Test", "sequence": [{"delay": {"seconds": 1}}]},
+                guide_response=_GR,
             )
             assert result["success"] is True
             mock_wait.assert_called_once()
@@ -219,6 +227,7 @@ class TestScriptWaitParameter:
             result = await register_tools["ha_config_set_script"](
                 script_id="test_script",
                 config={"alias": "Test", "sequence": [{"delay": {"seconds": 1}}]},
+                guide_response=_GR,
                 wait=False,
             )
             assert result["success"] is True

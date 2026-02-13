@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from ha_mcp.tools.tools_entities import register_entity_tools
 
+# Valid guide_response for tools requiring ha_get_tool_guide()
+_GR = {"success": True}
+
 
 class TestHaSetEntityLabels:
     """Test ha_set_entity labels parameter."""
@@ -63,7 +66,8 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", labels=["outdoor", "smart"])
+        result = await tool(entity_id="light.test", labels=["outdoor", "smart"]),
+        guide_response=_GR,
 
         assert result["success"] is True
         assert "labels=['outdoor', 'smart']" in str(result["updates"])
@@ -97,7 +101,8 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", labels=[])
+        result = await tool(entity_id="light.test", labels=[]),
+        guide_response=_GR,
 
         assert result["success"] is True
 
@@ -129,7 +134,8 @@ class TestHaSetEntityLabels:
         tool = self.registered_tools["ha_set_entity"]
 
         result = await tool(
-            entity_id="light.test", labels='["label1", "label2"]'
+            entity_id="light.test", labels='["label1", "label2"]',
+            guide_response=_GR,
         )
 
         assert result["success"] is True
@@ -139,7 +145,8 @@ class TestHaSetEntityLabels:
     @pytest.mark.asyncio
     async def test_set_labels_invalid_returns_error(self, set_entity_tool):
         """Invalid labels parameter should return an error."""
-        result = await set_entity_tool(entity_id="light.test", labels="not_json{")
+        result = await set_entity_tool(entity_id="light.test", labels="not_json{"),
+        guide_response=_GR,
 
         assert result["success"] is False
         error = result.get("error", {})
@@ -170,7 +177,8 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        await tool(entity_id="light.test", name="New Name")
+        await tool(entity_id="light.test", name="New Name"),
+        guide_response=_GR,
 
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert "labels" not in call_args
@@ -238,6 +246,7 @@ class TestHaSetEntityExposeTo:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={"conversation": True},
         )
 
@@ -278,6 +287,7 @@ class TestHaSetEntityExposeTo:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={"conversation": True, "cloud.alexa": False},
         )
 
@@ -292,6 +302,7 @@ class TestHaSetEntityExposeTo:
         """Invalid assistant name in expose_to should return error."""
         result = await set_entity_tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={"invalid_assistant": True},
         )
 
@@ -326,6 +337,7 @@ class TestHaSetEntityExposeTo:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to=json.dumps({"conversation": True}),
         )
 
@@ -337,6 +349,7 @@ class TestHaSetEntityExposeTo:
         """Invalid JSON string for expose_to should return error."""
         result = await set_entity_tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to="not valid json{",
         )
 
@@ -366,7 +379,8 @@ class TestHaSetEntityExposeTo:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", name="New Name")
+        result = await tool(entity_id="light.test", name="New Name"),
+        guide_response=_GR,
 
         assert result["success"] is True
         # Only 1 call (entity registry update), no exposure call
@@ -431,6 +445,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             name="My Light",
             labels=["outdoor"],
             expose_to={"conversation": True},
@@ -457,7 +472,8 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test")
+        result = await tool(entity_id="light.test"),
+        guide_response=_GR,
 
         assert result["success"] is False
         assert "No updates specified" in result["error"]
@@ -500,6 +516,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             name="Updated",
             expose_to={"conversation": True},
         )
@@ -529,6 +546,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={"conversation": True},
         )
 
@@ -553,6 +571,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={"conversation": True, "cloud.alexa": False},
         )
 
@@ -576,6 +595,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.nonexistent",
+            guide_response=_GR,
             expose_to={"conversation": True},
         )
 
@@ -589,7 +609,8 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", enabled="maybe")
+        result = await tool(entity_id="light.test", enabled="maybe"),
+        guide_response=_GR,
 
         assert result["success"] is False
         error = result.get("error", {})
@@ -602,7 +623,8 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", hidden="maybe")
+        result = await tool(entity_id="light.test", hidden="maybe"),
+        guide_response=_GR,
 
         assert result["success"] is False
         error = result.get("error", {})
@@ -636,6 +658,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to={
                 "conversation": True,
                 "cloud.alexa": True,
@@ -658,6 +681,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             expose_to=["conversation"],
         )
 
@@ -677,6 +701,7 @@ class TestHaSetEntityCombined:
 
         result = await tool(
             entity_id="light.nonexistent",
+            guide_response=_GR,
             labels=["outdoor"],
         )
 
@@ -746,6 +771,7 @@ class TestHaSetEntityLabelOperations:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             labels=["new_label"],
             label_operation="add",
         )
@@ -793,6 +819,7 @@ class TestHaSetEntityLabelOperations:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             labels=["remove_label"],
             label_operation="remove",
         )
@@ -840,6 +867,7 @@ class TestHaSetEntityLabelOperations:
 
         result = await tool(
             entity_id="light.test",
+            guide_response=_GR,
             labels=["label_b", "label_c"],  # label_b already exists
             label_operation="add",
         )
@@ -900,6 +928,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=["light.a", "light.b", "light.c"],
+            guide_response=_GR,
             labels=["outdoor"],
         )
 
@@ -936,6 +965,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=["light.a", "light.b"],
+            guide_response=_GR,
             expose_to={"conversation": True},
         )
 
@@ -950,6 +980,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=["light.a", "light.b"],
+            guide_response=_GR,
             name="Test Name",  # Single-entity param
             labels=["outdoor"],
         )
@@ -985,6 +1016,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=["light.a", "light.b"],
+            guide_response=_GR,
             labels=["outdoor"],
         )
 
@@ -1003,6 +1035,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=[],
+            guide_response=_GR,
             labels=["outdoor"],
         )
 
@@ -1059,6 +1092,7 @@ class TestHaSetEntityBulkOperations:
 
         result = await tool(
             entity_id=["light.a", "light.b"],
+            guide_response=_GR,
             labels=["new_label"],
             label_operation="add",
         )
