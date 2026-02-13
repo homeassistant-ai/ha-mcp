@@ -335,14 +335,56 @@ async def mcp_server(
     # Server cleanup handled by server.close()
 
 
+# Tools that require guide_response parameter (added by progressive disclosure PR)
+_TOOLS_REQUIRING_GUIDE: dict[str, str] = {
+    "ha_search_entities": "search",
+    "ha_get_overview": "search",
+    "ha_deep_search": "search",
+    "ha_get_history": "history",
+    "ha_get_statistics": "history",
+    "ha_eval_template": "template",
+    "ha_set_entity": "entity",
+    "ha_config_set_automation": "automation",
+    "ha_config_set_dashboard": "dashboard",
+    "ha_config_set_script": "script",
+}
+
+_VALID_GUIDE_RESPONSE: dict[str, Any] = {"success": True, "topic": "e2e_test"}
+
+
+class _GuideInjectingClient:
+    """Wrapper around FastMCP Client that auto-injects guide_response for tools that require it.
+
+    Tools trimmed by progressive disclosure require a guide_response parameter
+    (output from ha_get_tool_guide). This wrapper auto-injects a valid response
+    so E2E tests don't need to call ha_get_tool_guide() before every tool call.
+    """
+
+    def __init__(self, wrapped: Client):
+        self._wrapped = wrapped
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        if arguments is None:
+            arguments = {}
+        if name in _TOOLS_REQUIRING_GUIDE and "guide_response" not in arguments:
+            arguments = {**arguments, "guide_response": _VALID_GUIDE_RESPONSE}
+        return await self._wrapped.call_tool(name, arguments)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+
 @pytest.fixture
-async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
-    """Create FastMCP client connected to our server."""
+async def mcp_client(mcp_server) -> AsyncGenerator[_GuideInjectingClient]:
+    """Create FastMCP client connected to our server.
+
+    Returns a wrapper that auto-injects guide_response for tools that require it.
+    """
     client = Client(mcp_server.mcp)
 
     async with client:
         logger.debug("🔗 FastMCP client connected (in-memory transport)")
-        yield client
+        yield _GuideInjectingClient(client)
 
 
 # Test session information
