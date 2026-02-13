@@ -148,9 +148,11 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Retrieve state change history for entities (last ~10 days from recorder).
 
+        REQUIRED: You MUST call ha_get_tool_guide("history") before using this tool.
+        The guide contains parameter details, use cases, examples, and time format
+        reference that are essential for correct operation.
         start_time accepts relative formats: '24h', '7d', '2w'.
-        For long-term trends (>10 days), use ha_get_statistics() instead.
-        Call ha_get_tool_guide("history") for detailed usage and time format reference."""
+        For long-term trends (>10 days), use ha_get_statistics() instead."""
         try:
             # Parse entity_ids - handle string, list, or comma-separated
             if isinstance(entity_ids, str):
@@ -384,9 +386,11 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Retrieve long-term statistics for entities with state_class attribute.
 
+        REQUIRED: You MUST call ha_get_tool_guide("history") before using this tool.
+        The guide contains statistic type definitions, use cases, examples, and time
+        format reference that are essential for correct operation.
         Returns pre-aggregated data (mean, min, max, sum, state, change) beyond recorder retention.
-        Only entities with state_class (measurement, total, total_increasing) are supported.
-        Call ha_get_tool_guide("history") for statistic type definitions and time format reference."""
+        Only entities with state_class (measurement, total, total_increasing) are supported."""
         try:
             # Parse entity_ids
             if isinstance(entity_ids, str):

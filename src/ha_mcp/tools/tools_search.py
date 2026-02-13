@@ -122,8 +122,11 @@ def register_search_tools(mcp, client, **kwargs):
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
         """Search entities with fuzzy matching. Use domain_filter with empty query to list a domain.
-        Call ha_get_overview() first to understand available domains and areas.
-        Call ha_get_tool_guide("search") for search tips, workflow, and advanced patterns."""
+
+        REQUIRED: You MUST call ha_get_tool_guide("search") before using this tool.
+        The guide contains search tips, workflow patterns, domain listing examples,
+        and overview level recommendations that are essential for effective search.
+        Call ha_get_overview() first to understand available domains and areas."""
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
 
@@ -421,8 +424,10 @@ def register_search_tools(mcp, client, **kwargs):
     ) -> dict[str, Any]:
         """Get system overview with entity counts, domain stats, and area analysis.
 
+        Returns HA base_url, version, location, timezone, and entity overview.
         Use 'standard' (default) for most queries, 'minimal' for quick orientation,
-        'full' for maximum detail including system_info and service catalog."""
+        'full' for maximum detail including system_info and service catalog.
+        Call ha_get_tool_guide("search") for overview level recommendations."""
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
         include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
@@ -481,9 +486,11 @@ def register_search_tools(mcp, client, **kwargs):
     ) -> dict[str, Any]:
         """Search within automation, script, and helper configurations.
 
+        REQUIRED: You MUST call ha_get_tool_guide("search") before using this tool.
+        The guide contains search tips, workflow patterns, and examples that are
+        essential for effective deep search usage.
         Searches entity names and configuration definitions (triggers, actions, conditions).
-        Returns detailed matches with match_in_name, match_in_config, config, and score.
-        Call ha_get_tool_guide("search") for search tips and workflow patterns."""
+        Returns detailed matches with match_in_name, match_in_config, config, and score."""
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
         try:

@@ -357,9 +357,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Update entity registry properties (area, name, icon, enabled, hidden, aliases, labels, expose_to).
 
+        REQUIRED: You MUST call ha_get_tool_guide("entity") before using this tool.
+        The guide contains bulk operation details, label examples, and expose_to
+        assistant reference that are essential for correct operation.
         Bulk operations (list of entity_ids): only labels and expose_to supported.
-        label_operation: 'set' (replace), 'add', or 'remove'. Use ha_rename_entity() to change entity_id.
-        Call ha_get_tool_guide("entity") for bulk operation details, label examples, and expose_to reference."""
+        label_operation: 'set' (replace), 'add', or 'remove'. Use ha_rename_entity() to change entity_id."""
         try:
             # Parse entity_id - determine if bulk operation
             entity_ids: list[str]
