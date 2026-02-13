@@ -11,4 +11,4 @@ repos:
         entry: uv run pytest tests/src/unit/ -n auto -m "not slow" --tb=short -q
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(src/|tests/|pyproject\.toml)
