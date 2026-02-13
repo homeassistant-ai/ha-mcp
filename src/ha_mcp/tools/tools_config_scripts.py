@@ -115,116 +115,12 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant script.
+        """Create or update a script. Config must include 'sequence' or 'use_blueprint'.
 
-        Creates a new script or updates an existing one with the provided configuration.
-        Supports both regular scripts (with sequence) and blueprint-based scripts.
-
-        Required config fields (choose one):
-            - sequence: List of actions to execute (for regular scripts)
-            - use_blueprint: Blueprint configuration (for blueprint-based scripts)
-
-        Optional config fields:
-            - alias: Display name (defaults to script_id)
-            - description: Script description
-            - icon: Icon to display
-            - mode: Execution mode ('single', 'restart', 'queued', 'parallel')
-            - max: Maximum concurrent executions (for queued/parallel modes)
-            - fields: Input parameters for the script
-
-        IMPORTANT: The 'config' parameter must be passed as a proper dictionary/object.
-
-        EXAMPLES:
-
-        Create basic delay script:
-        ha_config_set_script("wait_script", {
-            "sequence": [{"delay": {"seconds": 5}}],
-            "alias": "Wait 5 Seconds",
-            "description": "Simple delay script"
-        })
-
-        Create service call script:
-        ha_config_set_script("blink_light", {
-            "sequence": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
-                {"delay": {"seconds": 2}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}}
-            ],
-            "alias": "Light Blink",
-            "mode": "single"
-        })
-
-        Create script with parameters:
-        ha_config_set_script("backup_script", {
-            "alias": "Backup with Reference",
-            "description": "Create backup with optional reference parameter",
-            "fields": {
-                "reference": {
-                    "name": "Reference",
-                    "description": "Optional reference for backup identification",
-                    "selector": {"text": None}
-                }
-            },
-            "sequence": [
-                {
-                    "action": "hassio.backup_partial",
-                    "data": {
-                        "compressed": False,
-                        "homeassistant": True,
-                        "homeassistant_exclude_database": True,
-                        "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}"
-                    }
-                }
-            ]
-        })
-
-        Update script:
-        ha_config_set_script("morning_routine", {
-            "sequence": [
-                {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-            ],
-            "alias": "Updated Morning Routine"
-        })
-
-        Create blueprint-based script:
-        ha_config_set_script("notification_script", {
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Hello World",
-                    "title": "Test Notification"
-                }
-            }
-        })
-
-        Update blueprint script inputs:
-        ha_config_set_script("notification_script", {
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Updated message",
-                    "title": "Updated Title"
-                }
-            }
-        })
-
-        PREFER NATIVE ACTIONS OVER TEMPLATES:
-        Before using template-based logic in scripts, check if native actions exist:
-        - Use `choose` action instead of template-based service names
-        - Use `if/then/else` action instead of template conditions
-        - Use `repeat` action with `for_each` instead of template loops
-        - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
-        - Use native action variables instead of complex template calculations
-
-        For detailed script configuration help, use: ha_get_domain_docs("script")
-
-        Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
-        features like conditions, variables, parallel execution, and service call options.
-        """
+        IMPORTANT: Call ha_get_tool_guide("script") first for examples, field details,
+        and critical warnings about native actions vs templates.
+        Optional: alias, description, icon, mode (single/restart/queued/parallel), max, fields.
+        Also: ha_get_domain_docs("script") for HA action/sequence reference."""
         try:
             # Parse JSON config if provided as string
             try:

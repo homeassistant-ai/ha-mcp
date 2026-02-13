@@ -489,130 +489,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             bool, Field(description="Show dashboard in sidebar navigation")
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant dashboard.
+        """Create or update a dashboard. url_path must contain a hyphen.
 
-        Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports three modes: full config replacement, Python transformation, OR jq-based transformation.
-
-        Use 'default' or 'lovelace' to target the built-in default dashboard.
-        New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
-
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
-        - jq_transform: Legacy mode. Requires jq binary (not available on Windows ARM64).
-        - config: New dashboards only, or full restructure. Replaces everything.
-
-        JQ TRANSFORM EXAMPLES:
-        - Update card icon: '.views[0].sections[1].cards[0].icon = "mdi:thermometer"'
-        - Add card: '.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]'
-        - Delete card: 'del(.views[0].sections[0].cards[2])'
-        - Update by selection: '(.views[0].cards[] | select(.entity == "light.living_room")).icon = "mdi:lamp"'
-
-        MULTI-OPERATION (chain with |):
-        - Delete then update: 'del(.views[0].cards[2]) | .views[0].cards[0].icon = "mdi:new"'
-        - Multiple updates: '.views[0].cards[0].icon = "mdi:a" | .views[0].cards[1].icon = "mdi:b"'
-
-        IMPORTANT: After delete/add operations, indices shift! Subsequent jq_transform calls
-        must use fresh config_hash from ha_dashboard_find_card() or ha_config_get_dashboard()
-        to get updated structure. Chain multiple ops in ONE expression when possible.
-
-        TIP: Use ha_dashboard_find_card() to get the jq_path for any card.
-
-        PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
-        - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
-        - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
-        - Delete card: 'del config["views"][0]["cards"][2]'
-        - Pattern-based update: 'for card in config["views"][0]["cards"]: if "light" in card.get("entity", ""): card["icon"] = "mdi:lightbulb"'
-        - Multi-operation: 'config["views"][0]["cards"][0]["icon"] = "mdi:a"; config["views"][0]["cards"][1]["icon"] = "mdi:b"'
-
-        MODERN DASHBOARD BEST PRACTICES (2024+):
-        - Use "sections" view type (default) with grid-based layouts
-        - Use "tile" cards as primary card type (replaces legacy entity/light/climate cards)
-        - Use "grid" cards for multi-column layouts within sections
-        - Create multiple views with navigation paths (avoid single-view endless scrolling)
-        - Use "area" cards with navigation for hierarchical organization
-
-        DISCOVERING ENTITY IDs FOR DASHBOARDS:
-        Do NOT guess entity IDs - use these tools to find exact entity IDs:
-        1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
-        2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
-        3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
-
-        If unsure about entity IDs, ALWAYS use one of these tools first.
-
-        DASHBOARD DOCUMENTATION:
-        - ha_get_dashboard_guide() - Complete guide (structure, views, cards, features, pitfalls)
-        - ha_get_card_types() - List of all 41 available card types
-        - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "tile", "grid")
-
-        EXAMPLES:
-
-        Create empty dashboard:
-        ha_config_set_dashboard(
-            url_path="mobile-dashboard",
-            title="Mobile View",
-            icon="mdi:cellphone"
-        )
-
-        Create dashboard with modern sections view:
-        ha_config_set_dashboard(
-            url_path="home-dashboard",
-            title="Home Overview",
-            config={
-                "views": [{
-                    "title": "Home",
-                    "type": "sections",
-                    "sections": [{
-                        "title": "Climate",
-                        "cards": [{
-                            "type": "tile",
-                            "entity": "climate.living_room",
-                            "features": [{"type": "target-temperature"}]
-                        }]
-                    }]
-                }]
-            }
-        )
-
-        Update card using jq_transform (efficient for small changes):
-        ha_config_set_dashboard(
-            url_path="home-dashboard",
-            jq_transform='.views[0].sections[0].cards[0].features += [{"type": "climate-hvac-modes"}]'
-        )
-
-        Create strategy-based dashboard (auto-generated):
-        ha_config_set_dashboard(
-            url_path="my-home",
-            title="My Home",
-            config={
-                "strategy": {
-                    "type": "home",
-                    "favorite_entities": ["light.bedroom"]
-                }
-            }
-        )
-
-        Note: Strategy dashboards cannot be converted to custom dashboards via this tool.
-        Use the "Take Control" feature in the Home Assistant interface to convert them.
-
-        Update existing dashboard config:
-        ha_config_set_dashboard(
-            url_path="existing-dashboard",
-            config={
-                "views": [{
-                    "title": "Updated View",
-                    "type": "sections",
-                    "sections": [{
-                        "cards": [{"type": "markdown", "content": "Updated!"}]
-                    }]
-                }]
-            }
-        )
-
-        Note: If dashboard exists, only the config is updated. To change metadata
-        (title, icon), use ha_config_update_dashboard_metadata().
-        """
+        IMPORTANT: Call ha_get_tool_guide("dashboard") first for mode selection guidance,
+        transform examples, index shifting warnings, and modern best practices.
+        Modes: config (full replacement/new), python_transform (recommended for edits),
+        jq_transform (legacy, needs jq binary). Only one mode at a time.
+        Use config_hash from ha_config_get_dashboard for transforms (optimistic locking).
+        Also: ha_get_dashboard_guide() for structure, ha_get_card_types() for card reference."""
         try:
             # Handle "default" as alias for the default dashboard
             # (matches ha_config_get_dashboard behavior)

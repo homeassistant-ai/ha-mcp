@@ -146,58 +146,11 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Retrieve raw state change history for entities (last ~10 days).
+        """Retrieve state change history for entities (last ~10 days from recorder).
 
-        Returns the full-resolution state history from Home Assistant's recorder.
-        This data shows every individual state change for the specified entities.
-
-        **Data Characteristics:**
-        - Full resolution: Every state transition captured
-        - Retention: ~10 days (configurable via recorder.purge_keep_days)
-        - Best for: Troubleshooting, pattern analysis, specific event queries
-
-        **Parameters:**
-        - entity_ids: Entity ID(s) to query (required)
-        - start_time: Start of period - ISO datetime or relative ('24h', '7d', '2w'). Default: 24h ago
-        - end_time: End of period - ISO datetime. Default: now
-        - minimal_response: Omit attributes for smaller response. Default: true
-        - significant_changes_only: Filter to actual state changes. Default: true
-        - limit: Max entries per entity. Default: 100, Max: 1000
-
-        **Use Cases:**
-        - "Why was my bedroom cold last night?" - Query temperature sensor history
-        - "Did my garage door open while I was away?" - Check cover state changes
-        - "What time does motion usually trigger?" - Analyze binary sensor patterns
-        - "Debug automation triggers" - See exact state change sequence
-
-        **Example:**
-        ```python
-        # Get temperature history for the last 24 hours
-        ha_get_history(entity_ids="sensor.bedroom_temperature")
-
-        # Get multiple entity history for last 7 days
-        ha_get_history(
-            entity_ids=["sensor.temperature", "sensor.humidity"],
-            start_time="7d",
-            limit=500
-        )
-
-        # Get full attributes for debugging
-        ha_get_history(
-            entity_ids="light.living_room",
-            start_time="2025-01-25T00:00:00Z",
-            end_time="2025-01-26T00:00:00Z",
-            minimal_response=False
-        )
-        ```
-
-        **Note:** For long-term trends (>10 days), use ha_get_statistics() instead.
-
-        **Returns:**
-        - List of entities with their state history
-        - Each entity includes: entity_id, period, states array, count
-        """
+        start_time accepts relative formats: '24h', '7d', '2w'.
+        For long-term trends (>10 days), use ha_get_statistics() instead.
+        Call ha_get_tool_guide("history") for detailed usage and time format reference."""
         try:
             # Parse entity_ids - handle string, list, or comma-separated
             if isinstance(entity_ids, str):
@@ -429,69 +382,11 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Retrieve pre-aggregated long-term statistics for trend analysis.
+        """Retrieve long-term statistics for entities with state_class attribute.
 
-        Returns aggregated statistical data from Home Assistant's long-term statistics
-        table. This data is pre-computed and stored permanently, allowing analysis
-        of historical trends beyond the standard ~10 day recorder retention.
-
-        **Data Characteristics:**
-        - Pre-aggregated: Hourly/daily/monthly statistics
-        - Retention: Permanent - never purged
-        - Entities: Only those with state_class (measurement, total, total_increasing)
-        - Best for: Long-term trends, energy consumption, period comparisons
-
-        **Parameters:**
-        - entity_ids: Entity ID(s) with state_class attribute (required)
-        - start_time: Start of period - ISO datetime or relative ('30d', '6m', '12m'). Default: 30d ago
-        - end_time: End of period - ISO datetime. Default: now
-        - period: Aggregation: '5minute', 'hour', 'day', 'week', 'month'. Default: 'day'
-        - statistic_types: Types to include: 'mean', 'min', 'max', 'sum', 'state', 'change'. Default: all
-
-        **Statistic Types Explained:**
-        - mean: Average value over the period
-        - min: Minimum value during the period
-        - max: Maximum value during the period
-        - sum: Running total (for total_increasing entities like energy)
-        - state: Last known state value
-        - change: Change from previous period
-
-        **Use Cases:**
-        - "How much electricity did I use this month vs last month?" - Monthly sum
-        - "What's my average living room temperature?" - Daily/monthly mean
-        - "Show daily energy consumption for the past 2 weeks" - Daily sum
-        - "Has my solar production declined year over year?" - Monthly comparison
-
-        **Example:**
-        ```python
-        # Get daily energy statistics for last 30 days
-        ha_get_statistics(entity_ids="sensor.total_energy_kwh")
-
-        # Get monthly temperature averages for 6 months
-        ha_get_statistics(
-            entity_ids="sensor.living_room_temperature",
-            start_time="6m",
-            period="month",
-            statistic_types=["mean", "min", "max"]
-        )
-
-        # Compare multiple sensors
-        ha_get_statistics(
-            entity_ids=["sensor.solar_production", "sensor.grid_consumption"],
-            start_time="12m",
-            period="month",
-            statistic_types=["sum"]
-        )
-        ```
-
-        **Note:** Only entities with state_class attribute support statistics.
-        Use ha_search_entities() to find entities and check their state_class.
-
-        **Returns:**
-        - List of entities with their statistics
-        - Each includes: entity_id, period type, statistics array, unit_of_measurement
-        """
+        Returns pre-aggregated data (mean, min, max, sum, state, change) beyond recorder retention.
+        Only entities with state_class (measurement, total, total_increasing) are supported.
+        Call ha_get_tool_guide("history") for statistic type definitions and time format reference."""
         try:
             # Parse entity_ids
             if isinstance(entity_ids, str):

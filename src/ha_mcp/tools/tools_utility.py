@@ -8,9 +8,10 @@ template evaluation, and domain documentation retrieval.
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
+from pydantic import Field
 
 from .helpers import log_tool_usage
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
@@ -232,133 +233,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_eval_template(
         template: str, timeout: int = 3, report_errors: bool | str = True
     ) -> dict[str, Any]:
-        """
-        Evaluate Jinja2 templates using Home Assistant's template engine.
+        """Evaluate a Jinja2 template using Home Assistant's template engine.
 
-        This tool allows testing and debugging of Jinja2 template expressions that are commonly used in
-        Home Assistant automations, scripts, and configurations. It provides real-time evaluation with
-        access to all Home Assistant states, functions, and template variables.
-
-        **Parameters:**
-        - template: The Jinja2 template string to evaluate
-        - timeout: Maximum evaluation time in seconds (default: 3)
-        - report_errors: Whether to return detailed error information (default: True)
-
-        **Common Template Functions:**
-
-        **State Access:**
-        ```jinja2
-        {{ states('sensor.temperature') }}              # Get entity state value
-        {{ states.sensor.temperature.state }}           # Alternative syntax
-        {{ state_attr('light.bedroom', 'brightness') }} # Get entity attribute
-        {{ is_state('light.living_room', 'on') }}       # Check if entity has specific state
-        ```
-
-        **Numeric Operations:**
-        ```jinja2
-        {{ states('sensor.temperature') | float(0) }}   # Convert to float with default
-        {{ states('sensor.humidity') | int }}           # Convert to integer
-        {{ (states('sensor.temp') | float + 5) | round(1) }} # Math operations
-        ```
-
-        **Time and Date:**
-        ```jinja2
-        {{ now() }}                                     # Current datetime
-        {{ now().strftime('%H:%M:%S') }}               # Format current time
-        {{ as_timestamp(now()) }}                      # Convert to Unix timestamp
-        {{ now().hour }}                               # Current hour (0-23)
-        {{ now().weekday() }}                          # Day of week (0=Monday)
-        ```
-
-        **Conditional Logic:**
-        ```jinja2
-        {{ 'Day' if now().hour < 18 else 'Night' }}    # Ternary operator
-        {% if is_state('sun.sun', 'above_horizon') %}
-          It's daytime
-        {% else %}
-          It's nighttime
-        {% endif %}
-        ```
-
-        **Lists and Loops:**
-        ```jinja2
-        {% for entity in states.light %}
-          {{ entity.entity_id }}: {{ entity.state }}
-        {% endfor %}
-
-        {{ states.light | selectattr('state', 'eq', 'on') | list | count }} # Count on lights
-        ```
-
-        **String Operations:**
-        ```jinja2
-        {{ states('sensor.weather') | title }}         # Title case
-        {{ 'Hello ' + states('input_text.name') }}     # String concatenation
-        {{ states('sensor.data') | regex_replace('pattern', 'replacement') }}
-        ```
-
-        **Device and Area Functions:**
-        ```jinja2
-        {{ device_entities('device_id_here') }}        # Get entities for device
-        {{ area_entities('living_room') }}             # Get entities in area
-        {{ device_id('light.bedroom') }}               # Get device ID for entity
-        ```
-
-        **Common Use Cases:**
-
-        **Automation Conditions:**
-        ```jinja2
-        # Check if it's a workday and after 7 AM
-        {{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 }}
-
-        # Temperature-based condition
-        {{ states('sensor.outdoor_temp') | float < 0 }}
-        ```
-
-        **Dynamic Service Data:**
-        ```jinja2
-        # Dynamic brightness based on time
-        {{ 255 if now().hour < 22 else 50 }}
-
-        # Message with current values
-        "Temperature is {{ states('sensor.temp') }}°C, humidity {{ states('sensor.humidity') }}%"
-        ```
-
-        **Examples:**
-
-        **Test basic state access:**
-        ```python
-        ha_eval_template("{{ states('light.living_room') }}")
-        ```
-
-        **Test conditional logic:**
-        ```python
-        ha_eval_template("{{ 'Day' if now().hour < 18 else 'Night' }}")
-        ```
-
-        **Test mathematical operations:**
-        ```python
-        ha_eval_template("{{ (states('sensor.temperature') | float + 5) | round(1) }}")
-        ```
-
-        **Test complex automation condition:**
-        ```python
-        ha_eval_template("{{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 and states('sensor.temperature') | float > 20 }}")
-        ```
-
-        **Test entity counting:**
-        ```python
-        ha_eval_template("{{ states.light | selectattr('state', 'eq', 'on') | list | count }}")
-        ```
-
-        **IMPORTANT NOTES:**
-        - Templates have access to all current Home Assistant states and attributes
-        - Use this tool to test templates before using them in automations or scripts
-        - Template evaluation respects Home Assistant's security model and timeouts
-        - Complex templates may affect Home Assistant performance - keep them efficient
-        - Use default values (e.g., `| float(0)`) to handle missing or invalid states
-
-        **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
-        """
+        Access all HA states, attributes, and functions. Common patterns:
+        states('entity_id'), state_attr('entity_id', 'attr'), is_state('entity_id', 'value').
+        Call ha_get_tool_guide("template") for function reference including device/area functions.
+        Also: https://www.home-assistant.io/docs/configuration/templating/ for full reference."""
         # Coerce boolean parameter that may come as string from XML-style calls
         report_errors_bool = coerce_bool_param(
             report_errors, "report_errors", default=True
@@ -517,3 +397,306 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "status": "error",
                 "suggestion": "Check your internet connection and try again",
             }
+
+    # ---- Tool usage guides (on-demand reference) ----
+    # These contain critical guidance, examples, and warnings that were previously
+    # embedded in tool descriptions. Loaded on-demand to reduce idle context usage.
+
+    _TOOL_GUIDES: dict[str, dict[str, Any]] = {
+        "automation": {
+            "topic": "Creating and updating automations",
+            "required_fields": {
+                "regular": ["alias", "trigger", "action"],
+                "blueprint": ["alias", "use_blueprint (with path + input)"],
+            },
+            "optional_fields": [
+                "description (RECOMMENDED: helps safely modify implementation later)",
+                "condition", "mode (single/restart/queued/parallel)",
+                "max (for queued/parallel)", "initial_state", "variables",
+            ],
+            "critical_guidance": [
+                "PREFER NATIVE SOLUTIONS OVER TEMPLATES:",
+                "- Use `condition: state` with `state: [list]` instead of template for multiple states",
+                "- Use `condition: state` with `attribute:` instead of template for attribute checks",
+                "- Use `condition: numeric_state` instead of template for number comparisons",
+                "- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes",
+                "- Use `choose` action instead of template-based service names",
+            ],
+            "trigger_types": "time, time_pattern, sun, state, numeric_state, event, device, zone, template",
+            "condition_types": "state, numeric_state, time, sun, template, device, zone",
+            "action_types": "service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel",
+            "examples": {
+                "time_trigger": {
+                    "alias": "Morning Lights",
+                    "description": "Turn on bedroom lights at 7 AM",
+                    "trigger": [{"platform": "time", "at": "07:00:00"}],
+                    "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}],
+                },
+                "motion_with_condition": {
+                    "alias": "Motion Light",
+                    "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
+                    "condition": [{"condition": "sun", "after": "sunset"}],
+                    "action": [
+                        {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
+                        {"delay": {"minutes": 5}},
+                        {"service": "light.turn_off", "target": {"entity_id": "light.hallway"}},
+                    ],
+                    "mode": "restart",
+                },
+                "blueprint": {
+                    "alias": "Motion Light Kitchen",
+                    "use_blueprint": {
+                        "path": "homeassistant/motion_light.yaml",
+                        "input": {
+                            "motion_entity": "binary_sensor.kitchen_motion",
+                            "light_target": {"entity_id": "light.kitchen"},
+                            "no_motion_wait": 120,
+                        },
+                    },
+                },
+            },
+            "troubleshooting": [
+                "Use ha_get_state() to verify entity_ids exist",
+                "Use ha_search_entities() to find correct entity_ids",
+                "Use ha_eval_template() to test Jinja2 templates before using in automations",
+                "Use ha_get_domain_docs('automation') for full HA documentation",
+            ],
+        },
+        "script": {
+            "topic": "Creating and updating scripts",
+            "required_fields": {
+                "regular": ["sequence (list of actions)"],
+                "blueprint": ["use_blueprint (with path + input)"],
+            },
+            "optional_fields": [
+                "alias", "description", "icon", "mode (single/restart/queued/parallel)",
+                "max (for queued/parallel)", "fields (input parameters)",
+            ],
+            "critical_guidance": [
+                "PREFER NATIVE ACTIONS OVER TEMPLATES:",
+                "- Use `choose` action instead of template-based service names",
+                "- Use `if/then/else` action instead of template conditions",
+                "- Use `repeat` action with `for_each` instead of template loops",
+                "- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes",
+                "- Use native action variables instead of complex template calculations",
+            ],
+            "examples": {
+                "basic_sequence": {
+                    "sequence": [
+                        {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
+                        {"delay": {"seconds": 2}},
+                        {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}},
+                    ],
+                    "alias": "Light Blink",
+                    "mode": "single",
+                },
+                "with_parameters": {
+                    "alias": "Backup with Reference",
+                    "fields": {
+                        "reference": {
+                            "name": "Reference",
+                            "description": "Optional reference for backup identification",
+                            "selector": {"text": None},
+                        },
+                    },
+                    "sequence": [
+                        {
+                            "action": "hassio.backup_partial",
+                            "data": {
+                                "compressed": False,
+                                "homeassistant": True,
+                                "homeassistant_exclude_database": True,
+                                "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}",
+                            },
+                        },
+                    ],
+                },
+                "blueprint": {
+                    "alias": "My Notification Script",
+                    "use_blueprint": {
+                        "path": "notification_script.yaml",
+                        "input": {"message": "Hello World", "title": "Test Notification"},
+                    },
+                },
+            },
+        },
+        "dashboard": {
+            "topic": "Creating and updating dashboards",
+            "critical_guidance": [
+                "url_path must contain a hyphen (-) to be valid",
+                "WHEN TO USE WHICH MODE:",
+                "- python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.",
+                "- jq_transform: Legacy mode. Requires jq binary (not available on Windows ARM64).",
+                "- config: New dashboards only, or full restructure. Replaces everything.",
+                "IMPORTANT: After delete/add operations, indices shift! Subsequent transform calls",
+                "must use fresh config_hash from ha_dashboard_find_card() or ha_config_get_dashboard().",
+                "Chain multiple ops in ONE expression when possible.",
+            ],
+            "modern_best_practices": [
+                "Use 'sections' view type (default) with grid-based layouts",
+                "Use 'tile' cards as primary card type (replaces legacy entity/light/climate cards)",
+                "Use 'grid' cards for multi-column layouts within sections",
+                "Create multiple views with navigation paths",
+                "Use 'area' cards with navigation for hierarchical organization",
+            ],
+            "discovery_workflow": [
+                "1. ha_get_overview(include_entity_id=True) - Get all entities by domain/area",
+                "2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities",
+                "3. ha_get_dashboard_guide() - Complete structure/cards/features guide",
+                "4. ha_get_card_types() - List of all available card types",
+                "5. ha_get_card_documentation(card_type) - Card-specific docs",
+            ],
+            "examples": {
+                "jq_update_icon": '.views[0].sections[1].cards[0].icon = "mdi:thermometer"',
+                "jq_add_card": '.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]',
+                "jq_delete_card": "del(.views[0].sections[0].cards[2])",
+                "jq_multi_op": 'del(.views[0].cards[2]) | .views[0].cards[0].icon = "mdi:new"',
+                "python_update": "config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'",
+                "python_pattern": "for card in config['views'][0]['cards']:\\n  if 'light' in card.get('entity', ''):\\n    card['icon'] = 'mdi:lightbulb'",
+            },
+        },
+        "template": {
+            "topic": "Jinja2 template evaluation in Home Assistant",
+            "common_functions": {
+                "state_access": [
+                    "{{ states('sensor.temperature') }} - Get entity state value",
+                    "{{ state_attr('light.bedroom', 'brightness') }} - Get entity attribute",
+                    "{{ is_state('light.living_room', 'on') }} - Check entity state",
+                ],
+                "numeric": [
+                    "{{ states('sensor.temp') | float(0) }} - Convert to float with default",
+                    "{{ (states('sensor.temp') | float + 5) | round(1) }} - Math operations",
+                ],
+                "time_date": [
+                    "{{ now() }} - Current datetime",
+                    "{{ now().strftime('%H:%M:%S') }} - Format time",
+                    "{{ now().hour }} - Current hour (0-23)",
+                    "{{ now().weekday() }} - Day of week (0=Monday)",
+                ],
+                "device_area": [
+                    "{{ device_entities('device_id_here') }} - Get entities for device",
+                    "{{ area_entities('living_room') }} - Get entities in area",
+                    "{{ device_id('light.bedroom') }} - Get device ID for entity",
+                ],
+                "lists_loops": [
+                    "{% for entity in states.light %} {{ entity.entity_id }} {% endfor %}",
+                    "{{ states.light | selectattr('state', 'eq', 'on') | list | count }}",
+                ],
+            },
+            "important_notes": [
+                "Templates have access to all current Home Assistant states and attributes",
+                "Use this tool to test templates before using them in automations or scripts",
+                "Use default values (e.g., | float(0)) to handle missing or invalid states",
+                "Complex templates may affect Home Assistant performance - keep them efficient",
+            ],
+            "documentation_url": "https://www.home-assistant.io/docs/configuration/templating/",
+        },
+        "entity": {
+            "topic": "Updating entity registry properties",
+            "bulk_operations": [
+                "When entity_id is a list, ONLY labels and expose_to parameters are supported.",
+                "Other parameters (area_id, name, icon, enabled, hidden, aliases) require single entity.",
+            ],
+            "label_operations": {
+                "set": "Replace all labels with the provided list. Use [] to clear all labels.",
+                "add": "Add labels to existing ones without removing any.",
+                "remove": "Remove specified labels from the entity.",
+            },
+            "expose_to_assistants": {
+                "conversation": "Home Assistant Assist",
+                "cloud.alexa": "Amazon Alexa via Nabu Casa",
+                "cloud.google_assistant": "Google Assistant via Nabu Casa",
+            },
+            "examples": {
+                "assign_area": 'ha_set_entity("sensor.temp", area_id="living_room")',
+                "set_labels": 'ha_set_entity("light.lamp", labels=["outdoor", "smart"])',
+                "add_labels": 'ha_set_entity("light.lamp", labels=["new_label"], label_operation="add")',
+                "bulk_labels": 'ha_set_entity(["light.a", "light.b"], labels=["outdoor"])',
+                "expose_alexa": 'ha_set_entity("light.lamp", expose_to={"cloud.alexa": true})',
+            },
+            "note": "To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.",
+        },
+        "history": {
+            "topic": "Retrieving entity state history",
+            "ha_get_history": {
+                "description": "Full-resolution state change history from recorder (~10 day retention)",
+                "relative_time_formats": "Use '24h', '7d', '2w' for relative start_time (hours/days/weeks)",
+                "best_for": "Troubleshooting, pattern analysis, specific event queries, debugging automation triggers",
+                "note": "For long-term trends (>10 days), use ha_get_statistics() instead",
+            },
+            "ha_get_statistics": {
+                "description": "Pre-aggregated long-term statistics (permanent retention)",
+                "eligible_entities": "Only entities with state_class attribute (measurement, total, total_increasing)",
+                "statistic_types": {
+                    "mean": "Average value over the period",
+                    "min": "Minimum value during the period",
+                    "max": "Maximum value during the period",
+                    "sum": "Running total (for total_increasing entities like energy)",
+                    "state": "Last known state value",
+                    "change": "Change from previous period",
+                },
+                "relative_time_formats": "Use '30d', '6m', '12m' for relative start_time",
+                "periods": "5minute, hour, day, week, month",
+                "note": "Use ha_search_entities() to find entities with state_class attribute",
+            },
+        },
+        "search": {
+            "topic": "Searching and discovering entities",
+            "usage_tips": [
+                "Try partial names: 'living' finds 'Living Room Light'",
+                "Domain search: 'light' finds all light entities",
+                "French/English: 'salon' or 'living' both work",
+                "Typo tolerant: 'lihgt' finds 'light' entities",
+                "List by domain: use domain_filter with empty query (e.g., domain_filter='calendar')",
+            ],
+            "workflow": [
+                "1. Call ha_get_overview() first to understand available domains and areas",
+                "2. Use ha_search_entities() for finding specific entities",
+                "3. Use ha_deep_search() to search within automation/script configurations",
+                "4. Use ha_get_state() for detailed state of a specific entity",
+            ],
+            "ha_get_overview_levels": {
+                "minimal": "10 entities per domain sample (recommended for quick orientation)",
+                "standard": "ALL entities per domain (friendly_name only, default)",
+                "full": "ALL entities with entity_id + friendly_name + state + system_info",
+            },
+            "ha_deep_search": {
+                "search_scope": "Searches entity names and within configuration definitions (triggers, actions, conditions)",
+                "return_fields": "entity_id, friendly_name, score, match_in_name, match_in_config, config",
+            },
+        },
+    }
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["information", "documentation"],
+            "title": "Get Tool Usage Guide",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_tool_guide(
+        topic: Annotated[
+            str,
+            Field(
+                description=(
+                    "Guide topic: 'automation', 'script', 'dashboard', 'template', "
+                    "'entity', 'history', 'search'. Get examples, critical warnings, "
+                    "and usage patterns for ha-mcp tools."
+                ),
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Get detailed usage guide with examples and critical warnings for ha-mcp tools.
+
+        Contains examples, required/optional fields, best practices, and troubleshooting
+        that are essential for correct tool usage. Call before using complex tools."""
+        topic_lower = topic.lower().strip()
+        if topic_lower in _TOOL_GUIDES:
+            return {"success": True, **_TOOL_GUIDES[topic_lower]}
+        return {
+            "success": False,
+            "error": f"Unknown topic: {topic}",
+            "available_topics": list(_TOOL_GUIDES.keys()),
+        }

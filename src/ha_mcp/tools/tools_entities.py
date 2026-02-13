@@ -355,41 +355,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Update entity properties in the entity registry.
+        """Update entity registry properties (area, name, icon, enabled, hidden, aliases, labels, expose_to).
 
-        Allows modifying entity metadata such as area assignment, display name,
-        icon, enabled/disabled state, visibility, aliases, labels, and voice
-        assistant exposure in a single call.
-
-        BULK OPERATIONS:
-        When entity_id is a list, only labels and expose_to parameters are supported.
-        Other parameters (area_id, name, icon, enabled, hidden, aliases) require single entity.
-
-        LABEL OPERATIONS:
-        - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
-        - label_operation="add": Add labels to existing ones without removing any.
-        - label_operation="remove": Remove specified labels from the entity.
-
-        Use ha_search_entities() or ha_get_device() to find entity IDs.
-        Use ha_config_get_label() to find available label IDs.
-
-        EXAMPLES:
-        Single entity:
-        - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
-        - Rename: ha_set_entity("sensor.temp", name="Living Room Temperature")
-        - Set labels: ha_set_entity("light.lamp", labels=["outdoor", "smart"])
-        - Add labels: ha_set_entity("light.lamp", labels=["new_label"], label_operation="add")
-        - Remove labels: ha_set_entity("light.lamp", labels=["old_label"], label_operation="remove")
-        - Clear labels: ha_set_entity("light.lamp", labels=[])
-        - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
-
-        Bulk operations:
-        - Set labels on multiple: ha_set_entity(["light.a", "light.b"], labels=["outdoor"])
-        - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
-        - Expose multiple to Alexa: ha_set_entity(["light.a", "light.b"], expose_to={"cloud.alexa": True})
-
-        NOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.
-        """
+        Bulk operations (list of entity_ids): only labels and expose_to supported.
+        label_operation: 'set' (replace), 'add', or 'remove'. Use ha_rename_entity() to change entity_id.
+        Call ha_get_tool_guide("entity") for bulk operation details, label examples, and expose_to reference."""
         try:
             # Parse entity_id - determine if bulk operation
             entity_ids: list[str]

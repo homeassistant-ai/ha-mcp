@@ -121,24 +121,9 @@ def register_search_tools(mcp, client, **kwargs):
         limit: int = 10,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
-        """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
-
-        **Listing Entities by Domain:**
-        Use domain_filter with an empty query to list all entities of a specific type:
-        - ha_search_entities(query="", domain_filter="calendar") - List all calendars
-        - ha_search_entities(query="", domain_filter="todo") - List all todo lists
-        - ha_search_entities(query="", domain_filter="scene") - List all scenes
-        - ha_search_entities(query="", domain_filter="zone") - List all zones (as entities)
-
-        **BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:
-        - Smart home size and scale (total entities, domains, areas)
-        - Language used in entity naming (French/English/mixed)
-        - Available areas/rooms and their entity distribution
-
-        Choose overview detail level based on task:
-        - 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches
-        - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
-        - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
+        """Search entities with fuzzy matching. Use domain_filter with empty query to list a domain.
+        Call ha_get_overview() first to understand available domains and areas.
+        Call ha_get_tool_guide("search") for search tips, workflow, and advanced patterns."""
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
 
@@ -434,12 +419,10 @@ def register_search_tools(mcp, client, **kwargs):
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get AI-friendly system overview with intelligent categorization.
+        """Get system overview with entity counts, domain stats, and area analysis.
 
-        Returns comprehensive system information at the requested detail level,
-        including Home Assistant base_url, version, location, timezone, and entity overview.
-        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
-        """
+        Use 'standard' (default) for most queries, 'minimal' for quick orientation,
+        'full' for maximum detail including system_info and service catalog."""
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
         include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
@@ -496,31 +479,11 @@ def register_search_tools(mcp, client, **kwargs):
         ] = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """Deep search across automation, script, and helper definitions.
+        """Search within automation, script, and helper configurations.
 
-        Searches not only entity names but also within configuration definitions including
-        triggers, actions, sequences, and other config fields. Perfect for finding automations
-        that use specific services, helpers referenced in scripts, or tracking down where
-        particular entities are being used.
-
-        Args:
-            query: Search query (can be partial, with typos)
-            search_types: Types to search (list of strings, default: ["automation", "script", "helper"])
-            limit: Maximum total results to return (default: 20)
-
-        Examples:
-            - Find automations using a service: ha_deep_search("light.turn_on")
-            - Find scripts with delays: ha_deep_search("delay")
-            - Find helpers with specific options: ha_deep_search("option_a")
-            - Search all types for an entity: ha_deep_search("sensor.temperature")
-            - Search only automations: ha_deep_search("motion", search_types=["automation"])
-
-        Returns detailed matches with:
-            - match_in_name: True if query matched the entity name
-            - match_in_config: True if query matched within the configuration
-            - config: Full configuration for matched items
-            - score: Match quality score (higher is better)
-        """
+        Searches entity names and configuration definitions (triggers, actions, conditions).
+        Returns detailed matches with match_in_name, match_in_config, config, and score.
+        Call ha_get_tool_guide("search") for search tips and workflow patterns."""
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
         try:
