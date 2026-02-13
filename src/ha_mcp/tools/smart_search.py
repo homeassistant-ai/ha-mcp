@@ -117,33 +117,13 @@ class SmartSearchTools:
             if not matches or (matches and matches[0]["score"] < 80):
                 suggestions = self.fuzzy_searcher.get_smart_suggestions(entities, query)
 
-            response = {
+            return {
                 "success": True,
                 "query": query,
                 "total_matches": total_matches,
-                "matches": results,  # Changed from 'results' to 'matches' for consistency
+                "matches": results,
                 "is_truncated": total_matches > len(results),
-                "search_metadata": {
-                    "fuzzy_threshold": self.settings.fuzzy_threshold,
-                    "best_match_score": matches[0]["score"] if matches else 0,
-                    "search_suggestions": suggestions,
-                },
-                "usage_tips": [
-                    "Try partial names: 'living' finds 'Living Room Light'",
-                    "Domain search: 'light' finds all light entities",
-                    "French/English: 'salon' or 'living' both work",
-                    "Typo tolerant: 'lihgt' finds 'light' entities",
-                ],
             }
-
-            # Add hint if results are truncated
-            if response["is_truncated"]:
-                response["usage_tips"].insert(
-                    0,
-                    f"Showing {len(results)} of {total_matches} matches. Increase 'limit' parameter to see more.",
-                )
-
-            return response
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
@@ -254,18 +234,9 @@ class SmartSearchTools:
                     "total_areas_found": 0,
                     "total_entities": 0,
                     "areas": {},
-                    "search_metadata": {
-                        "grouped_by_domain": group_by_domain,
-                        "area_inference_method": "registry_lookup",
-                        "available_areas": [
-                            {"area_id": aid, "name": ainfo.get("name", aid)}
-                            for aid, ainfo in area_registry.items()
-                        ],
-                    },
-                    "usage_tips": [
-                        "No areas matched your query. See available_areas for valid area names.",
-                        "Try exact area names from Home Assistant",
-                        "Use ha_list_areas() to see all areas",
+                    "available_areas": [
+                        {"area_id": aid, "name": ainfo.get("name", aid)}
+                        for aid, ainfo in area_registry.items()
                     ],
                 }
 
@@ -348,15 +319,6 @@ class SmartSearchTools:
                 "total_areas_found": len(formatted_areas),
                 "total_entities": total_entities,
                 "areas": formatted_areas,
-                "search_metadata": {
-                    "grouped_by_domain": group_by_domain,
-                    "area_inference_method": "registry_lookup",
-                },
-                "usage_tips": [
-                    "Try room names: 'salon', 'chambre', 'cuisine'",
-                    "English names: 'living', 'bedroom', 'kitchen'",
-                    "Use ha_list_areas() to see all available areas",
-                ],
             }
 
         except Exception as e:
@@ -612,7 +574,9 @@ class SmartSearchTools:
         self,
         query: str,
         search_types: list[str] | None = None,
-        limit: int = 20,
+        limit: int = 5,
+        offset: int = 0,
+        include_config: bool = False,
         concurrency_limit: int = DEFAULT_CONCURRENCY_LIMIT,
     ) -> dict[str, Any]:
         """
@@ -624,8 +588,10 @@ class SmartSearchTools:
         Args:
             query: Search query (can be partial, with typos)
             search_types: Types to search (default: ["automation", "script", "helper"])
-            limit: Maximum total results to return
-            concurrency_limit: Max concurrent API calls for config fetching (default: 5)
+            limit: Maximum total results to return (default: 5)
+            offset: Number of results to skip for pagination (default: 0)
+            include_config: Include full config in results (default: False)
+            concurrency_limit: Max concurrent API calls for config fetching
 
         Returns:
             Dictionary with search results grouped by type
@@ -984,7 +950,7 @@ class SmartSearchTools:
                     elif isinstance(result, Exception):
                         logger.debug(f"Helper list fetch failed: {result}")
 
-            # Sort all results by score and apply limit
+            # Sort all results by score and apply offset + limit
             all_results = []
             for result_type, items in results.items():
                 for item in items:
@@ -992,7 +958,15 @@ class SmartSearchTools:
                     all_results.append(item)
 
             all_results.sort(key=lambda x: x["score"], reverse=True)
-            limited_results = all_results[:limit]
+
+            # Apply offset and limit for pagination
+            total_before_pagination = len(all_results)
+            paginated_results = all_results[offset:offset + limit]
+
+            # Strip config from results unless explicitly requested
+            if not include_config:
+                for item in paginated_results:
+                    item.pop("config", None)
 
             # Re-group by type
             final_results: dict[str, list[dict[str, Any]]] = {
@@ -1000,34 +974,23 @@ class SmartSearchTools:
                 "scripts": [],
                 "helpers": [],
             }
-            for item in limited_results:
+            for item in paginated_results:
                 result_type = item.pop("result_type")
                 final_results[f"{result_type}s"].append(item)
 
-            total_matches = len(limited_results)
+            has_more = (offset + limit) < total_before_pagination
 
-            # Return automations/scripts/helpers at top level for easy access
             return {
                 "success": True,
                 "query": query,
-                "total_matches": total_matches,
+                "total_matches": total_before_pagination,
+                "returned": len(paginated_results),
+                "has_more": has_more,
+                "next_offset": offset + limit if has_more else None,
                 "automations": final_results["automations"],
                 "scripts": final_results["scripts"],
                 "helpers": final_results["helpers"],
                 "search_types": search_types,
-                "search_metadata": {
-                    "fuzzy_threshold": self.settings.fuzzy_threshold,
-                    "best_match_score": limited_results[0]["score"]
-                    if limited_results
-                    else 0,
-                    "truncated": len(all_results) > limit,
-                },
-                "usage_tips": [
-                    "Deep search finds matches in automation triggers, actions, and conditions",
-                    "Script sequences and service calls are also searched",
-                    "Helper configurations including options and constraints are included",
-                    "Use match_in_name and match_in_config to understand where the match occurred",
-                ],
             }
 
         except Exception as e:

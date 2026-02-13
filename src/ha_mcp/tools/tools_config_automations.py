@@ -374,7 +374,6 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             return {
                 "success": True,
                 **result,
-                "config_provided": config_dict,
             }
 
         except ToolError:
