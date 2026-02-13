@@ -49,6 +49,7 @@ class SmartSearchTools:
         self,
         query: str,
         limit: int = 10,
+        offset: int = 0,
         include_attributes: bool = False,
         domain_filter: str | None = None,
     ) -> dict[str, Any]:
@@ -58,6 +59,7 @@ class SmartSearchTools:
         Args:
             query: Search query (can be partial, with typos)
             limit: Maximum number of results
+            offset: Number of results to skip for pagination
             include_attributes: Whether to include full entity attributes
             domain_filter: Optional domain to filter entities before search (e.g., "light", "sensor")
 
@@ -77,9 +79,9 @@ class SmartSearchTools:
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
                 ]
 
-            # Perform fuzzy search - returns (limited_results, total_count)
+            # Perform fuzzy search - returns (paginated_results, total_count)
             matches, total_matches = self.fuzzy_searcher.search_entities(
-                entities, query, limit
+                entities, query, limit, offset
             )
 
             # Format results
@@ -112,18 +114,24 @@ class SmartSearchTools:
 
                 results.append(result)
 
-            # Get suggestions if no good matches
-            suggestions = []
-            if not matches or (matches and matches[0]["score"] < 80):
-                suggestions = self.fuzzy_searcher.get_smart_suggestions(entities, query)
+            has_more = (offset + len(results)) < total_matches
 
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "query": query,
                 "total_matches": total_matches,
+                "offset": offset,
+                "limit": limit,
+                "count": len(results),
+                "has_more": has_more,
+                "next_offset": offset + limit if has_more else None,
                 "matches": results,
-                "is_truncated": total_matches > len(results),
             }
+
+            if not matches or (matches and matches[0]["score"] < 80):
+                response["suggestions"] = self.fuzzy_searcher.get_smart_suggestions(entities, query)
+
+            return response
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
@@ -245,8 +253,9 @@ class SmartSearchTools:
             entity_area_resolved: dict[str, str] = {}
             for entity_id, reg_info in entity_reg_map.items():
                 area_id = reg_info.get("area_id")
-                if not area_id and reg_info.get("device_id"):
-                    area_id = device_area_map.get(reg_info["device_id"])
+                device_id = reg_info.get("device_id")
+                if not area_id and device_id:
+                    area_id = device_area_map.get(device_id)
                 if area_id:
                     entity_area_resolved[entity_id] = area_id
 
@@ -950,41 +959,37 @@ class SmartSearchTools:
                     elif isinstance(result, Exception):
                         logger.debug(f"Helper list fetch failed: {result}")
 
-            # Sort all results by score and apply offset + limit
-            all_results = []
-            for result_type, items in results.items():
+            # Merge all results with their category, sort by score, and paginate
+            tagged_results: list[tuple[str, dict[str, Any]]] = []
+            for category, items in results.items():
                 for item in items:
-                    item["result_type"] = result_type.rstrip("s")  # singular form
-                    all_results.append(item)
+                    tagged_results.append((category, item))
 
-            all_results.sort(key=lambda x: x["score"], reverse=True)
+            tagged_results.sort(key=lambda x: x[1]["score"], reverse=True)
 
-            # Apply offset and limit for pagination
-            total_before_pagination = len(all_results)
-            paginated_results = all_results[offset:offset + limit]
+            total_before_pagination = len(tagged_results)
+            paginated = tagged_results[offset:offset + limit]
 
-            # Strip config from results unless explicitly requested
-            if not include_config:
-                for item in paginated_results:
-                    item.pop("config", None)
-
-            # Re-group by type
+            # Re-group paginated results by category
             final_results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
                 "helpers": [],
             }
-            for item in paginated_results:
-                result_type = item.pop("result_type")
-                final_results[f"{result_type}s"].append(item)
+            for category, item in paginated:
+                if not include_config:
+                    item.pop("config", None)
+                final_results[category].append(item)
 
-            has_more = (offset + limit) < total_before_pagination
+            has_more = (offset + len(paginated)) < total_before_pagination
 
             return {
                 "success": True,
                 "query": query,
                 "total_matches": total_before_pagination,
-                "returned": len(paginated_results),
+                "offset": offset,
+                "limit": limit,
+                "count": len(paginated),
                 "has_more": has_more,
                 "next_offset": offset + limit if has_more else None,
                 "automations": final_results["automations"],
