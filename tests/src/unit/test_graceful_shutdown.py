@@ -484,3 +484,13 @@ class TestHTTPEntryPoints:
 
         assert port == 8086
         assert path == "/mcp"
+
+    def test_http_runtime_invalid_port_exits(self):
+        """Non-integer MCP_PORT should cause sys.exit(1)."""
+        from ha_mcp.__main__ import _get_http_runtime
+
+        with patch.dict(os.environ, {"MCP_PORT": "not-a-number"}):
+            with pytest.raises(SystemExit) as exc_info:
+                _get_http_runtime()
+
+        assert exc_info.value.code == 1
