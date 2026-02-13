@@ -154,6 +154,53 @@ def parse_json_param(
     )
 
 
+def validate_guide_response(
+    guide_response: str | dict[str, Any] | None,
+    expected_topic: str,
+) -> None:
+    """
+    Validate that guide_response is a valid output from ha_get_tool_guide().
+
+    This enforces that the LLM called ha_get_tool_guide() before using the tool,
+    providing #363-level enforcement via required parameter schema validation.
+
+    Args:
+        guide_response: The guide response to validate (JSON string or dict)
+        expected_topic: The expected topic (e.g., "automation", "dashboard")
+
+    Raises:
+        ValueError: If the guide response is invalid or missing
+    """
+    if guide_response is None:
+        raise ValueError(
+            f"guide_response is required. Call ha_get_tool_guide('{expected_topic}') "
+            f"first and pass its output here."
+        )
+
+    # Parse if string
+    parsed: Any = guide_response
+    if isinstance(guide_response, str):
+        try:
+            parsed = json.loads(guide_response)
+        except (json.JSONDecodeError, ValueError):
+            raise ValueError(
+                f"guide_response must be the JSON output from ha_get_tool_guide('{expected_topic}'). "
+                f"Call ha_get_tool_guide('{expected_topic}') first and pass its complete output here."
+            )
+
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"guide_response must be the output from ha_get_tool_guide('{expected_topic}'). "
+            f"Call ha_get_tool_guide('{expected_topic}') first and pass its complete output here."
+        )
+
+    if not parsed.get("success"):
+        raise ValueError(
+            f"guide_response indicates failure. Call ha_get_tool_guide('{expected_topic}') "
+            f"and pass the successful output here."
+        )
+
+
 def parse_string_list_param(
     param: str | list[str] | None, param_name: str = "parameter"
 ) -> list[str] | None:

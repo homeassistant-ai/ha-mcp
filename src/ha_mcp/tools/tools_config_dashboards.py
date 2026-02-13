@@ -22,7 +22,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .helpers import log_tool_usage
-from .util_helpers import parse_json_param
+from .util_helpers import parse_json_param, validate_guide_response
 
 logger = logging.getLogger(__name__)
 
@@ -428,6 +428,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "New dashboards must use a hyphenated path."
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('dashboard'). You MUST call ha_get_tool_guide('dashboard') first and pass its full response here."
+            ),
+        ],
         config: Annotated[
             str | dict[str, Any] | None,
             Field(
@@ -491,14 +497,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     ) -> dict[str, Any]:
         """Create or update a dashboard. url_path must contain a hyphen.
 
-        REQUIRED: You MUST call ha_get_tool_guide("dashboard") before using this tool.
-        The guide contains mode selection guidance, transform examples, index shifting
-        warnings, and modern best practices that are essential for correct operation.
+        The guide_response parameter enforces that ha_get_tool_guide('dashboard')
+        was called first. The guide contains mode selection guidance, transform examples,
+        index shifting warnings, and modern best practices.
         Modes: config (full replacement/new), python_transform (recommended for edits),
         jq_transform (legacy, needs jq binary). Only one mode at a time.
         Use config_hash from ha_config_get_dashboard for transforms (optimistic locking).
         Also: ha_get_dashboard_guide() for structure, ha_get_card_types() for card reference."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "dashboard")
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "suggestion": "Call ha_get_tool_guide('dashboard') first and pass its output as guide_response.",
+                }
+
             # Handle "default" as alias for the default dashboard
             # (matches ha_config_get_dashboard behavior)
             if url_path == "default":

@@ -11,7 +11,7 @@ from pydantic import Field
 
 from ..errors import create_entity_not_found_error
 from .helpers import exception_to_structured_error, log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
+from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param, validate_guide_response
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,12 @@ def register_search_tools(mcp, client, **kwargs):
     @log_tool_usage
     async def ha_search_entities(
         query: str,
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+            ),
+        ],
         domain_filter: str | None = None,
         area_filter: str | None = None,
         limit: int = 10,
@@ -127,6 +133,12 @@ def register_search_tools(mcp, client, **kwargs):
         The guide contains search tips, workflow patterns, domain listing examples,
         and overview level recommendations that are essential for effective search.
         Call ha_get_overview() first to understand available domains and areas."""
+        # Validate guide_response - enforces ha_get_tool_guide() was called first
+        try:
+            validate_guide_response(guide_response, "search")
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
 
@@ -388,6 +400,12 @@ def register_search_tools(mcp, client, **kwargs):
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
     @log_tool_usage
     async def ha_get_overview(
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+            ),
+        ],
         detail_level: Annotated[
             Literal["minimal", "standard", "full"],
             Field(
@@ -424,10 +442,17 @@ def register_search_tools(mcp, client, **kwargs):
     ) -> dict[str, Any]:
         """Get system overview with entity counts, domain stats, and area analysis.
 
-        Returns HA base_url, version, location, timezone, and entity overview.
+        REQUIRED: You MUST call ha_get_tool_guide("search") before using this tool.
+        The guide contains overview level recommendations, search workflow patterns,
+        and tips that are essential for effective system discovery.
         Use 'standard' (default) for most queries, 'minimal' for quick orientation,
-        'full' for maximum detail including system_info and service catalog.
-        Call ha_get_tool_guide("search") for overview level recommendations."""
+        'full' for maximum detail including system_info and service catalog."""
+        # Validate guide_response - enforces ha_get_tool_guide() was called first
+        try:
+            validate_guide_response(guide_response, "search")
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
         include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
@@ -472,6 +497,12 @@ def register_search_tools(mcp, client, **kwargs):
     @log_tool_usage
     async def ha_deep_search(
         query: str,
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+            ),
+        ],
         search_types: Annotated[
             str | list[str] | None,
             Field(
@@ -491,6 +522,12 @@ def register_search_tools(mcp, client, **kwargs):
         essential for effective deep search usage.
         Searches entity names and configuration definitions (triggers, actions, conditions).
         Returns detailed matches with match_in_name, match_in_config, config, and score."""
+        # Validate guide_response - enforces ha_get_tool_guide() was called first
+        try:
+            validate_guide_response(guide_response, "search")
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
         try:

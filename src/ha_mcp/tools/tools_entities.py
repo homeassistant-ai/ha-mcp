@@ -14,7 +14,7 @@ from pydantic import Field
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .tools_voice_assistant import KNOWN_ASSISTANTS
-from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
+from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param, validate_guide_response
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels and expose_to parameters."
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('entity'). You MUST call ha_get_tool_guide('entity') first and pass its full response here."
+            ),
+        ],
         area_id: Annotated[
             str | None,
             Field(
@@ -363,6 +369,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Bulk operations (list of entity_ids): only labels and expose_to supported.
         label_operation: 'set' (replace), 'add', or 'remove'. Use ha_rename_entity() to change entity_id."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "entity")
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
             # Parse entity_id - determine if bulk operation
             entity_ids: list[str]
             is_bulk: bool

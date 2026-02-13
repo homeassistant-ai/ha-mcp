@@ -17,7 +17,7 @@ from ..errors import (
     create_validation_error,
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import coerce_bool_param, parse_json_param, wait_for_entity_registered, wait_for_entity_removed
+from .util_helpers import coerce_bool_param, parse_json_param, validate_guide_response, wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +282,12 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'"
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('automation'). You MUST call ha_get_tool_guide('automation') first and pass its full response here."
+            ),
+        ],
         identifier: Annotated[
             str | None,
             Field(
@@ -299,13 +305,19 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
     ) -> dict[str, Any]:
         """Create or update an automation. Omit identifier to create new.
 
-        REQUIRED: You MUST call ha_get_tool_guide("automation") before using this tool.
-        The guide contains required field schemas, examples, and critical warnings
-        about native vs template usage that are essential for correct operation.
+        The guide_response parameter enforces that ha_get_tool_guide('automation')
+        was called first. The guide contains required field schemas, examples, and
+        critical warnings about native vs template usage.
         Required fields: alias, trigger, action (or use_blueprint with path+input).
         Optional: description, condition, mode (single/restart/queued/parallel), max, variables.
         Also: ha_get_domain_docs("automation") for HA trigger/condition/action reference."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "automation")
+            except ValueError as e:
+                raise_tool_error(create_validation_error(str(e), parameter="guide_response"))
+
             # Parse JSON config if provided as string
             try:
                 parsed_config = parse_json_param(config, "config")

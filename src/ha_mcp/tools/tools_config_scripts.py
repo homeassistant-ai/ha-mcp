@@ -11,7 +11,7 @@ from typing import Annotated, Any, cast
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import coerce_bool_param, parse_json_param, wait_for_entity_registered, wait_for_entity_removed
+from .util_helpers import coerce_bool_param, parse_json_param, validate_guide_response, wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,12 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('script'). You MUST call ha_get_tool_guide('script') first and pass its full response here."
+            ),
+        ],
         wait: Annotated[
             bool | str,
             Field(
@@ -117,12 +123,18 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Create or update a script. Config must include 'sequence' or 'use_blueprint'.
 
-        REQUIRED: You MUST call ha_get_tool_guide("script") before using this tool.
-        The guide contains examples, field details, and critical warnings about
-        native actions vs templates that are essential for correct operation.
+        The guide_response parameter enforces that ha_get_tool_guide('script')
+        was called first. The guide contains examples, field details, and critical
+        warnings about native actions vs templates.
         Optional: alias, description, icon, mode (single/restart/queued/parallel), max, fields.
         Also: ha_get_domain_docs("script") for HA action/sequence reference."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "script")
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
             # Parse JSON config if provided as string
             try:
                 parsed_config = parse_json_param(config, "config")

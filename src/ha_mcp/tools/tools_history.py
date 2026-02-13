@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .helpers import get_connected_ws_client, log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_int_param, parse_string_list_param
+from .util_helpers import add_timezone_metadata, coerce_int_param, parse_string_list_param, validate_guide_response
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,12 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array."
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('history'). You MUST call ha_get_tool_guide('history') first and pass its full response here."
+            ),
+        ],
         start_time: Annotated[
             str | None,
             Field(
@@ -154,6 +160,12 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         start_time accepts relative formats: '24h', '7d', '2w'.
         For long-term trends (>10 days), use ha_get_statistics() instead."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "history")
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
             # Parse entity_ids - handle string, list, or comma-separated
             if isinstance(entity_ids, str):
                 if entity_ids.startswith("["):
@@ -355,6 +367,12 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Entity ID(s) to query. Must have state_class attribute. Can be single ID, comma-separated, or JSON array."
             ),
         ],
+        guide_response: Annotated[
+            str | dict[str, Any],
+            Field(
+                description="REQUIRED: Paste the complete output from ha_get_tool_guide('history'). You MUST call ha_get_tool_guide('history') first and pass its full response here."
+            ),
+        ],
         start_time: Annotated[
             str | None,
             Field(
@@ -392,6 +410,12 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns pre-aggregated data (mean, min, max, sum, state, change) beyond recorder retention.
         Only entities with state_class (measurement, total, total_increasing) are supported."""
         try:
+            # Validate guide_response - enforces ha_get_tool_guide() was called first
+            try:
+                validate_guide_response(guide_response, "history")
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
             # Parse entity_ids
             if isinstance(entity_ids, str):
                 if entity_ids.startswith("["):
