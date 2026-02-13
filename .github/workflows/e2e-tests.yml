@@ -59,8 +59,8 @@ jobs:
       uses: nick-invision/retry@v3
       with:
         timeout_minutes: 5
-        max_attempts: 3
-        retry_wait_seconds: 15
+        max_attempts: 5
+        retry_wait_seconds: 30
         command: docker pull ghcr.io/home-assistant/home-assistant:2026.1.3
 
     - name: Run full E2E test suite
