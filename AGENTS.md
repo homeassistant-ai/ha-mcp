@@ -437,6 +437,20 @@ Balance improvement against regression risk. Consider:
 | **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
 | **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
 
+### Test Coverage Requirements
+
+**When tests ARE required:**
+- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
+- Tools that previously had NO tests — add E2E tests even if not part of current PR
+- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
+- Bug fixes without regression tests
+
+**When tests may NOT be required:**
+- Refactoring with existing comprehensive test coverage
+- Documentation-only changes (`*.md` files)
+- Minor parameter additions to well-tested tools
+- Internal utilities already covered by E2E tests
+
 **Examples:**
 
 ```python

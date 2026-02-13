@@ -31,7 +31,7 @@ CATEGORY_DISPLAY = {v: k for k, v in CATEGORY_MAP.items()}
 CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
 
 
-async def _check_hacs_available(client) -> tuple[bool, str | None]:
+async def _check_hacs_available(client: Any) -> tuple[bool, str | None]:
     """
     Check if HACS is installed and available via WebSocket.
 
@@ -56,7 +56,7 @@ async def _check_hacs_available(client) -> tuple[bool, str | None]:
         return False, f"Failed to connect to HACS: {str(e)}"
 
 
-def register_hacs_tools(mcp, client, **kwargs):
+def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register HACS integration tools with the MCP server."""
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Info"})
@@ -268,6 +268,13 @@ def register_hacs_tools(mcp, client, **kwargs):
                 description="Maximum number of results to return (default: 10, max: 100)",
             ),
         ] = 10,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of results to skip for pagination (default: 0)",
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
         """Search HACS store for repositories by keyword with pagination.
 
@@ -293,12 +300,13 @@ def register_hacs_tools(mcp, client, **kwargs):
             query: Search query (repository name, description, author)
             category: Filter by category (optional)
             max_results: Maximum results to return (default: 10, max: 100)
+            offset: Number of results to skip for pagination (default: 0)
 
         Returns:
             Search results from HACS store or error if HACS is not available.
         """
         try:
-            # Coerce max_results to int
+            # Coerce max_results and offset to int
             max_results_int = coerce_int_param(
                 max_results,
                 "max_results",
@@ -306,6 +314,12 @@ def register_hacs_tools(mcp, client, **kwargs):
                 min_value=1,
                 max_value=100,
             ) or 10
+            offset_int = coerce_int_param(
+                offset,
+                "offset",
+                default=0,
+                min_value=0,
+            ) or 0
 
             # Check if HACS is available
             is_available, error_msg = await _check_hacs_available(client)
@@ -384,16 +398,21 @@ def register_hacs_tools(mcp, client, **kwargs):
                         "score": score,
                     })
 
-            # Sort by score (descending) and limit results
+            # Sort by score (descending) and apply offset + limit
             matches.sort(key=lambda x: x["score"], reverse=True)
-            limited_matches = matches[:max_results_int]
+            limited_matches = matches[offset_int:offset_int + max_results_int]
+            has_more = (offset_int + len(limited_matches)) < len(matches)
 
             return await add_timezone_metadata(client, {
                 "success": True,
                 "query": query,
                 "category_filter": category,
                 "total_matches": len(matches),
-                "results_returned": len(limited_matches),
+                "offset": offset_int,
+                "limit": max_results_int,
+                "count": len(limited_matches),
+                "has_more": has_more,
+                "next_offset": offset_int + max_results_int if has_more else None,
                 "results": limited_matches,
             })
 
