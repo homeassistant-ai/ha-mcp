@@ -73,7 +73,7 @@ For local machine setup with `ha-mcp`, use **STDIO** so Codex launches `ha-mcp` 
 3. Click **Add Server**
 4. Set:
    - **Type:** `STDIO`
-   - **Name:** `homeassistant` (or `ha-mcp`)
+   - **Name:** `home-assistant` (or `ha-mcp`)
    - **Command:** `uvx`
    - **Args:** `ha-mcp@latest`
 5. Add environment variables:
