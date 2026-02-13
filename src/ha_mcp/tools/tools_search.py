@@ -11,13 +11,28 @@ from pydantic import Field
 
 from ..errors import create_entity_not_found_error
 from .helpers import exception_to_structured_error, log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
+from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
 
 
+def _build_pagination_metadata(
+    total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build standardized pagination metadata for search responses."""
+    has_more = (offset + len(results)) < total_matches
+    return {
+        "total_matches": total_matches,
+        "offset": offset,
+        "limit": limit,
+        "count": len(results),
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+    }
+
+
 async def _exact_match_search(
-    client, query: str, domain_filter: str | None, limit: int
+    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
 ) -> dict[str, Any]:
     """
     Fallback exact match search when fuzzy search fails.
@@ -40,31 +55,30 @@ async def _exact_match_search(
 
         # Check for exact substring match in entity_id or friendly_name
         if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
+            is_exact = query_lower == entity_id.lower() or query_lower == friendly_name.lower()
             results.append({
                 "entity_id": entity_id,
                 "friendly_name": friendly_name,
                 "domain": domain,
                 "state": entity.get("state", "unknown"),
-                "score": 100 if query_lower == entity_id.lower() or query_lower == friendly_name.lower() else 80,
+                "score": 100 if is_exact else 80,
                 "match_type": "exact_match",
             })
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
-    total_matches = len(results)
-    limited_results = results[:limit]
+    paginated = results[offset:offset + limit]
     return {
         "success": True,
         "query": query,
-        "total_matches": total_matches,
-        "results": limited_results,
-        "is_truncated": total_matches > len(limited_results),
+        **_build_pagination_metadata(len(results), offset, limit, paginated),
+        "results": paginated,
         "search_type": "exact_match",
     }
 
 
 async def _partial_results_search(
-    client, query: str, domain_filter: str | None, limit: int
+    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
 ) -> dict[str, Any]:
     """
     Last resort fallback - return any entities that might be relevant.
@@ -89,24 +103,22 @@ async def _partial_results_search(
             "friendly_name": friendly_name,
             "domain": domain,
             "state": entity.get("state", "unknown"),
-            "score": 0,  # No match score for partial results
+            "score": 0,
             "match_type": "partial_listing",
         })
 
-    total_matches = len(results)
-    limited_results = results[:limit]
+    paginated = results[offset:offset + limit]
     return {
         "success": True,
         "partial": True,
         "query": query,
-        "total_matches": total_matches,
-        "results": limited_results,
-        "is_truncated": total_matches > len(limited_results),
+        **_build_pagination_metadata(len(results), offset, limit, paginated),
+        "results": paginated,
         "search_type": "partial_listing",
     }
 
 
-def register_search_tools(mcp, client, **kwargs):
+def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register search and discovery tools with the MCP server."""
     smart_tools = kwargs.get("smart_tools")
     if not smart_tools:
@@ -119,6 +131,10 @@ def register_search_tools(mcp, client, **kwargs):
         domain_filter: str | None = None,
         area_filter: str | None = None,
         limit: int = 10,
+        offset: Annotated[
+            int | str,
+            Field(default=0, description="Number of results to skip for pagination (default: 0)"),
+        ] = 0,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
         """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
@@ -143,6 +159,8 @@ def register_search_tools(mcp, client, **kwargs):
         group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
 
         try:
+            offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+
             # If area_filter is provided, use area-based search
             if area_filter:
                 area_result = await smart_tools.get_entities_by_area(
@@ -183,7 +201,7 @@ def register_search_tools(mcp, client, **kwargs):
                         )
 
                     matches, total_matches = fuzzy_searcher.search_entities(
-                        entities_for_search, query, limit
+                        entities_for_search, query, limit, offset
                     )
 
                     # Format matches similar to smart_entity_search
@@ -201,37 +219,27 @@ def register_search_tools(mcp, client, **kwargs):
                             }
                         )
 
-                    # Group by domain if requested
+                    pagination = _build_pagination_metadata(total_matches, offset, limit, results)
+
+                    search_data: dict[str, Any] = {
+                        "success": True,
+                        "query": query,
+                        "area_filter": area_filter,
+                        **pagination,
+                        "results": results,
+                        "search_type": "area_filtered_query",
+                    }
+
                     if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
-                        for result in results:
-                            domain = result["domain"]
+                        for item in results:
+                            domain = item["domain"]
                             if domain not in by_domain:
                                 by_domain[domain] = []
-                            by_domain[domain].append(result)
+                            by_domain[domain].append(item)
+                        search_data["by_domain"] = by_domain
 
-                        search_data = {
-                            "success": True,
-                            "query": query,
-                            "area_filter": area_filter,
-                            "total_matches": total_matches,
-                            "results": results,
-                            "is_truncated": total_matches > len(results),
-                            "by_domain": by_domain,
-                            "search_type": "area_filtered_query",
-                        }
-                        return await add_timezone_metadata(client, search_data)
-                    else:
-                        search_data = {
-                            "success": True,
-                            "query": query,
-                            "area_filter": area_filter,
-                            "total_matches": total_matches,
-                            "results": results,
-                            "is_truncated": total_matches > len(results),
-                            "search_type": "area_filtered_query",
-                        }
-                        return await add_timezone_metadata(client, search_data)
+                    return await add_timezone_metadata(client, search_data)
                 else:
                     # Just area filter, return area results with enhanced format
                     if "areas" in area_result and area_result["areas"]:
@@ -280,8 +288,9 @@ def register_search_tools(mcp, client, **kwargs):
                 ]
 
                 # Format results to match fuzzy search output
+                paginated_entities = filtered_entities[offset:offset + limit]
                 results = []
-                for entity in filtered_entities[:limit]:
+                for entity in paginated_entities:
                     entity_id = entity.get("entity_id", "")
                     attributes = entity.get("attributes", {})
                     results.append({
@@ -293,15 +302,12 @@ def register_search_tools(mcp, client, **kwargs):
                         "match_type": "domain_listing",
                     })
 
-                total_filtered = len(filtered_entities)
-                # Build response data (avoid duplication by conditionally adding by_domain)
-                domain_list_data = {
+                domain_list_data: dict[str, Any] = {
                     "success": True,
                     "query": query,
                     "domain_filter": domain_filter,
-                    "total_matches": total_filtered,
+                    **_build_pagination_metadata(len(filtered_entities), offset, limit, results),
                     "results": results,
-                    "is_truncated": total_filtered > len(results),
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
@@ -315,20 +321,20 @@ def register_search_tools(mcp, client, **kwargs):
             # 3. If that fails, return partial results with warning
             # 4. Only error if all methods fail
 
-            result = None
-            warning = None
+            result: dict[str, Any] | None = None
+            warning: str | None = None
             search_type = "fuzzy_search"
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
+                result = await smart_tools.smart_entity_search(query, limit, offset=offset, domain_filter=domain_filter)
                 search_type = "fuzzy_search"
             except Exception as fuzzy_error:
                 logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
 
                 # Step 2: Try exact match fallback
                 try:
-                    result = await _exact_match_search(client, query, domain_filter, limit)
+                    result = await _exact_match_search(client, query, domain_filter, limit, offset)
                     warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
                 except Exception as exact_error:
@@ -336,7 +342,7 @@ def register_search_tools(mcp, client, **kwargs):
 
                     # Step 3: Try partial results fallback
                     try:
-                        result = await _partial_results_search(client, query, domain_filter, limit)
+                        result = await _partial_results_search(client, query, domain_filter, limit, offset)
                         warning = "Search degraded, returning partial results"
                         search_type = "partial_listing"
                     except Exception as partial_error:
@@ -351,14 +357,21 @@ def register_search_tools(mcp, client, **kwargs):
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
+            # Remove legacy is_truncated if present (replaced by has_more)
+            result.pop("is_truncated", None)
+
             # Add domain_filter to result if it was provided (for API consistency)
             if domain_filter:
                 result["domain_filter"] = domain_filter
 
-            # Ensure is_truncated field exists in result
-            if "is_truncated" not in result:
-                # For backward compatibility, calculate if not present
-                result["is_truncated"] = result.get("total_matches", 0) > len(result.get("results", []))
+            # Ensure pagination metadata exists in result
+            result.setdefault("offset", offset)
+            result.setdefault("limit", limit)
+            result.setdefault("count", len(result.get("results", [])))
+            if "has_more" not in result:
+                total = result.get("total_matches", 0)
+                result["has_more"] = (result["offset"] + result["count"]) < total
+                result["next_offset"] = result["offset"] + limit if result["has_more"] else None
 
             # Group by domain if requested
             if group_by_domain_bool and "results" in result:

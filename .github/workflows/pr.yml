@@ -67,6 +67,8 @@ jobs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        cache-binary: true
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
@@ -78,6 +80,14 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
+
+    - name: Pre-pull Home Assistant image
+      uses: nick-invision/retry@v3
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        retry_wait_seconds: 15
+        command: docker pull ghcr.io/home-assistant/home-assistant:2026.1.3
 
     - name: Run full E2E test suite
       run: |
@@ -101,6 +111,8 @@ jobs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        cache-binary: true
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
