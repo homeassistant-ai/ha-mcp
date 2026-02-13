@@ -13,7 +13,6 @@ single-entity search correctness. These tests specifically validate:
   - Results include the config object (proving bulk fetch worked)
 """
 
-import asyncio
 import logging
 import time
 import uuid
@@ -424,8 +423,8 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     )
     page1 = assert_mcp_success(result_page1, "Pagination page 1")
 
-    assert page1.get("returned") == 3, (
-        f"Expected 3 results on page 1, got {page1.get('returned')}"
+    assert page1.get("count") == 3, (
+        f"Expected 3 results on page 1, got {page1.get('count')}"
     )
     assert page1.get("has_more") is True, (
         "has_more should be True when more results exist"
@@ -450,8 +449,8 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     )
     page2 = assert_mcp_success(result_page2, "Pagination page 2")
 
-    assert page2.get("returned") == 3, (
-        f"Expected 3 results on page 2, got {page2.get('returned')}"
+    assert page2.get("count") == 3, (
+        f"Expected 3 results on page 2, got {page2.get('count')}"
     )
     # total_matches should be the same across pages
     assert page2.get("total_matches") == total, (
@@ -501,8 +500,8 @@ async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
     )
     past_data = assert_mcp_success(result_past, "Pagination past end")
 
-    assert past_data.get("returned") == 0, (
-        f"Expected 0 results past end, got {past_data.get('returned')}"
+    assert past_data.get("count") == 0, (
+        f"Expected 0 results past end, got {past_data.get('count')}"
     )
     assert past_data.get("has_more") is False, (
         "has_more should be False when offset >= total"
@@ -511,7 +510,7 @@ async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
         "next_offset should be None on last page"
     )
 
-    logger.info(f"Last page test passed: total={total}, returned=0, has_more=False")
+    logger.info(f"Last page test passed: total={total}, count=0, has_more=False")
 
 
 @pytest.mark.asyncio
