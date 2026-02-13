@@ -196,11 +196,6 @@ class DeviceControlTools:
                             "timeout_seconds": timeout_seconds,
                         },
                     },
-                    "usage_tips": [
-                        f"Check operation status: get_device_operation_status('{operation_id}')",
-                        "Operation will auto-complete when device responds",
-                        f"Timeout in {timeout_seconds} seconds if no response",
-                    ],
                 }
 
             except Exception as e:

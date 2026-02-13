@@ -181,7 +181,7 @@ def parse_string_list_param(
 
 
 async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
-    """Add timezone metadata to tool responses containing timestamps."""
+    """Add Home Assistant timezone to tool responses for local time context."""
     try:
         config = await client.get_config()
         ha_timezone = config.get("time_zone", "UTC")

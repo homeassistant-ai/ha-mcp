@@ -274,7 +274,6 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return {
                 "success": True,
                 **result,
-                "config_provided": config_dict,
             }
 
         except Exception as e:
