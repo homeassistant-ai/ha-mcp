@@ -165,9 +165,8 @@ def write_claude_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> P
             }
         }
     }
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="claude_mcp_", delete=False)
-    json.dump(config, f)
-    f.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="claude_mcp_", delete=False) as f:
+        json.dump(config, f)
     return Path(f.name)
 
 
@@ -446,7 +445,7 @@ async def run(args: argparse.Namespace) -> dict:
     """Execute the BAT scenario and return results."""
     # Read scenario
     if args.scenario_file:
-        scenario = json.loads(Path(args.scenario_file).read_text())
+        scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
     else:
         scenario = json.loads(sys.stdin.read())
 
@@ -555,11 +554,10 @@ Examples:
         sys.exit(1)
 
     # Write full results to temp file
-    results_file = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="bat_results_", delete=False
-    )
-    json.dump(full_results, results_file, indent=2)
-    results_file.close()
+    ) as results_file:
+        json.dump(full_results, results_file, indent=2)
 
     # Output concise summary + file path to stdout
     summary = make_summary(full_results)

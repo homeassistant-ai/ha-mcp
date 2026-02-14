@@ -10,7 +10,11 @@ import logging
 import time
 from typing import Any
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +151,7 @@ def parse_json_param(
                 )
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}")
+            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
     raise ValueError(
         f"{param_name} must be string, dict, list, or None, got {type(param).__name__}"
@@ -175,7 +179,7 @@ def parse_string_list_param(
                 raise ValueError(f"{param_name} must be a JSON array of strings")
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}")
+            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
     raise ValueError(f"{param_name} must be string, list, or None")
 

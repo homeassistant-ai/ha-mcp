@@ -50,7 +50,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
     logger.info("MCP tools installer enabled via feature flag")
 
     # Import HACS helpers - we depend on HACS functionality
-    from .tools_hacs import _check_hacs_available, CATEGORY_MAP
+    from .tools_hacs import CATEGORY_MAP, _check_hacs_available
 
     @mcp.tool(
         annotations={
@@ -276,8 +276,12 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                     result["message"] += ". Home Assistant is restarting."
                     result["note"] = "Wait 1-5 minutes for Home Assistant to restart."
                 except Exception as restart_error:
-                    # Connection errors during restart are expected
-                    if "connection" in str(restart_error).lower():
+                    # Connection/proxy errors during restart are expected
+                    # (HA closes connections, proxies may return 504)
+                    if any(
+                        pattern in str(restart_error).lower()
+                        for pattern in ("connect", "closed", "504")
+                    ):
                         result["restarted"] = True
                         result["message"] += ". Home Assistant is restarting."
                         result["note"] = (

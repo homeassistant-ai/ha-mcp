@@ -412,34 +412,34 @@ def _format_detailed_trace(
     }
 
     raw_trace = trace.get("trace", {})
-    
+
     # Initialize lists
     triggers = []
     conditions = []
     actions = []
-    
+
     # Home Assistant trace data is stored as a flat dict with path keys
     # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
     for path, steps in raw_trace.items():
         if not isinstance(steps, list):
             continue
-            
+
         for step in steps:
             # Create a copy to avoid modifying original
             step_info = step.copy()
             step_info["path"] = path
-            
+
             if path == "trigger" or path.startswith("trigger/"):
                 triggers.append(step_info)
             elif path == "condition" or path.startswith("condition/"):
                 conditions.append(step_info)
             elif path == "action" or path.startswith("action/"):
                 actions.append(step_info)
-    
+
     # Sort by timestamp (if available) or path to maintain execution order
     def sort_key(item):
         return (item.get("timestamp", ""), item.get("path", ""))
-        
+
     triggers.sort(key=sort_key)
     conditions.sort(key=sort_key)
     actions.sort(key=sort_key)
@@ -451,7 +451,7 @@ def _format_detailed_trace(
         # Sometimes variables are in 'variables' key, sometimes 'changed_variables'
         if not trigger_vars:
             trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
-            
+
         result["trigger"] = {
             "platform": trigger_vars.get("platform"),
             "description": trigger_vars.get("description"),
@@ -463,7 +463,7 @@ def _format_detailed_trace(
             result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
-    
+
     # If no trigger info found in traces, try to get it from the top-level trigger field if present
     # (some HA versions might populate this)
     if "trigger" not in result and "trigger" in trace:
@@ -511,7 +511,7 @@ def _format_detailed_trace(
                 useful_vars = {k: v for k, v in variables.items() if v is not None}
                 if useful_vars:
                     action_info["variables"] = useful_vars
-            
+
             # Add child execution info (for nested scripts/automations)
             if "child_id" in action:
                 action_info["child_id"] = action["child_id"]

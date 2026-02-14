@@ -21,7 +21,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
-from .helpers import log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -1688,14 +1688,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 f"error={e}",
                 exc_info=True,
             )
-            return {
-                "success": False,
-                "action": "find_card",
-                "url_path": url_path,
-                "error": str(e) if str(e) else f"{type(e).__name__} (no details)",
-                "error_type": type(e).__name__,
-                "suggestions": [
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "entity_id": entity_id,
+                    "card_type": card_type,
+                    "heading": heading,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
-                ],
-            }
+                ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
+            return error_response

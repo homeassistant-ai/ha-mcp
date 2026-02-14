@@ -123,8 +123,8 @@ class ToolsRegistry:
 
         # Add explicit modules (only if enabled or no filter)
         discovered.extend(
-            m for m in EXPLICIT_MODULES
-            if enabled_set is None or m in enabled_set
+            module_name for module_name in EXPLICIT_MODULES
+            if enabled_set is None or module_name in enabled_set
         )
 
         if enabled_set is not None:

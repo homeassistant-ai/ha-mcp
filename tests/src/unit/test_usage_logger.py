@@ -169,7 +169,7 @@ class TestUsageLoggerRingBuffer:
 
 class TestUsageLoggerDefaults:
     """Test UsageLogger default behavior."""
-    
+
     def test_default_log_path(self):
         """Test that default log path is in user home directory."""
         logger = UsageLogger()
