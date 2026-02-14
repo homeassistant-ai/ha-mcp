@@ -645,7 +645,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"Unexpected error response structure, could not add suggestions: "
                     f"{type(error_response.get('error'))}"
                 )
-            return await add_timezone_metadata(client, error_response)
+            return error_response
 
     @mcp.tool(
         annotations={

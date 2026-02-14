@@ -65,13 +65,12 @@ class TestDeepSearchErrorHandling:
 
         result = await deep_search_tool(query="test_query")
 
-        data = result["data"]
-        assert data["success"] is False
-        assert isinstance(data["error"], dict), "error must be structured dict, not raw string"
-        assert "code" in data["error"]
-        assert "message" in data["error"]
-        assert "traceback" not in data
-        assert "error_type" not in data
+        assert result["success"] is False
+        assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
+        assert "code" in result["error"]
+        assert "message" in result["error"]
+        assert "traceback" not in result
+        assert "error_type" not in result
 
     @pytest.mark.asyncio
     async def test_error_includes_search_specific_suggestions(
@@ -84,24 +83,9 @@ class TestDeepSearchErrorHandling:
 
         result = await deep_search_tool(query="test_query")
 
-        data = result["data"]
-        suggestions = data["error"]["suggestions"]
+        suggestions = result["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
-
-    @pytest.mark.asyncio
-    async def test_error_response_includes_timezone_metadata(
-        self, mock_mcp, mock_client, mock_smart_tools, deep_search_tool
-    ):
-        """Error responses should be wrapped with timezone metadata."""
-        mock_smart_tools.deep_search = AsyncMock(
-            side_effect=RuntimeError("fail")
-        )
-
-        result = await deep_search_tool(query="test_query")
-
-        assert "metadata" in result, "error response must include timezone metadata"
-        assert "home_assistant_timezone" in result["metadata"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -129,6 +113,5 @@ class TestDeepSearchErrorHandling:
 
         result = await deep_search_tool(query="test_query")
 
-        data = result["data"]
-        assert data["success"] is False
-        assert data["error"]["code"] == expected_code
+        assert result["success"] is False
+        assert result["error"]["code"] == expected_code
