@@ -1688,7 +1688,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 f"error={e}",
                 exc_info=True,
             )
-            error_response = exception_to_structured_error(
+            return exception_to_structured_error(
                 e,
                 context={
                     "action": "find_card",
@@ -1698,15 +1698,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "heading": heading,
                 },
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
-                ]
-            else:
-                logger.warning(
-                    f"Unexpected error response structure, could not add suggestions: "
-                    f"{type(error_response.get('error'))}"
-                )
-            return error_response
+                ],
+            )

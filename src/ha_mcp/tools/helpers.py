@@ -89,6 +89,7 @@ def exception_to_structured_error(
     context: dict[str, Any] | None = None,
     *,
     raise_error: Literal[True] = True,
+    suggestions: list[str] | None = None,
 ) -> NoReturn: ...
 
 
@@ -98,6 +99,7 @@ def exception_to_structured_error(
     context: dict[str, Any] | None = None,
     *,
     raise_error: Literal[False],
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]: ...
 
 
@@ -106,6 +108,7 @@ def exception_to_structured_error(
     context: dict[str, Any] | None = None,
     *,
     raise_error: bool = True,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Convert an exception to a structured error response.
@@ -119,6 +122,8 @@ def exception_to_structured_error(
         context: Additional context to include in the response
         raise_error: If True (default), raises ToolError with the structured error.
                     If False, returns the error dict for further modification.
+        suggestions: Optional list of actionable suggestions to embed in the error.
+                    Saves callers from manually inserting suggestions after the call.
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
@@ -207,6 +212,9 @@ def exception_to_structured_error(
             details=error_msg,
             context=context,
         )
+
+    if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
+        error_response["error"]["suggestions"] = suggestions
 
     if raise_error:
         raise_tool_error(error_response)

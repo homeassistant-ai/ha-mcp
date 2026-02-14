@@ -115,6 +115,38 @@ class TestExceptionToStructuredError:
         assert result.get("entity_id") == "light.test"
         assert result.get("action") == "get"
 
+    def test_suggestions_embedded_when_raising(self):
+        """Suggestions should be embedded in the error and raised as ToolError."""
+        suggestions = ["Check connection", "Retry later"]
+        with pytest.raises(ToolError) as exc_info:
+            exception_to_structured_error(
+                ValueError("test error"),
+                suggestions=suggestions,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["suggestions"] == suggestions
+
+    def test_suggestions_embedded_when_returning(self):
+        """Suggestions should be embedded in the returned error dict."""
+        suggestions = ["Try a different query", "Check spelling"]
+        result = exception_to_structured_error(
+            ValueError("test error"),
+            raise_error=False,
+            suggestions=suggestions,
+        )
+
+        assert result["error"]["suggestions"] == suggestions
+
+    def test_no_suggestions_when_none(self):
+        """No suggestions key should be added when suggestions is None."""
+        result = exception_to_structured_error(
+            ValueError("test error"),
+            raise_error=False,
+        )
+
+        assert "suggestions" not in result["error"]
+
     def test_tool_error_message_is_valid_json(self):
         """ToolError message should be valid JSON."""
         with pytest.raises(ToolError) as exc_info:

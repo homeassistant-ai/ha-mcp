@@ -124,13 +124,12 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"tool": "ha_hacs_info"},
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check Home Assistant connection",
                     "Restart Home Assistant if HACS was recently installed",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -244,13 +243,12 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"tool": "ha_hacs_list_installed", "category": category},
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                     "Check Home Assistant connection",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -425,13 +423,12 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"tool": "ha_hacs_search", "query": query, "category": category},
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Try a simpler search query",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -543,13 +540,12 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"tool": "ha_hacs_repository_info", "repository_id": repository_id},
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID format (e.g., 'hacs/integration' or 'owner/repo')",
                     "Use ha_hacs_search() to find the correct repository ID",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -668,15 +664,14 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "category": category,
                 },
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository format: 'owner/repo'",
                     "Verify the repository exists on GitHub",
                     "Ensure category matches repository type",
                     "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -806,13 +801,12 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "version": version,
                 },
                 raise_error=False,
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID is valid (use ha_hacs_search() to find it)",
                     "Ensure the repository is in HACS (use ha_hacs_add_repository() if needed)",
                     "Check version format (e.g., 'v1.2.3' or '1.2.3')",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
