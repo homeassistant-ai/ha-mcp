@@ -85,7 +85,12 @@ class TestVoiceAssistantExposure:
         data = parse_mcp_result(result)
 
         assert not data.get("success"), "Invalid assistant should fail"
-        assert "valid_assistants" in data, "Should suggest valid assistants"
+        # When routed through the proxy, valid_assistants may be inside the
+        # stringified error message rather than at the top level of data.
+        error_info = str(data.get("error", ""))
+        assert "valid_assistants" in data or "valid_assistants" in error_info, (
+            "Should suggest valid assistants"
+        )
 
         logger.info("Invalid assistant correctly rejected")
 
