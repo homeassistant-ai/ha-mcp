@@ -210,7 +210,7 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
         args = getattr(hint, "__args__", ())
 
         if origin is Annotated:
-            base_type = args[0] if args else str
+            type_to_inspect = args[0] if args else str
             for metadata in args[1:]:
                 if isinstance(metadata, type(Field())):
                     field_info = metadata
@@ -218,10 +218,17 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
                         param_schema["description"] = field_info.description
                     if hasattr(field_info, "default") and field_info.default is not None:
                         param_schema["default"] = field_info.default
-            # Map Python types to JSON schema types
-            param_schema["type"] = _python_type_to_json(base_type)
         else:
-            param_schema["type"] = _python_type_to_json(hint)
+            type_to_inspect = hint
+
+        json_type = _python_type_to_json(type_to_inspect)
+        param_schema["type"] = json_type
+
+        # Enrich array types with items schema (e.g. list[str] -> items: {type: string})
+        if json_type == "array":
+            item_schema = _get_array_items_schema(type_to_inspect)
+            if item_schema:
+                param_schema["items"] = item_schema
 
         properties[param_name] = param_schema
 
@@ -234,6 +241,24 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
         schema["required"] = required
 
     return name, description, schema
+
+
+def _get_array_items_schema(python_type: Any) -> dict[str, str] | None:
+    """Extract items schema for array types (e.g. list[str] -> {"type": "string"})."""
+    effective = python_type
+    eff_origin = getattr(effective, "__origin__", None)
+
+    # Unwrap Union to find the list type (e.g. list[str] | None)
+    if eff_origin is types.UnionType:
+        for arg in effective.__args__:
+            if arg is not type(None) and getattr(arg, "__origin__", arg) is list:
+                effective = arg
+                break
+
+    type_args = getattr(effective, "__args__", ())
+    if type_args:
+        return {"type": _python_type_to_json(type_args[0])}
+    return None
 
 
 def _python_type_to_json(python_type: Any) -> str:
