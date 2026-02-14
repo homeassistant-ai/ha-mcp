@@ -4,8 +4,9 @@ Validates that ha_dashboard_find_card uses structured error responses and
 does NOT leak internal Python type names or tracebacks.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
 

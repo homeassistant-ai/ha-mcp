@@ -31,7 +31,7 @@ env/
 .ENV
 
 # IDE
-.vscode/
+.vscode
 .idea/
 *.swp
 *.swo
@@ -91,3 +91,26 @@ tests/initial_test_state/custom_components/hacs/hacs_frontend/
 .auto-claude/
 .worktrees/
 .claude_settings.json
+
+# Shell dotfiles (WSL2 artifacts)
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+
+# Tool configs
+.gitconfig
+.ripgreprc
+.mcp.json
+
+# Git bare repo fragments
+HEAD
+config
+hooks
+objects
+refs
+.gitmodules
+
+# Claude Code
+.claude/commands

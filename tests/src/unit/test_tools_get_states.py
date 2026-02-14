@@ -1,7 +1,8 @@
 """Unit tests for ha_get_states bulk state retrieval tool."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ha_mcp.tools.tools_search import register_search_tools
 
