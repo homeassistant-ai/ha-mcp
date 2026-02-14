@@ -619,14 +619,41 @@ def register_<domain>_tools(mcp, client, **kwargs):
 | `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
 
 ### Error Handling
-Use structured errors from `errors.py`:
+
+**Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
+
+**Domain-specific errors** (`errors.py`) — use these when the error type is known:
 ```python
-from ..errors import create_error_response, ErrorCode
-return create_error_response(
-    code=ErrorCode.ENTITY_NOT_FOUND,
-    message="Entity not found",
-    suggestions=["Use ha_search_entities() to find valid IDs"]
-)
+from ..errors import create_entity_not_found_error, create_validation_error, create_service_error
+
+# Entity lookup failures (404 / not found)
+return create_entity_not_found_error(entity_id, details=str(e))
+
+# Invalid parameters
+return create_validation_error("Invalid format", parameter="entity_ids", details=str(e))
+
+# Service call failures
+return create_service_error(domain, service, message=f"Service call failed: {e}", details=str(e))
+```
+
+Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
+
+**Catch-all exception handler** (`helpers.py`) — use in `except Exception` blocks:
+```python
+from .helpers import exception_to_structured_error
+
+except Exception as e:
+    return exception_to_structured_error(e, context={"entity_id": entity_id})
+```
+
+**Pattern for tools**: Use `exception_to_structured_error` as the catch-all — it already classifies 404s, auth errors, timeouts, etc. based on exception type and message. Pass `context={"entity_id": ...}` so it can produce `ENTITY_NOT_FOUND` for 404 errors automatically. No manual 404 string matching needed:
+```python
+try:
+    result = await client.get_entity_state(entity_id)
+    return await add_timezone_metadata(client, result)
+except Exception as e:
+    error_response = exception_to_structured_error(e, context={"entity_id": entity_id})
+    return await add_timezone_metadata(client, error_response)
 ```
 
 ### Return Values
