@@ -646,31 +646,165 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "error": "helper_id is required for update action",
                     }
 
-                # For updates, we primarily use entity registry update
                 entity_id = (
                     helper_id
                     if helper_id.startswith(helper_type)
                     else f"{helper_type}.{helper_id}"
                 )
 
-                update_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/update",
-                    "entity_id": entity_id,
-                }
+                # Person, zone, and tag store config in separate config stores
+                # (not just the entity registry). Route updates accordingly.
+                # The entity registry only holds UI metadata (name, icon, area,
+                # labels). Domain-specific data like device_trackers (person),
+                # coordinates (zone), and descriptions (tag) live in their own
+                # config stores accessed via {type}/update websocket commands.
+                config_store_types = {"person", "zone", "tag"}
 
-                if name:
-                    update_msg["name"] = name
-                if icon:
-                    update_msg["icon"] = icon
-                if area_id:
-                    update_msg["area_id"] = area_id
-                if labels:
-                    update_msg["labels"] = labels
+                if helper_type in config_store_types:
+                    # Step 1: Get unique_id from entity registry
+                    registry_msg: dict[str, Any] = {
+                        "type": "config/entity_registry/get",
+                        "entity_id": entity_id,
+                    }
+                    registry_result = await client.send_websocket_message(
+                        registry_msg
+                    )
+                    if not registry_result.get("success"):
+                        return {
+                            "success": False,
+                            "error": f"Could not find {helper_type} entity: {entity_id}",
+                        }
+                    registry_entry = registry_result.get("result", {})
+                    if not isinstance(registry_entry, dict):
+                        return {
+                            "success": False,
+                            "error": f"Unexpected registry response for {entity_id}",
+                        }
+                    unique_id = registry_entry.get("unique_id")
+                    if not unique_id:
+                        return {
+                            "success": False,
+                            "error": f"No unique_id found in entity registry for {entity_id}",
+                        }
 
-                result = await client.send_websocket_message(update_msg)
+                    config_data: dict[str, Any] = {}
 
-                if result.get("success"):
-                    entity_data = result.get("result", {}).get("entity_entry", {})
+                    if helper_type == "person":
+                        # Person config API is full-replace (not patch):
+                        # fetch current config, merge with new values, then send.
+                        list_result = await client.send_websocket_message(
+                            {"type": "person/list"}
+                        )
+                        if not list_result.get("success"):
+                            return {
+                                "success": False,
+                                "error": f"Failed to fetch person config list: {list_result.get('error', 'Unknown')}",
+                            }
+
+                        # person/list returns {"storage": [...], "config": [...]}
+                        # "storage" contains UI-managed (editable) persons
+                        person_result = list_result.get("result", {})
+                        person_list = (
+                            person_result.get("storage", [])
+                            if isinstance(person_result, dict)
+                            else person_result
+                        )
+
+                        current_config = None
+                        for person_entry in person_list:
+                            if isinstance(person_entry, dict) and person_entry.get("id") == unique_id:
+                                current_config = person_entry
+                                break
+
+                        if not current_config:
+                            return {
+                                "success": False,
+                                "error": f"Person config not found for id: {unique_id}",
+                            }
+
+                        # Merge: use new values if provided, else keep current
+                        update_msg: dict[str, Any] = {
+                            "type": "person/update",
+                            "person_id": unique_id,
+                            "name": name if name else current_config.get("name"),
+                            "user_id": user_id
+                            if user_id is not None
+                            else current_config.get("user_id"),
+                            "device_trackers": device_trackers
+                            if device_trackers is not None
+                            else current_config.get("device_trackers", []),
+                        }
+                        if picture is not None:
+                            update_msg["picture"] = picture
+                        elif current_config.get("picture"):
+                            update_msg["picture"] = current_config["picture"]
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            return {
+                                "success": False,
+                                "error": f"Failed to update person config: {result.get('error', 'Unknown error')}",
+                                "entity_id": entity_id,
+                            }
+                        config_data = result.get("result", {})
+
+                    elif helper_type == "zone":
+                        update_msg = {
+                            "type": "zone/update",
+                            "zone_id": unique_id,
+                        }
+                        if name:
+                            update_msg["name"] = name
+                        if latitude is not None:
+                            update_msg["latitude"] = latitude
+                        if longitude is not None:
+                            update_msg["longitude"] = longitude
+                        if radius is not None:
+                            update_msg["radius"] = radius
+                        if passive is not None:
+                            update_msg["passive"] = passive
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            return {
+                                "success": False,
+                                "error": f"Failed to update zone config: {result.get('error', 'Unknown error')}",
+                                "entity_id": entity_id,
+                            }
+                        config_data = result.get("result", {})
+
+                    elif helper_type == "tag":
+                        update_msg = {
+                            "type": "tag/update",
+                            "tag_id": unique_id,
+                        }
+                        if name:
+                            update_msg["name"] = name
+                        if description is not None:
+                            update_msg["description"] = description
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            return {
+                                "success": False,
+                                "error": f"Failed to update tag config: {result.get('error', 'Unknown error')}",
+                                "entity_id": entity_id,
+                            }
+                        config_data = result.get("result", {})
+
+                    # Also update entity registry for icon/area/labels
+                    if icon or area_id or labels:
+                        registry_update: dict[str, Any] = {
+                            "type": "config/entity_registry/update",
+                            "entity_id": entity_id,
+                        }
+                        if icon:
+                            registry_update["icon"] = icon
+                        if area_id:
+                            registry_update["area_id"] = area_id
+                        if labels:
+                            registry_update["labels"] = labels
+                        await client.send_websocket_message(registry_update)
 
                     # Wait for entity to reflect the update
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
@@ -679,7 +813,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "action": "update",
                         "helper_type": helper_type,
                         "entity_id": entity_id,
-                        "updated_data": entity_data,
+                        "updated_data": config_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
                     if wait_bool:
@@ -690,12 +824,52 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         except Exception as e:
                             response["warning"] = f"Update applied but verification failed: {e}"
                     return response
+
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to update helper: {result.get('error', 'Unknown error')}",
+                    # Standard helpers: entity registry update only
+                    update_msg = {
+                        "type": "config/entity_registry/update",
                         "entity_id": entity_id,
                     }
+
+                    if name:
+                        update_msg["name"] = name
+                    if icon:
+                        update_msg["icon"] = icon
+                    if area_id:
+                        update_msg["area_id"] = area_id
+                    if labels:
+                        update_msg["labels"] = labels
+
+                    result = await client.send_websocket_message(update_msg)
+
+                    if result.get("success"):
+                        entity_data = result.get("result", {}).get("entity_entry", {})
+
+                        # Wait for entity to reflect the update
+                        wait_bool = coerce_bool_param(wait, "wait", default=True)
+                        response = {
+                            "success": True,
+                            "action": "update",
+                            "helper_type": helper_type,
+                            "entity_id": entity_id,
+                            "updated_data": entity_data,
+                            "message": f"Successfully updated {helper_type}: {entity_id}",
+                        }
+                        if wait_bool:
+                            try:
+                                registered = await wait_for_entity_registered(client, entity_id)
+                                if not registered:
+                                    response["warning"] = f"Update applied but {entity_id} not yet queryable."
+                            except Exception as e:
+                                response["warning"] = f"Update applied but verification failed: {e}"
+                        return response
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Failed to update helper: {result.get('error', 'Unknown error')}",
+                            "entity_id": entity_id,
+                        }
 
             # This should never be reached since action is either "create" or "update"
             return {
