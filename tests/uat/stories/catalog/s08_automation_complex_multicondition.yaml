@@ -43,7 +43,7 @@ prompt: >
 teardown:
   - tool: ha_config_remove_automation
     args:
-      automation_id: "door_alert_lights"
+      identifier: "door_alert_lights"
   - tool: ha_config_remove_helper
     args:
       helper_type: "input_boolean"

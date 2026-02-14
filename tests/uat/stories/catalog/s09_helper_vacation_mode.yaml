@@ -27,7 +27,7 @@ prompt: >
 teardown:
   - tool: ha_config_remove_automation
     args:
-      automation_id: "vacation_mode_lights"
+      identifier: "vacation_mode_lights"
   - tool: ha_config_remove_helper
     args:
       helper_type: "input_boolean"

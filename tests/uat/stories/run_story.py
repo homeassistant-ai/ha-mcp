@@ -2,32 +2,39 @@
 """
 Standalone story runner.
 
-Converts YAML stories to BAT format and runs them via run_uat.py.
-In standalone mode, setup/teardown are converted to agent prompts
-(since there's no FastMCP in-memory client available).
+Runs YAML stories against a HA test instance:
+- Setup/teardown: FastMCP in-memory (sub-second, deterministic)
+- Test prompt: AI agent CLI via run_uat.py (gemini/claude)
 
+One HA container is shared across all stories in a run.
 Results are appended to a JSONL file for historical tracking.
 
 Usage:
     # Run a single story
-    python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
+    uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
 
     # Run all stories
-    python tests/uat/stories/run_story.py --all --agents gemini
+    uv run python tests/uat/stories/run_story.py --all --agents gemini
 
     # Run against a specific branch/tag
-    python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
+    uv run python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
 
-    # Just print the BAT scenario JSON (for piping to run_uat.py manually)
-    python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --dry-run
+    # Use an existing HA instance instead of starting a container
+    uv run python tests/uat/stories/run_story.py --all --agents gemini --ha-url http://localhost:8123
+
+    # Just print the BAT scenario JSON
+    uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --dry-run
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,67 +43,209 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 CATALOG_DIR = SCRIPT_DIR / "catalog"
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
+TESTS_DIR = REPO_ROOT / "tests"
 RUN_UAT = SCRIPT_DIR.parent / "run_uat.py"
 DEFAULT_RESULTS_FILE = REPO_ROOT / "local" / "uat-results.jsonl"
 
+# Add paths for imports
+sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(TESTS_DIR))
 
+logger = logging.getLogger(__name__)
+
+
+def log(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Story loading
+# ---------------------------------------------------------------------------
 def load_story(path: Path) -> dict:
     """Load a story YAML file."""
     with open(path) as f:
         return yaml.safe_load(f)
 
 
-def story_to_bat_scenario(story: dict) -> dict:
-    """Convert a story to BAT scenario format.
+# ---------------------------------------------------------------------------
+# HA Container (reuses run_uat.py's HAContainer)
+# ---------------------------------------------------------------------------
+def _start_container() -> dict:
+    """Start a HA test container, return {url, token, container, config_dir}."""
+    import os
+    import shutil
+    import tempfile
 
-    In standalone mode, setup/teardown steps are converted to agent prompts
-    that describe the MCP tool calls to make.
-    """
-    scenario: dict = {}
+    import requests
+    from testcontainers.core.container import DockerContainer
 
-    # Convert setup steps to a prompt
-    setup_steps = story.get("setup") or []
-    if setup_steps:
-        setup_lines = ["Set up the test environment by running these tool calls:"]
-        for step in setup_steps:
-            tool = step["tool"]
+    from test_constants import TEST_TOKEN
+
+    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+    HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+
+    # Copy initial_test_state
+    config_dir = Path(tempfile.mkdtemp(prefix="ha_story_"))
+    initial_state = TESTS_DIR / "initial_test_state"
+    shutil.copytree(initial_state, config_dir, dirs_exist_ok=True)
+    os.chmod(config_dir, 0o755)
+    for item in config_dir.rglob("*"):
+        if item.is_file():
+            os.chmod(item, 0o644)
+        elif item.is_dir():
+            os.chmod(item, 0o755)
+
+    container = (
+        DockerContainer(HA_IMAGE)
+        .with_exposed_ports(8123)
+        .with_volume_mapping(str(config_dir), "/config", "rw")
+        .with_env("TZ", "UTC")
+        .with_kwargs(privileged=True)
+    )
+    container.start()
+
+    try:
+        port = container.get_exposed_port(8123)
+        url = f"http://localhost:{port}"
+        log(f"HA container started on {url}")
+
+        # Wait for HA to be ready
+        time.sleep(5)
+        start = time.time()
+        while time.time() - start < 120:
+            try:
+                r = requests.get(
+                    f"{url}/api/config",
+                    headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+                    timeout=5,
+                )
+                if r.status_code == 200:
+                    version = r.json().get("version", "unknown")
+                    log(f"HA ready (version {version})")
+                    break
+            except requests.RequestException:
+                pass
+            time.sleep(3)
+        else:
+            raise TimeoutError("HA not ready after 120s")
+
+        time.sleep(10)  # component stabilization
+    except Exception:
+        container.stop()
+        shutil.rmtree(config_dir, ignore_errors=True)
+        raise
+
+    return {
+        "url": url,
+        "token": TEST_TOKEN,
+        "container": container,
+        "config_dir": config_dir,
+    }
+
+
+def _stop_container(ha: dict) -> None:
+    """Stop HA container and clean up."""
+    import shutil
+
+    log("Stopping HA container...")
+    ha["container"].stop()
+    shutil.rmtree(ha["config_dir"], ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# FastMCP in-memory setup/teardown
+# ---------------------------------------------------------------------------
+async def _run_mcp_steps(
+    ha_url: str, ha_token: str, steps: list[dict], phase: str
+) -> None:
+    """Execute setup or teardown steps via FastMCP in-memory client."""
+    if not steps:
+        return
+
+    import ha_mcp.config
+
+    from ha_mcp.client import HomeAssistantClient
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    ha_mcp.config._settings = None
+
+    client = HomeAssistantClient(base_url=ha_url, token=ha_token)
+    server = HomeAssistantSmartMCPServer(client=client)
+
+    from fastmcp import Client
+
+    async with Client(server.mcp) as mcp_client:
+        for step in steps:
+            tool_name = step["tool"]
             args = step.get("args", {})
-            args_str = json.dumps(args) if args else ""
-            setup_lines.append(f"- Call {tool} with arguments: {args_str}")
-        setup_lines.append("Report what you created.")
-        scenario["setup_prompt"] = "\n".join(setup_lines)
-
-    # Test prompt is used directly
-    scenario["test_prompt"] = story["prompt"].strip()
-
-    # Convert teardown steps to a prompt
-    teardown_steps = story.get("teardown") or []
-    if teardown_steps:
-        teardown_lines = ["Clean up the test environment:"]
-        for step in teardown_steps:
-            tool = step["tool"]
-            args = step.get("args", {})
-            args_str = json.dumps(args) if args else ""
-            teardown_lines.append(f"- Call {tool} with arguments: {args_str}")
-        teardown_lines.append("Report what you cleaned up.")
-        scenario["teardown_prompt"] = "\n".join(teardown_lines)
-
-    return scenario
+            log(f"  [{phase}] {tool_name}({args})")
+            try:
+                await mcp_client.call_tool(tool_name, args)
+            except Exception as e:
+                if phase == "setup":
+                    log(f"  [{phase}] {tool_name} FAILED: {e}")
+                    raise
+                else:
+                    log(f"  [{phase}] {tool_name} failed (ok): {e}")
 
 
+# ---------------------------------------------------------------------------
+# Test prompt execution via agent CLI
+# ---------------------------------------------------------------------------
+def _run_test_prompt(
+    prompt: str,
+    agents: str,
+    ha_url: str,
+    ha_token: str,
+    branch: str | None = None,
+    extra_args: list[str] | None = None,
+) -> tuple[int, dict | None]:
+    """Run test prompt via run_uat.py. Returns (exit_code, parsed_summary)."""
+    scenario = {"test_prompt": prompt.strip()}
+
+    cmd = [
+        sys.executable,
+        str(RUN_UAT),
+        "--agents", agents,
+        "--ha-url", ha_url,
+        "--ha-token", ha_token,
+    ]
+    if branch:
+        cmd.extend(["--branch", branch])
+    if extra_args:
+        cmd.extend(extra_args)
+
+    result = subprocess.run(
+        cmd,
+        input=json.dumps(scenario),
+        capture_output=True,
+        text=True,
+    )
+
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="")
+
+    summary = None
+    if result.stdout.strip():
+        try:
+            summary = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            pass
+
+    return result.returncode, summary
+
+
+# ---------------------------------------------------------------------------
+# Git info
+# ---------------------------------------------------------------------------
 def get_git_info() -> tuple[str, str]:
-    """Get git commit SHA (short) and human-readable description.
-
-    Returns (sha, describe) where describe is like "v6.6.1" or "v6.6.1-5-gabc1234".
-    """
+    """Get (short SHA, git describe) for the current commit."""
     sha = "unknown"
     describe = "unknown"
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
+            capture_output=True, text=True, cwd=str(REPO_ROOT),
         )
         sha = result.stdout.strip()
     except Exception:
@@ -104,9 +253,7 @@ def get_git_info() -> tuple[str, str]:
     try:
         result = subprocess.run(
             ["git", "describe", "--tags", "--always"],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
+            capture_output=True, text=True, cwd=str(REPO_ROOT),
         )
         describe = result.stdout.strip()
     except Exception:
@@ -114,6 +261,9 @@ def get_git_info() -> tuple[str, str]:
     return sha, describe
 
 
+# ---------------------------------------------------------------------------
+# JSONL results
+# ---------------------------------------------------------------------------
 def append_result(
     results_file: Path,
     story: dict,
@@ -150,59 +300,98 @@ def append_result(
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
-def run_story(
-    story_path: Path,
-    agents: str,
-    branch: str | None = None,
-    extra_args: list[str] | None = None,
-) -> tuple[int, dict | None]:
-    """Run a single story via run_uat.py. Returns (exit_code, parsed_summary)."""
-    story = load_story(story_path)
-    scenario = story_to_bat_scenario(story)
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]]) -> int:
+    """Run all stories: container → (setup → test → teardown) per story."""
+    sha, describe = get_git_info()
+    agent_list = [a.strip() for a in args.agents.split(",")]
 
-    print(f"--- Story {story['id']}: {story['title']} ---", file=sys.stderr)
-    print(f"Category: {story['category']}, Weight: {story['weight']}", file=sys.stderr)
+    # Start or connect to HA
+    ha = None
+    ha_url = args.ha_url
+    ha_token = args.ha_token
+    if not ha_url:
+        ha = _start_container()
+        ha_url = ha["url"]
+        ha_token = ha["token"]
 
-    cmd = [
-        sys.executable,
-        str(RUN_UAT),
-        "--agents", agents,
-    ]
-    if branch:
-        cmd.extend(["--branch", branch])
-    if extra_args:
-        cmd.extend(extra_args)
+    try:
+        results = []
+        for path, story in filtered:
+            sid = story["id"]
+            log(f"\n{'='*60}")
+            log(f"Story {sid}: {story['title']}")
+            log(f"{'='*60}")
 
-    result = subprocess.run(
-        cmd,
-        input=json.dumps(scenario),
-        capture_output=True,
-        text=True,
-    )
+            setup_steps = story.get("setup") or []
+            teardown_steps = story.get("teardown") or []
 
-    # Print stderr passthrough
-    if result.stderr:
-        print(result.stderr, file=sys.stderr, end="")
+            # Setup via FastMCP in-memory
+            if setup_steps:
+                log(f"[{sid}] Setup ({len(setup_steps)} steps via FastMCP)...")
+                await _run_mcp_steps(ha_url, ha_token, setup_steps, "setup")
 
-    # Parse JSON summary from stdout
-    summary = None
-    if result.stdout.strip():
-        try:
-            summary = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            pass
+            # Test via agent CLI
+            log(f"[{sid}] Test via {args.agents}...")
+            rc, summary = _run_test_prompt(
+                story["prompt"],
+                args.agents,
+                ha_url,
+                ha_token,
+                args.branch,
+                args.extra_args or None,
+            )
+            results.append((story, rc, summary))
 
-    return result.returncode, summary
+            # Append JSONL result
+            if summary:
+                for agent in agent_list:
+                    append_result(
+                        args.results_file, story, agent, sha, describe,
+                        args.branch, summary,
+                    )
+
+            # Teardown via FastMCP in-memory
+            if teardown_steps:
+                log(f"[{sid}] Teardown ({len(teardown_steps)} steps via FastMCP)...")
+                await _run_mcp_steps(ha_url, ha_token, teardown_steps, "teardown")
+
+        # Summary
+        log(f"\n--- Summary ---")
+        for story, rc, _ in results:
+            status = "PASS" if rc == 0 else "FAIL"
+            log(f"  [{status}] {story['id']}: {story['title']}")
+
+        log(f"\nResults appended to {args.results_file}")
+
+        failed = sum(1 for _, rc, _ in results if rc != 0)
+        if failed:
+            log(f"\n{failed}/{len(results)} stories failed")
+            return 1
+        else:
+            log(f"\nAll {len(results)} stories passed")
+            return 0
+
+    finally:
+        if ha:
+            _stop_container(ha)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run user acceptance stories via BAT")
+    parser = argparse.ArgumentParser(
+        description="Run user acceptance stories via BAT",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("story_file", nargs="?", help="Path to story YAML file")
     parser.add_argument("--all", action="store_true", help="Run all stories in catalog/")
     parser.add_argument("--agents", default="gemini", help="Comma-separated agent list")
     parser.add_argument("--branch", help="Git branch/tag to install ha-mcp from")
-    parser.add_argument("--dry-run", action="store_true", help="Print BAT JSON without running")
-    parser.add_argument("--min-weight", type=int, default=1, help="Minimum story weight to run")
+    parser.add_argument("--ha-url", help="Use existing HA instance (skip container)")
+    parser.add_argument("--ha-token", help="HA long-lived access token")
+    parser.add_argument("--dry-run", action="store_true", help="Print BAT scenario JSON")
+    parser.add_argument("--min-weight", type=int, default=1, help="Minimum story weight")
     parser.add_argument(
         "--results-file",
         type=Path,
@@ -211,6 +400,8 @@ def main() -> None:
     )
     parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
     args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))
@@ -231,44 +422,19 @@ def main() -> None:
             filtered.append((path, story))
 
     if args.dry_run:
-        for path, story in filtered:
-            scenario = story_to_bat_scenario(story)
+        for _, story in filtered:
+            scenario = {"test_prompt": story["prompt"].strip()}
             print(f"# {story['id']}: {story['title']}")
+            if story.get("setup"):
+                print(f"# Setup: {len(story['setup'])} steps (FastMCP in-memory)")
+            if story.get("teardown"):
+                print(f"# Teardown: {len(story['teardown'])} steps (FastMCP in-memory)")
             print(json.dumps(scenario, indent=2))
             print()
         return
 
-    sha, describe = get_git_info()
-    agent_list = [a.strip() for a in args.agents.split(",")]
-
-    # Run stories
-    results = []
-    for path, story in filtered:
-        rc, summary = run_story(path, args.agents, args.branch, args.extra_args or None)
-        results.append((story, rc, summary))
-
-        # Append JSONL result for each agent
-        if summary:
-            for agent in agent_list:
-                append_result(
-                    args.results_file, story, agent, sha, describe,
-                    args.branch, summary,
-                )
-
-    # Summary
-    print(f"\n--- Summary ---", file=sys.stderr)
-    for story, rc, _ in results:
-        status = "PASS" if rc == 0 else "FAIL"
-        print(f"  [{status}] {story['id']}: {story['title']}", file=sys.stderr)
-
-    print(f"\nResults appended to {args.results_file}", file=sys.stderr)
-
-    failed = sum(1 for _, rc, _ in results if rc != 0)
-    if failed:
-        print(f"\n{failed}/{len(results)} stories failed", file=sys.stderr)
-        sys.exit(1)
-    else:
-        print(f"\nAll {len(results)} stories passed", file=sys.stderr)
+    exit_code = asyncio.run(run_stories(args, filtered))
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
