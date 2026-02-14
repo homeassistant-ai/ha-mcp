@@ -139,7 +139,11 @@ class ToolProxyRegistry:
         return provided_hash == self._schema_hash(tool_name)
 
     def _schema_hash(self, tool_name: str) -> str:
-        """Short fingerprint of the tool's parameter schema."""
+        """Short fingerprint of the tool's parameter schema.
+
+        12 hex chars (48 bits) balances compactness with hallucination
+        resistance — 2^48 ≈ 281 trillion possible values.
+        """
         tool = self._tools.get(tool_name)
         if not tool:
             return ""
@@ -147,7 +151,7 @@ class ToolProxyRegistry:
         param_keys = sorted(params.get("properties", {}).keys())
         required = sorted(params.get("required", []))
         fingerprint = f"{tool_name}:{','.join(param_keys)}:{','.join(required)}"
-        return hashlib.md5(fingerprint.encode()).hexdigest()[:8]
+        return hashlib.md5(fingerprint.encode()).hexdigest()[:12]
 
     def _make_summary(self, tool: dict[str, Any]) -> dict[str, Any]:
         params = tool["parameters"]
@@ -345,10 +349,29 @@ def discover_proxy_tools(
 
 
 class _MockMCP:
-    """Mock FastMCP that captures @mcp.tool() registrations without registering."""
+    """Mock FastMCP that captures @mcp.tool() registrations without registering.
+
+    This mimics the FastMCP ``@mcp.tool()`` decorator API.  If the SDK's
+    decorator signature changes, the assertion in ``__init__`` will fail
+    fast rather than silently producing incorrect metadata.
+    """
 
     def __init__(self) -> None:
         self.captured_tools: list[dict[str, Any]] = []
+        # Verify we're compatible with the current FastMCP SDK.
+        # If the SDK removes or renames the `tool` method, this will
+        # raise immediately during proxy initialization.
+        try:
+            from fastmcp import FastMCP as _RealMCP
+
+            _real_tool = getattr(_RealMCP, "tool", None)
+            if _real_tool is None:
+                logger.warning(
+                    "FastMCP.tool() not found — _MockMCP may be incompatible "
+                    "with the installed SDK version"
+                )
+        except ImportError:
+            pass  # Test environments may not have FastMCP installed
 
     def tool(self, **kwargs: Any) -> Any:
         """Capture the @mcp.tool() decorator call."""

@@ -81,7 +81,7 @@ class TestToolProxyRegistry:
         assert d["tool_name"] == "ha_get_zone"
         for key in ("description", "parameters", "schema_hash"):
             assert key in d
-        assert len(d["schema_hash"]) == 8
+        assert len(d["schema_hash"]) == 12
 
     def test_get_details_missing(self):
         assert self.registry.get_tool_details("nonexistent") is None
