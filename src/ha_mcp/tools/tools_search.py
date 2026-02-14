@@ -4,20 +4,41 @@ Search and discovery tools for Home Assistant MCP server.
 This module provides entity search, system overview, deep search, and state retrieval tools.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
-from ..errors import create_entity_not_found_error
+from ..errors import create_entity_not_found_error, create_validation_error
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import add_timezone_metadata, coerce_bool_param, parse_string_list_param
+from .util_helpers import (
+    add_timezone_metadata,
+    coerce_bool_param,
+    coerce_int_param,
+    parse_string_list_param,
+)
 
 logger = logging.getLogger(__name__)
 
 
+def _build_pagination_metadata(
+    total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build standardized pagination metadata for search responses."""
+    has_more = (offset + len(results)) < total_matches
+    return {
+        "total_matches": total_matches,
+        "offset": offset,
+        "limit": limit,
+        "count": len(results),
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+    }
+
+
 async def _exact_match_search(
-    client, query: str, domain_filter: str | None, limit: int
+    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
 ) -> dict[str, Any]:
     """
     Fallback exact match search when fuzzy search fails.
@@ -40,31 +61,34 @@ async def _exact_match_search(
 
         # Check for exact substring match in entity_id or friendly_name
         if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
-            results.append({
-                "entity_id": entity_id,
-                "friendly_name": friendly_name,
-                "domain": domain,
-                "state": entity.get("state", "unknown"),
-                "score": 100 if query_lower == entity_id.lower() or query_lower == friendly_name.lower() else 80,
-                "match_type": "exact_match",
-            })
+            is_exact = query_lower == entity_id.lower() or query_lower == friendly_name.lower()
+            results.append(
+                {
+                    "entity_id": entity_id,
+                    "friendly_name": friendly_name,
+                    "domain": domain,
+                    "state": entity.get("state", "unknown"),
+                    "score": 100
+                    if is_exact
+                    else 80,
+                    "match_type": "exact_match",
+                }
+            )
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
-    total_matches = len(results)
-    limited_results = results[:limit]
+    paginated = results[offset:offset + limit]
     return {
         "success": True,
         "query": query,
-        "total_matches": total_matches,
-        "results": limited_results,
-        "is_truncated": total_matches > len(limited_results),
+        **_build_pagination_metadata(len(results), offset, limit, paginated),
+        "results": paginated,
         "search_type": "exact_match",
     }
 
 
 async def _partial_results_search(
-    client, query: str, domain_filter: str | None, limit: int
+    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
 ) -> dict[str, Any]:
     """
     Last resort fallback - return any entities that might be relevant.
@@ -84,41 +108,52 @@ async def _partial_results_search(
         if domain_filter and domain != domain_filter:
             continue
 
-        results.append({
-            "entity_id": entity_id,
-            "friendly_name": friendly_name,
-            "domain": domain,
-            "state": entity.get("state", "unknown"),
-            "score": 0,  # No match score for partial results
-            "match_type": "partial_listing",
-        })
+        results.append(
+            {
+                "entity_id": entity_id,
+                "friendly_name": friendly_name,
+                "domain": domain,
+                "state": entity.get("state", "unknown"),
+                "score": 0,
+                "match_type": "partial_listing",
+            }
+        )
 
-    total_matches = len(results)
-    limited_results = results[:limit]
+    paginated = results[offset:offset + limit]
     return {
         "success": True,
         "partial": True,
         "query": query,
-        "total_matches": total_matches,
-        "results": limited_results,
-        "is_truncated": total_matches > len(limited_results),
+        **_build_pagination_metadata(len(results), offset, limit, paginated),
+        "results": paginated,
         "search_type": "partial_listing",
     }
 
 
-def register_search_tools(mcp, client, **kwargs):
+def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register search and discovery tools with the MCP server."""
     smart_tools = kwargs.get("smart_tools")
     if not smart_tools:
         raise ValueError("smart_tools is required for search tools registration")
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Search Entities"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Search Entities",
+        }
+    )
     @log_tool_usage
     async def ha_search_entities(
         query: str,
         domain_filter: str | None = None,
         area_filter: str | None = None,
         limit: int = 10,
+        offset: Annotated[
+            int | str,
+            Field(default=0, description="Number of results to skip for pagination (default: 0)"),
+        ] = 0,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
         """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
@@ -140,9 +175,14 @@ def register_search_tools(mcp, client, **kwargs):
         - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
         - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
         # Coerce boolean parameter that may come as string from XML-style calls
-        group_by_domain_bool = coerce_bool_param(group_by_domain, "group_by_domain", default=False) or False
+        group_by_domain_bool = (
+            coerce_bool_param(group_by_domain, "group_by_domain", default=False)
+            or False
+        )
 
         try:
+            offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+
             # If area_filter is provided, use area-based search
             if area_filter:
                 area_result = await smart_tools.get_entities_by_area(
@@ -159,7 +199,9 @@ def register_search_tools(mcp, client, **kwargs):
                                 if isinstance(
                                     area_data["entities"], dict
                                 ):  # grouped by domain
-                                    for domain_entities in area_data["entities"].values():
+                                    for domain_entities in area_data[
+                                        "entities"
+                                    ].values():
                                         all_area_entities.extend(domain_entities)
                                 else:  # flat list
                                     all_area_entities.extend(area_data["entities"])
@@ -170,71 +212,59 @@ def register_search_tools(mcp, client, **kwargs):
                     fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 
                     # Convert to format expected by fuzzy searcher
-                    entities_for_search = []
-                    for entity in all_area_entities:
-                        entities_for_search.append(
-                            {
-                                "entity_id": entity.get("entity_id", ""),
-                                "attributes": {
-                                    "friendly_name": entity.get("friendly_name", "")
-                                },
-                                "state": entity.get("state", "unknown"),
-                            }
-                        )
+                    entities_for_search = [
+                        {
+                            "entity_id": entity.get("entity_id", ""),
+                            "attributes": {
+                                "friendly_name": entity.get("friendly_name", "")
+                            },
+                            "state": entity.get("state", "unknown"),
+                        }
+                        for entity in all_area_entities
+                    ]
 
                     matches, total_matches = fuzzy_searcher.search_entities(
-                        entities_for_search, query, limit
+                        entities_for_search, query, limit, offset
                     )
 
                     # Format matches similar to smart_entity_search
-                    results = []
-                    for match in matches:
-                        results.append(
-                            {
-                                "entity_id": match["entity_id"],
-                                "friendly_name": match["friendly_name"],
-                                "domain": match["domain"],
-                                "state": match["state"],
-                                "score": match["score"],
-                                "match_type": match["match_type"],
-                                "area_filter": area_filter,
-                            }
-                        )
+                    results = [
+                        {
+                            "entity_id": match["entity_id"],
+                            "friendly_name": match["friendly_name"],
+                            "domain": match["domain"],
+                            "state": match["state"],
+                            "score": match["score"],
+                            "match_type": match["match_type"],
+                            "area_filter": area_filter,
+                        }
+                        for match in matches
+                    ]
 
-                    # Group by domain if requested
+                    pagination = _build_pagination_metadata(total_matches, offset, limit, results)
+
+                    search_data: dict[str, Any] = {
+                        "success": True,
+                        "query": query,
+                        "area_filter": area_filter,
+                        **pagination,
+                        "results": results,
+                        "search_type": "area_filtered_query",
+                    }
+
                     if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
-                        for result in results:
-                            domain = result["domain"]
+                        for item in results:
+                            domain = item["domain"]
                             if domain not in by_domain:
                                 by_domain[domain] = []
-                            by_domain[domain].append(result)
+                            by_domain[domain].append(item)
+                        search_data["by_domain"] = by_domain
 
-                        search_data = {
-                            "success": True,
-                            "query": query,
-                            "area_filter": area_filter,
-                            "total_matches": total_matches,
-                            "results": results,
-                            "is_truncated": total_matches > len(results),
-                            "by_domain": by_domain,
-                            "search_type": "area_filtered_query",
-                        }
-                        return await add_timezone_metadata(client, search_data)
-                    else:
-                        search_data = {
-                            "success": True,
-                            "query": query,
-                            "area_filter": area_filter,
-                            "total_matches": total_matches,
-                            "results": results,
-                            "is_truncated": total_matches > len(results),
-                            "search_type": "area_filtered_query",
-                        }
-                        return await add_timezone_metadata(client, search_data)
+                    return await add_timezone_metadata(client, search_data)
                 else:
                     # Just area filter, return area results with enhanced format
-                    if "areas" in area_result and area_result["areas"]:
+                    if area_result.get("areas"):
                         first_area = next(iter(area_result["areas"].values()))
                         by_domain = first_area.get("entities", {})
 
@@ -275,33 +305,34 @@ def register_search_tools(mcp, client, **kwargs):
 
                 # Filter by domain
                 filtered_entities = [
-                    e for e in all_entities
+                    e
+                    for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
                 ]
 
                 # Format results to match fuzzy search output
+                paginated_entities = filtered_entities[offset:offset + limit]
                 results = []
-                for entity in filtered_entities[:limit]:
+                for entity in paginated_entities:
                     entity_id = entity.get("entity_id", "")
                     attributes = entity.get("attributes", {})
-                    results.append({
-                        "entity_id": entity_id,
-                        "friendly_name": attributes.get("friendly_name", entity_id),
-                        "domain": domain_filter,
-                        "state": entity.get("state", "unknown"),
-                        "score": 100,  # Perfect match since we're listing by domain
-                        "match_type": "domain_listing",
-                    })
+                    results.append(
+                        {
+                            "entity_id": entity_id,
+                            "friendly_name": attributes.get("friendly_name", entity_id),
+                            "domain": domain_filter,
+                            "state": entity.get("state", "unknown"),
+                            "score": 100,  # Perfect match since we're listing by domain
+                            "match_type": "domain_listing",
+                        }
+                    )
 
-                total_filtered = len(filtered_entities)
-                # Build response data (avoid duplication by conditionally adding by_domain)
-                domain_list_data = {
+                domain_list_data: dict[str, Any] = {
                     "success": True,
                     "query": query,
                     "domain_filter": domain_filter,
-                    "total_matches": total_filtered,
+                    **_build_pagination_metadata(len(filtered_entities), offset, limit, results),
                     "results": results,
-                    "is_truncated": total_filtered > len(results),
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
@@ -315,50 +346,72 @@ def register_search_tools(mcp, client, **kwargs):
             # 3. If that fails, return partial results with warning
             # 4. Only error if all methods fail
 
-            result = None
-            warning = None
+            result: dict[str, Any] | None = None
+            warning: str | None = None
             search_type = "fuzzy_search"
 
             # Step 1: Try fuzzy search
             try:
-                result = await smart_tools.smart_entity_search(query, limit, domain_filter=domain_filter)
+                result = await smart_tools.smart_entity_search(
+                    query, limit, offset=offset, domain_filter=domain_filter
+                )
                 search_type = "fuzzy_search"
+            except asyncio.CancelledError:
+                raise
             except Exception as fuzzy_error:
-                logger.warning(f"Fuzzy search failed, trying exact match: {fuzzy_error}")
+                logger.warning(
+                    f"Fuzzy search failed, trying exact match: {fuzzy_error}"
+                )
 
                 # Step 2: Try exact match fallback
                 try:
-                    result = await _exact_match_search(client, query, domain_filter, limit)
+                    result = await _exact_match_search(
+                        client, query, domain_filter, limit, offset
+                    )
                     warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exact_error:
-                    logger.warning(f"Exact match failed, trying partial results: {exact_error}")
+                    logger.warning(
+                        f"Exact match failed, trying partial results: {exact_error}"
+                    )
 
                     # Step 3: Try partial results fallback
                     try:
-                        result = await _partial_results_search(client, query, domain_filter, limit)
+                        result = await _partial_results_search(
+                            client, query, domain_filter, limit, offset
+                        )
                         warning = "Search degraded, returning partial results"
                         search_type = "partial_listing"
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as partial_error:
                         # Step 4: All methods failed - raise to outer exception handler
                         logger.error(f"All search methods failed: {partial_error}")
                         raise Exception(
-                            f"All search methods failed. Fuzzy: {fuzzy_error}, "
-                            f"Exact: {exact_error}, Partial: {partial_error}"
+                            "All search methods failed"
                         ) from partial_error
 
             # Convert 'matches' to 'results' for backward compatibility
             if "matches" in result:
                 result["results"] = result.pop("matches")
 
+            # Remove legacy is_truncated if present (replaced by has_more)
+            result.pop("is_truncated", None)
+
             # Add domain_filter to result if it was provided (for API consistency)
             if domain_filter:
                 result["domain_filter"] = domain_filter
 
-            # Ensure is_truncated field exists in result
-            if "is_truncated" not in result:
-                # For backward compatibility, calculate if not present
-                result["is_truncated"] = result.get("total_matches", 0) > len(result.get("results", []))
+            # Ensure pagination metadata exists in result
+            result.setdefault("offset", offset)
+            result.setdefault("limit", limit)
+            result.setdefault("count", len(result.get("results", [])))
+            if "has_more" not in result:
+                total = result.get("total_matches", 0)
+                result["has_more"] = (result["offset"] + result["count"]) < total
+                result["next_offset"] = result["offset"] + limit if result["has_more"] else None
 
             # Group by domain if requested
             if group_by_domain_bool and "results" in result:
@@ -396,24 +449,35 @@ def register_search_tools(mcp, client, **kwargs):
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
                 ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get System Overview"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Get System Overview",
+        }
+    )
     @log_tool_usage
     async def ha_get_overview(
         detail_level: Annotated[
             Literal["minimal", "standard", "full"],
             Field(
-                default="standard",
+                default="minimal",
                 description=(
-                    "Level of detail - "
-                    "'minimal': 10 random entities per domain (friendly_name only); "
-                    "'standard': ALL entities per domain (friendly_name only, default); "
-                    "'full': ALL entities with entity_id + friendly_name + state"
+                    "'minimal': 10 entities per domain sample (default); "
+                    "'standard': ALL entities per domain (friendly_name only); "
+                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
                 ),
             ),
-        ] = "standard",
+        ] = "minimal",
         max_entities_per_domain: Annotated[
             int | None,
             Field(
@@ -443,46 +507,60 @@ def register_search_tools(mcp, client, **kwargs):
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
-        include_state_bool = coerce_bool_param(include_state, "include_state", default=None)
-        include_entity_id_bool = coerce_bool_param(include_entity_id, "include_entity_id", default=None)
+        include_state_bool = coerce_bool_param(
+            include_state, "include_state", default=None
+        )
+        include_entity_id_bool = coerce_bool_param(
+            include_entity_id, "include_entity_id", default=None
+        )
 
         result = await smart_tools.get_system_overview(
-            detail_level, max_entities_per_domain, include_state_bool, include_entity_id_bool
+            detail_level,
+            max_entities_per_domain,
+            include_state_bool,
+            include_entity_id_bool,
         )
         result = cast(dict[str, Any], result)
 
-        # Include comprehensive system info in the overview
-        # This replaces the deprecated ha_get_system_info and ha_get_system_version tools
+        # Include system info - essential fields always, full details at "full" level
         try:
             config = await client.get_config()
-            result["system_info"] = {
+            system_info: dict[str, Any] = {
                 "base_url": client.base_url,
                 "version": config.get("version"),
                 "location_name": config.get("location_name"),
                 "time_zone": config.get("time_zone"),
                 "language": config.get("language"),
-                "country": config.get("country"),
-                "currency": config.get("currency"),
-                "unit_system": config.get("unit_system", {}),
-                "latitude": config.get("latitude"),
-                "longitude": config.get("longitude"),
-                "elevation": config.get("elevation"),
-                "config_dir": config.get("config_dir"),
-                "allowlist_external_dirs": config.get("allowlist_external_dirs", []),
-                "allowlist_external_urls": config.get("allowlist_external_urls", []),
-                "components": config.get("components", []),
-                "components_loaded": len(config.get("components", [])),
                 "state": config.get("state"),
-                "safe_mode": config.get("safe_mode", False),
-                "internal_url": config.get("internal_url"),
-                "external_url": config.get("external_url"),
             }
+            # Full detail level adds extended system info
+            if detail_level == "full":
+                system_info.update({
+                    "country": config.get("country"),
+                    "currency": config.get("currency"),
+                    "unit_system": config.get("unit_system", {}),
+                    "latitude": config.get("latitude"),
+                    "longitude": config.get("longitude"),
+                    "elevation": config.get("elevation"),
+                    "components_loaded": len(config.get("components", [])),
+                    "safe_mode": config.get("safe_mode", False),
+                    "internal_url": config.get("internal_url"),
+                    "external_url": config.get("external_url"),
+                })
+            result["system_info"] = system_info
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
 
         return result
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Deep Search"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Deep Search",
+        }
+    )
     @log_tool_usage
     async def ha_deep_search(
         query: str,
@@ -491,12 +569,23 @@ def register_search_tools(mcp, client, **kwargs):
             Field(
                 default=None,
                 description=(
-                    "Types to search in: 'automation', 'script', 'helper'. Pass as a list of strings, "
-                    "e.g. ['automation'], or a JSON array string '[\"automation\"]'. Default: all types"
+                    "Types to search: 'automation', 'script', 'helper'. "
+                    "Pass as list or JSON array string. Default: all types."
                 ),
             ),
         ] = None,
-        limit: int = 20,
+        limit: int = 5,
+        offset: int = 0,
+        include_config: Annotated[
+            bool | str,
+            Field(
+                default=False,
+                description=(
+                    "Include full config in results. Default: False (returns summary only). "
+                    "Use ha_config_get_automation/ha_config_get_script for individual configs."
+                ),
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Deep search across automation, script, and helper definitions.
 
@@ -525,27 +614,47 @@ def register_search_tools(mcp, client, **kwargs):
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
+        include_config_bool = coerce_bool_param(include_config, "include_config", default=False) or False
         try:
-            result = await smart_tools.deep_search(query, parsed_search_types, limit)
+            result = await smart_tools.deep_search(
+                query, parsed_search_types, limit, offset, include_config_bool
+            )
             return cast(dict[str, Any], result)
         except Exception as e:
-            import traceback
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-                "query": query,
-                "search_types": parsed_search_types,
-                "limit": limit,
-                "suggestions": [
+            logger.error(
+                f"Error in deep search: query={query}, "
+                f"search_types={parsed_search_types}, limit={limit}, "
+                f"error={e}",
+                exc_info=True,
+            )
+            error_response = exception_to_structured_error(
+                e,
+                context={
+                    "query": query,
+                    "search_types": parsed_search_types,
+                    "limit": limit,
+                },
+            )
+            if "error" in error_response and isinstance(error_response["error"], dict):
+                error_response["error"]["suggestions"] = [
                     "Check Home Assistant connection",
                     "Try simpler search terms",
-                    "Check search_types are valid: 'automation', 'script', 'helper'",
-                ],
-            }
+                ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
+            return error_response
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["search"], "title": "Get Entity State"})
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Get Entity State",
+        }
+    )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
         """Get detailed state information for a Home Assistant entity with timezone metadata."""
@@ -575,3 +684,131 @@ def register_search_tools(mcp, client, **kwargs):
                 ]
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["search"],
+            "title": "Get Multiple Entity States",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_states(
+        entity_ids: Annotated[
+            list[str],
+            Field(
+                description="List of entity IDs to retrieve states for (e.g., ['light.kitchen', 'sensor.temperature'])"
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Get state information for multiple Home Assistant entities in a single call.
+
+        Efficiently retrieves states for multiple entities using parallel requests
+        instead of calling ha_get_state repeatedly. Maximum 100 entities per call.
+        Duplicate entity IDs are automatically deduplicated.
+
+        Returns success=True if at least one entity state was retrieved.
+        Check 'error_count' for any failed lookups in partial-success scenarios.
+
+        WHEN TO USE:
+        - Checking states of multiple entities at once (e.g., verifying automation results)
+        - Comparing states across related entities
+        - Any scenario requiring 2+ entity state lookups
+
+        EXAMPLES:
+        - ha_get_states(["light.kitchen", "light.living_room", "sensor.temperature"])
+        - ha_get_states(["automation.morning_routine", "binary_sensor.motion"])
+
+        NOTE: For a single entity, use ha_get_state() instead.
+        """
+        MAX_ENTITIES = 100
+
+        if not isinstance(entity_ids, list) or not entity_ids:
+            return await add_timezone_metadata(
+                client,
+                create_validation_error(
+                    "entity_ids must be a non-empty list of entity ID strings",
+                    parameter="entity_ids",
+                ),
+            )
+
+        if not all(isinstance(eid, str) for eid in entity_ids):
+            return await add_timezone_metadata(
+                client,
+                create_validation_error(
+                    "All entity_ids values must be strings",
+                    parameter="entity_ids",
+                ),
+            )
+
+        if len(entity_ids) > MAX_ENTITIES:
+            return await add_timezone_metadata(
+                client,
+                create_validation_error(
+                    f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
+                    parameter="entity_ids",
+                ),
+            )
+
+        # Deduplicate while preserving order
+        unique_ids = list(dict.fromkeys(entity_ids))
+        if len(unique_ids) < len(entity_ids):
+            logger.debug(
+                f"Deduplicated entity_ids: {len(entity_ids)} -> {len(unique_ids)}"
+            )
+
+        try:
+            async def _fetch_state(entity_id: str) -> dict[str, Any]:
+                try:
+                    state = await client.get_entity_state(entity_id)
+                    return {"success": True, "entity_id": entity_id, "state": state}
+                except Exception as e:
+                    logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
+                    return exception_to_structured_error(
+                        e, context={"entity_id": entity_id}
+                    )
+
+            results = await asyncio.gather(
+                *(_fetch_state(eid) for eid in unique_ids)
+            )
+
+            states: dict[str, Any] = {}
+            errors: list[dict[str, Any]] = []
+
+            for eid, result in zip(unique_ids, results, strict=True):
+                if result.get("success") is True and "state" in result:
+                    states[eid] = result["state"]
+                else:
+                    error_detail = result.get("error")
+                    if error_detail is None:
+                        error_detail = {"code": "INTERNAL_ERROR", "message": "Unknown error"}
+                    errors.append({
+                        "entity_id": result.get("entity_id", eid),
+                        "error": error_detail,
+                    })
+
+            response: dict[str, Any] = {
+                "success": len(states) > 0,
+                "count": len(states),
+                "states": states,
+            }
+
+            if errors:
+                response["errors"] = errors
+                response["error_count"] = len(errors)
+                response["suggestions"] = [
+                    "Use ha_search_entities() to find correct entity IDs for failed lookups",
+                    "Verify entities exist in Home Assistant",
+                ]
+                if states:
+                    response["partial"] = True
+
+            return await add_timezone_metadata(client, response)
+
+        except Exception as e:
+            logger.error(f"Error getting bulk states: {e}", exc_info=True)
+            error_response = exception_to_structured_error(
+                e, context={"entity_ids": entity_ids}
+            )
+            return await add_timezone_metadata(client, error_response)

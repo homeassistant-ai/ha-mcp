@@ -10,11 +10,11 @@ The structured error format enables AI agents to:
 - Understand the context and details of failures
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     """
     Standard error codes for Home Assistant MCP operations.
 
@@ -355,9 +355,11 @@ def create_timeout_error(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a timeout error response."""
-    final_context: dict[str, Any] = {"operation": operation, "timeout_seconds": timeout_seconds}
+    final_context: dict[str, Any] = {}
     if context:
         final_context.update(context)
+    final_context["operation"] = operation
+    final_context["timeout_seconds"] = timeout_seconds
     return create_error_response(
         ErrorCode.TIMEOUT_OPERATION,
         f"Operation '{operation}' timed out after {timeout_seconds}s",

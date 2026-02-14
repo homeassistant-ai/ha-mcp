@@ -11,7 +11,12 @@ from typing import Annotated, Any, cast
 from pydantic import Field
 
 from .helpers import log_tool_usage
-from .util_helpers import coerce_bool_param, parse_json_param, wait_for_entity_registered, wait_for_entity_removed
+from .util_helpers import (
+    coerce_bool_param,
+    parse_json_param,
+    wait_for_entity_registered,
+    wait_for_entity_removed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +279,6 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return {
                 "success": True,
                 **result,
-                "config_provided": config_dict,
             }
 
         except Exception as e:
