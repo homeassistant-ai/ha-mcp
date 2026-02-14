@@ -189,10 +189,12 @@ async def test_search_entities_limit_respected(mcp_client):
     assert len(data_limited.get("results", [])) == 2, "Expected exactly 2 results with limit=2"
     # total_matches should still show the actual count
     assert data_limited.get("total_matches") == total_lights
-    # is_truncated should be True since we limited the results
-    assert data_limited.get("is_truncated") is True, "Expected is_truncated=True when limit < total_matches"
+    # has_more should be True since we limited the results
+    assert data_limited.get("has_more") is True, "Expected has_more=True when limit < total_matches"
+    assert data_limited.get("count") == 2, "Expected count=2"
+    assert data_limited.get("next_offset") == 2, "Expected next_offset=2"
 
-    logger.info(f"Limit correctly applied: 2 results of {total_lights} total, is_truncated={data_limited.get('is_truncated')}")
+    logger.info(f"Limit correctly applied: 2 results of {total_lights} total, has_more={data_limited.get('has_more')}")
 
 
 @pytest.mark.asyncio
@@ -254,6 +256,8 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     # Normal search should NOT have warning or partial flag
     assert "warning" not in data or data.get("warning") is None
     assert "partial" not in data or data.get("partial") is not True
+    # Strong matches should not include suggestions
+    assert "suggestions" not in data, "Strong matches should not include suggestions"
 
     logger.info("Fuzzy search succeeded without fallback indicators")
 
@@ -321,14 +325,13 @@ async def test_search_entities_fallback_fields_when_present(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_search_entities_truncation_indicator(mcp_client):
-    """Test that is_truncated field accurately indicates when results are truncated.
+async def test_search_entities_pagination_metadata(mcp_client):
+    """Test that pagination metadata fields are present and correct.
 
-    This test verifies the fix for the truncation indicator issue where
-    total_matches would incorrectly report the limited count instead of the
-    actual total number of matches.
+    Verifies the standardized pagination response (issue #605):
+    total_matches, offset, limit, count, has_more, next_offset.
     """
-    logger.info("Testing truncation indicator")
+    logger.info("Testing pagination metadata")
 
     # Search for a common term that should match many entities
     result = await mcp_client.call_tool(
@@ -338,27 +341,75 @@ async def test_search_entities_truncation_indicator(mcp_client):
     raw_data = assert_mcp_success(result, "Search with small limit")
     data = raw_data.get("data", raw_data)
 
-    # Verify is_truncated field exists
-    assert "is_truncated" in data, "Response must include is_truncated field"
-    assert isinstance(data["is_truncated"], bool), "is_truncated must be a boolean"
+    # Verify pagination fields exist
+    assert "has_more" in data, "Response must include has_more field"
+    assert isinstance(data["has_more"], bool), "has_more must be a boolean"
+    assert "count" in data, "Response must include count field"
+    assert "offset" in data, "Response must include offset field"
+    assert "limit" in data, "Response must include limit field"
 
     results_count = len(data.get("results", []))
     total_matches = data.get("total_matches", 0)
 
-    # If total_matches > results count, is_truncated should be True
-    if total_matches > results_count:
-        assert data["is_truncated"] is True, \
-            f"Expected is_truncated=True when total_matches ({total_matches}) > results ({results_count})"
-        logger.info(f"Truncation correctly indicated: {results_count} of {total_matches} shown, is_truncated=True")
-    else:
-        # If all matches fit within limit, is_truncated should be False
-        assert data["is_truncated"] is False, \
-            f"Expected is_truncated=False when total_matches ({total_matches}) <= results ({results_count})"
-        logger.info(f"No truncation: {results_count} of {total_matches} shown, is_truncated=False")
+    # count should match actual results length
+    assert data["count"] == results_count, \
+        f"count ({data['count']}) should equal results length ({results_count})"
 
-    # Also test that total_matches reports the actual total, not the limited count
-    # This should always be >= results_count
+    # If total_matches > results count, has_more should be True
+    if total_matches > results_count:
+        assert data["has_more"] is True, \
+            f"Expected has_more=True when total_matches ({total_matches}) > results ({results_count})"
+        assert data["next_offset"] is not None, "next_offset should be set when has_more=True"
+        logger.info(f"Pagination: {results_count} of {total_matches} shown, has_more=True, next_offset={data['next_offset']}")
+    else:
+        assert data["has_more"] is False, \
+            f"Expected has_more=False when total_matches ({total_matches}) <= results ({results_count})"
+        assert data.get("next_offset") is None, "next_offset should be None when has_more=False"
+        logger.info(f"No pagination needed: {results_count} of {total_matches} shown, has_more=False")
+
+    # total_matches should always be >= results_count
     assert total_matches >= results_count, \
         f"total_matches ({total_matches}) should be >= results count ({results_count})"
 
-    logger.info("Truncation indicator test passed")
+    logger.info("Pagination metadata test passed")
+
+
+@pytest.mark.asyncio
+async def test_search_entities_offset_pagination(mcp_client):
+    """Test that offset parameter works for paginating through results.
+
+    Issue #605: Verify that offset skips results and pages don't overlap.
+    """
+    logger.info("Testing offset pagination")
+
+    # Get first page
+    result1 = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "", "domain_filter": "light", "limit": 2, "offset": 0},
+    )
+    raw_data1 = assert_mcp_success(result1, "First page")
+    data1 = raw_data1.get("data", raw_data1)
+
+    total = data1.get("total_matches", 0)
+    if total <= 2:
+        pytest.skip("Need more than 2 light entities to test offset pagination")
+
+    # Get second page
+    result2 = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "", "domain_filter": "light", "limit": 2, "offset": 2},
+    )
+    raw_data2 = assert_mcp_success(result2, "Second page")
+    data2 = raw_data2.get("data", raw_data2)
+
+    # Pages should not overlap
+    ids1 = {r["entity_id"] for r in data1.get("results", [])}
+    ids2 = {r["entity_id"] for r in data2.get("results", [])}
+    assert ids1.isdisjoint(ids2), f"Pages overlap: {ids1 & ids2}"
+
+    # Both pages should have correct total_matches
+    assert data1["total_matches"] == data2["total_matches"]
+    assert data1["offset"] == 0
+    assert data2["offset"] == 2
+
+    logger.info(f"Offset pagination works: page1={ids1}, page2={ids2}")
