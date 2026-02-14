@@ -144,6 +144,7 @@ def main() -> int:
             port=port,
             path=secret_path,
             log_level="info",
+            stateless_http=True,
             uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
     except Exception as e:
