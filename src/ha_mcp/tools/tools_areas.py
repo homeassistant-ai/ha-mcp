@@ -8,10 +8,11 @@ Home Assistant areas and floors - essential organizational features for smart ho
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, raise_tool_error
 from .util_helpers import parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -121,10 +122,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid aliases parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update operation
             if area_id:
@@ -193,6 +194,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     error_response["name"] = name
                 return error_response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in ha_config_set_area: {e}")
             error_response = {
@@ -352,10 +355,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid aliases parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update operation
             if floor_id:
@@ -420,6 +423,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     error_response["name"] = name
                 return error_response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in ha_config_set_floor: {e}")
             error_response = {

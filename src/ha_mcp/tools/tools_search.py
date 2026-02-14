@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import Field
 
 from ..errors import create_entity_not_found_error, create_validation_error
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
     coerce_bool_param,
@@ -440,6 +440,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "domain_filter": domain_filter,
                     "area_filter": area_filter,
                 },
+                raise_error=False,
             )
             # Add search-specific suggestions
             if "error" in error_response and isinstance(error_response["error"], dict):
@@ -453,7 +454,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"Unexpected error response structure, could not add suggestions: "
                     f"{type(error_response.get('error'))}"
                 )
-            return await add_timezone_metadata(client, error_response)
+            error_with_tz = await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_with_tz)
 
     @mcp.tool(
         annotations={
@@ -671,6 +673,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_response = exception_to_structured_error(
                     e,
                     context={"entity_id": entity_id},
+                    raise_error=False,
                 )
             # Add entity-specific suggestions
             if "error" in error_response and isinstance(error_response["error"], dict):
@@ -679,7 +682,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
                 ]
-            return await add_timezone_metadata(client, error_response)
+            error_with_tz = await add_timezone_metadata(client, error_response)
+            raise_tool_error(error_with_tz)
 
     @mcp.tool(
         annotations={
