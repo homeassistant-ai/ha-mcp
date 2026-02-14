@@ -180,7 +180,8 @@ async def run_setup_steps(mcp_client: Client, steps: list[dict]) -> None:
         try:
             await mcp_client.call_tool(tool_name, args)
         except Exception as e:
-            logger.warning(f"  [setup] {tool_name} failed: {e}")
+            logger.error(f"  [setup] {tool_name} failed: {e}")
+            raise
 
 
 async def run_teardown_steps(mcp_client: Client, steps: list[dict]) -> None:

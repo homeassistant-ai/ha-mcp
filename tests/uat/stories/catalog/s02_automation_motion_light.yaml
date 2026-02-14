@@ -16,7 +16,7 @@ tags:
 
 setup:
   # Create an input_boolean to simulate a motion sensor
-  - tool: ha_create_config_entry_helper
+  - tool: ha_config_set_helper
     args:
       helper_type: "input_boolean"
       name: "Kitchen Motion Sensor Test"
@@ -33,12 +33,10 @@ teardown:
   - tool: ha_config_remove_automation
     args:
       automation_id: "kitchen_motion_light"
-  - tool: ha_call_service
+  - tool: ha_config_remove_helper
     args:
-      domain: "input_boolean"
-      service: "remove"
-      service_data:
-        entity_id: "input_boolean.kitchen_motion_sensor_test"
+      helper_type: "input_boolean"
+      helper_id: "kitchen_motion_sensor_test"
 
 expected:
   tools_should_use:

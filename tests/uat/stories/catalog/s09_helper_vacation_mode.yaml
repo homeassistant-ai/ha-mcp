@@ -28,16 +28,14 @@ teardown:
   - tool: ha_config_remove_automation
     args:
       automation_id: "vacation_mode_lights"
-  - tool: ha_call_service
+  - tool: ha_config_remove_helper
     args:
-      domain: "input_boolean"
-      service: "remove"
-      service_data:
-        entity_id: "input_boolean.vacation_mode"
+      helper_type: "input_boolean"
+      helper_id: "vacation_mode"
 
 expected:
   tools_should_use:
-    - ha_create_config_entry_helper
+    - ha_config_set_helper
     - ha_config_set_automation
   description: >
     Agent should create an input_boolean helper first, then an automation

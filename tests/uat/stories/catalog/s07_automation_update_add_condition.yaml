@@ -32,7 +32,7 @@ setup:
               brightness_pct: 80
         mode: single
   # Create a presence indicator
-  - tool: ha_create_config_entry_helper
+  - tool: ha_config_set_helper
     args:
       helper_type: "input_boolean"
       name: "Someone Home Test"
@@ -48,12 +48,10 @@ teardown:
   - tool: ha_config_remove_automation
     args:
       automation_id: "evening_lights_test"
-  - tool: ha_call_service
+  - tool: ha_config_remove_helper
     args:
-      domain: "input_boolean"
-      service: "remove"
-      service_data:
-        entity_id: "input_boolean.someone_home_test"
+      helper_type: "input_boolean"
+      helper_id: "someone_home_test"
 
 expected:
   tools_should_use:
