@@ -219,5 +219,5 @@ class TestProxyModulesConfig:
     def test_expected_modules(self):
         expected = {"tools_zones", "tools_labels", "tools_addons",
                     "tools_voice_assistant", "tools_traces"}
-        assert PROXY_MODULES == expected
+        assert expected == PROXY_MODULES
         assert all(m.startswith("tools_") for m in PROXY_MODULES)

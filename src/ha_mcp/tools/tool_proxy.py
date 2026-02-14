@@ -20,6 +20,7 @@ import types
 import typing
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import (
@@ -573,6 +574,8 @@ def register_proxy_tools(
             result = await implementation(**parsed_args)
             return result
 
+        except ToolError:
+            raise  # Let ToolErrors propagate — FastMCP handles isError flag
         except TypeError as e:
             return create_validation_error(
                 message=f"Parameter error: {e}",
