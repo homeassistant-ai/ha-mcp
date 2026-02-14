@@ -11,8 +11,6 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from fastmcp.exceptions import ToolError
-
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error
 from .util_helpers import parse_string_list_param
