@@ -4,13 +4,13 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
+import shutil
 import sys
-import pytest
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
-import tempfile
-import shutil
 
+import pytest
 
 # Mock the Home Assistant imports before importing the module
 sys.modules['voluptuous'] = MagicMock()
@@ -22,12 +22,15 @@ sys.modules['homeassistant.helpers.config_validation'] = MagicMock()
 
 
 # Now we can import the functions
-from custom_components.ha_mcp_tools import (
+from custom_components.ha_mcp_tools import (  # noqa: E402
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _mask_secrets_content,
 )
-from custom_components.ha_mcp_tools.const import ALLOWED_READ_DIRS, ALLOWED_WRITE_DIRS
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    ALLOWED_READ_DIRS,
+    ALLOWED_WRITE_DIRS,
+)
 
 
 class TestIsPathAllowedForDir:

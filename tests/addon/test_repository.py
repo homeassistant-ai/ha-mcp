@@ -1,6 +1,7 @@
 """Test Home Assistant add-on repository configuration."""
 
 import os
+
 import yaml
 
 

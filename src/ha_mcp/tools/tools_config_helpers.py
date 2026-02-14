@@ -10,13 +10,17 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
-
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error
-from .util_helpers import parse_string_list_param
+from .util_helpers import (
+    coerce_bool_param,
+    parse_string_list_param,
+    wait_for_entity_registered,
+    wait_for_entity_removed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -247,51 +251,51 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         monday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
                 default=None,
             ),
         ] = None,
         tuesday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         wednesday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         thursday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         friday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         saturday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
         sunday: Annotated[
-            list[dict[str, str]] | None,
+            list[dict[str, Any]] | None,
             Field(
-                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts",
+                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
             ),
         ] = None,
@@ -358,6 +362,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities.
@@ -371,6 +382,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
         - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
+        - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
 
         PREFER BUILT-IN HELPERS OVER TEMPLATE SENSORS:
         Before creating a template sensor, check if a built-in helper/integration exists:
@@ -525,6 +537,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 elif helper_type == "schedule":
                     # Schedule parameters: monday-sunday with time ranges
                     # Each day is a list of {"from": "HH:MM:SS", "to": "HH:MM:SS"}
+                    # with optional "data" dict for additional attributes
                     day_params = {
                         "monday": monday,
                         "tuesday": tuesday,
@@ -547,6 +560,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                         if time_val.count(":") == 1:
                                             time_val = f"{time_val}:00"
                                         formatted_range[key] = time_val
+                                # Pass through the optional 'data' dict
+                                # for additional attributes (e.g. mode, brightness)
+                                if "data" in time_range:
+                                    formatted_range["data"] = time_range["data"]
                                 formatted_ranges.append(formatted_range)
                             message[day_name] = formatted_ranges
 
@@ -585,32 +602,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     entity_id = helper_data.get("entity_id")
 
                     # Wait for entity to be properly registered before proceeding
-                    if entity_id:
-                        logger.debug(f"Waiting for {entity_id} to be registered...")
-                        # Give the entity a moment to register in the system
-                        await asyncio.sleep(0.2)
-
-                        # Verify the entity is accessible via state API
-                        max_verification_attempts = 5
-                        for attempt in range(max_verification_attempts):
-                            try:
-                                state_check = await client.get_state(entity_id)
-                                if state_check:
-                                    logger.debug(
-                                        f"Entity {entity_id} verified via state API"
-                                    )
-                                    break
-                            except Exception:
-                                pass
-
-                            if attempt < max_verification_attempts - 1:
-                                wait_time = 0.1 * (
-                                    attempt + 1
-                                )  # 0.1s, 0.2s, 0.3s, 0.4s
-                                logger.debug(
-                                    f"Entity {entity_id} not yet accessible, waiting {wait_time}s..."
-                                )
-                                await asyncio.sleep(wait_time)
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    if wait_bool and entity_id:
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                helper_data["warning"] = f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
+                        except Exception as e:
+                            helper_data["warning"] = f"Helper created but verification failed: {e}"
 
                     # Update entity registry if area_id or labels specified
                     if (area_id or labels) and entity_id:
@@ -678,7 +677,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if result.get("success"):
                     entity_data = result.get("result", {}).get("entity_entry", {})
-                    return {
+
+                    # Wait for entity to reflect the update
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
@@ -686,6 +688,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "updated_data": entity_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
+                    if wait_bool:
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                response["warning"] = f"Update applied but {entity_id} not yet queryable."
+                        except Exception as e:
+                            response["warning"] = f"Update applied but verification failed: {e}"
+                    return response
                 else:
                     return {
                         "success": False,
@@ -747,6 +757,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Helper ID to delete (e.g., 'my_button' or 'input_button.my_button')"
             ),
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for helper entity to be fully removed before returning. Default: True.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Delete a Home Assistant helper entity.
@@ -784,7 +801,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Check if entity exists via state API first (faster check)
                 try:
-                    state_check = await client.get_state(entity_id)
+                    state_check = await client.get_entity_state(entity_id)
                     if not state_check:
                         # Entity doesn't exist in state, wait a bit for registration
                         if attempt < max_retries - 1:
@@ -845,7 +862,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result = await client.send_websocket_message(delete_msg)
 
                 if result.get("success"):
-                    return {
+                    # Wait for entity to be removed
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "delete",
                         "helper_type": helper_type,
@@ -854,10 +873,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "method": "fallback_direct_id",
                         "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
                     }
+                    if wait_bool:
+                        try:
+                            removed = await wait_for_entity_removed(client, entity_id)
+                            if not removed:
+                                response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                        except Exception as e:
+                            response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                    return response
 
                 # Fallback strategy 2: Check if entity was already deleted
                 try:
-                    final_state_check = await client.get_state(entity_id)
+                    final_state_check = await client.get_entity_state(entity_id)
                     if not final_state_check:
                         logger.info(
                             f"Entity {entity_id} no longer exists, considering deletion successful"
@@ -894,7 +921,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.info(f"WebSocket delete response: {result}")
 
             if result.get("success"):
-                return {
+                # Wait for entity to be removed
+                wait_bool = coerce_bool_param(wait, "wait", default=True)
+                response = {
                     "success": True,
                     "action": "delete",
                     "helper_type": helper_type,
@@ -904,6 +933,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "method": "standard",
                     "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
                 }
+                if wait_bool:
+                    try:
+                        removed = await wait_for_entity_removed(client, entity_id)
+                        if not removed:
+                            response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                    except Exception as e:
+                        response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                return response
             else:
                 error_msg = result.get("error", "Unknown error")
                 # Handle specific HA error messages

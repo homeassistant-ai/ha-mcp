@@ -30,6 +30,8 @@ This repository uses a worktree-based development workflow.
 - All worktrees automatically inherit `.claude/agents/` workflows
 - Easy cleanup: `git worktree prune` removes stale references
 
+**Quick command:** Use `/wt <branch-name>` skill to create worktree automatically.
+
 ## Worktree Workflow
 
 ### Creating Worktrees
@@ -76,7 +78,7 @@ Custom agent workflows are located in `.claude/agents/`:
 |-------|------|-------|---------|
 | **issue-analysis** | `issue-analysis.md` | Opus | Deep issue analysis - comprehensive codebase exploration, implementation planning, architectural assessment, complexity evaluation. Complements automated Gemini triage with human-directed deep analysis. |
 | **issue-to-pr-resolver** | `issue-to-pr-resolver.md` | Sonnet | End-to-end issue implementation: pre-flight checks → worktree creation → implementation with tests → pre-PR checkpoint → PR creation → iterative CI/review resolution until merge-ready. |
-| **pr-checker** | `pr-checker.md` | Sonnet | Review and manage existing PRs - check comments, CI status, resolve review threads, monitor until all checks pass. |
+| **my-pr-checker** | `my-pr-checker.md` | Sonnet | Review and manage YOUR OWN PRs - check comments, CI status, resolve review threads, monitor until all checks pass. Use for your PRs, not external contributions. |
 
 ## Project Overview
 
@@ -100,6 +102,23 @@ When implementing features or debugging, consult these resources:
 | **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
 
 ## Issue & PR Management
+
+### Automated Code Review (Gemini Code Assist)
+
+**Gemini Code Assist** runs automatically on all PRs, providing immediate feedback on:
+- Code quality (correctness, efficiency, maintainability)
+- Test coverage (enforces `src/` modifications must have tests)
+- Security patterns (eval/exec, SQL injection, credentials)
+- Tool naming conventions and MCP patterns
+- Safety annotation accuracy
+- Return value consistency
+
+**Configuration**: `.gemini/styleguide.md` and `.gemini/config.yaml`
+
+**Division of Labor:**
+- **Gemini (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **Claude `contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
+- **Claude `my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 | Label | Meaning |
@@ -192,12 +211,19 @@ gh api graphql -f query='mutation($threadId: ID!) {
 
 ## Git & PR Policies
 
-**Never commit directly to master.** Always create feature/fix branches:
+**CRITICAL - Never commit directly to master.**
+
+You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
+
 ```bash
-git checkout -b feature/description
-git add . && git commit -m "feat: description"
-# ASK USER before pushing or creating PRs
+# Use /wt skill or manually:
+git worktree add worktree/<branch-name> -b <branch-name>
+cd worktree/<branch-name>
 ```
+
+**Before any commit, verify:**
+1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
+2. In worktree: `pwd` (must be in `worktree/` subdirectory)
 
 **Never push or create PRs without user permission.**
 
@@ -411,6 +437,20 @@ Balance improvement against regression risk. Consider:
 | **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
 | **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
 
+### Test Coverage Requirements
+
+**When tests ARE required:**
+- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
+- Tools that previously had NO tests — add E2E tests even if not part of current PR
+- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
+- Bug fixes without regression tests
+
+**When tests may NOT be required:**
+- Refactoring with existing comprehensive test coverage
+- Documentation-only changes (`*.md` files)
+- Minor parameter additions to well-tested tools
+- Internal utilities already covered by E2E tests
+
 **Examples:**
 
 ```python
@@ -469,6 +509,13 @@ uv sync --group dev        # Install with dev dependencies
 uv run ha-mcp              # Run MCP server (80+ tools)
 cp .env.example .env       # Configure HA connection
 ```
+
+### Claude Code Hooks
+
+**Post-Push Reminder** (`.claude/settings.local.json`):
+- Reminds to update PR description after `git push`
+- Appears in Claude Code output
+- Personal workflow helper (gitignored, not committed)
 
 ### Testing
 E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
@@ -565,21 +612,48 @@ def register_<domain>_tools(mcp, client, **kwargs):
 ```
 
 ### Safety Annotations
-| Annotation | Use For |
-|------------|---------|
-| `readOnlyHint: True` | No side effects |
-| `idempotentHint: True` | Safe to retry |
-| `destructiveHint: True` | Deletes data |
+| Annotation | Default | Use For |
+|------------|---------|--------|
+| `readOnlyHint: True` | `False` | Tool does not modify its environment |
+| `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
+| `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
 
 ### Error Handling
-Use structured errors from `errors.py`:
+
+**Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
+
+**Domain-specific errors** (`errors.py`) — use these when the error type is known:
 ```python
-from ..errors import create_error_response, ErrorCode
-return create_error_response(
-    code=ErrorCode.ENTITY_NOT_FOUND,
-    message="Entity not found",
-    suggestions=["Use ha_search_entities() to find valid IDs"]
-)
+from ..errors import create_entity_not_found_error, create_validation_error, create_service_error
+
+# Entity lookup failures (404 / not found)
+return create_entity_not_found_error(entity_id, details=str(e))
+
+# Invalid parameters
+return create_validation_error("Invalid format", parameter="entity_ids", details=str(e))
+
+# Service call failures
+return create_service_error(domain, service, message=f"Service call failed: {e}", details=str(e))
+```
+
+Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
+
+**Catch-all exception handler** (`helpers.py`) — use in `except Exception` blocks:
+```python
+from .helpers import exception_to_structured_error
+
+except Exception as e:
+    return exception_to_structured_error(e, context={"entity_id": entity_id})
+```
+
+**Pattern for tools**: Use `exception_to_structured_error` as the catch-all — it already classifies 404s, auth errors, timeouts, etc. based on exception type and message. Pass `context={"entity_id": ...}` so it can produce `ENTITY_NOT_FOUND` for 404 errors automatically. No manual 404 string matching needed:
+```python
+try:
+    result = await client.get_entity_state(entity_id)
+    return await add_timezone_metadata(client, result)
+except Exception as e:
+    error_response = exception_to_structured_error(e, context={"entity_id": entity_id})
+    return await add_timezone_metadata(client, error_response)
 ```
 
 ### Return Values
@@ -592,13 +666,29 @@ return create_error_response(
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
 
+### Breaking Changes Definition
+
+A change is **BREAKING** only if it removes functionality that users depend on without providing an alternative.
+
+**Breaking Changes (require major version bump):**
+- Deleting a tool without providing alternative functionality elsewhere
+- Removing a feature that has no replacement in any other tool
+- Making something impossible that was previously possible
+
+**NOT Breaking Changes (these are improvements):**
+- Tool consolidation (combining multiple tools into one) — **encouraged**
+- Tool refactoring (restructuring how tools work internally)
+- Parameter changes (as long as same outcome achievable via other means)
+- Return value restructuring (as long as data still accessible)
+- Tool renaming with functionality preserved
+
+**Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only mark as breaking when functionality is genuinely lost forever, not when it's restructured or consolidated.
+
 ## Tool Waiting Behavior
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
 
-**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
-
-**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
+**Implementation (#381)**: Tools have an optional `wait` parameter (default `True`) that controls whether they poll for completion:
 
 ```python
 # Config operations wait by default
@@ -611,12 +701,15 @@ await _verify_all_created(entity_ids)  # Batch verification
 ```
 
 **Tool Categories**:
-- **Config ops** (automations, helpers, scripts): MUST wait by default
-- **Service calls** (lights, switches): SHOULD wait for state change
-- **Async ops** (automation triggers, external integrations): Return immediately, users poll
-- **Query ops** (get_state, search): Return immediately
+- **Config ops** (automations, helpers, scripts): Wait by default (poll until entity queryable/removed)
+- **Service calls** (lights, switches): Wait for state change on state-changing services (turn_on, turn_off, toggle, etc.)
+- **Async ops** (automation triggers, external integrations): Return immediately (not state-changing)
+- **Query ops** (get_state, search): Return immediately (no `wait` parameter)
 
-See issue #381 for implementation plan.
+**Shared utilities** in `src/ha_mcp/tools/util_helpers.py`:
+- `wait_for_entity_registered(client, entity_id)` — polls until entity accessible via state API
+- `wait_for_entity_removed(client, entity_id)` — polls until entity no longer accessible
+- `wait_for_state_change(client, entity_id, expected_state)` — polls until state changes
 
 ## Context Engineering & Progressive Disclosure
 
@@ -740,6 +833,25 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 
 **HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
 
+**E2E tests: poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
+```python
+from ..utilities.wait_helpers import wait_for_tool_result
+
+# BAD: entity may not be registered yet
+create_result = await mcp_client.call_tool("ha_config_set_automation", {"config": config})
+result = await mcp_client.call_tool("ha_deep_search", {"query": "my_sensor"})  # may return empty
+
+# GOOD: poll until the entity appears in results
+data = await wait_for_tool_result(
+    mcp_client,
+    tool_name="ha_deep_search",
+    arguments={"query": "my_sensor", "search_types": ["automation"], "limit": 10},
+    predicate=lambda d: len(d.get("automations", [])) > 0,
+    description="deep search finds new automation",
+)
+```
+Other available helpers: `wait_for_entity_state()`, `wait_for_entity_attribute()`, `wait_for_condition()`. See `wait_helpers.py` for the full set.
+
 ## Release Process
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
@@ -774,7 +886,44 @@ Located in `.claude/agents/`:
 |-------|---------|
 | `issue-analysis` | Deep issue analysis: codebase exploration, implementation planning, complexity assessment |
 | `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
-| `pr-checker` | Review PR comments, resolve threads, monitor CI |
+| `my-pr-checker` | Review YOUR OWN PRs: comments, CI status, resolve threads, monitor until ready |
+
+## Skills
+
+Located in `.claude/skills/`:
+
+| Skill | Command | Purpose | When to Use |
+|-------|---------|---------|-------------|
+| `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
+| `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
+| `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
+
+### BAT (Bot Acceptance Testing)
+
+**Usage:** `/bat [scenario-description]`
+
+Quick summary:
+- Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
+- Runner at `tests/uat/run_uat.py` returns concise summary to stdout, full results to temp file
+- Use for PR validation, regression detection, and end-to-end integration verification
+- Progressive disclosure: only read `results_file` when you need to dig deeper
+
+For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read `.claude/skills/bat/SKILL.md`.
+
+### Contributor PR Review
+
+**Usage:** `/contrib-pr-review <pr-number>`
+
+Review external contributor PRs with comprehensive security-first analysis:
+- **Security assessment** - prompt injection, AGENTS.md changes, workflow modifications
+- **Test coverage** - checks for pre-existing tests and new tests (uses both naming conventions and grep for function/class names)
+- **Contributor experience** - assesses both project contributions and overall GitHub experience
+- **PR size appropriateness** - validates size matches contributor experience level
+- **Intent alignment** - checks issue linkage and scope
+
+**When to use:** Reviewing PRs from external contributors (not your own PRs). Provides structured review framework focusing on safety and quality.
+
+See `.claude/skills/contrib-pr-review/SKILL.md` for full documentation.
 
 ## Documentation Updates
 

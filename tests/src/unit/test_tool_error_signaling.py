@@ -7,12 +7,12 @@ Issue #518: Tool errors were not being signaled via isError in MCP protocol resp
 """
 
 import json
-import pytest
 
+import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.errors import ErrorCode, create_error_response, create_validation_error
-from ha_mcp.tools.helpers import raise_tool_error, exception_to_structured_error
+from ha_mcp.tools.helpers import exception_to_structured_error, raise_tool_error
 
 
 class TestRaiseToolError:

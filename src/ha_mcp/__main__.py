@@ -1,14 +1,18 @@
 """Home Assistant MCP Server."""
 
 import truststore
+
 truststore.inject_into_ssl()
 
 import asyncio  # noqa: E402
+import copy  # noqa: E402
+import hashlib  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import signal  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
+import threading  # noqa: E402
 from typing import Any  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -24,10 +28,12 @@ class OAuthProxyClient:
     def __init__(self, auth_provider):
         self._auth_provider = auth_provider
         self._oauth_clients = {}
+        self._lock = threading.Lock()
 
     def _get_oauth_client(self):
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
+
         from ha_mcp.client.rest_client import HomeAssistantClient
 
         # Get the access token from the current request context
@@ -41,22 +47,32 @@ class OAuthProxyClient:
         claims = token.claims
 
         if not claims or "ha_url" not in claims or "ha_token" not in claims:
-            logger.error(f"No HA credentials in token claims: {claims}")
+            logger.error(f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}")
             raise RuntimeError("No Home Assistant credentials in OAuth token claims")
 
         ha_url = claims["ha_url"]
         ha_token = claims["ha_token"]
 
-        # Create or reuse client for these credentials
-        client_key = f"{ha_url}:{ha_token}"
-        if client_key not in self._oauth_clients:
-            self._oauth_clients[client_key] = HomeAssistantClient(
-                base_url=ha_url,
-                token=ha_token,
-            )
-            logger.info(f"Created OAuth client for {ha_url}")
+        # Hash credentials for cache key to avoid raw tokens appearing in dict keys
+        client_key = hashlib.sha256(f"{ha_url}:{ha_token}".encode()).hexdigest()
 
-        return self._oauth_clients[client_key]
+        with self._lock:
+            if client_key not in self._oauth_clients:
+                self._oauth_clients[client_key] = HomeAssistantClient(
+                    base_url=ha_url,
+                    token=ha_token,
+                )
+                logger.info(f"Created OAuth client for {ha_url}")
+
+            return self._oauth_clients[client_key]
+
+    async def close(self) -> None:
+        """Close all cached OAuth clients to release httpx connection pools."""
+        with self._lock:
+            clients = list(self._oauth_clients.values())
+            self._oauth_clients.clear()
+        for client in clients:
+            await client.close()
 
     def __getattr__(self, name):
         """Forward all attribute access to the OAuth client."""
@@ -154,15 +170,15 @@ def _check_stdin_available() -> bool:
         return True
 
     # Block character devices that aren't TTYs (like /dev/null in Docker without -i)
-    if stat.S_ISCHR(mode):
-        return False
-
     # Unknown type - allow it and let the server handle any issues
-    return True
+    return not stat.S_ISCHR(mode)
 
 
 def _handle_config_error(error: Exception) -> None:
-    """Handle configuration errors with a user-friendly message."""
+    """Handle configuration errors with a user-friendly message and exit.
+
+    Always calls sys.exit(1) — never returns normally.
+    """
     from pydantic import ValidationError
 
     if isinstance(error, ValidationError):
@@ -201,19 +217,66 @@ For setup instructions, see:
     sys.exit(1)
 
 
+def _validate_standard_credentials(settings) -> None:
+    """Exit with error if HA credentials are OAuth sentinels in standard (non-OAuth) mode."""
+    from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL
+
+    missing_vars = []
+    if settings.homeassistant_url == OAUTH_MODE_URL:
+        missing_vars.append("  - HOMEASSISTANT_URL")
+    if settings.homeassistant_token == OAUTH_MODE_TOKEN:
+        missing_vars.append("  - HOMEASSISTANT_TOKEN")
+
+    if missing_vars:
+        print(
+            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def _get_show_banner() -> bool:
+    """Check if CLI banner should be shown (respects FASTMCP_SHOW_CLI_BANNER env var)."""
+    import fastmcp
+
+    return fastmcp.settings.show_cli_banner
+
+
+def _setup_standard_mode() -> None:
+    """Validate credentials and configure logging for standard (non-OAuth) modes."""
+    from ha_mcp.config import get_settings
+
+    settings = get_settings()
+    _validate_standard_credentials(settings)
+    _setup_logging(settings.log_level)
+
+
+def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
+    """Build common run_async kwargs for HTTP-based transports."""
+    return {
+        "transport": transport,
+        "host": "0.0.0.0",
+        "port": port,
+        "path": path,
+        "show_banner": _get_show_banner(),
+        "stateless_http": True,
+        "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
+    }
+
+
 def _create_server():
     """Create server instance (deferred to avoid import during smoke test)."""
+    from pydantic import ValidationError
+
     try:
-        from ha_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
+        from ha_mcp.server import (
+            HomeAssistantSmartMCPServer,  # type: ignore[import-not-found]
+        )
 
         return HomeAssistantSmartMCPServer()
-    except Exception as e:
-        # Check if this is a pydantic validation error (missing env vars)
-        from pydantic import ValidationError
-
-        if isinstance(e, ValidationError):
-            _handle_config_error(e)
-        raise
+    except ValidationError as e:
+        _handle_config_error(e)
+        raise  # _handle_config_error calls sys.exit, but satisfy type checker
 
 
 # Lazy server creation - only create when needed
@@ -244,11 +307,37 @@ class _DeferredMCP:
     def __getattr__(self, name: str) -> Any:
         return getattr(_get_mcp(), name)
 
-    def run(self, *args: Any, **kwargs: Any) -> None:
-        return _get_mcp().run(*args, **kwargs)
-
 
 mcp = _DeferredMCP()
+
+
+_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _setup_logging(log_level_str: str, force: bool = False) -> None:
+    """Configure root logger with consistent timestamp format."""
+    logging.basicConfig(
+        level=getattr(logging, log_level_str),
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt=_LOG_DATE_FORMAT,
+        force=force,
+    )
+
+
+def _get_timestamped_uvicorn_log_config() -> dict:
+    """Return a Uvicorn log config with human-readable timestamps added."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    log_config["formatters"]["default"]["fmt"] = (
+        "%(asctime)s %(levelprefix)s %(message)s"
+    )
+    log_config["formatters"]["default"]["datefmt"] = _LOG_DATE_FORMAT
+    log_config["formatters"]["access"]["fmt"] = (
+        '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    )
+    log_config["formatters"]["access"]["datefmt"] = _LOG_DATE_FORMAT
+    return log_config
 
 
 async def _cleanup_resources() -> None:
@@ -263,8 +352,10 @@ async def _cleanup_resources() -> None:
 
         await stop_websocket_listener()
         logger.debug("WebSocket listener stopped")
+    except ImportError:
+        logger.debug("WebSocket listener module not available")
     except Exception as e:
-        logger.debug(f"WebSocket listener cleanup: {e}")
+        logger.warning(f"WebSocket listener cleanup failed: {e}")
 
     # Close WebSocket manager connections
     try:
@@ -272,8 +363,10 @@ async def _cleanup_resources() -> None:
 
         await websocket_manager.disconnect()
         logger.debug("WebSocket manager disconnected")
+    except ImportError:
+        logger.debug("WebSocket manager module not available")
     except Exception as e:
-        logger.debug(f"WebSocket manager cleanup: {e}")
+        logger.warning(f"WebSocket manager cleanup failed: {e}")
 
     # Close the server's HTTP client
     if _server is not None:
@@ -281,9 +374,78 @@ async def _cleanup_resources() -> None:
             await _server.close()
             logger.debug("Server closed")
         except Exception as e:
-            logger.debug(f"Server cleanup: {e}")
+            logger.warning(f"Server cleanup failed: {e}")
 
     logger.info("Server resources cleaned up")
+
+
+async def _cancel_tasks(*tasks: asyncio.Task) -> None:
+    """Cancel tasks and wait for completion, swallowing CancelledError."""
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+async def _run_with_shutdown(server_coro) -> None:
+    """Run a server coroutine with graceful shutdown support.
+
+    Handles signal-based shutdown, resource cleanup, and task cancellation.
+    """
+    global _shutdown_event
+
+    _shutdown_event = asyncio.Event()
+
+    server_task = asyncio.create_task(server_coro)
+    shutdown_task = asyncio.create_task(_shutdown_event.wait())
+
+    try:
+        done, pending = await asyncio.wait(
+            [server_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if shutdown_task in done:
+            logger.info("Shutdown signal received, stopping server...")
+            server_task.cancel()
+            try:
+                await asyncio.wait_for(server_task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
+            except TimeoutError:
+                logger.warning("Server did not stop within timeout")
+            except asyncio.CancelledError:
+                pass
+
+    except asyncio.CancelledError:
+        logger.info("Server task cancelled")
+    finally:
+        try:
+            await asyncio.wait_for(
+                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            logger.warning("Resource cleanup timed out")
+
+        await _cancel_tasks(server_task, shutdown_task)
+
+
+def _run_entrypoint(coro, label: str) -> None:
+    """Run an async entrypoint with standard exception handling."""
+    _setup_signal_handlers()
+
+    try:
+        asyncio.run(coro)
+    except KeyboardInterrupt:
+        logger.info("Interrupted, exiting")
+    except SystemExit:
+        raise
+    except Exception as e:
+        logger.error(f"{label} error: {e}")
+        sys.exit(1)
+
+    sys.exit(0)
 
 
 def _signal_handler(signum: int, frame: Any) -> None:
@@ -323,57 +485,7 @@ def _setup_signal_handlers() -> None:
 
 async def _run_with_graceful_shutdown() -> None:
     """Run the MCP server with graceful shutdown support."""
-    global _shutdown_event
-
-    _shutdown_event = asyncio.Event()
-
-    # Respect FastMCP's show_cli_banner setting
-    # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
-    import fastmcp
-    show_banner = fastmcp.settings.show_cli_banner
-
-    # Create a task for the MCP server
-    server_task = asyncio.create_task(_get_mcp().run_async(show_banner=show_banner))
-
-    # Wait for either the server to complete or a shutdown signal
-    shutdown_task = asyncio.create_task(_shutdown_event.wait())
-
-    try:
-        done, pending = await asyncio.wait(
-            [server_task, shutdown_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        # If shutdown was signaled, cancel the server task
-        if shutdown_task in done:
-            logger.info("Shutdown signal received, stopping server...")
-            server_task.cancel()
-            try:
-                await asyncio.wait_for(server_task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
-            except TimeoutError:
-                logger.warning("Server did not stop within timeout")
-            except asyncio.CancelledError:
-                pass
-
-    except asyncio.CancelledError:
-        logger.info("Server task cancelled")
-    finally:
-        # Clean up resources with timeout
-        try:
-            await asyncio.wait_for(
-                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            logger.warning("Resource cleanup timed out")
-
-        # Cancel any remaining tasks
-        for task in [server_task, shutdown_task]:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+    await _run_with_shutdown(_get_mcp().run_async(show_banner=_get_show_banner()))
 
 
 # CLI entry point (for pyproject.toml) - use FastMCP's built-in runner
@@ -382,6 +494,7 @@ def main() -> None:
     # Handle --version flag early, before server creation requires config
     if "--version" in sys.argv or "-V" in sys.argv:
         from importlib.metadata import version
+
         print(f"ha-mcp {version('ha-mcp')}")
         sys.exit(0)
 
@@ -393,56 +506,26 @@ def main() -> None:
 
     # Configure logging before server creation
     from ha_mcp.config import get_settings
+
     settings = get_settings()
 
-    # In standard mode (not OAuth), validate that real credentials are provided
-    # The config has defaults for OAuth mode, but standard mode requires real values
     # Check config FIRST so users see helpful config errors before stdin errors
-    missing_vars = []
-    if settings.homeassistant_url == "http://oauth-mode":
-        missing_vars.append("  - HOMEASSISTANT_URL")
-    if settings.homeassistant_token == "oauth-mode-token":
-        missing_vars.append("  - HOMEASSISTANT_TOKEN")
-
-    if missing_vars:
-        print(
-            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _validate_standard_credentials(settings)
 
     # Check if stdin is available (fails in Docker without -i flag)
-    # This check comes after config validation so users see config errors first
     if not _check_stdin_available():
         print(_STDIN_ERROR_MESSAGE, file=sys.stderr)
         sys.exit(1)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
-    )
+    _setup_logging(settings.log_level)
 
-    # Set up signal handlers before running
-    _setup_signal_handlers()
-
-    # Run with graceful shutdown support
-    try:
-        asyncio.run(_run_with_graceful_shutdown())
-    except KeyboardInterrupt:
-        # Handle case where KeyboardInterrupt is raised before our handler
-        logger.info("Interrupted, exiting")
-    except SystemExit:
-        raise
-    except Exception as e:
-        logger.error(f"Server error: {e}")
-        sys.exit(1)
-
-    sys.exit(0)
+    _run_entrypoint(_run_with_graceful_shutdown(), "Server")
 
 
 def main_dev() -> None:
     """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
     import os
+
     os.environ["LOG_LEVEL"] = "DEBUG"
     main()
 
@@ -455,78 +538,25 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
 
-    port = int(os.getenv("MCP_PORT", str(default_port)))
+    port_str = os.getenv("MCP_PORT", str(default_port))
+    try:
+        port = int(port_str)
+    except ValueError:
+        logger.error(f"Invalid MCP_PORT value: {port_str!r}. Must be an integer.")
+        sys.exit(1)
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
     return port, path
 
 
 async def _run_http_with_graceful_shutdown(
     transport: str,
-    host: str,
     port: int,
     path: str,
 ) -> None:
     """Run HTTP server with graceful shutdown support."""
-    global _shutdown_event
-
-    _shutdown_event = asyncio.Event()
-
-    # Respect FastMCP's show_cli_banner setting
-    # Users can disable banner via FASTMCP_SHOW_CLI_BANNER=false
-    import fastmcp
-    show_banner = fastmcp.settings.show_cli_banner
-
-    # Create a task for the MCP server
-    server_task = asyncio.create_task(
-        _get_mcp().run_async(
-            transport=transport,
-            host=host,
-            port=port,
-            path=path,
-            show_banner=show_banner,
-            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
-        )
+    await _run_with_shutdown(
+        _get_mcp().run_async(**_http_run_kwargs(transport, port, path))
     )
-
-    # Wait for either the server to complete or a shutdown signal
-    shutdown_task = asyncio.create_task(_shutdown_event.wait())
-
-    try:
-        done, pending = await asyncio.wait(
-            [server_task, shutdown_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        # If shutdown was signaled, cancel the server task
-        if shutdown_task in done:
-            logger.info("Shutdown signal received, stopping HTTP server...")
-            server_task.cancel()
-            try:
-                await asyncio.wait_for(server_task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
-            except TimeoutError:
-                logger.warning("HTTP server did not stop within timeout")
-            except asyncio.CancelledError:
-                pass
-
-    except asyncio.CancelledError:
-        logger.info("HTTP server task cancelled")
-    finally:
-        # Clean up resources with timeout
-        try:
-            await asyncio.wait_for(
-                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            logger.warning("Resource cleanup timed out")
-
-        # Cancel any remaining tasks
-        for task in [server_task, shutdown_task]:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
 
 
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
@@ -538,28 +568,10 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """
     port, path = _get_http_runtime(default_port)
 
-    # Set up signal handlers before running
-    _setup_signal_handlers()
-
-    # Run with graceful shutdown support
-    try:
-        asyncio.run(
-            _run_http_with_graceful_shutdown(
-                transport=transport,
-                host="0.0.0.0",
-                port=port,
-                path=path,
-            )
-        )
-    except KeyboardInterrupt:
-        logger.info("Interrupted, exiting")
-    except SystemExit:
-        raise
-    except Exception as e:
-        logger.error(f"HTTP server error: {e}")
-        sys.exit(1)
-
-    sys.exit(0)
+    _run_entrypoint(
+        _run_http_with_graceful_shutdown(transport, port, path),
+        "HTTP server",
+    )
 
 
 def main_web() -> None:
@@ -571,29 +583,7 @@ def main_web() -> None:
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
-    # Configure logging before server creation
-    from ha_mcp.config import get_settings
-    settings = get_settings()
-
-    # Validate credentials (required in non-OAuth HTTP mode)
-    missing_vars = []
-    if settings.homeassistant_url == "http://oauth-mode":
-        missing_vars.append("  - HOMEASSISTANT_URL")
-    if settings.homeassistant_token == "oauth-mode-token":
-        missing_vars.append("  - HOMEASSISTANT_TOKEN")
-
-    if missing_vars:
-        print(
-            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
-    )
-
+    _setup_standard_mode()
     _run_http_server("streamable-http", default_port=8086)
 
 
@@ -606,29 +596,7 @@ def main_sse() -> None:
     - MCP_PORT (optional, default: 8087)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
-    # Configure logging before server creation
-    from ha_mcp.config import get_settings
-    settings = get_settings()
-
-    # Validate credentials (required in non-OAuth SSE mode)
-    missing_vars = []
-    if settings.homeassistant_url == "http://oauth-mode":
-        missing_vars.append("  - HOMEASSISTANT_URL")
-    if settings.homeassistant_token == "oauth-mode-token":
-        missing_vars.append("  - HOMEASSISTANT_TOKEN")
-
-    if missing_vars:
-        print(
-            _CONFIG_ERROR_MESSAGE.format(missing_vars="\n".join(missing_vars)),
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s'
-    )
-
+    _setup_standard_mode()
     _run_http_server("sse", default_port=8087)
 
 
@@ -650,39 +618,23 @@ def main_oauth() -> None:
     """
     # Configure logging for OAuth mode
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
-        force=True  # Force reconfiguration
-    )
+    _setup_logging(log_level, force=True)
     # Also configure all ha_mcp loggers
-    for logger_name in ['ha_mcp', 'ha_mcp.auth', 'ha_mcp.auth.provider']:
+    for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
     logger.info(f"OAuth mode logging configured at {log_level} level")
 
-    port = int(os.getenv("MCP_PORT", "8086"))
-    path = os.getenv("MCP_SECRET_PATH", "/mcp")
+    port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")
 
     if not base_url:
         logger.error("MCP_BASE_URL environment variable is required for OAuth mode")
-        logger.error("Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com")
+        logger.error(
+            "Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com"
+        )
         sys.exit(1)
 
-    # Set up signal handlers
-    _setup_signal_handlers()
-
-    try:
-        asyncio.run(_run_oauth_server(base_url, port, path))
-    except KeyboardInterrupt:
-        logger.info("Interrupted, exiting")
-    except SystemExit:
-        raise
-    except Exception as e:
-        logger.error(f"OAuth server error: {e}")
-        sys.exit(1)
-
-    sys.exit(0)
+    _run_entrypoint(_run_oauth_server(base_url, port, path), "OAuth server")
 
 
 async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
@@ -693,12 +645,8 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         port: Port to listen on
         path: MCP endpoint path
     """
-    global _shutdown_event
-
     from ha_mcp.auth import HomeAssistantOAuthProvider
     from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    _shutdown_event = asyncio.Event()
 
     # Create OAuth provider
     auth_provider = HomeAssistantOAuthProvider(
@@ -706,72 +654,25 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         service_documentation_url="https://github.com/homeassistant-ai/ha-mcp",
     )
 
-    # Create full HomeAssistantSmartMCPServer with OAuth authentication
-    # In OAuth mode, we don't require pre-configured HA credentials in environment.
-    # Instead, tools will get credentials from the OAuth provider per-request.
-    # The Settings class now has defaults that work for OAuth mode.
-
-    # Create proxy client that dynamically forwards to OAuth clients
-    # This is necessary because tools capture a reference to the client at registration time.
+    # In OAuth mode, credentials come from the OAuth consent form per-request.
+    # The proxy client extracts them from token claims on each tool invocation.
     proxy_client = OAuthProxyClient(auth_provider)
 
-    # Create server with the proxy client
-    server = HomeAssistantSmartMCPServer(client=proxy_client)
-    mcp = server.mcp
+    global _server
+    _server = HomeAssistantSmartMCPServer(client=proxy_client)
+    mcp = _server.mcp
+    mcp.auth = auth_provider
 
     logger.info("Server created with OAuthProxyClient")
 
-    # Add OAuth authentication to the MCP server
-    mcp.auth = auth_provider
-
-    # Get tool count (get_tools is async, but we can count registered tools)
     tools = await mcp.get_tools()
-    logger.info(f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}")
-
-    # Respect FastMCP's show_cli_banner setting for consistency
-    import fastmcp
-    show_banner = fastmcp.settings.show_cli_banner
-
-    # Run server
-    server_task = asyncio.create_task(
-        mcp.run_async(
-            transport="streamable-http",
-            host="0.0.0.0",
-            port=port,
-            path=path,
-            show_banner=show_banner,
-            stateless_http=True,  # Enable stateless mode for horizontal scaling and restart resilience
-        )
+    logger.info(
+        f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
-    shutdown_task = asyncio.create_task(_shutdown_event.wait())
-
-    try:
-        done, pending = await asyncio.wait(
-            [server_task, shutdown_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        if shutdown_task in done:
-            logger.info("Shutdown signal received, stopping OAuth server...")
-            server_task.cancel()
-            try:
-                await asyncio.wait_for(server_task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
-            except TimeoutError:
-                logger.warning("OAuth server did not stop within timeout")
-            except asyncio.CancelledError:
-                pass
-
-    except asyncio.CancelledError:
-        logger.info("OAuth server task cancelled")
-    finally:
-        for task in [server_task, shutdown_task]:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+    await _run_with_shutdown(
+        mcp.run_async(**_http_run_kwargs("streamable-http", port, path))
+    )
 
 
 if __name__ == "__main__":

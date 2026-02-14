@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "6.5.0"
+version = "6.6.1"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -54,30 +54,6 @@ packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 [tool.setuptools.package-data]
 ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json"]
 
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
-known_first_party = ["ha_mcp"]
-
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
@@ -100,33 +76,45 @@ ignore_missing_imports = true
 
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 88
+extend-exclude = ["tests/initial_test_state"]
 
 [tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
-    "RUF100", # unused noqa
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "UP",    # pyupgrade
+    "RUF",   # ruff-specific rules
+    "PIE",   # misc lints
+    "PERF",  # performance anti-patterns
+    "ASYNC", # async best practices
+    "A",     # builtin shadowing
+    "LOG",   # logging best practices
+    "SIM",   # simplify
 ]
 ignore = [
-    "E501",  # line too long, handled by black
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
-    "B904",  # raise exceptions with from None/err - non-critical
-    "F841",  # local variable assigned but never used
-    "B007",  # loop control variable not used within loop body
-    "W293",  # blank line contains whitespace
-    "W291",  # trailing whitespace
-    "F821",  # undefined name (often false positives in complex imports)
-    "E722",  # bare except (temporary for cleanup)
-    "UP038", # isinstance union syntax (non-critical)
-    "I001",  # import sorting handled by isort
+    "E501",    # line too long — formatter handles this
+    "B008",    # function calls in defaults — FastMCP pattern
+    "C901",    # complexity — too many to fix now
+    "SIM102",  # collapsible-if — sometimes less readable
+    "SIM108",  # ternary — sometimes less readable
+    "SIM105",  # contextlib.suppress — style preference
+    "ASYNC109",# timeout params are standard in HA API patterns
+    "RUF001",  # ambiguous unicode — HA entity names use degree symbols etc
+    "RUF003",  # ambiguous unicode in comments
+    "RUF010",  # explicit f-string type conversion — str(x) is clearer than !s
+    "F841",    # unused variable — too many to fix now
+    "RUF059",  # unused unpacked variable
+    "SIM118",  # in-dict-keys — style preference
+    "PIE810",  # multiple-starts-ends-with — style preference
+    "RUF005",  # collection-literal-concatenation
+    "RUF022",  # unsorted-dunder-all
+    "RUF013",  # implicit-optional
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -162,10 +150,8 @@ asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
-    "black>=23.0.0",
     "build>=1.2.2",
     "docker>=7.1.0",
-    "isort>=5.12.0",
     "mypy>=1.17.0",
     "psutil>=7.0.0",
     "pytest>=8.4.2",
@@ -173,6 +159,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
+    "pre-commit>=4.0.0",
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
 ]
@@ -186,7 +173,8 @@ version_variables = [
 build_command = """
 VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = \"\\(.*\\)\"/\\1/')
 sed -i "s/^version: \\\".*\\\"/version: \\\"$VERSION\\\"/" homeassistant-addon/config.yaml
-git add homeassistant-addon/config.yaml
+pip install uv && uv lock
+git add homeassistant-addon/config.yaml uv.lock
 """
 dist_path = "dist/"
 upload_to_PyPI = true

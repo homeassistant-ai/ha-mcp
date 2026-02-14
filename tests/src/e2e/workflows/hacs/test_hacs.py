@@ -259,13 +259,13 @@ class TestHacsSearch:
         # Verify response structure
         assert "query" in data, "Response should include query"
         assert "total_matches" in data, "Response should include total_matches"
-        assert "results_returned" in data, "Response should include results_returned"
+        assert "count" in data, "Response should include count"
         assert "results" in data, "Response should include results list"
 
         # Query should be recorded
         assert data["query"] == "mushroom", "Query should match input"
 
-        logger.info(f"Search 'mushroom': {data['total_matches']} matches, {data['results_returned']} returned")
+        logger.info(f"Search 'mushroom': {data['total_matches']} matches, {data['count']} returned")
 
         # Verify result structure if we have results
         if data["results"]:
@@ -327,10 +327,10 @@ class TestHacsSearch:
             pytest.fail(f"HACS search with limit failed: {data.get('error')}")
 
         # Results returned should not exceed max_results
-        assert data["results_returned"] <= 5, "Results should not exceed max_results"
+        assert data["count"] <= 5, "Results should not exceed max_results"
         assert len(data["results"]) <= 5, "Actual results should not exceed max_results"
 
-        logger.info(f"Max results test: {data['results_returned']}/{data['total_matches']} returned")
+        logger.info(f"Max results test: {data['count']}/{data['total_matches']} returned")
         logger.info("Search with max_results test passed")
 
     async def test_search_no_results(self, mcp_client):
@@ -355,7 +355,7 @@ class TestHacsSearch:
 
         # Should succeed with empty results
         assert data["total_matches"] == 0, "Should have no matches for nonsense query"
-        assert data["results_returned"] == 0, "Should return no results"
+        assert data["count"] == 0, "Should return no results"
         assert len(data["results"]) == 0, "Results list should be empty"
 
         logger.info("No results search test passed")
@@ -378,7 +378,7 @@ class TestHacsRepositoryInfo:
             "ha_hacs_repository_info",
             {"repository_id": "nonexistent/repo12345"},
         )
-        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
+        data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:

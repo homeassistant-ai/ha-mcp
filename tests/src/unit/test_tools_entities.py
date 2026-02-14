@@ -1,9 +1,10 @@
 """Unit tests for entity management tools module."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from fastmcp.exceptions import ToolError
 
 from fastmcp.exceptions import ToolError
 

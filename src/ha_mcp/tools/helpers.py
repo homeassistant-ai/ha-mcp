@@ -134,15 +134,15 @@ def exception_to_structured_error(
     # Handle specific exception types
     if isinstance(error, HomeAssistantConnectionError):
         if "timeout" in error_str:
-            error_response = create_connection_error(error_msg, timeout=True)
+            error_response = create_connection_error(error_msg, timeout=True, context=context)
         else:
-            error_response = create_connection_error(error_msg)
+            error_response = create_connection_error(error_msg, context=context)
 
     elif isinstance(error, HomeAssistantAuthError):
         if "expired" in error_str:
-            error_response = create_auth_error(error_msg, expired=True)
+            error_response = create_auth_error(error_msg, expired=True, context=context)
         else:
-            error_response = create_auth_error(error_msg)
+            error_response = create_auth_error(error_msg, context=context)
 
     elif isinstance(error, HomeAssistantAPIError):
         # Check for specific error patterns
@@ -159,7 +159,7 @@ def exception_to_structured_error(
                         context=context,
                     )
             case 401 | 403:
-                error_response = create_auth_error(error_msg)
+                error_response = create_auth_error(error_msg, context=context)
             case 400:
                 error_response = create_validation_error(error_msg, context=context)
             case _:
@@ -173,10 +173,10 @@ def exception_to_structured_error(
     elif isinstance(error, TimeoutError):
         operation = context.get("operation", "request") if context else "request"
         timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg)
+        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
 
     elif isinstance(error, ValueError):
-        error_response = create_validation_error(error_msg)
+        error_response = create_validation_error(error_msg, context=context)
 
     # Check for common error patterns in error message
     elif "not found" in error_str or "404" in error_str:
@@ -191,20 +191,20 @@ def exception_to_structured_error(
             )
 
     elif "timeout" in error_str:
-        error_response = create_timeout_error("operation", 30, details=error_msg)
+        error_response = create_timeout_error("operation", 30, details=error_msg, context=context)
 
     elif "connection" in error_str or "connect" in error_str:
-        error_response = create_connection_error(error_msg)
+        error_response = create_connection_error(error_msg, context=context)
 
     elif "auth" in error_str or "token" in error_str or "401" in error_str:
-        error_response = create_auth_error(error_msg)
+        error_response = create_auth_error(error_msg, context=context)
 
     else:
-        # Default to internal error
+        # Default to internal error -- use generic message to avoid leaking internals
         error_response = create_error_response(
             ErrorCode.INTERNAL_ERROR,
-            error_msg,
-            details="An unexpected error occurred",
+            "An unexpected error occurred",
+            details=error_msg,
             context=context,
         )
 
