@@ -70,6 +70,45 @@ Lower-weight stories are good for comprehensive coverage.
 | 1 | integration | Set up a config entry flow | Integration config |
 | 1 | system | Check HA system info and config | System diagnostics |
 
+## Results Tracking
+
+Results are appended to a JSONL file after each run. Each line records one story result:
+
+```jsonl
+{"sha":"8b521d4","version":"v6.6.1","branch":"v6.6.1","timestamp":"2026-02-13T10:00:00+00:00","agent":"gemini","story":"s01","category":"automation","weight":5,"passed":true,"duration_ms":45000,"tool_calls":5,"tool_failures":0,"turns":3}
+```
+
+- `sha`: exact commit for reproducibility
+- `version`: human-readable from `git describe --tags` (e.g., `v6.6.1` or `v6.6.1-5-gabc1234`)
+- `branch`: the `--branch` flag value (tag/branch installed via uvx), or `null` for local code
+
+**Local runs:** `local/uat-results.jsonl` (gitignored)
+**Future CI:** Orphan branch `uat-results` with `history.jsonl`
+
+**Running with results tracking:**
+```bash
+# Run against current local code
+python tests/uat/stories/run_story.py --all --agents gemini
+
+# Run against a specific release tag
+python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
+
+# Custom results file location
+python tests/uat/stories/run_story.py --all --agents gemini --results-file /tmp/results.jsonl
+```
+
+**Querying results:**
+```bash
+# All results for a specific version
+jq 'select(.branch == "v6.6.1")' local/uat-results.jsonl
+
+# Pass rate by story
+jq -s 'group_by(.story) | .[] | {story: .[0].story, pass_rate: ([.[] | select(.passed)] | length) / length}' local/uat-results.jsonl
+
+# Compare two runs
+diff <(jq -s 'sort_by(.story) | .[] | {s:.story,p:.passed}' run1.jsonl) <(jq -s 'sort_by(.story) | .[] | {s:.story,p:.passed}' run2.jsonl)
+```
+
 ## Sources
 
 Stories are derived from:
