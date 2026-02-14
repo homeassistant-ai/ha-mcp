@@ -16,6 +16,7 @@ import logging
 import pytest
 
 from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.proxy_helpers import proxy_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_get_entity_exposure")
 
-        result = await mcp_client.call_tool("ha_get_entity_exposure", {})
+        result = await proxy_call_tool(mcp_client, "ha_get_entity_exposure", {})
 
         data = parse_mcp_result(result)
         assert data.get("success"), f"Failed to list exposed entities: {data}"
@@ -54,7 +55,7 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_get_entity_exposure with assistant filter")
 
-        result = await mcp_client.call_tool(
+        result = await proxy_call_tool(mcp_client,
             "ha_get_entity_exposure",
             {"assistant": "conversation"},
         )
@@ -76,11 +77,12 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_get_entity_exposure with invalid assistant")
 
-        data = await safe_call_tool(
+        result = await proxy_call_tool(
             mcp_client,
             "ha_get_entity_exposure",
             {"assistant": "invalid_assistant"},
         )
+        data = parse_mcp_result(result)
 
         assert not data.get("success"), "Invalid assistant should fail"
         assert "valid_assistants" in data, "Should suggest valid assistants"
@@ -109,7 +111,7 @@ class TestVoiceAssistantExposure:
 
 
         # Get exposure settings
-        result = await mcp_client.call_tool(
+        result = await proxy_call_tool(mcp_client,
             "ha_get_entity_exposure",
             {"entity_id": entity_id},
         )
@@ -170,7 +172,7 @@ class TestVoiceAssistantExposure:
         logger.info(f"Exposed entity to conversation: {expose_data}")
 
         # Verify exposure
-        check_result = await mcp_client.call_tool(
+        check_result = await proxy_call_tool(mcp_client,
             "ha_get_entity_exposure",
             {"entity_id": entity_id},
         )
@@ -256,7 +258,7 @@ async def test_voice_exposure_basic(mcp_client):
     """
     logger.info("Running basic voice exposure test")
 
-    result = await mcp_client.call_tool("ha_get_entity_exposure", {})
+    result = await proxy_call_tool(mcp_client, "ha_get_entity_exposure", {})
     data = parse_mcp_result(result)
 
     assert data.get("success"), f"Failed: {data}"
