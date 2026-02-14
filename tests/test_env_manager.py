@@ -45,8 +45,8 @@ class HomeAssistantTestEnvironment:
 
     def _setup_config_directory(self) -> Path:
         """Set up Home Assistant configuration directory."""
-        import tempfile
         import shutil
+        import tempfile
 
         # Create temporary directory for HA config
         config_dir = Path(tempfile.mkdtemp(prefix="ha_test_env_"))
@@ -255,7 +255,7 @@ class HomeAssistantTestEnvironment:
                     print("✅ Ready")
                 else:
                     print(f"⚠️ Status {response.status_code}")
-            except:
+            except Exception:
                 print("❌ Not accessible")
         else:
             print("🐳 Container Status: Not running")

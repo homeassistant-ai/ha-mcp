@@ -8,6 +8,7 @@ entities of that domain, not return empty results.
 import logging
 
 import pytest
+
 from ..utilities.assertions import assert_mcp_success, parse_mcp_result
 
 logger = logging.getLogger(__name__)

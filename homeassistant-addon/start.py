@@ -135,7 +135,7 @@ def main() -> int:
     # Import and run MCP server directly
     try:
         log_info("Importing ha_mcp module...")
-        from ha_mcp.__main__ import mcp, _get_timestamped_uvicorn_log_config
+        from ha_mcp.__main__ import _get_timestamped_uvicorn_log_config, mcp
 
         log_info("Starting MCP server...")
         mcp.run(

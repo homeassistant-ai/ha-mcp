@@ -50,7 +50,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
     logger.info("MCP tools installer enabled via feature flag")
 
     # Import HACS helpers - we depend on HACS functionality
-    from .tools_hacs import _check_hacs_available, CATEGORY_MAP
+    from .tools_hacs import CATEGORY_MAP, _check_hacs_available
 
     @mcp.tool(
         annotations={

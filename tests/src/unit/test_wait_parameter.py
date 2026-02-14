@@ -51,7 +51,9 @@ class TestAutomationWaitParameter:
 
     @pytest.fixture
     def register_tools(self, mock_client):
-        from ha_mcp.tools.tools_config_automations import register_config_automation_tools
+        from ha_mcp.tools.tools_config_automations import (
+            register_config_automation_tools,
+        )
 
         registered_tools: dict[str, Any] = {}
 

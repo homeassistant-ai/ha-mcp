@@ -170,18 +170,18 @@ class TestAutomationTraces:
 
             assert detailed_data.get("success") is True
             assert detailed_data.get("run_id") == run_id
-            
+
             # Verify detailed content structure (Deep verification)
             # This ensures we correctly parsed the flat structure (trigger/0, action/0)
             assert "trigger" in detailed_data, "Detailed trace should contain trigger info"
             assert "action_trace" in detailed_data, "Detailed trace should contain action_trace"
             assert isinstance(detailed_data["action_trace"], list), "action_trace should be a list"
             assert len(detailed_data["action_trace"]) > 0, "action_trace should not be empty"
-            
+
             # Check for path property to ensure flat structure parsing worked
             first_action = detailed_data["action_trace"][0]
             assert "path" in first_action, "Action trace element should contain 'path'"
-            
+
             logger.info(f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions")
 
     async def test_empty_traces_with_diagnostics(

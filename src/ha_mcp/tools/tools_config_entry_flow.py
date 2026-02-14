@@ -52,7 +52,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             Result dict with success/error and flow details
         """
         max_steps = 10
-        for step_num in range(max_steps):
+        for _ in range(max_steps):
             result = await client.submit_config_flow_step(flow_id, config)
 
             result_type = result.get("type")

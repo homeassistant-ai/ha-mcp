@@ -146,4 +146,4 @@ def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise RuntimeError(
                 f"Failed to retrieve camera image from {entity_id}: {str(e)}. "
                 "Ensure the camera is online and accessible."
-            )
+            ) from e

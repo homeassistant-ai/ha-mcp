@@ -5,6 +5,7 @@ Simple connection test to verify E2E test setup works.
 import logging
 
 import pytest
+
 from ..utilities.assertions import assert_mcp_success, assert_search_results
 
 logger = logging.getLogger(__name__)

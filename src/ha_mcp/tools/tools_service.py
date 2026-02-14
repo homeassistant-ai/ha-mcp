@@ -10,10 +10,10 @@ from typing import Any, cast
 import httpx
 from fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import (
     create_validation_error,
 )
-from ..client.rest_client import HomeAssistantConnectionError
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
 
