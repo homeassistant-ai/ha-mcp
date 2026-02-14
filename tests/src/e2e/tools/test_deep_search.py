@@ -10,6 +10,14 @@ from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
+DEEP_SEARCH_KEYS = ("automations", "scripts", "helpers")
+
+
+def assert_deep_search_keys(data: dict) -> None:
+    """Assert that a deep search response contains the expected top-level keys."""
+    for key in DEEP_SEARCH_KEYS:
+        assert key in data, f"Response should contain '{key}' key"
+
 
 @pytest.mark.asyncio
 async def test_deep_search_automation(mcp_client):
@@ -57,7 +65,8 @@ async def test_deep_search_automation(mcp_client):
         )
 
         # Verify we found the automation
-        automations = data.get("automations", [])
+        assert_deep_search_keys(data)
+        automations = data["automations"]
         assert len(automations) > 0, "Should find automation containing the sensor"
 
         # Find our specific automation
@@ -139,7 +148,8 @@ async def test_deep_search_script(mcp_client):
         )
 
         # Verify we found the script
-        scripts = data.get("scripts", [])
+        assert_deep_search_keys(data)
+        scripts = data["scripts"]
         assert len(scripts) > 0, "Should find script containing the unique message"
 
         # Find our specific script
@@ -215,7 +225,8 @@ async def test_deep_search_helper(mcp_client):
         )
 
         # Verify we found the helper
-        helpers = data.get("helpers", [])
+        assert_deep_search_keys(data)
+        helpers = data["helpers"]
         assert len(helpers) > 0, "Should find helper containing the unique option"
 
         # Find our specific helper
@@ -262,10 +273,11 @@ async def test_deep_search_all_types(mcp_client):
     )
     data = assert_mcp_success(result, "Deep search across all types")
 
-    # Verify we get results grouped by type
-    automations = data.get("automations", [])
-    scripts = data.get("scripts", [])
-    helpers = data.get("helpers", [])
+    assert_deep_search_keys(data)
+
+    automations = data["automations"]
+    scripts = data["scripts"]
+    helpers = data["helpers"]
 
     total_results = len(automations) + len(scripts) + len(helpers)
     logger.info(
@@ -298,11 +310,9 @@ async def test_deep_search_limit(mcp_client):
     )
     data = assert_mcp_success(result, "Deep search with limit=5")
 
-    # Count total results
-    automations = data.get("automations", [])
-    scripts = data.get("scripts", [])
-    helpers = data.get("helpers", [])
-    total_results = len(automations) + len(scripts) + len(helpers)
+    assert_deep_search_keys(data)
+
+    total_results = len(data["automations"]) + len(data["scripts"]) + len(data["helpers"])
 
     assert total_results <= 5, f"Should respect limit of 5, got {total_results}"
     logger.info(f"✅ Correctly limited results to {total_results} (limit was 5)")
@@ -322,7 +332,8 @@ async def test_deep_search_no_results(mcp_client):
     )
     data = assert_mcp_success(result, "Deep search with no matches")
 
-    # Verify we get empty results
+    assert_deep_search_keys(data)
+
     # Filter out any test entities that may not have been cleaned up from parallel tests
     # Common test entity prefixes: deep_search, concurrent_test, test_, e2e_, bulk_
     test_prefixes = ("deep_search", "concurrent_test", "test_", "e2e_", "bulk_")
@@ -334,9 +345,9 @@ async def test_deep_search_no_results(mcp_client):
         object_id = entity_id.lower().split('.')[-1]
         return object_id.startswith(test_prefixes)
 
-    automations = [a for a in data.get("automations", []) if not is_test_entity(a.get("entity_id", ""))]
-    scripts = [s for s in data.get("scripts", []) if not is_test_entity(s.get("entity_id", ""))]
-    helpers = [h for h in data.get("helpers", []) if not is_test_entity(h.get("entity_id", ""))]
+    automations = [a for a in data["automations"] if not is_test_entity(a.get("entity_id", ""))]
+    scripts = [s for s in data["scripts"] if not is_test_entity(s.get("entity_id", ""))]
+    helpers = [h for h in data["helpers"] if not is_test_entity(h.get("entity_id", ""))]
 
     assert len(automations) == 0, "Should have no automation matches"
     assert len(scripts) == 0, "Should have no script matches"

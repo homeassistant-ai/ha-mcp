@@ -203,11 +203,11 @@ def exception_to_structured_error(
         error_response = create_auth_error(error_msg)
 
     else:
-        # Default to internal error
+        # Default to internal error -- use generic message to avoid leaking internals
         error_response = create_error_response(
             ErrorCode.INTERNAL_ERROR,
-            error_msg,
-            details="An unexpected error occurred",
+            "An unexpected error occurred",
+            details=error_msg,
             context=context,
         )
 
