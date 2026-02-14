@@ -1,25 +1,14 @@
 """
-Tool Search Proxy for ha-mcp — progressive tool discovery via meta-tools.
+Tool Search Proxy — progressive tool discovery via 3 meta-tools.
 
-Implements the server-side Tool Search Proxy pattern recommended by Anthropic
-(https://www.anthropic.com/engineering/code-execution-with-mcp) and validated
-by Speakeasy (https://www.speakeasy.com/blog/100x-token-reduction-dynamic-toolsets).
+Instead of registering all tools with MCP (~35K tokens of idle context),
+proxied tools are discovered and executed on demand via:
 
-Instead of registering all tools with MCP (consuming ~35K tokens of idle context),
-this module registers 3 lightweight meta-tools that let the LLM discover and
-execute tools on demand:
+  ha_find_tools(query)           — search by name/category
+  ha_get_tool_details(tool_name) — full schema + description
+  ha_execute_tool(tool_name, args, tool_schema) — validate & dispatch
 
-  ha_find_tools(query)          — search by name/category, returns summaries
-  ha_get_tool_details(tool_name) — returns full description + parameter schema
-  ha_execute_tool(tool_name, args, tool_schema) — validates & dispatches
-
-The tool_schema parameter on ha_execute_tool is required — the LLM must call
-ha_get_tool_details first and pass its output, providing structural enforcement
-that prevents hallucinated or uninformed tool calls (same principle as PR #616's
-guide_response, but applied universally to all proxied tools).
-
-Proxied tools are NOT registered with MCP. Their implementations, descriptions,
-and schemas are stored in a server-side registry and returned on demand.
+See: https://www.anthropic.com/engineering/code-execution-with-mcp
 """
 
 import hashlib
@@ -43,37 +32,19 @@ from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
 
-# Modules whose tools should be routed through the proxy instead of
-# registered directly with MCP. Add module names here to proxy them.
-# Tools in these modules remain fully functional — they're just accessed
-# via ha_execute_tool instead of direct MCP tool calls.
-#
-# MIGRATION ROADMAP (Phase 1 → Phase N):
-# ──────────────────────────────────────
-# Phase 1 (this PR): 10 niche tools from 5 modules
+# Modules whose tools are proxied instead of registered directly with MCP.
+# To proxy a module: add its name here.  No changes to the module code needed.
 PROXY_MODULES: set[str] = {
-    "tools_zones",            # 4 zone CRUD tools
-    "tools_labels",           # 3 label tools
-    "tools_addons",           # ha_get_addon
-    "tools_voice_assistant",  # ha_get_entity_exposure
-    "tools_traces",           # ha_get_automation_traces
+    "tools_zones",
+    "tools_labels",
+    "tools_addons",
+    "tools_voice_assistant",
+    "tools_traces",
 }
-# Phase 2: Move ~20 more tools (calendar, groups, todo, resources, camera, ...)
-# Phase 3: Move ~30 more tools (filesystem, hacs, integrations, ...)
-# Phase 4: Move remaining tools — only 3 meta-tools stay registered
-#
-# To migrate a module: add its name to PROXY_MODULES above. That's it.
-# The module's tools stop being registered with MCP and become proxy-only.
-# No changes to the tool module code are needed.
 
 
 class ToolProxyRegistry:
-    """Server-side registry of proxied tools.
-
-    Stores tool metadata (name, description, parameters, annotations) and
-    implementation references for tools that are NOT registered with MCP.
-    The meta-tools query this registry to serve tool information on demand.
-    """
+    """Server-side registry of proxied tools and their metadata."""
 
     def __init__(self) -> None:
         self._tools: dict[str, dict[str, Any]] = {}
@@ -116,10 +87,7 @@ class ToolProxyRegistry:
         logger.debug(f"Proxy registry: registered {name} (category: {category})")
 
     def find_tools(self, query: str) -> list[dict[str, Any]]:
-        """Search for tools by name, category, or keyword.
-
-        Returns compact summaries suitable for LLM consumption.
-        """
+        """Search for tools by name, category, or keyword."""
         query_lower = query.lower().strip()
         results = []
 
@@ -148,12 +116,7 @@ class ToolProxyRegistry:
         return results
 
     def get_tool_details(self, tool_name: str) -> dict[str, Any] | None:
-        """Get full details for a specific tool.
-
-        Returns the complete description, parameter schema, annotations,
-        and an example call format. This is what the LLM needs to
-        construct a valid ha_execute_tool call.
-        """
+        """Get full description, parameter schema, and schema_hash for a tool."""
         tool = self._tools.get(tool_name)
         if not tool:
             return None
@@ -187,21 +150,14 @@ class ToolProxyRegistry:
         return provided_hash == self._schema_hash(tool_name)
 
     def _schema_hash(self, tool_name: str) -> str:
-        """Generate a short hash to prove the LLM read the real schema.
-
-        This is intentionally NOT cryptographic — it's a structural
-        enforcement mechanism, not a security measure. The hash changes
-        if the tool's parameters change, ensuring the LLM has current info.
-        """
+        """Short fingerprint of the tool's parameter schema."""
         tool = self._tools.get(tool_name)
         if not tool:
             return ""
-        # Use a simple deterministic string based on param names + types
         params = tool["parameters"]
         param_keys = sorted(params.get("properties", {}).keys()) if isinstance(params, dict) else []
         required = sorted(params.get("required", [])) if isinstance(params, dict) else []
         fingerprint = f"{tool_name}:{','.join(param_keys)}:{','.join(required)}"
-        # Simple hash — not crypto, just a fingerprint
         return hashlib.md5(fingerprint.encode()).hexdigest()[:8]
 
     def _make_summary(self, tool: dict[str, Any]) -> dict[str, Any]:
@@ -251,11 +207,7 @@ class ToolProxyRegistry:
 
 
 def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
-    """Extract tool name, description, and parameter schema from a function.
-
-    Reads the function's type hints and docstring to build the same
-    metadata that FastMCP would generate during @mcp.tool() registration.
-    """
+    """Extract tool name, description, and parameter schema from type hints."""
     name = func.__name__
     description = inspect.getdoc(func) or ""
 
@@ -335,12 +287,7 @@ def discover_proxy_tools(
     proxy_modules: set[str],
     **kwargs: Any,
 ) -> ToolProxyRegistry:
-    """Import proxy modules and extract tool metadata WITHOUT registering with MCP.
-
-    This mirrors what ToolsRegistry.register_all_tools() does, but instead of
-    calling @mcp.tool(), it captures the tool functions and their metadata
-    into a ToolProxyRegistry for the meta-tools to serve.
-    """
+    """Import proxy modules and capture tool metadata without MCP registration."""
     from .registry import EXPLICIT_MODULES
 
     registry = ToolProxyRegistry()
@@ -396,11 +343,7 @@ def discover_proxy_tools(
 
 
 class _MockMCP:
-    """Mock FastMCP server that captures tool registrations without actually registering.
-
-    When a tool module calls @mcp.tool(), this mock captures the decorated function,
-    its annotations, and metadata instead of registering it with the real MCP server.
-    """
+    """Mock FastMCP that captures @mcp.tool() registrations without registering."""
 
     def __init__(self) -> None:
         self.captured_tools: list[dict[str, Any]] = []
@@ -435,13 +378,7 @@ def register_proxy_tools(
     proxy_registry: ToolProxyRegistry,
     **kwargs: Any,
 ) -> None:
-    """Register the 3 meta-tools with MCP.
-
-    These are the only tools the LLM sees for proxied tool access:
-    - ha_find_tools: discover tools by query/category
-    - ha_get_tool_details: get full schema + description for a tool
-    - ha_execute_tool: validate schema proof + dispatch to real implementation
-    """
+    """Register the 3 meta-tools (find, details, execute) with MCP."""
 
     # Build the capabilities catalog for the ha_find_tools description
     catalog = proxy_registry.get_catalog()
@@ -450,7 +387,6 @@ def register_proxy_tools(
         catalog_lines.append(f"  {category.upper()}: {', '.join(sorted(tool_names))}")
     catalog_text = "\n".join(catalog_lines)
 
-    # Build the docstring for ha_find_tools with embedded catalog
     find_tools_doc = (
         "Search for available Home Assistant tools by name, category, or keyword.\n\n"
         "Returns matching tools with summaries and parameter lists.\n"

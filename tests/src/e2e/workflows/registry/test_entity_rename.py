@@ -19,8 +19,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
-from ...utilities.proxy_helpers import proxy_call_tool
+from ...utilities.assertions import safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -414,12 +413,11 @@ class TestEntityRenameVoiceExposure:
         await asyncio.sleep(0.5)
 
         # 4. VERIFY: New entity has exposure settings
-        check_result = await proxy_call_tool(
+        check_data = await safe_call_tool(
             mcp_client,
             "ha_get_entity_exposure",
             {"entity_id": new_entity_id},
         )
-        check_data = parse_mcp_result(check_result)
         assert check_data.get("success"), f"Failed to check exposure: {check_data}"
         logger.info(f"New entity exposure: {check_data.get('exposed_to')}")
 

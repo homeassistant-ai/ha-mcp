@@ -5,9 +5,6 @@ Tests the complete lifecycle of labels including:
 - List, create, get, update, and delete operations
 - Label assignment to entities
 - Label properties (color, icon, description)
-
-Note: Label tools (ha_config_get_label, ha_config_set_label, ha_config_remove_label)
-are proxied behind meta-tools. Tests use proxy_call_tool() to route through the proxy.
 """
 
 import logging
@@ -15,7 +12,6 @@ import logging
 import pytest
 
 from ...utilities.assertions import assert_mcp_success, parse_mcp_result
-from ...utilities.proxy_helpers import proxy_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +25,9 @@ class TestLabelCRUD:
         """Test listing all labels."""
         logger.info("Testing ha_config_get_label")
 
-        result = await proxy_call_tool(
-            mcp_client, "ha_config_get_label", {},
+        result = await mcp_client.call_tool(
+            "ha_config_get_label",
+            {},
         )
 
         data = assert_mcp_success(result, "List labels")
@@ -50,8 +47,7 @@ class TestLabelCRUD:
         label_name = "E2E Test Label"
 
         # CREATE
-        create_result = await proxy_call_tool(
-            mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {
                 "name": label_name,
@@ -68,8 +64,9 @@ class TestLabelCRUD:
         logger.info(f"Created label: {label_name} (id: {label_id})")
 
         # GET specific label (config operations are synchronous)
-        get_result = await proxy_call_tool(
-            mcp_client, "ha_config_get_label", {"label_id": label_id},
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_label",
+            {"label_id": label_id},
         )
         get_data = assert_mcp_success(get_result, "Get label")
         assert "label" in get_data, f"Missing 'label' in response: {get_data}"
@@ -79,8 +76,7 @@ class TestLabelCRUD:
         logger.info("Label retrieved successfully")
 
         # UPDATE
-        update_result = await proxy_call_tool(
-            mcp_client,
+        update_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {
                 "label_id": label_id,
@@ -92,8 +88,9 @@ class TestLabelCRUD:
         logger.info(f"Updated label: {update_data.get('message')}")
 
         # VERIFY UPDATE via get (config operations are synchronous)
-        get_result = await proxy_call_tool(
-            mcp_client, "ha_config_get_label", {"label_id": label_id},
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_label",
+            {"label_id": label_id},
         )
         get_data = assert_mcp_success(get_result, "Get updated label")
         assert get_data["label"]["name"] == "E2E Test Label Updated", (
@@ -102,15 +99,17 @@ class TestLabelCRUD:
         logger.info("Label update verified")
 
         # DELETE
-        delete_result = await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        delete_result = await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
         delete_data = assert_mcp_success(delete_result, "Delete label")
         logger.info(f"Deleted label: {delete_data.get('message')}")
 
         # VERIFY DELETION (config operations are synchronous)
-        get_result = await proxy_call_tool(
-            mcp_client, "ha_config_get_label", {"label_id": label_id},
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_label",
+            {"label_id": label_id},
         )
         get_data = parse_mcp_result(get_result)
         assert get_data.get("success") is False, (
@@ -122,8 +121,9 @@ class TestLabelCRUD:
         """Test creating label with minimal required fields."""
         logger.info("Testing minimal label creation")
 
-        result = await proxy_call_tool(
-            mcp_client, "ha_config_set_label", {"name": "E2E Minimal Label"},
+        result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "E2E Minimal Label"},
         )
 
         data = assert_mcp_success(result, "Create minimal label")
@@ -133,8 +133,9 @@ class TestLabelCRUD:
         logger.info(f"Created minimal label: {label_id}")
 
         # Clean up
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
     async def test_create_label_with_color(self, mcp_client, cleanup_tracker):
@@ -144,8 +145,7 @@ class TestLabelCRUD:
         colors = ["red", "green", "blue", "#FF5733"]
 
         for color in colors:
-            result = await proxy_call_tool(
-                mcp_client,
+            result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {
                     "name": f"E2E Color Test {color}",
@@ -160,8 +160,9 @@ class TestLabelCRUD:
                 logger.info(f"Color '{color}' accepted, label_id: {label_id}")
 
                 # Clean up immediately
-                await proxy_call_tool(
-                    mcp_client, "ha_config_remove_label", {"label_id": label_id},
+                await mcp_client.call_tool(
+                    "ha_config_remove_label",
+                    {"label_id": label_id},
                 )
             else:
                 logger.warning(f"Color '{color}' may not be supported")
@@ -170,8 +171,7 @@ class TestLabelCRUD:
         """Test creating label with MDI icon."""
         logger.info("Testing label creation with icon")
 
-        result = await proxy_call_tool(
-            mcp_client,
+        result = await mcp_client.call_tool(
             "ha_config_set_label",
             {
                 "name": "E2E Icon Label",
@@ -185,8 +185,9 @@ class TestLabelCRUD:
         logger.info(f"Created label with icon: {label_id}")
 
         # Verify icon was saved
-        get_result = await proxy_call_tool(
-            mcp_client, "ha_config_get_label", {"label_id": label_id},
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_label",
+            {"label_id": label_id},
         )
         get_data = assert_mcp_success(get_result, "Get label with icon")
         assert get_data["label"].get("icon") == "mdi:label-variant", (
@@ -195,16 +196,16 @@ class TestLabelCRUD:
         logger.info("Label icon verified")
 
         # Clean up
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
     async def test_get_nonexistent_label(self, mcp_client):
         """Test getting a non-existent label."""
         logger.info("Testing get non-existent label")
 
-        result = await proxy_call_tool(
-            mcp_client,
+        result = await mcp_client.call_tool(
             "ha_config_get_label",
             {"label_id": "nonexistent_label_xyz_12345"},
         )
@@ -219,8 +220,7 @@ class TestLabelCRUD:
         """Test deleting a non-existent label."""
         logger.info("Testing delete non-existent label")
 
-        result = await proxy_call_tool(
-            mcp_client,
+        result = await mcp_client.call_tool(
             "ha_config_remove_label",
             {"label_id": "nonexistent_label_xyz_12345"},
         )
@@ -245,15 +245,17 @@ class TestLabelAssignment:
         logger.info(f"Testing label assignment to {test_light_entity}")
 
         # Create a test label
-        create_result = await proxy_call_tool(
-            mcp_client, "ha_config_set_label", {"name": "E2E Assignment Test"},
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "E2E Assignment Test"},
         )
         create_data = assert_mcp_success(create_result, "Create label for assignment")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
         logger.info(f"Created label for assignment: {label_id}")
 
-        # Assign label to entity (ha_set_entity is NOT proxied)
+
+        # Assign label to entity
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
             {
@@ -276,8 +278,9 @@ class TestLabelAssignment:
         logger.info(f"Labels cleared: {clear_data.get('message')}")
 
         # Clean up label
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
     async def test_assign_multiple_labels(
@@ -289,8 +292,7 @@ class TestLabelAssignment:
         # Create two test labels
         label_ids = []
         for i in range(2):
-            result = await proxy_call_tool(
-                mcp_client,
+            result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {"name": f"E2E Multi Label {i + 1}"},
             )
@@ -300,7 +302,8 @@ class TestLabelAssignment:
             cleanup_tracker.track("label", label_id)
         logger.info(f"Created labels: {label_ids}")
 
-        # Assign both labels (ha_set_entity is NOT proxied)
+
+        # Assign both labels
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
             {
@@ -322,8 +325,9 @@ class TestLabelAssignment:
 
         # Clean up labels
         for label_id in label_ids:
-            await proxy_call_tool(
-                mcp_client, "ha_config_remove_label", {"label_id": label_id},
+            await mcp_client.call_tool(
+                "ha_config_remove_label",
+                {"label_id": label_id},
             )
 
     async def test_assign_label_as_string(
@@ -333,14 +337,14 @@ class TestLabelAssignment:
         logger.info(f"Testing string label assignment to {test_light_entity}")
 
         # Create a test label
-        create_result = await proxy_call_tool(
-            mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "E2E String Assignment Test"},
         )
         create_data = assert_mcp_success(create_result, "Create label")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
+
 
         # Assign using string (JSON array) instead of list
         assign_result = await mcp_client.call_tool(
@@ -363,8 +367,9 @@ class TestLabelAssignment:
         )
 
         # Clean up
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
     async def test_assign_label_json_string(
@@ -374,14 +379,14 @@ class TestLabelAssignment:
         logger.info(f"Testing JSON string label assignment to {test_light_entity}")
 
         # Create a test label
-        create_result = await proxy_call_tool(
-            mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "E2E JSON Assignment Test"},
         )
         create_data = assert_mcp_success(create_result, "Create label")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
+
 
         # Assign using JSON array string
         assign_result = await mcp_client.call_tool(
@@ -404,8 +409,9 @@ class TestLabelAssignment:
         )
 
         # Clean up
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
     async def test_assign_label_to_nonexistent_entity(self, mcp_client, cleanup_tracker):
@@ -413,14 +419,14 @@ class TestLabelAssignment:
         logger.info("Testing label assignment to non-existent entity")
 
         # Create a test label
-        create_result = await proxy_call_tool(
-            mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "E2E Nonexistent Entity Test"},
         )
         create_data = assert_mcp_success(create_result, "Create label")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
+
 
         # Try to assign to non-existent entity
         assign_result = await mcp_client.call_tool(
@@ -439,8 +445,9 @@ class TestLabelAssignment:
         logger.info("Non-existent entity properly returned error")
 
         # Clean up
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
 
 
@@ -459,8 +466,9 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     # Create multiple labels
     for config in label_configs:
-        result = await proxy_call_tool(
-            mcp_client, "ha_config_set_label", config,
+        result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            config,
         )
         data = assert_mcp_success(result, f"Create {config['name']}")
         label_id = data.get("label_id")
@@ -469,8 +477,9 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
         logger.info(f"Created: {config['name']} (id: {label_id})")
 
     # List and verify all exist
-    list_result = await proxy_call_tool(
-        mcp_client, "ha_config_get_label", {},
+    list_result = await mcp_client.call_tool(
+        "ha_config_get_label",
+        {},
     )
     list_data = assert_mcp_success(list_result, "List labels")
 
@@ -481,14 +490,16 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     # Delete all
     for label_id in label_ids:
-        await proxy_call_tool(
-            mcp_client, "ha_config_remove_label", {"label_id": label_id},
+        await mcp_client.call_tool(
+            "ha_config_remove_label",
+            {"label_id": label_id},
         )
     logger.info("All labels deleted")
 
     # Verify deletions
-    list_result = await proxy_call_tool(
-        mcp_client, "ha_config_get_label", {},
+    list_result = await mcp_client.call_tool(
+        "ha_config_get_label",
+        {},
     )
     list_data = assert_mcp_success(list_result, "List after deletion")
 

@@ -16,7 +16,7 @@ import logging
 
 import pytest
 
-from ...utilities.proxy_helpers import ProxyMCPAssertions as MCPAssertions
+from ...utilities.assertions import MCPAssertions
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

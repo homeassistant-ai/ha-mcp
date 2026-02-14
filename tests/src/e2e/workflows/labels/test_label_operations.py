@@ -18,7 +18,6 @@ from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
 )
-from ...utilities.proxy_helpers import proxy_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class TestLabelSetOperation:
         label = "test_set_label"
 
         # Create the test label
-        create_result = await proxy_call_tool(mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": label},
         )
@@ -79,7 +78,7 @@ class TestLabelSetOperation:
         # Create two test labels
         labels = []
         for name in ["test_multi_1", "test_multi_2"]:
-            create_result = await proxy_call_tool(mcp_client,
+            create_result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {"name": name},
             )
@@ -112,7 +111,7 @@ class TestLabelSetOperation:
         entity_id = test_entity_id
 
         # Create and set a label
-        create_result = await proxy_call_tool(mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "test_clear_label"},
         )
@@ -146,7 +145,7 @@ class TestLabelSetOperation:
         # Create two labels
         labels = []
         for name in ["test_replace_1", "test_replace_2"]:
-            create_result = await proxy_call_tool(mcp_client,
+            create_result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {"name": name},
             )
@@ -200,7 +199,7 @@ class TestLabelEntityRegistryIntegrity:
         initial_data = parse_mcp_result(initial_result)
 
         # Create and set a label
-        create_result = await proxy_call_tool(mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "test_integrity"},
         )
@@ -244,7 +243,7 @@ class TestLabelAddRemoveOperations:
         # Create two test labels
         labels = []
         for name in ["test_add_existing", "test_add_new"]:
-            create_result = await proxy_call_tool(mcp_client,
+            create_result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {"name": name},
             )
@@ -291,7 +290,7 @@ class TestLabelAddRemoveOperations:
         # Create two test labels
         labels = []
         for name in ["test_remove_keep", "test_remove_delete"]:
-            create_result = await proxy_call_tool(mcp_client,
+            create_result = await mcp_client.call_tool(
                 "ha_config_set_label",
                 {"name": name},
             )
@@ -336,7 +335,7 @@ class TestLabelAddRemoveOperations:
         entity_id = test_entity_id
 
         # Create a test label
-        create_result = await proxy_call_tool(mcp_client,
+        create_result = await mcp_client.call_tool(
             "ha_config_set_label",
             {"name": "test_dup_check"},
         )

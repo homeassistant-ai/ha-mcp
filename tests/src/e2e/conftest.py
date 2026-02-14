@@ -11,6 +11,7 @@ Environment Variables:
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -335,14 +336,101 @@ async def mcp_server(
     # Server cleanup handled by server.close()
 
 
+class _ProxyAwareClient:
+    """Wraps a FastMCP Client to transparently route proxied tools.
+
+    When tool_proxy.py moves tools behind meta-tools, E2E tests continue
+    calling ``mcp_client.call_tool("ha_get_zone", {...})`` unchanged.
+    This wrapper detects proxied tools (via ha_get_tool_details) and
+    routes them through ha_execute_tool automatically.  Non-proxied tools
+    fall through to the real client.
+    """
+
+    def __init__(self, real_client: Client) -> None:
+        self._client = real_client
+        self._schema_cache: dict[str, str] = {}
+        self._direct_tools: set[str] = set()
+
+    async def call_tool(self, tool_name: str, args: dict[str, Any] | None = None) -> Any:
+        if args is None:
+            args = {}
+
+        # Meta-tools and known non-proxied tools skip the proxy
+        if tool_name in self._direct_tools or tool_name.startswith("ha_find_tool") or tool_name in (
+            "ha_get_tool_details", "ha_execute_tool",
+        ):
+            return await self._client.call_tool(tool_name, args)
+
+        # Discover whether this tool is proxied (result cached)
+        if tool_name not in self._schema_cache:
+            details_result = await self._client.call_tool(
+                "ha_get_tool_details", {"tool_name": tool_name},
+            )
+            details = parse_mcp_result(details_result)
+            if not details.get("success"):
+                self._direct_tools.add(tool_name)
+                return await self._client.call_tool(tool_name, args)
+            self._schema_cache[tool_name] = details["schema_hash"]
+
+        result = await self._client.call_tool(
+            "ha_execute_tool",
+            {
+                "tool_name": tool_name,
+                "args": json.dumps(args),
+                "tool_schema": self._schema_cache[tool_name],
+            },
+        )
+
+        # Unwrap proxy error responses so tests see the original tool output.
+        # When a proxied tool raises an exception, ha_execute_tool catches it
+        # and wraps the response as {"error": {"message": "Tool execution
+        # failed: {original_json}"}}.  We extract the original JSON so tests
+        # don't need to know about the proxy layer.
+        return self._unwrap_proxy_error(result)
+
+    @staticmethod
+    def _unwrap_proxy_error(result: Any) -> Any:
+        """If *result* is a proxy-wrapped error containing the original tool
+        response as stringified JSON, return a synthetic result with the
+        unwrapped JSON so callers see the original response shape."""
+        try:
+            data = parse_mcp_result(result)
+        except Exception:
+            return result
+
+        error = data.get("error")
+        if not isinstance(error, dict):
+            return result
+
+        msg = error.get("message", "")
+        prefix = "Tool execution failed: "
+        if not msg.startswith(prefix):
+            return result
+
+        # Try to parse the original tool response out of the message
+        try:
+            original = json.loads(msg[len(prefix):])
+        except (json.JSONDecodeError, TypeError):
+            return result
+
+        # Rebuild as a synthetic MCP text-content result matching what
+        # the original tool would have returned directly.
+        from mcp.types import TextContent
+        return [TextContent(type="text", text=json.dumps(original))]
+
+    # Forward everything else (list_tools, session, etc.) to the real client
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
 @pytest.fixture
 async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
-    """Create FastMCP client connected to our server."""
+    """Create FastMCP client connected to our server (proxy-aware)."""
     client = Client(mcp_server.mcp)
 
     async with client:
         logger.debug("🔗 FastMCP client connected (in-memory transport)")
-        yield client
+        yield _ProxyAwareClient(client)
 
 
 # Test session information
