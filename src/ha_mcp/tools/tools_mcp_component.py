@@ -277,7 +277,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                     result["note"] = "Wait 1-5 minutes for Home Assistant to restart."
                 except Exception as restart_error:
                     # Connection/proxy errors during restart are expected
-                    # (HA closes connections, proxies return 502/503/504)
+                    # (HA closes connections, proxies may return 504)
                     if any(
                         pattern in str(restart_error).lower()
                         for pattern in ("connect", "closed", "504")
