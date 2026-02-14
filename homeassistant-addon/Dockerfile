@@ -34,9 +34,6 @@ COPY homeassistant-addon/start.py /
 # Activate virtual environment via PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy bundled MCP webhook proxy integration for Nabu Casa remote access
-COPY homeassistant-addon/mcp_proxy /opt/mcp_proxy
-
 # Labels
 ARG BUILD_VERSION
 ARG BUILD_ARCH

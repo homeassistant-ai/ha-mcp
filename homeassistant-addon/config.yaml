@@ -18,21 +18,14 @@ hassio_role: default
 homeassistant_api: true
 # Enable host network mode for local network access
 host_network: true
-# Mount HA config directory for webhook proxy auto-setup
-map:
-  - config:rw
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
 options:
   backup_hint: "normal"
-  enable_webhook_proxy: false
-  remote_url: ""
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
-  enable_webhook_proxy: bool
-  remote_url: str?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
