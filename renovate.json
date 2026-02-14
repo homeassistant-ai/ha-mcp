@@ -16,7 +16,8 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/tests/.*\\.py$/"
+        "/tests/.*\\.py$/",
+        "/.github/workflows/.*\\.yml$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+.*?\\S+:(?<currentValue>[\\d.]+)"
