@@ -192,14 +192,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👥 Contributors
 
-- **[@julienld](https://github.com/julienld)** — Project maintainer & core contributor.
-- **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
-- **[@sergeykad](https://github.com/sergeykad)** — Dashboard card-level CRUD operations, better changelogs and removed the dependency to textdistance/numpy.
-- **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
-- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
-- **[@kingpanther13](https://github.com/kingpanther13)** — Dev channel documentation, bulk control validation, OAuth 2.1 docs, tool consolidation, error handling improvements, and native solutions guidance.
+### Maintainers
+
+- **[@julienld](https://github.com/julienld)** — Project creator & core maintainer.
+- **[@sergeykad](https://github.com/sergeykad)** — Dashboard CRUD, search pagination, `__main__` security refactor, pre-commit hooks & CI lint, addon Docker fixes, `.gitattributes` enforcement, human-readable log timestamps, and removed the textdistance/numpy dependency.
+- **[@kingpanther13](https://github.com/kingpanther13)** — Dev channel documentation, bulk control validation, OAuth 2.1 docs, tool consolidation, error handling improvements, native solutions guidance, default dashboard editing fix, and search response optimization.
+
+### Contributors
+
+- **[@airlabno](https://github.com/airlabno)** — Support for `data` field in schedule time blocks.
+- **[@ryphez](https://github.com/ryphez)** — Codex Desktop UI MCP quick setup guide.
 - **[@Danm72](https://github.com/Danm72)** — Entity registry tools (`ha_set_entity`, `ha_get_entity`) for managing entity properties.
 - **[@Raygooo](https://github.com/Raygooo)** — SOCKS proxy support.
+- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
+- **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
+- **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 
 ---
 
