@@ -4,6 +4,7 @@ Service call and device operation tools for Home Assistant MCP server.
 This module provides service execution and WebSocket-enabled operation monitoring tools.
 """
 
+import logging
 from typing import Any, cast
 
 import httpx
@@ -14,7 +15,30 @@ from ..errors import (
 )
 from ..client.rest_client import HomeAssistantConnectionError
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import coerce_bool_param, parse_json_param
+from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
+
+logger = logging.getLogger(__name__)
+
+# Services that produce observable state changes on entities
+_STATE_CHANGING_SERVICES = {
+    "turn_on", "turn_off", "toggle", "open", "close", "lock", "unlock",
+    "set_temperature", "set_hvac_mode", "set_fan_mode", "set_speed",
+    "select_option", "set_value", "set_datetime", "set_cover_position",
+    "set_position", "play_media", "media_play", "media_pause", "media_stop",
+}
+
+# Domains where service calls don't produce entity state changes
+_NON_STATE_CHANGING_DOMAINS = {
+    "automation", "script", "homeassistant", "notify", "tts",
+    "persistent_notification", "logbook", "system_log",
+}
+
+# Mapping from service name to the expected resulting state
+_SERVICE_TO_STATE: dict[str, str] = {
+    "turn_on": "on", "turn_off": "off",
+    "open": "open", "close": "closed",
+    "lock": "locked", "unlock": "unlocked",
+}
 
 
 def _build_service_suggestions(domain: str, service: str, entity_id: str | None) -> list[str]:
@@ -40,6 +64,7 @@ def register_service_tools(mcp, client, **kwargs):
         entity_id: str | None = None,
         data: str | dict[str, Any] | None = None,
         return_response: bool | str = False,
+        wait: bool | str = True,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services to control entities and trigger automations.
@@ -69,6 +94,9 @@ def register_service_tools(mcp, client, **kwargs):
         - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
         - **data**: Optional dict of service-specific parameters
         - **return_response**: Set to True for services that return data
+        - **wait**: Wait for the entity state to change after the service call (default: True).
+          Only applies to state-changing services on a single entity. Set to False for
+          fire-and-forget calls, bulk operations, or services without observable state changes.
 
         **For detailed service documentation and parameters, use ha_get_domain_docs(domain).**
 
@@ -103,10 +131,30 @@ def register_service_tools(mcp, client, **kwargs):
 
             # Coerce return_response boolean parameter
             return_response_bool = coerce_bool_param(return_response, "return_response", default=False) or False
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
+
+            # Determine if we should wait for state change:
+            # Only for state-changing services on a single entity, not for
+            # trigger/reload/fire-and-forget services or services without entities.
+            should_wait = (
+                wait_bool
+                and entity_id is not None
+                and service in _STATE_CHANGING_SERVICES
+                and domain not in _NON_STATE_CHANGING_DOMAINS
+            )
+
+            # Capture initial state before the call
+            initial_state = None
+            if should_wait:
+                try:
+                    state_data = await client.get_entity_state(entity_id)
+                    initial_state = state_data.get("state") if state_data else None
+                except Exception as e:
+                    logger.debug(f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded")
 
             result = await client.call_service(domain, service, service_data, return_response=return_response_bool)
 
-            response = {
+            response: dict[str, Any] = {
                 "success": True,
                 "domain": domain,
                 "service": service,
@@ -119,6 +167,21 @@ def register_service_tools(mcp, client, **kwargs):
             # If return_response was requested, include the service_response key prominently
             if return_response_bool and isinstance(result, dict):
                 response["service_response"] = result.get("service_response", result)
+
+            # Wait for entity state to change
+            if should_wait and entity_id is not None:
+                try:
+                    expected = _SERVICE_TO_STATE.get(service)
+                    new_state = await wait_for_state_change(
+                        client, entity_id, expected_state=expected,
+                        initial_state=initial_state, timeout=10.0,
+                    )
+                    if new_state:
+                        response["verified_state"] = new_state.get("state")
+                    else:
+                        response["warning"] = "Service executed but state change could not be verified within timeout."
+                except Exception as e:
+                    response["warning"] = f"Service executed but state verification failed: {e}"
 
             return response
         except HomeAssistantConnectionError as error:

@@ -906,3 +906,26 @@ class TestOAuthProxyClient:
         with patch("fastmcp.server.dependencies.get_access_token", return_value=token_no_claims):
             with pytest.raises(RuntimeError, match="No Home Assistant credentials"):
                 _ = proxy.get_state
+
+    @pytest.mark.asyncio
+    async def test_oauth_proxy_client_close_all_clients(self, mock_auth_provider, mock_access_token):
+        """Test that close() closes all cached OAuth clients."""
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token):
+            with patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
+                mock_client_instance = MagicMock()
+                mock_client_instance.close = AsyncMock()
+                mock_ha_client.return_value = mock_client_instance
+
+                # Create a cached client
+                _ = proxy.get_state
+                assert len(proxy._oauth_clients) == 1
+
+                # Close should close all clients and clear the cache
+                await proxy.close()
+
+                mock_client_instance.close.assert_called_once()
+                assert len(proxy._oauth_clients) == 0

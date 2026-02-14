@@ -10,8 +10,43 @@ on:
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
+  # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.1.3"
 
 jobs:
+  lint:
+    name: Ruff Lint
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: uv sync --dev
+
+    - name: Run ruff check
+      run: uv run ruff check src/ tests/
+
+  # Fast unit tests (no Docker, no HA instance needed)
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run unit tests
+      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
   # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})
@@ -34,6 +69,8 @@ jobs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        cache-binary: true
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
@@ -45,6 +82,37 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-extras --dev
+
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@v4
+      with:
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        HA_VERSION="${HA_IMAGE_GHCR##*:}"
+        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
+        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
+              docker tag "$registry" "$HA_IMAGE_GHCR"
+            fi
+            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
 
     - name: Run full E2E test suite
       run: |
@@ -68,6 +136,8 @@ jobs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        cache-binary: true
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7

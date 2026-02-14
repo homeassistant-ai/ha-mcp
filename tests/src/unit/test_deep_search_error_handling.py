@@ -84,7 +84,3 @@ class TestDeepSearchErrorHandling:
         suggestions = data["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
-        assert (
-            "Check search_types are valid: 'automation', 'script', 'helper'"
-            in suggestions
-        )

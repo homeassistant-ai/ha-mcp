@@ -4,8 +4,15 @@ Shared utility functions for MCP tool modules.
 This module provides common helper functions used across multiple tool registration modules.
 """
 
+import asyncio
 import json
+import logging
+import time
 from typing import Any
+
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError
+
+logger = logging.getLogger(__name__)
 
 
 def coerce_bool_param(
@@ -174,7 +181,7 @@ def parse_string_list_param(
 
 
 async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
-    """Add timezone metadata to tool responses containing timestamps."""
+    """Add Home Assistant timezone to tool responses for local time context."""
     try:
         config = await client.get_config()
         ha_timezone = config.get("time_zone", "UTC")
@@ -197,3 +204,162 @@ async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, 
                 "note": "All timestamps are in UTC. Could not fetch Home Assistant timezone.",
             },
         }
+
+
+async def wait_for_entity_registered(
+    client: Any,
+    entity_id: str,
+    timeout: float = 10.0,
+    poll_interval: float = 0.3,
+) -> bool:
+    """
+    Poll until an entity is registered and accessible via the state API.
+
+    Used after config create/update operations to confirm the entity is queryable.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity ID to wait for (e.g., 'automation.morning_routine')
+        timeout: Maximum time to wait in seconds
+        poll_interval: Time between polls in seconds
+
+    Returns:
+        True if entity became accessible, False if timed out
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            state = await client.get_entity_state(entity_id)
+            if state:
+                logger.debug(f"Entity {entity_id} registered after {time.monotonic() - start:.1f}s")
+                return True
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                pass  # Expected: entity not registered yet
+            else:
+                logger.warning(f"Unexpected API error polling {entity_id}: {e}")
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            logger.warning(f"Connection/auth error polling {entity_id}: {e}")
+            raise
+        except Exception as e:
+            logger.debug(f"Unexpected error polling {entity_id}: {e}")
+        await asyncio.sleep(poll_interval)
+    logger.warning(f"Entity {entity_id} not registered within {timeout}s")
+    return False
+
+
+async def wait_for_entity_removed(
+    client: Any,
+    entity_id: str,
+    timeout: float = 10.0,
+    poll_interval: float = 0.3,
+) -> bool:
+    """
+    Poll until an entity is no longer accessible via the state API.
+
+    Used after config delete operations to confirm the entity is gone.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity ID to wait for removal
+        timeout: Maximum time to wait in seconds
+        poll_interval: Time between polls in seconds
+
+    Returns:
+        True if entity was removed, False if timed out (entity still exists)
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            state = await client.get_entity_state(entity_id)
+            if not state:
+                logger.debug(f"Entity {entity_id} removed after {time.monotonic() - start:.1f}s")
+                return True
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                logger.debug(f"Entity {entity_id} removed (404) after {time.monotonic() - start:.1f}s")
+                return True
+            logger.warning(f"Unexpected API error polling {entity_id} removal: {e}")
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            logger.warning(f"Connection/auth error polling {entity_id} removal: {e}")
+            raise
+        except Exception as e:
+            logger.debug(f"Unexpected error polling {entity_id} removal: {e}")
+        await asyncio.sleep(poll_interval)
+    logger.warning(f"Entity {entity_id} still exists after {timeout}s")
+    return False
+
+
+async def wait_for_state_change(
+    client: Any,
+    entity_id: str,
+    expected_state: str | None = None,
+    timeout: float = 10.0,
+    poll_interval: float = 0.3,
+    initial_state: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Poll until an entity's state changes (optionally to a specific value).
+
+    Used after service calls to verify the operation took effect.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity to monitor
+        expected_state: If set, wait for this specific state value.
+                        If None, wait for any change from initial_state.
+        timeout: Maximum time to wait in seconds
+        poll_interval: Time between polls in seconds
+        initial_state: The state before the operation. If None, it will be
+                       fetched automatically.
+
+    Returns:
+        The entity state dict if the change was detected, None if timed out
+    """
+    # Capture initial state if not provided
+    if initial_state is None:
+        try:
+            raw_initial = await client.get_entity_state(entity_id)
+            if isinstance(raw_initial, dict):
+                initial_state = raw_initial.get("state")
+        except HomeAssistantAPIError:
+            logger.debug(f"Could not fetch initial state for {entity_id} — will detect any change")
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            logger.warning(f"Connection/auth error fetching initial state for {entity_id}: {e}")
+            raise
+        except Exception as e:
+            logger.debug(f"Error fetching initial state for {entity_id}: {e}")
+
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            raw = await client.get_entity_state(entity_id)
+            state_data: dict[str, Any] | None = raw if isinstance(raw, dict) else None
+            if state_data:
+                current = state_data.get("state")
+                if expected_state is not None and current == expected_state:
+                    logger.debug(
+                        f"Entity {entity_id} reached state '{expected_state}' "
+                        f"after {time.monotonic() - start:.1f}s"
+                    )
+                    return state_data
+                if expected_state is None and initial_state is not None and current != initial_state:
+                    logger.debug(
+                        f"Entity {entity_id} changed from '{initial_state}' to '{current}' "
+                        f"after {time.monotonic() - start:.1f}s"
+                    )
+                    return state_data
+                # If initial state fetch failed, use first successful poll as baseline
+                if expected_state is None and initial_state is None and current is not None:
+                    initial_state = current
+        except HomeAssistantAPIError as e:
+            logger.debug(f"API error polling {entity_id} state: {e}")
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            logger.warning(f"Connection/auth error polling {entity_id} state: {e}")
+            raise
+        except Exception as e:
+            logger.debug(f"Error polling {entity_id} state: {e}")
+        await asyncio.sleep(poll_interval)
+
+    logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
+    return None

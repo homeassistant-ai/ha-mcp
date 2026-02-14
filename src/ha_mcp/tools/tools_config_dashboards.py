@@ -423,8 +423,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         url_path: Annotated[
             str,
             Field(
-                description="Unique URL path for dashboard (must contain hyphen, "
-                "e.g., 'my-dashboard', 'mobile-view')"
+                description="Dashboard URL path (e.g., 'my-dashboard'). "
+                "Use 'default' or 'lovelace' for the default dashboard. "
+                "New dashboards must use a hyphenated path."
             ),
         ],
         config: Annotated[
@@ -494,7 +495,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Creates a new dashboard or updates an existing one with the provided configuration.
         Supports three modes: full config replacement, Python transformation, OR jq-based transformation.
 
-        IMPORTANT: url_path must contain a hyphen (-) to be valid.
+        Use 'default' or 'lovelace' to target the built-in default dashboard.
+        New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
 
         WHEN TO USE WHICH MODE:
         - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
@@ -612,8 +614,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         (title, icon), use ha_config_update_dashboard_metadata().
         """
         try:
-            # Validate url_path contains hyphen
-            if "-" not in url_path:
+            # Handle "default" as alias for the default dashboard
+            # (matches ha_config_get_dashboard behavior)
+            if url_path == "default":
+                url_path = "lovelace"
+
+            # Validate url_path contains hyphen for new dashboards
+            # The built-in "lovelace" dashboard is exempt since it already exists
+            if "-" not in url_path and url_path != "lovelace":
                 return {
                     "success": False,
                     "action": "set",
@@ -621,6 +629,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "suggestions": [
                         f"Try '{url_path.replace('_', '-')}' instead",
                         "Use format like 'my-dashboard' or 'mobile-view'",
+                        "Use 'lovelace' or 'default' to edit the default dashboard",
                     ],
                 }
 
@@ -908,6 +917,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 d.get("url_path") == url_path for d in existing_dashboards
             )
 
+            # The built-in default dashboard ("lovelace") is always present
+            # but isn't listed by lovelace/dashboards/list on fresh installs
+            if url_path == "lovelace":
+                dashboard_exists = True
+
             # If dashboard doesn't exist, create it
             dashboard_id = None
             if not dashboard_exists:
@@ -1065,7 +1079,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "error": str(e),
                 "suggestions": [
                     "Ensure url_path is unique (not already in use for different dashboard type)",
-                    "Verify url_path contains a hyphen",
+                    "New dashboards require a hyphenated url_path",
                     "Check that you have admin permissions",
                     "Verify config format is valid Lovelace JSON",
                 ],
