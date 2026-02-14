@@ -75,12 +75,14 @@ Lower-weight stories are good for comprehensive coverage.
 Results are appended to a JSONL file after each run. Each line records one story result:
 
 ```jsonl
-{"sha":"8b521d4","version":"v6.6.1","branch":"v6.6.1","timestamp":"2026-02-13T10:00:00+00:00","agent":"gemini","story":"s01","category":"automation","weight":5,"passed":true,"duration_ms":45000,"tool_calls":5,"tool_failures":0,"turns":3}
+{"sha":"8b521d4","version":"v6.6.1","branch":"v6.6.1","timestamp":"2026-02-13T10:00:00+00:00","agent":"gemini","story":"s01","category":"automation","weight":5,"passed":true,"test_duration_ms":45000,"total_duration_ms":62000,"tool_calls":5,"tool_failures":0,"turns":3}
 ```
 
 - `sha`: exact commit for reproducibility
 - `version`: human-readable from `git describe --tags` (e.g., `v6.6.1` or `v6.6.1-5-gabc1234`)
 - `branch`: the `--branch` flag value (tag/branch installed via uvx), or `null` for local code
+- `test_duration_ms`: duration of the test phase only (what matters for comparison)
+- `total_duration_ms`: includes setup + test + teardown (total wall time)
 
 **Local runs:** `local/uat-results.jsonl` (gitignored)
 **Future CI:** Orphan branch `uat-results` with `history.jsonl`
