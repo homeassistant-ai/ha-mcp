@@ -16,6 +16,11 @@ Set ENABLED_TOOL_MODULES environment variable to filter which tools are loaded:
 - "all" (default): Load all tools
 - "automation": Load only automation-related tools (automations, scripts, traces, blueprints)
 - Comma-separated list: Load specific modules (e.g., "tools_config_automations,tools_search")
+
+Tool proxy:
+Modules listed in tool_proxy.PROXY_MODULES are NOT registered with MCP directly.
+Instead, they are captured into a proxy registry and accessed via 3 meta-tools:
+ha_find_tools, ha_get_tool_details, ha_execute_tool. See tool_proxy.py for details.
 """
 
 import logging
@@ -136,12 +141,17 @@ class ToolsRegistry:
 
         Tool modules are imported and registered only when this method is called,
         which happens after the MCP server is ready to accept connections.
+
+        Modules listed in tool_proxy.PROXY_MODULES are NOT registered with MCP.
+        Instead, they are captured into a proxy registry and served via meta-tools.
         """
         if self._modules_registered:
             logger.debug("Tools already registered, skipping")
             return
 
         import importlib
+
+        from .tool_proxy import PROXY_MODULES, discover_proxy_tools, register_proxy_tools
 
         # Build kwargs with all available dependencies (lazy access)
         kwargs = {
@@ -150,11 +160,22 @@ class ToolsRegistry:
         }
 
         registered_count = 0
+        proxied_modules = []
 
-        # Import and register tools_*.py modules
+        # Determine which discovered modules should be proxied
+        proxy_set = {
+            m for m in self._discovered_modules if m in PROXY_MODULES
+        }
+
+        # Import and register tools_*.py modules (skip proxied ones)
         for module_name in self._discovered_modules:
             # Skip explicit modules - handled separately
             if module_name in EXPLICIT_MODULES:
+                continue
+
+            # Skip proxied modules — they'll be captured below
+            if module_name in proxy_set:
+                proxied_modules.append(module_name)
                 continue
 
             try:
@@ -185,6 +206,10 @@ class ToolsRegistry:
         for module_name, func_name in EXPLICIT_MODULES.items():
             if module_name not in self._discovered_modules:
                 continue
+            # Skip proxied explicit modules
+            if module_name in proxy_set:
+                proxied_modules.append(module_name)
+                continue
             try:
                 module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
                 register_func = getattr(module, func_name)
@@ -195,5 +220,19 @@ class ToolsRegistry:
                 logger.error(f"Failed to register tools from {module_name}: {e}")
                 raise
 
+        # Capture proxied modules into the proxy registry and register meta-tools
+        if proxy_set:
+            proxy_registry = discover_proxy_tools(
+                self.mcp, self.client, proxy_set, **kwargs
+            )
+            register_proxy_tools(self.mcp, self.client, proxy_registry, **kwargs)
+            logger.info(
+                f"Tool proxy: {proxy_registry.tool_count} tools from "
+                f"{len(proxy_set)} modules routed through meta-tools"
+            )
+
         self._modules_registered = True
-        logger.info(f"Auto-discovery registered tools from {registered_count} modules")
+        logger.info(
+            f"Auto-discovery registered tools from {registered_count} modules "
+            f"(+ {len(proxied_modules)} proxied modules)"
+        )
