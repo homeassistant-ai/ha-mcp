@@ -161,23 +161,15 @@ class ToolProxyRegistry:
         return hashlib.md5(fingerprint.encode()).hexdigest()[:8]
 
     def _make_summary(self, tool: dict[str, Any]) -> dict[str, Any]:
-        """Create a compact tool summary for search results."""
-        # First line of description only
-        desc = tool["description"].strip()
-        first_line = desc.split("\n")[0].strip()
-
-        # Build compact param summary
         params = tool["parameters"]
-        param_names = list(params.get("properties", {}).keys()) if isinstance(params, dict) else []
-        required = params.get("required", []) if isinstance(params, dict) else []
-
+        props = params.get("properties", {}) if isinstance(params, dict) else {}
         return {
             "tool_name": tool["name"],
-            "summary": first_line,
+            "summary": tool["description"].strip().split("\n")[0],
             "category": tool["category"],
             "is_destructive": tool["annotations"].get("destructiveHint", False),
-            "parameters": param_names,
-            "required_parameters": required,
+            "parameters": list(props.keys()),
+            "required_parameters": params.get("required", []) if isinstance(params, dict) else [],
         }
 
     def _format_parameters(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -551,28 +543,15 @@ def register_proxy_tools(
                 details=f"Call ha_get_tool_details('{tool_name}') to get the current schema_hash.",
             )
 
-        # Parse args
         try:
-            if isinstance(args, str):
-                parsed_args = json.loads(args)
-            elif isinstance(args, dict):
-                parsed_args = args
-            else:
-                return create_validation_error(
-                    message=f"args must be a JSON object string, got {type(args).__name__}",
-                    parameter="args",
-                )
-        except json.JSONDecodeError as e:
+            parsed_args = json.loads(args) if isinstance(args, str) else args
+        except (json.JSONDecodeError, TypeError) as e:
             return create_validation_error(
-                message=f"Invalid JSON in args: {e}",
-                parameter="args",
-                invalid_json=True,
+                message=f"Invalid JSON in args: {e}", parameter="args",
             )
-
         if not isinstance(parsed_args, dict):
             return create_validation_error(
-                message="args must be a JSON object (not array or primitive).",
-                parameter="args",
+                message="args must be a JSON object.", parameter="args",
             )
 
         # Validate required parameters
@@ -582,25 +561,10 @@ def register_proxy_tools(
         missing = required_params - provided_params
 
         if missing:
-            # Build helpful error with parameter details
-            tool_details = proxy_registry.get_tool_details(tool_name)
-            param_help = []
-            if tool_details:
-                param_help = [
-                    f"  - {p['name']} ({p['type']}, required): "
-                    f"{p.get('description', 'no description')}"
-                    for p in tool_details["parameters"]
-                    if p["name"] in missing
-                ]
-
             return create_error_response(
                 code=ErrorCode.VALIDATION_MISSING_PARAMETER,
                 message=f"Missing required parameter(s): {', '.join(sorted(missing))}",
-                details="\n".join(param_help) if param_help else None,
-                context={
-                    "missing_parameters": sorted(missing),
-                    "provided_parameters": sorted(provided_params),
-                },
+                context={"missing_parameters": sorted(missing)},
             )
 
         # Execute the tool
@@ -610,10 +574,8 @@ def register_proxy_tools(
             return result
 
         except TypeError as e:
-            # Likely wrong parameter types
             return create_validation_error(
                 message=f"Parameter error: {e}",
-                details="Check parameter types match the schema from ha_get_tool_details.",
                 context={"tool_name": tool_name},
             )
         except Exception as e:
