@@ -93,26 +93,14 @@ class ToolProxyRegistry:
         results = []
 
         for name, tool in self._tools.items():
-            # Match on tool name
-            if query_lower in name.lower():
-                results.append(self._make_summary(tool))
-                continue
-
-            # Match on category
-            if query_lower in tool["category"].lower():
-                results.append(self._make_summary(tool))
-                continue
-
-            # Match on description keywords
-            if query_lower in tool["description"].lower():
-                results.append(self._make_summary(tool))
-                continue
-
-            # Match on annotation tags
             tags = tool["annotations"].get("tags", [])
-            if any(query_lower in tag.lower() for tag in tags):
+            if (
+                query_lower in name.lower()
+                or query_lower in tool["category"].lower()
+                or query_lower in tool["description"].lower()
+                or any(query_lower in tag.lower() for tag in tags)
+            ):
                 results.append(self._make_summary(tool))
-                continue
 
         return results
 
@@ -156,28 +144,24 @@ class ToolProxyRegistry:
         if not tool:
             return ""
         params = tool["parameters"]
-        param_keys = sorted(params.get("properties", {}).keys()) if isinstance(params, dict) else []
-        required = sorted(params.get("required", [])) if isinstance(params, dict) else []
+        param_keys = sorted(params.get("properties", {}).keys())
+        required = sorted(params.get("required", []))
         fingerprint = f"{tool_name}:{','.join(param_keys)}:{','.join(required)}"
         return hashlib.md5(fingerprint.encode()).hexdigest()[:8]
 
     def _make_summary(self, tool: dict[str, Any]) -> dict[str, Any]:
         params = tool["parameters"]
-        props = params.get("properties", {}) if isinstance(params, dict) else {}
         return {
             "tool_name": tool["name"],
             "summary": tool["description"].strip().split("\n")[0],
             "category": tool["category"],
             "is_destructive": tool["annotations"].get("destructiveHint", False),
-            "parameters": list(props.keys()),
-            "required_parameters": params.get("required", []) if isinstance(params, dict) else [],
+            "parameters": list(params.get("properties", {}).keys()),
+            "required_parameters": params.get("required", []),
         }
 
     def _format_parameters(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Format parameter schema into LLM-friendly list."""
-        if not isinstance(params, dict):
-            return []
-
         properties = params.get("properties", {})
         required = set(params.get("required", []))
         result = []
