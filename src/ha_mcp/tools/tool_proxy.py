@@ -255,7 +255,7 @@ def _python_type_to_json(python_type: Any) -> str:
         dict: "object",
         list: "array",
     }
-    return type_map.get(python_type, "string")
+    return type_map.get(origin or python_type, "string")
 
 
 def discover_proxy_tools(
