@@ -612,11 +612,11 @@ def register_<domain>_tools(mcp, client, **kwargs):
 ```
 
 ### Safety Annotations
-| Annotation | Use For |
-|------------|---------|
-| `readOnlyHint: True` | No side effects |
-| `idempotentHint: True` | Safe to retry |
-| `destructiveHint: True` | Deletes data |
+| Annotation | Default | Use For |
+|------------|---------|--------|
+| `readOnlyHint: True` | `False` | Tool does not modify its environment |
+| `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
+| `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
 
 ### Error Handling
 Use structured errors from `errors.py`:
