@@ -3,6 +3,9 @@ Automation Traces E2E Tests
 
 Tests the automation trace functionality: Create automation → Trigger → Get traces
 Verifies that ha_get_automation_traces returns non-empty traces after automation runs.
+
+Note: ha_get_automation_traces is proxied behind meta-tools.
+Tests use proxy_call_tool() to route through the proxy.
 """
 
 import logging
@@ -13,6 +16,7 @@ from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
 )
+from ...utilities.proxy_helpers import proxy_call_tool
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
@@ -104,7 +108,8 @@ class TestAutomationTraces:
 
         # Wait for trace to be recorded
         async def check_automation_traces():
-            result = await mcp_client.call_tool(
+            result = await proxy_call_tool(
+                mcp_client,
                 "ha_get_automation_traces",
                 {"automation_id": automation_id},
             )
@@ -127,7 +132,8 @@ class TestAutomationTraces:
             )
 
         # 4. Get traces for the automation
-        traces_result = await mcp_client.call_tool(
+        traces_result = await proxy_call_tool(
+            mcp_client,
             "ha_get_automation_traces",
             {"automation_id": automation_id},
         )
@@ -161,7 +167,8 @@ class TestAutomationTraces:
         # 7. Get detailed trace using run_id
         run_id = first_trace.get("run_id")
         if run_id:
-            detailed_result = await mcp_client.call_tool(
+            detailed_result = await proxy_call_tool(
+                mcp_client,
                 "ha_get_automation_traces",
                 {"automation_id": automation_id, "run_id": run_id},
             )
@@ -170,18 +177,18 @@ class TestAutomationTraces:
 
             assert detailed_data.get("success") is True
             assert detailed_data.get("run_id") == run_id
-            
+
             # Verify detailed content structure (Deep verification)
             # This ensures we correctly parsed the flat structure (trigger/0, action/0)
             assert "trigger" in detailed_data, "Detailed trace should contain trigger info"
             assert "action_trace" in detailed_data, "Detailed trace should contain action_trace"
             assert isinstance(detailed_data["action_trace"], list), "action_trace should be a list"
             assert len(detailed_data["action_trace"]) > 0, "action_trace should not be empty"
-            
+
             # Check for path property to ensure flat structure parsing worked
             first_action = detailed_data["action_trace"][0]
             assert "path" in first_action, "Action trace element should contain 'path'"
-            
+
             logger.info(f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions")
 
     async def test_empty_traces_with_diagnostics(
@@ -223,7 +230,8 @@ class TestAutomationTraces:
         # Wait for automation registration
 
         # 3. Get traces (should be empty with diagnostics)
-        traces_result = await mcp_client.call_tool(
+        traces_result = await proxy_call_tool(
+            mcp_client,
             "ha_get_automation_traces",
             {"automation_id": automation_id},
         )
@@ -299,7 +307,8 @@ class TestAutomationTraces:
 
         # Wait for trace to be recorded
         async def check_traces():
-            result = await mcp_client.call_tool(
+            result = await proxy_call_tool(
+                mcp_client,
                 "ha_get_automation_traces",
                 {"automation_id": script_entity_id},
             )
@@ -322,7 +331,8 @@ class TestAutomationTraces:
             )
 
         # 4. Get traces for the script
-        traces_result = await mcp_client.call_tool(
+        traces_result = await proxy_call_tool(
+            mcp_client,
             "ha_get_automation_traces",
             {"automation_id": script_entity_id},
         )

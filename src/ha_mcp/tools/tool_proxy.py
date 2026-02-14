@@ -22,14 +22,23 @@ Proxied tools are NOT registered with MCP. Their implementations, descriptions,
 and schemas are stored in a server-side registry and returned on demand.
 """
 
+import hashlib
 import importlib
 import inspect
 import json
 import logging
+import types
+import typing
 from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import (
+    ErrorCode,
+    create_error_response,
+    create_resource_not_found_error,
+    create_validation_error,
+)
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
@@ -43,11 +52,11 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────
 # Phase 1 (this PR): 10 niche tools from 5 modules
 PROXY_MODULES: set[str] = {
-    "tools_zones",           # 4 tools: ha_get_zone, ha_create_zone, ha_update_zone, ha_delete_zone
-    "tools_labels",          # 3 tools: ha_config_get_label, ha_config_set_label, ha_config_remove_label
-    "tools_addons",          # 1 tool:  ha_get_addon
-    "tools_voice_assistant", # 1 tool:  ha_get_entity_exposure
-    "tools_traces",          # 1 tool:  ha_get_automation_traces
+    "tools_zones",            # 4 zone CRUD tools
+    "tools_labels",           # 3 label tools
+    "tools_addons",           # ha_get_addon
+    "tools_voice_assistant",  # ha_get_entity_exposure
+    "tools_traces",           # ha_get_automation_traces
 }
 # Phase 2: Move ~20 more tools (calendar, groups, todo, resources, camera, ...)
 # Phase 3: Move ~30 more tools (filesystem, hacs, integrations, ...)
@@ -193,8 +202,6 @@ class ToolProxyRegistry:
         required = sorted(params.get("required", [])) if isinstance(params, dict) else []
         fingerprint = f"{tool_name}:{','.join(param_keys)}:{','.join(required)}"
         # Simple hash — not crypto, just a fingerprint
-        import hashlib
-
         return hashlib.md5(fingerprint.encode()).hexdigest()[:8]
 
     def _make_summary(self, tool: dict[str, Any]) -> dict[str, Any]:
@@ -249,8 +256,6 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
     Reads the function's type hints and docstring to build the same
     metadata that FastMCP would generate during @mcp.tool() registration.
     """
-    import typing
-
     name = func.__name__
     description = inspect.getdoc(func) or ""
 
@@ -304,8 +309,6 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
 
 def _python_type_to_json(python_type: Any) -> str:
     """Map Python type hints to JSON Schema types."""
-    import types
-
     origin = getattr(python_type, "__origin__", None)
 
     # Handle Union types (e.g., str | None)
@@ -532,14 +535,18 @@ def register_proxy_tools(
             all_tools = []
             for tools in catalog.values():
                 all_tools.extend(tools)
-            suggestions = [t for t in all_tools if tool_name.lower() in t.lower()][:5]
+            similar = [t for t in all_tools if tool_name.lower() in t.lower()][:5]
 
-            return {
-                "success": False,
-                "error": f"Tool '{tool_name}' not found in proxy registry.",
-                "available_tools": sorted(all_tools),
-                "suggestions": suggestions or "Use ha_find_tools() to search for tools.",
-            }
+            return create_resource_not_found_error(
+                resource_type="Tool",
+                identifier=tool_name,
+                details=(
+                    f"Tool '{tool_name}' is not in the proxy registry. "
+                    f"Available tools: {', '.join(sorted(all_tools))}. "
+                    + (f"Similar: {', '.join(similar)}. " if similar else "")
+                    + "Use ha_find_tools() to search for tools."
+                ),
+            )
 
         return {
             "success": True,
@@ -590,21 +597,23 @@ def register_proxy_tools(
         # Validate tool exists
         tool = proxy_registry.get_tool(tool_name)
         if not tool:
-            return {
-                "success": False,
-                "error": f"Tool '{tool_name}' not found.",
-                "suggestion": "Use ha_find_tools() to search for available tools.",
-            }
+            return create_resource_not_found_error(
+                resource_type="Tool",
+                identifier=tool_name,
+                details="Use ha_find_tools() to search for available tools.",
+            )
 
         # Validate schema hash — proves LLM read the docs
         if not proxy_registry.validate_schema(tool_name, tool_schema):
-            return {
-                "success": False,
-                "error": "Invalid tool_schema hash. You must call "
-                "ha_get_tool_details(tool_name) first and pass the "
-                "schema_hash from the response.",
-                "required_step": f"Call ha_get_tool_details('{tool_name}') to get the current schema_hash.",
-            }
+            return create_validation_error(
+                message=(
+                    "Invalid tool_schema hash. You must call "
+                    "ha_get_tool_details(tool_name) first and pass the "
+                    "schema_hash from the response."
+                ),
+                parameter="tool_schema",
+                details=f"Call ha_get_tool_details('{tool_name}') to get the current schema_hash.",
+            )
 
         # Parse args
         try:
@@ -613,22 +622,22 @@ def register_proxy_tools(
             elif isinstance(args, dict):
                 parsed_args = args
             else:
-                return {
-                    "success": False,
-                    "error": f"args must be a JSON object string, got {type(args).__name__}",
-                }
+                return create_validation_error(
+                    message=f"args must be a JSON object string, got {type(args).__name__}",
+                    parameter="args",
+                )
         except json.JSONDecodeError as e:
-            return {
-                "success": False,
-                "error": f"Invalid JSON in args: {e}",
-                "suggestion": "Ensure args is a valid JSON object string.",
-            }
+            return create_validation_error(
+                message=f"Invalid JSON in args: {e}",
+                parameter="args",
+                invalid_json=True,
+            )
 
         if not isinstance(parsed_args, dict):
-            return {
-                "success": False,
-                "error": "args must be a JSON object (not array or primitive).",
-            }
+            return create_validation_error(
+                message="args must be a JSON object (not array or primitive).",
+                parameter="args",
+            )
 
         # Validate required parameters
         params_schema = tool["parameters"]
@@ -638,23 +647,25 @@ def register_proxy_tools(
 
         if missing:
             # Build helpful error with parameter details
-            details = proxy_registry.get_tool_details(tool_name)
+            tool_details = proxy_registry.get_tool_details(tool_name)
             param_help = []
-            if details:
-                for p in details["parameters"]:
-                    if p["name"] in missing:
-                        param_help.append(
-                            f"  - {p['name']} ({p['type']}, required): "
-                            f"{p.get('description', 'no description')}"
-                        )
+            if tool_details:
+                param_help = [
+                    f"  - {p['name']} ({p['type']}, required): "
+                    f"{p.get('description', 'no description')}"
+                    for p in tool_details["parameters"]
+                    if p["name"] in missing
+                ]
 
-            return {
-                "success": False,
-                "error": f"Missing required parameter(s): {', '.join(sorted(missing))}",
-                "missing_parameters": sorted(missing),
-                "parameter_help": param_help,
-                "provided_parameters": sorted(provided_params),
-            }
+            return create_error_response(
+                code=ErrorCode.VALIDATION_MISSING_PARAMETER,
+                message=f"Missing required parameter(s): {', '.join(sorted(missing))}",
+                details="\n".join(param_help) if param_help else None,
+                context={
+                    "missing_parameters": sorted(missing),
+                    "provided_parameters": sorted(provided_params),
+                },
+            )
 
         # Execute the tool
         try:
@@ -664,20 +675,15 @@ def register_proxy_tools(
 
         except TypeError as e:
             # Likely wrong parameter types
-            error_msg = str(e)
-            details = proxy_registry.get_tool_details(tool_name)
-            return {
-                "success": False,
-                "error": f"Parameter error: {error_msg}",
-                "tool_name": tool_name,
-                "provided_args": parsed_args,
-                "expected_parameters": details["parameters"] if details else [],
-                "suggestion": "Check parameter types match the schema from ha_get_tool_details.",
-            }
+            return create_validation_error(
+                message=f"Parameter error: {e}",
+                details="Check parameter types match the schema from ha_get_tool_details.",
+                context={"tool_name": tool_name},
+            )
         except Exception as e:
             logger.error(f"Proxy execution error for {tool_name}: {e}")
-            return {
-                "success": False,
-                "error": f"Tool execution failed: {str(e)}",
-                "tool_name": tool_name,
-            }
+            return create_error_response(
+                code=ErrorCode.INTERNAL_ERROR,
+                message=f"Tool execution failed: {e}",
+                context={"tool_name": tool_name},
+            )

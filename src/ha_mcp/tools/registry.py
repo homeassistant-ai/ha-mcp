@@ -122,9 +122,10 @@ class ToolsRegistry:
                     discovered.append(module_name)
 
         # Add explicit modules (only if enabled or no filter)
-        for module_name in EXPLICIT_MODULES.keys():
-            if enabled_set is None or module_name in enabled_set:
-                discovered.append(module_name)
+        discovered.extend(
+            m for m in EXPLICIT_MODULES
+            if enabled_set is None or m in enabled_set
+        )
 
         if enabled_set is not None:
             logger.info(
@@ -151,7 +152,11 @@ class ToolsRegistry:
 
         import importlib
 
-        from .tool_proxy import PROXY_MODULES, discover_proxy_tools, register_proxy_tools
+        from .tool_proxy import (
+            PROXY_MODULES,
+            discover_proxy_tools,
+            register_proxy_tools,
+        )
 
         # Build kwargs with all available dependencies (lazy access)
         kwargs = {

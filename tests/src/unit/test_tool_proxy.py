@@ -17,7 +17,6 @@ from ha_mcp.tools.tool_proxy import (
     register_proxy_tools,
 )
 
-
 # ─── ToolProxyRegistry unit tests ───
 
 
@@ -253,7 +252,7 @@ class TestMetaToolIntegration:
     async def test_get_tool_details_not_found(self):
         result = await self.meta_tools["ha_get_tool_details"](tool_name="fake_tool")
         assert result["success"] is False
-        assert "not found" in result["error"]
+        assert "not found" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_execute_tool_success(self):
@@ -278,7 +277,8 @@ class TestMetaToolIntegration:
             tool_schema="wrong_hash",
         )
         assert result["success"] is False
-        assert "schema_hash" in result["error"].lower() or "tool_schema" in result["error"].lower()
+        error_msg = result["error"]["message"].lower()
+        assert "schema" in error_msg or "tool_schema" in error_msg
         self.test_impl.assert_not_called()
 
     @pytest.mark.asyncio
@@ -289,7 +289,7 @@ class TestMetaToolIntegration:
             tool_schema="anything",
         )
         assert result["success"] is False
-        assert "not found" in result["error"]
+        assert "not found" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_execute_tool_rejects_invalid_json(self):
@@ -300,7 +300,7 @@ class TestMetaToolIntegration:
             tool_schema=details["schema_hash"],
         )
         assert result["success"] is False
-        assert "JSON" in result["error"]
+        assert "json" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_execute_tool_rejects_missing_required_params(self):
@@ -333,7 +333,7 @@ class TestMetaToolIntegration:
             tool_schema=schema_hash,
         )
         assert result["success"] is False
-        assert "latitude" in result["error"]
+        assert "latitude" in result["error"]["message"]
 
 
 # ─── PROXY_MODULES config tests ───
@@ -362,4 +362,4 @@ class TestProxyModulesConfig:
             "tools_voice_assistant",
             "tools_traces",
         }
-        assert PROXY_MODULES == expected
+        assert expected == PROXY_MODULES
