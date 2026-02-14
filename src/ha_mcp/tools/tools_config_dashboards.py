@@ -1703,4 +1703,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
                 ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
             return error_response

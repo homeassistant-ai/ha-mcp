@@ -65,7 +65,8 @@ async def test_deep_search_automation(mcp_client):
         )
 
         # Verify we found the automation
-        automations = data.get("automations", [])
+        assert_deep_search_keys(data)
+        automations = data["automations"]
         assert len(automations) > 0, "Should find automation containing the sensor"
 
         # Find our specific automation
@@ -147,7 +148,8 @@ async def test_deep_search_script(mcp_client):
         )
 
         # Verify we found the script
-        scripts = data.get("scripts", [])
+        assert_deep_search_keys(data)
+        scripts = data["scripts"]
         assert len(scripts) > 0, "Should find script containing the unique message"
 
         # Find our specific script
@@ -223,7 +225,8 @@ async def test_deep_search_helper(mcp_client):
         )
 
         # Verify we found the helper
-        helpers = data.get("helpers", [])
+        assert_deep_search_keys(data)
+        helpers = data["helpers"]
         assert len(helpers) > 0, "Should find helper containing the unique option"
 
         # Find our specific helper

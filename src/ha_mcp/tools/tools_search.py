@@ -4,6 +4,7 @@ Search and discovery tools for Home Assistant MCP server.
 This module provides entity search, system overview, deep search, and state retrieval tools.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
@@ -14,7 +15,8 @@ from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import (
     add_timezone_metadata,
     coerce_bool_param,
-    coerce_int_param, parse_string_list_param,
+    coerce_int_param,
+    parse_string_list_param,
 )
 
 logger = logging.getLogger(__name__)
@@ -356,6 +358,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     query, limit, offset=offset, domain_filter=domain_filter
                 )
                 search_type = "fuzzy_search"
+            except asyncio.CancelledError:
+                raise
             except Exception as fuzzy_error:
                 logger.warning(
                     f"Fuzzy search failed, trying exact match: {fuzzy_error}"
@@ -364,10 +368,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Step 2: Try exact match fallback
                 try:
                     result = await _exact_match_search(
-                        client, query, domain_filter, limit
-                    , offset)
+                        client, query, domain_filter, limit, offset
+                    )
                     warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exact_error:
                     logger.warning(
                         f"Exact match failed, trying partial results: {exact_error}"
@@ -376,16 +382,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Step 3: Try partial results fallback
                     try:
                         result = await _partial_results_search(
-                            client, query, domain_filter, limit
-                        , offset)
+                            client, query, domain_filter, limit, offset
+                        )
                         warning = "Search degraded, returning partial results"
                         search_type = "partial_listing"
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as partial_error:
                         # Step 4: All methods failed - raise to outer exception handler
                         logger.error(f"All search methods failed: {partial_error}")
                         raise Exception(
-                            f"All search methods failed. Fuzzy: {fuzzy_error}, "
-                            f"Exact: {exact_error}, Partial: {partial_error}"
+                            "All search methods failed"
                         ) from partial_error
 
             # Convert 'matches' to 'results' for backward compatibility
@@ -443,6 +450,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
                 ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
             return await add_timezone_metadata(client, error_response)
 
     @mcp.tool(
@@ -609,6 +621,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
             return cast(dict[str, Any], result)
         except Exception as e:
+            logger.error(
+                f"Error in deep search: query={query}, "
+                f"search_types={parsed_search_types}, limit={limit}, "
+                f"error={e}",
+                exc_info=True,
+            )
             error_response = exception_to_structured_error(
                 e,
                 context={
@@ -622,6 +640,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                 ]
+            else:
+                logger.warning(
+                    f"Unexpected error response structure, could not add suggestions: "
+                    f"{type(error_response.get('error'))}"
+                )
             return await add_timezone_metadata(client, error_response)
 
     @mcp.tool(

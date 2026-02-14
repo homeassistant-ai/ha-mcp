@@ -49,6 +49,10 @@ class TestDashboardFindCardErrorHandling:
         """Error response must NOT contain 'error_type' or 'traceback'."""
         result = await find_card_tool(url_path="lovelace", entity_id="light.test")
 
+        assert result["success"] is False
+        assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
+        assert "code" in result["error"]
+        assert "message" in result["error"]
         assert "error_type" not in result
         assert "traceback" not in result
 
@@ -63,3 +67,31 @@ class TestDashboardFindCardErrorHandling:
             "Verify dashboard with ha_config_get_dashboard(list_only=True)"
             in suggestions
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exception_cls,exception_msg,expected_code",
+        [
+            (ValueError, "invalid dashboard", "VALIDATION_FAILED"),
+            (TimeoutError, "timed out", "TIMEOUT_OPERATION"),
+            (RuntimeError, "unexpected failure", "INTERNAL_ERROR"),
+        ],
+    )
+    async def test_different_exception_types_produce_correct_error_codes(
+        self,
+        mock_mcp,
+        mock_client,
+        find_card_tool,
+        exception_cls,
+        exception_msg,
+        expected_code,
+    ):
+        """Different exception types should map to appropriate error codes."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=exception_cls(exception_msg)
+        )
+
+        result = await find_card_tool(url_path="lovelace", entity_id="light.test")
+
+        assert result["success"] is False
+        assert result["error"]["code"] == expected_code

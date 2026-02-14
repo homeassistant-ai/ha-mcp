@@ -66,6 +66,10 @@ class TestDeepSearchErrorHandling:
         result = await deep_search_tool(query="test_query")
 
         data = result["data"]
+        assert data["success"] is False
+        assert isinstance(data["error"], dict), "error must be structured dict, not raw string"
+        assert "code" in data["error"]
+        assert "message" in data["error"]
         assert "traceback" not in data
         assert "error_type" not in data
 
@@ -84,3 +88,47 @@ class TestDeepSearchErrorHandling:
         suggestions = data["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
+
+    @pytest.mark.asyncio
+    async def test_error_response_includes_timezone_metadata(
+        self, mock_mcp, mock_client, mock_smart_tools, deep_search_tool
+    ):
+        """Error responses should be wrapped with timezone metadata."""
+        mock_smart_tools.deep_search = AsyncMock(
+            side_effect=RuntimeError("fail")
+        )
+
+        result = await deep_search_tool(query="test_query")
+
+        assert "metadata" in result, "error response must include timezone metadata"
+        assert "home_assistant_timezone" in result["metadata"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exception_cls,exception_msg,expected_code",
+        [
+            (ValueError, "invalid input", "VALIDATION_FAILED"),
+            (TimeoutError, "timed out", "TIMEOUT_OPERATION"),
+            (RuntimeError, "unexpected failure", "INTERNAL_ERROR"),
+        ],
+    )
+    async def test_different_exception_types_produce_correct_error_codes(
+        self,
+        mock_mcp,
+        mock_client,
+        mock_smart_tools,
+        deep_search_tool,
+        exception_cls,
+        exception_msg,
+        expected_code,
+    ):
+        """Different exception types should map to appropriate error codes."""
+        mock_smart_tools.deep_search = AsyncMock(
+            side_effect=exception_cls(exception_msg)
+        )
+
+        result = await deep_search_tool(query="test_query")
+
+        data = result["data"]
+        assert data["success"] is False
+        assert data["error"]["code"] == expected_code
