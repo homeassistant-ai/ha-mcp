@@ -8,9 +8,8 @@ Home Assistant areas and floors - essential organizational features for smart ho
 import logging
 from typing import Annotated, Any
 
-from pydantic import Field
-
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error

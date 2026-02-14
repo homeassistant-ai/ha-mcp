@@ -13,9 +13,8 @@ Known assistant identifiers:
 import logging
 from typing import Annotated, Any
 
-from pydantic import Field
-
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from .helpers import log_tool_usage, raise_tool_error
 
