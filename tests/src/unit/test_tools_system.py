@@ -4,8 +4,9 @@ Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
 ha_restart reports failure when a reverse proxy returns 504 during restart.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,

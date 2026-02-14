@@ -498,12 +498,12 @@ class SmartSearchTools:
                 "most_common_domains": [domain for domain, _ in sorted_domains[:5]],
                 "controllable_devices": [
                     domain
-                    for domain in domain_stats.keys()
+                    for domain in domain_stats
                     if domain in ["light", "switch", "climate", "media_player", "cover"]
                 ],
                 "monitoring_sensors": [
                     domain
-                    for domain in domain_stats.keys()
+                    for domain in domain_stats
                     if domain in ["sensor", "binary_sensor", "camera"]
                 ],
                 "automation_ready": "automation" in domain_stats
@@ -712,9 +712,9 @@ class SmartSearchTools:
                     )
 
                     for (
-                        entity_id,
-                        friendly_name,
-                        name_score,
+                        _entity_id,
+                        _friendly_name,
+                        _name_score,
                         unique_id,
                     ) in sorted_by_score:
                         if time.perf_counter() - budget_start > AUTOMATION_CONFIG_TIME_BUDGET:
@@ -833,10 +833,10 @@ class SmartSearchTools:
                         script_name_scored, key=lambda x: x[3], reverse=True
                     )
                     for (
-                        entity_id,
-                        friendly_name,
+                        _entity_id,
+                        _friendly_name,
                         script_id,
-                        name_score,
+                        _name_score,
                     ) in sorted_scripts:
                         if time.perf_counter() - budget_start > SCRIPT_CONFIG_TIME_BUDGET:
                             break
@@ -962,8 +962,7 @@ class SmartSearchTools:
             # Merge all results with their category, sort by score, and paginate
             tagged_results: list[tuple[str, dict[str, Any]]] = []
             for category, items in results.items():
-                for item in items:
-                    tagged_results.append((category, item))
+                tagged_results.extend((category, item) for item in items)
 
             tagged_results.sort(key=lambda x: x[1]["score"], reverse=True)
 

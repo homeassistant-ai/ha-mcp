@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.util_helpers import (
     wait_for_entity_registered,
     wait_for_entity_removed,

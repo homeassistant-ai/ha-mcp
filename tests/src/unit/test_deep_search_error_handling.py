@@ -4,8 +4,9 @@ Validates that ha_deep_search uses structured error responses and does NOT
 leak internal tracebacks to clients (issue #517).
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ha_mcp.tools.tools_search import register_search_tools
 

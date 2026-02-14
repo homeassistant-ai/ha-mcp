@@ -212,36 +212,34 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 
                     # Convert to format expected by fuzzy searcher
-                    entities_for_search = []
-                    for entity in all_area_entities:
-                        entities_for_search.append(
-                            {
-                                "entity_id": entity.get("entity_id", ""),
-                                "attributes": {
-                                    "friendly_name": entity.get("friendly_name", "")
-                                },
-                                "state": entity.get("state", "unknown"),
-                            }
-                        )
+                    entities_for_search = [
+                        {
+                            "entity_id": entity.get("entity_id", ""),
+                            "attributes": {
+                                "friendly_name": entity.get("friendly_name", "")
+                            },
+                            "state": entity.get("state", "unknown"),
+                        }
+                        for entity in all_area_entities
+                    ]
 
                     matches, total_matches = fuzzy_searcher.search_entities(
                         entities_for_search, query, limit, offset
                     )
 
                     # Format matches similar to smart_entity_search
-                    results = []
-                    for match in matches:
-                        results.append(
-                            {
-                                "entity_id": match["entity_id"],
-                                "friendly_name": match["friendly_name"],
-                                "domain": match["domain"],
-                                "state": match["state"],
-                                "score": match["score"],
-                                "match_type": match["match_type"],
-                                "area_filter": area_filter,
-                            }
-                        )
+                    results = [
+                        {
+                            "entity_id": match["entity_id"],
+                            "friendly_name": match["friendly_name"],
+                            "domain": match["domain"],
+                            "state": match["state"],
+                            "score": match["score"],
+                            "match_type": match["match_type"],
+                            "area_filter": area_filter,
+                        }
+                        for match in matches
+                    ]
 
                     pagination = _build_pagination_metadata(total_matches, offset, limit, results)
 
@@ -266,7 +264,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     return await add_timezone_metadata(client, search_data)
                 else:
                     # Just area filter, return area results with enhanced format
-                    if "areas" in area_result and area_result["areas"]:
+                    if area_result.get("areas"):
                         first_area = next(iter(area_result["areas"].values()))
                         by_domain = first_area.get("entities", {})
 

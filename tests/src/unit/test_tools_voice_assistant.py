@@ -1,11 +1,12 @@
 """Unit tests for voice assistant tools module."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from ha_mcp.tools.tools_voice_assistant import (
-    register_voice_assistant_tools,
     KNOWN_ASSISTANTS,
+    register_voice_assistant_tools,
 )
 
 

@@ -97,8 +97,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
             logger.info(f"Downloading HACS frontend {tag_name}...")
 
-            with urllib.request.urlopen(tarball_url, timeout=120) as response:
-                with tarfile.open(fileobj=response, mode="r:gz") as tar:
+            with urllib.request.urlopen(tarball_url, timeout=120) as response, tarfile.open(fileobj=response, mode="r:gz") as tar:
                     # Extract to temp location first
                     temp_extract = Path(tempfile.mkdtemp())
                     tar.extractall(temp_extract)
