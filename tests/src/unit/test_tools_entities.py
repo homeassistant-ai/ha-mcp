@@ -66,8 +66,7 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", labels=["outdoor", "smart"]),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", labels=["outdoor", "smart"], guide_response=_GR)
 
         assert result["success"] is True
         assert "labels=['outdoor', 'smart']" in str(result["updates"])
@@ -101,8 +100,7 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", labels=[]),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", labels=[], guide_response=_GR)
 
         assert result["success"] is True
 
@@ -145,8 +143,7 @@ class TestHaSetEntityLabels:
     @pytest.mark.asyncio
     async def test_set_labels_invalid_returns_error(self, set_entity_tool):
         """Invalid labels parameter should return an error."""
-        result = await set_entity_tool(entity_id="light.test", labels="not_json{"),
-        guide_response=_GR,
+        result = await set_entity_tool(entity_id="light.test", labels="not_json{", guide_response=_GR)
 
         assert result["success"] is False
         error = result.get("error", {})
@@ -177,8 +174,7 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        await tool(entity_id="light.test", name="New Name"),
-        guide_response=_GR,
+        await tool(entity_id="light.test", name="New Name", guide_response=_GR)
 
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert "labels" not in call_args
@@ -379,8 +375,7 @@ class TestHaSetEntityExposeTo:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", name="New Name"),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", name="New Name", guide_response=_GR)
 
         assert result["success"] is True
         # Only 1 call (entity registry update), no exposure call
@@ -472,8 +467,7 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test"),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", guide_response=_GR)
 
         assert result["success"] is False
         assert "No updates specified" in result["error"]
@@ -609,8 +603,7 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", enabled="maybe"),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", enabled="maybe", guide_response=_GR)
 
         assert result["success"] is False
         error = result.get("error", {})
@@ -623,8 +616,7 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", hidden="maybe"),
-        guide_response=_GR,
+        result = await tool(entity_id="light.test", hidden="maybe", guide_response=_GR)
 
         assert result["success"] is False
         error = result.get("error", {})
