@@ -163,6 +163,50 @@ def _stop_container(ha: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Token extraction from session files
+# ---------------------------------------------------------------------------
+def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
+    """Extract token usage from an agent session file.
+
+    Returns dict with keys: input, output, cached, thoughts (all ints).
+    Only non-cached tokens matter for cost — cached tokens are free.
+    """
+    if not session_file or not Path(session_file).exists():
+        return None
+
+    try:
+        if agent == "gemini":
+            data = json.loads(Path(session_file).read_text())
+            totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
+            for msg in data.get("messages", []):
+                t = msg.get("tokens", {})
+                totals["input"] += t.get("input", 0)
+                totals["output"] += t.get("output", 0)
+                totals["cached"] += t.get("cached", 0)
+                totals["thoughts"] += t.get("thoughts", 0)
+            return totals
+
+        if agent == "claude":
+            totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
+            for line in Path(session_file).read_text().splitlines():
+                entry = json.loads(line)
+                if entry.get("type") == "assistant":
+                    usage = entry.get("message", {}).get("usage", {})
+                    totals["input"] += usage.get("input_tokens", 0)
+                    totals["output"] += usage.get("output_tokens", 0)
+                    totals["cached"] += (
+                        usage.get("cache_read_input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                    )
+            return totals
+    except Exception as exc:
+        log(f"  Token extraction failed: {exc}")
+        return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Session file detection
 # ---------------------------------------------------------------------------
 def _find_latest_session_file(agent: str, after: float) -> str | None:
@@ -349,6 +393,14 @@ def append_result(
     }
     if session_file:
         record["session_file"] = session_file
+
+    # Extract token usage from session file
+    tokens = _extract_tokens(session_file, agent)
+    if tokens:
+        record["tokens_input"] = tokens["input"]
+        record["tokens_output"] = tokens["output"]
+        record["tokens_cached"] = tokens["cached"]
+        record["tokens_thoughts"] = tokens["thoughts"]
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "a") as f:

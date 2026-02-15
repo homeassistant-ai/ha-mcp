@@ -172,6 +172,58 @@ If any story has trend = `decreased`, flag it prominently and suggest:
 | `references/evaluation-protocol.md` | Detailed scoring criteria (read if unsure) |
 | `references/regression-protocol.md` | Full regression investigation protocol |
 
+## Step 8: Token Efficiency Analysis (when comparing versions)
+
+When running with `--branch` for version comparison, extract token data from session files.
+
+**Billable tokens = non-cached input + output + thoughts.** Cached tokens are free and MUST be excluded from cost evaluation.
+
+### Extract tokens from Gemini session
+
+```python
+import json
+from pathlib import Path
+
+def extract_gemini_tokens(session_path):
+    data = json.loads(Path(session_path).read_text())
+    totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
+    for msg in data.get("messages", []):
+        t = msg.get("tokens", {})
+        totals["input"] += t.get("input", 0)
+        totals["output"] += t.get("output", 0)
+        totals["cached"] += t.get("cached", 0)
+        totals["thoughts"] += t.get("thoughts", 0)
+    billable = totals["input"] - totals["cached"] + totals["output"] + totals["thoughts"]
+    return {**totals, "billable": billable}
+```
+
+### Investigate slow stories
+
+When a story is significantly slower (>30%) on one version, check for **KV-cache misses** in the Gemini session:
+
+```python
+# Turn-by-turn timing reveals cache misses
+for i, msg in enumerate(data["messages"]):
+    tok = msg.get("tokens", {})
+    cached = tok.get("cached", 0)
+    total = tok.get("input", 0)
+    print(f"Turn {i+1}: input={total:,} cached={cached:,} non-cached={total-cached:,}")
+```
+
+A turn with `cached=0` after a non-cold-start turn indicates a **KV-cache miss**. This is a Gemini-side issue (often caused by different tool/response shapes changing the conversation prefix), NOT a code regression. The regression protocol should still be followed to confirm.
+
+## Step 9: Tool Description Size (when comparing versions)
+
+Use `measure_tools.py` to measure total tool description size:
+
+```bash
+uv run python tests/uat/stories/scripts/measure_tools.py \
+  --output local/tool-sizes-master.json \
+  --compare local/tool-sizes-v661.json
+```
+
+Tool description size directly impacts token cost (larger descriptions = more input tokens per turn). Track changes between versions and flag large increases (>5% total).
+
 ## Important Notes
 
 - Run ONE story at a time: run -> verify -> stop container -> next story
@@ -181,3 +233,6 @@ If any story has trend = `decreased`, flag it prominently and suggest:
 - ha_query.py needs the container URL and token from stderr output
 - Do NOT skip the black-box verification - it's the ground truth
 - Session files may be large; extract just tool calls, don't read entire files
+- **Never use cached tokens** for cost evaluation - they are free and highly variable
+- When comparing versions, always compare **billable tokens** (non-cached input + output + thoughts)
+- A slow story is NOT necessarily a regression - check for KV-cache misses first
