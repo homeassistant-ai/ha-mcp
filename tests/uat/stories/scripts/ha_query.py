@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -72,6 +73,8 @@ def run_gemini_query(
         }
         (gemini_dir / "settings.json").write_text(json.dumps(config))
 
+        # Strip CLAUDECODE to allow nested sessions
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         result = subprocess.run(
             [
                 "gemini",
@@ -83,6 +86,7 @@ def run_gemini_query(
             text=True,
             cwd=str(workdir),
             timeout=timeout,
+            env=env,
         )
 
         output = result.stdout
@@ -131,6 +135,8 @@ def run_claude_query(
     config_file = Path(f.name)
 
     try:
+        # Strip CLAUDECODE to allow nested sessions
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         result = subprocess.run(
             [
                 "claude",
@@ -146,6 +152,7 @@ def run_claude_query(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
 
         output = result.stdout

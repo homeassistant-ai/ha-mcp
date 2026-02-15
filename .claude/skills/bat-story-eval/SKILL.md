@@ -1,186 +1,182 @@
 ---
 name: bat-story-eval
-description: Evaluate UAT stories with AI-driven black-box and white-box analysis. Runs stories, verifies results against live HA, analyzes session files, scores outcomes, and detects regressions.
+description: Run UAT stories, verify results against live HA, score pass/partial/fail, detect regressions.
 disable-model-invocation: true
-argument-hint: [--agents gemini] [--branch v6.6.1] [--stories s01,s02]
+argument-hint: [--agents gemini] [--stories s01,s02] [--branch v6.6.1]
 allowed-tools: Bash, Read, Write, Glob, Grep, Task
 ---
 
-# UAT Evaluation Skill
+# BAT Story Evaluation
 
-Structured evaluation of UAT stories with regression detection. Unlike `/bat-adhoc` (ad-hoc testing), `/bat-story-eval` runs the full story catalog, scores results via black-box and white-box analysis, and compares against baseline.
+You are the evaluator. Follow these steps IN ORDER. Do not skip steps.
 
-## Architecture
+## Parse Arguments
 
+From `$ARGUMENTS`, extract:
+- `--agents`: Agent list (default: `gemini`). Comma-separated.
+- `--stories`: Story IDs (default: all). Comma-separated, e.g. `s01,s02`.
+- `--branch`: Git branch/tag (default: local code).
+- `--keep-container`: Keep HA container alive after run.
+
+If `$ARGUMENTS` is `--help` or empty, show usage and stop:
 ```
-/bat-story-eval [--agents gemini] [--branch v6.6.1] [--stories s01,s02]
-  |
-  +- For each agent:
-  |   +- Start HA container (via run_story.py)
-  |   +- For each story:
-  |   |   +- Setup (FastMCP in-memory)
-  |   |   +- Run test agent (gemini/claude CLI)
-  |   |   +- Capture: session file path
-  |   |
-  |   +- EVALUATE each story (black box + white box)
-  |   |   +- Black box: run ha_query.py against live container
-  |   |   |   with verify.questions from story YAML
-  |   |   +- White box: read session file for tool calls, thoughts, errors
-  |   |   +- Score: pass/partial/fail + explanation
-  |   |
-  |   +- Compare against baseline (from JSONL)
-  |   |   +- improved / stable / decreased
-  |   |
-  |   +- Stop container (or keep alive if --debug)
-  |
-  +- Regression protocol (if decreased):
-  |   +- Re-run up to 3x (test + control against baseline version)
-  |   +- Cross-check with other agent if still decreased
-  |   +- If confirmed: git diff analysis between versions
-  |
-  +- Report + append scored results to JSONL
+/bat-story-eval --agents gemini --stories s01
+/bat-story-eval --agents gemini,claude --stories s01,s02 --branch v6.6.1
 ```
 
-## Workflow
+## Step 1: Run Stories
 
-### Step 1: Parse Arguments
-
-Parse `$ARGUMENTS` for:
-- `--agents`: Comma-separated agent list (default: `gemini`)
-- `--branch`: Git branch/tag to test (default: local code)
-- `--stories`: Comma-separated story IDs to run (default: all)
-- `--debug`: Keep containers alive for manual inspection
-- `--baseline`: Branch/tag to compare against (default: latest JSONL baseline)
-- `--help`: Show this documentation
-
-### Step 2: Run Stories
-
-Use `run_story.py` with `--keep-container` to run stories and keep the HA container alive for verification:
+Run `run_story.py` with `--keep-container` so the HA container stays alive for verification.
 
 ```bash
-uv run python tests/uat/stories/run_story.py --all \
-  --agents gemini \
-  --keep-container \
+cd /home/julien/github/ha-mcp/worktree/uat-stories
+uv run python tests/uat/stories/run_story.py \
+  --all --agents gemini --keep-container \
   --results-file local/uat-results.jsonl
 ```
 
-Capture from stderr:
-- Container URL and token (for ha_query.py)
-- Session file paths (for white-box analysis)
+If `--stories` was specified, use specific files instead of `--all`:
+```bash
+uv run python tests/uat/stories/run_story.py \
+  catalog/s01_automation_sunset_lights.yaml \
+  --agents gemini --keep-container \
+  --results-file local/uat-results.jsonl
+```
 
-### Step 3: Black-Box Evaluation
+**CAPTURE from stderr output:**
+- The HA container URL (e.g., `http://localhost:32771`)
+- The HA token
+- Session file paths for each story run
 
-For each story, use `ha_query.py` to ask the `verify.questions` from the story YAML against the live container:
+Save these values - you need them for the next steps.
 
+## Step 2: Black-Box Verification (REQUIRED)
+
+For EACH story that ran, query the LIVE HA container using `ha_query.py`.
+
+1. Read the story YAML to get `verify.questions`:
+```bash
+cat tests/uat/stories/catalog/s01_automation_sunset_lights.yaml
+```
+
+2. For EACH verify question, run ha_query.py against the live container:
 ```bash
 uv run python tests/uat/stories/scripts/ha_query.py \
   --ha-url http://localhost:PORT --ha-token TOKEN \
   --agent gemini \
-  "Does automation.sunset_porch_light exist? Show its triggers and actions."
+  "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
 ```
 
-Score each question as answered/unanswered. The evaluator agent should use a **different** agent than the test agent when possible (e.g., use gemini to evaluate claude's work).
+3. Record each answer as: **confirmed** / **denied** / **unclear**.
 
-### Step 4: White-Box Evaluation
+If ALL critical questions are confirmed -> black-box = PASS.
+If entity doesn't exist -> black-box = FAIL.
+If entity exists but wrong structure -> black-box = PARTIAL.
 
-Read the session file captured during the test run:
+## Step 3: White-Box Analysis (REQUIRED)
 
-**Gemini sessions** (`~/.gemini/tmp/<hash>/chats/session-*.json`):
-```python
-# Read and parse
-import json
-session = json.loads(Path(session_file).read_text())
-for msg in session["messages"]:
-    if msg.get("toolCalls"):
-        for tc in msg["toolCalls"]:
-            print(f"  {tc['name']}({tc.get('status', 'unknown')})")
+For EACH story that ran, read the session file captured in Step 1.
+
+**Gemini sessions** (JSON file):
+```bash
+cat /path/to/session-*.json | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for msg in data.get('messages', []):
+    for tc in msg.get('toolCalls', []):
+        status = tc.get('status', '?')
+        print(f\"  {tc['name']} ({status})\")
+"
 ```
 
-**Claude sessions** (`~/.claude/projects/<dir>/<session>.jsonl`):
-```python
-# Read JSONL line by line
-for line in Path(session_file).read_text().splitlines():
+**Claude sessions** (JSONL file):
+```bash
+grep '"tool_use"' /path/to/session.jsonl | python3 -c "
+import json, sys
+for line in sys.stdin:
     entry = json.loads(line)
-    if entry.get("type") == "assistant":
-        for block in entry["message"].get("content", []):
-            if block.get("type") == "tool_use":
-                print(f"  {block['name']}")
+    for block in entry.get('message', {}).get('content', []):
+        if block.get('type') == 'tool_use':
+            print(f\"  {block['name']}\")
+"
 ```
 
-Evaluate against criteria in `references/evaluation-protocol.md`.
+Then read the story YAML `expected.tools_should_use` and compare:
+- Were all expected tools used? (High weight)
+- Were there tool failures followed by recovery? (Medium weight)
+- How many total tool calls? (Low weight, just note it)
 
-### Step 5: Score
+## Step 4: Score Each Story
 
-For each story, assign a score:
+Combine black-box and white-box into a final score:
 
-| Score | Meaning |
-|-------|---------|
-| **pass** | Entity created correctly, right tools used, efficient execution |
-| **partial** | Entity created but with issues (wrong triggers, extra steps, etc.) |
-| **fail** | Entity not created, wrong entity, or critical errors |
+| Black-Box | White-Box | Score |
+|-----------|-----------|-------|
+| Entity correct + right structure | Right tools used | **pass** |
+| Entity correct + right structure | Wrong tools or recovered errors | **pass** (with notes) |
+| Entity correct + wrong structure | Any | **partial** |
+| Entity not created | Any | **fail** |
 
-### Step 6: Compare Against Baseline
+## Step 5: Compare Against Baseline (REQUIRED)
 
-Read the JSONL results file and find the most recent baseline for comparison:
+Read the JSONL results file and find the MOST RECENT passing result for the same story+agent:
 
 ```bash
-# Find baseline results for comparison
-grep '"story":"s01"' local/uat-results.jsonl | tail -5
+grep '"story":"s01"' local/uat-results.jsonl | grep '"agent":"gemini"' | grep '"passed":true' | tail -1
 ```
 
-Determine trend: `improved`, `stable`, or `decreased`.
+Compare:
+- If no baseline exists: trend = `new`
+- If current passed and baseline passed: trend = `stable`
+- If current passed but baseline failed: trend = `improved`
+- If current failed but baseline passed: trend = `decreased` (REGRESSION)
 
-### Step 7: Regression Protocol
+## Step 6: Update JSONL with Eval Results
 
-If any story shows a `decreased` trend, follow the protocol in `references/regression-protocol.md`.
+For EACH scored story, append a NEW line to the JSONL (do NOT modify existing lines).
+Read the LAST line for this story+agent to get the raw data, then write a new line with eval fields added:
 
-### Step 8: Report
+```python
+import json
+# Read the last result for this story+agent
+# Add these fields:
+record["eval_score"] = "pass"  # or "partial" or "fail"
+record["eval_notes"] = "Entity created correctly, sun triggers verified, correct tools used"
+record["eval_trend"] = "stable"  # or "new", "improved", "decreased"
+# Write as new JSONL line
+```
 
-Output a summary table:
+## Step 7: Report
+
+Output a summary table to the user:
 
 ```
-| Story | Agent  | Score   | Trend     | Notes |
-|-------|--------|---------|-----------|-------|
-| s01   | gemini | pass    | stable    | -     |
-| s02   | gemini | partial | decreased | Missing delay in automation |
-| s03   | gemini | pass    | improved  | Now checks traces correctly |
+| Story | Agent  | Score   | Trend   | Notes |
+|-------|--------|---------|---------|-------|
+| s01   | gemini | pass    | stable  | Sun triggers verified |
+| s02   | gemini | pass    | new     | First run, no baseline |
 ```
 
-Append scored results to the JSONL file with additional fields:
-- `eval_score`: pass/partial/fail
-- `eval_notes`: explanation
-- `eval_trend`: improved/stable/decreased
+If any story has trend = `decreased`, flag it prominently and suggest:
+1. Re-run to check for flakiness
+2. Run against baseline branch as control
+3. Check `git diff` between baseline SHA and current
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `tests/uat/stories/run_story.py` | Story runner with container-per-agent |
-| `tests/uat/stories/scripts/ha_query.py` | Query HA via agent+MCP |
-| `tests/uat/stories/catalog/s*.yaml` | Story definitions with `verify` sections |
+| `tests/uat/stories/run_story.py` | Story runner (starts container, runs agents) |
+| `tests/uat/stories/scripts/ha_query.py` | Query live HA via agent+MCP |
+| `tests/uat/stories/catalog/s*.yaml` | Story definitions with `verify` + `expected` |
 | `local/uat-results.jsonl` | Historical results (gitignored) |
-| `references/evaluation-protocol.md` | Black/white box scoring criteria |
-| `references/regression-protocol.md` | Re-run, cross-check, diff procedures |
+| `references/evaluation-protocol.md` | Detailed scoring criteria (read if unsure) |
+| `references/regression-protocol.md` | Full regression investigation protocol |
 
-## Cost Awareness
+## Important Notes
 
-Each evaluation run costs API credits. Minimize by:
-- Running only specific stories (`--stories s01,s02`) during development
-- Using one agent at a time (default: gemini only)
-- Skipping regression protocol for known-flaky stories
-
-## Handling Arguments
-
-When `/bat-story-eval` is invoked:
-
-**With `--help` or no arguments**: Show this documentation.
-
-**With arguments**: Parse flags and execute the full evaluation workflow.
-
-**Examples**:
-```
-/bat-story-eval --agents gemini --stories s01
-/bat-story-eval --agents gemini,claude --branch v6.6.1
-/bat-story-eval --agents gemini --debug
-/bat-story-eval --baseline v6.5.0
-```
+- ALWAYS use `--keep-container` so you can run ha_query.py after
+- The working directory MUST be the worktree root for `uv run` to work
+- ha_query.py needs the container URL and token from Step 1's stderr output
+- Do NOT skip the black-box verification - it's the ground truth
+- Session files may be large; extract just tool calls, don't read entire files
