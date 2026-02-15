@@ -5,6 +5,7 @@ This module provides tools to list, enable, disable, and delete Home Assistant
 integrations (config entries) via the REST and WebSocket APIs.
 """
 
+import asyncio
 import logging
 from copy import deepcopy
 from typing import Annotated, Any
@@ -80,6 +81,25 @@ def _coerce_patch_value(key: str, value: Any) -> tuple[bool, Any, str | None]:
                 return True, False, None
         return False, None, "expected boolean"
     return False, None, "unsupported expected type"
+
+
+def _schema_suggested_value(
+    data_schema: list[dict[str, Any]] | None, field_name: str
+) -> Any | None:
+    if not data_schema:
+        return None
+    for item in data_schema:
+        if not isinstance(item, dict):
+            continue
+        if item.get("name") != field_name:
+            continue
+        desc = item.get("description")
+        if isinstance(desc, dict) and "suggested_value" in desc:
+            return desc.get("suggested_value")
+        if "default" in item:
+            return item.get("default")
+        return None
+    return None
 
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -591,6 +611,37 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     mismatched.append(
                         {"key": key, "expected": expected_val, "actual": actual_val}
                     )
+
+            # Fallback verification for environments where config-entry options/data
+            # are masked by HA API. For phase-1 central presence key, we can verify
+            # persisted value through options-flow suggested_value.
+            if mismatched and set(normalized_patch.keys()) == {"presence_sensor_entity_id"}:
+                try:
+                    expected = normalized_patch["presence_sensor_entity_id"]
+                    for _ in range(5):
+                        verify_flow = await client.start_options_flow(entry_id)
+                        verify_flow_id = verify_flow.get("flow_id")
+                        verify_presence = None
+                        if verify_flow.get("type") == "menu" and verify_flow_id:
+                            verify_presence = await client.submit_options_flow_step(
+                                verify_flow_id, {"next_step_id": "presence"}
+                            )
+                        elif verify_flow.get("type") == "form":
+                            verify_presence = verify_flow
+
+                        suggested = _schema_suggested_value(
+                            (verify_presence or {}).get("data_schema"),
+                            "presence_sensor_entity_id",
+                        )
+                        if suggested == expected:
+                            mismatched = []
+                            verify_diff = _diff_options(before_options, candidate)
+                            after_options = deepcopy(candidate)
+                            break
+                        await asyncio.sleep(0.35)
+                except Exception:
+                    # Keep original mismatch behavior on verification failure.
+                    pass
             if mismatched:
                 return _error(
                     "WRITE_CONFLICT",
