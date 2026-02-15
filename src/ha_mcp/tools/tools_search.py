@@ -441,19 +441,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "area_filter": area_filter,
                 },
                 raise_error=False,
-            )
-            # Add search-specific suggestions
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
-                ]
-            else:
-                logger.warning(
-                    f"Unexpected error response structure, could not add suggestions: "
-                    f"{type(error_response.get('error'))}"
-                )
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 
@@ -627,25 +620,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"error={e}",
                 exc_info=True,
             )
-            error_response = exception_to_structured_error(
+            return exception_to_structured_error(
                 e,
                 context={
                     "query": query,
                     "search_types": parsed_search_types,
                     "limit": limit,
                 },
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                raise_error=False,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
-                ]
-            else:
-                logger.warning(
-                    f"Unexpected error response structure, could not add suggestions: "
-                    f"{type(error_response.get('error'))}"
-                )
-            return error_response
+                ],
+            )
 
     @mcp.tool(
         annotations={
@@ -766,7 +753,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
                     return exception_to_structured_error(
-                        e, context={"entity_id": entity_id}
+                        e, context={"entity_id": entity_id},
+                        raise_error=False,
                     )
 
             results = await asyncio.gather(
@@ -809,6 +797,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.error(f"Error getting bulk states: {e}", exc_info=True)
             error_response = exception_to_structured_error(
-                e, context={"entity_ids": entity_ids}
+                e, context={"entity_ids": entity_ids},
+                raise_error=False,
             )
             return await add_timezone_metadata(client, error_response)

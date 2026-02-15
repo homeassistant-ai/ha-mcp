@@ -162,8 +162,17 @@ class TestEntityRename:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        # Wait for entity to be registered
-        await asyncio.sleep(1.0)
+        # Wait for entity to be registered (retry with backoff)
+        for attempt in range(10):
+            await asyncio.sleep(0.5)
+            state_data = await safe_call_tool(
+                mcp_client,
+                "ha_get_state",
+                {"entity_id": original_entity_id}
+            )
+            if "data" in state_data and state_data["data"].get("state"):
+                break
+            logger.info(f"Waiting for entity to register (attempt {attempt + 1}/10)...")
 
         # 2. RENAME: With name and icon updates
         rename_data = await safe_call_tool(
