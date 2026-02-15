@@ -894,13 +894,14 @@ Located in `.claude/skills/`:
 
 | Skill | Command | Purpose | When to Use |
 |-------|---------|---------|-------------|
-| `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
+| `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing - validates MCP tools with dynamically generated scenarios | PR validation, quick regression checks, one-off integration verification |
+| `bat-story-eval` | `/bat-story-eval [--agents gemini] [--stories s01]` | Structured story evaluation with AI-driven scoring and regression detection | Full story catalog evaluation, baseline comparison, regression protocol |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
 | `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
-### BAT (Bot Acceptance Testing)
+### BAT Ad-Hoc Testing
 
-**Usage:** `/bat [scenario-description]`
+**Usage:** `/bat-adhoc [scenario-description]`
 
 Quick summary:
 - Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
@@ -908,7 +909,20 @@ Quick summary:
 - Use for PR validation, regression detection, and end-to-end integration verification
 - Progressive disclosure: only read `results_file` when you need to dig deeper
 
-For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read `.claude/skills/bat/SKILL.md`.
+For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat-adhoc --help` or read `.claude/skills/bat-adhoc/SKILL.md`.
+
+### BAT Story Evaluation
+
+**Usage:** `/bat-story-eval [--agents gemini] [--stories s01,s02] [--branch v6.6.1]`
+
+Quick summary:
+- Runs structured story catalog against live HA container (one container per agent)
+- Black-box verification: queries live HA via `ha_query.py` using `verify.questions` from stories
+- White-box analysis: reads agent session files for tool selection, error recovery, efficiency
+- Scores each story: pass/partial/fail with regression detection against baseline
+- Regression protocol: re-run, cross-agent check, git diff analysis
+
+For complete workflow and evaluation criteria, invoke `/bat-story-eval --help` or read `.claude/skills/bat-story-eval/SKILL.md`.
 
 ### Contributor PR Review
 

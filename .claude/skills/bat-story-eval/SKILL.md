@@ -1,5 +1,5 @@
 ---
-name: uat-eval
+name: bat-story-eval
 description: Evaluate UAT stories with AI-driven black-box and white-box analysis. Runs stories, verifies results against live HA, analyzes session files, scores outcomes, and detects regressions.
 disable-model-invocation: true
 argument-hint: [--agents gemini] [--branch v6.6.1] [--stories s01,s02]
@@ -8,12 +8,12 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Task
 
 # UAT Evaluation Skill
 
-Structured evaluation of UAT stories with regression detection. Unlike `/bat` (ad-hoc testing), `/uat-eval` runs the full story catalog, scores results via black-box and white-box analysis, and compares against baseline.
+Structured evaluation of UAT stories with regression detection. Unlike `/bat-adhoc` (ad-hoc testing), `/bat-story-eval` runs the full story catalog, scores results via black-box and white-box analysis, and compares against baseline.
 
 ## Architecture
 
 ```
-/uat-eval [--agents gemini] [--branch v6.6.1] [--stories s01,s02]
+/bat-story-eval [--agents gemini] [--branch v6.6.1] [--stories s01,s02]
   |
   +- For each agent:
   |   +- Start HA container (via run_story.py)
@@ -171,7 +171,7 @@ Each evaluation run costs API credits. Minimize by:
 
 ## Handling Arguments
 
-When `/uat-eval` is invoked:
+When `/bat-story-eval` is invoked:
 
 **With `--help` or no arguments**: Show this documentation.
 
@@ -179,8 +179,8 @@ When `/uat-eval` is invoked:
 
 **Examples**:
 ```
-/uat-eval --agents gemini --stories s01
-/uat-eval --agents gemini,claude --branch v6.6.1
-/uat-eval --agents gemini --debug
-/uat-eval --baseline v6.5.0
+/bat-story-eval --agents gemini --stories s01
+/bat-story-eval --agents gemini,claude --branch v6.6.1
+/bat-story-eval --agents gemini --debug
+/bat-story-eval --baseline v6.5.0
 ```
