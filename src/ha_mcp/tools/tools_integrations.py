@@ -198,6 +198,91 @@ async def _verify_presence_sensor_with_timeout(
     return False
 
 
+async def _apply_options_via_flow(
+    *,
+    client: Any,
+    entry_id: str,
+    target_step: str,
+    candidate: dict[str, Any],
+    normalized_patch: dict[str, Any],
+    before_options: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    flow = await client.start_options_flow(entry_id)
+    flow_id = flow.get("flow_id")
+    if not flow_id:
+        return None, _integration_error(
+            ErrorCode.CONFIG_NOT_FOUND,
+            "Options flow did not return a flow_id.",
+            context={"entry_id": entry_id},
+        )
+
+    current = flow
+    if current.get("type") == "menu":
+        current = await client.submit_options_flow_step(flow_id, {"next_step_id": target_step})
+    if current.get("type") != "form":
+        return None, _integration_error(
+            ErrorCode.CONFIG_INVALID,
+            "Expected a form step for options submission.",
+            context={"entry_id": entry_id, "target_step": target_step, "flow_type": current.get("type")},
+        )
+
+    submit_payload = {k: candidate.get(k) for k in normalized_patch}
+    apply_result = await client.submit_options_flow_step(flow_id, submit_payload)
+
+    if apply_result.get("type") == "form":
+        step_id = apply_result.get("step_id")
+        schema = apply_result.get("data_schema", []) or []
+        required_fields = {
+            f.get("name")
+            for f in schema
+            if isinstance(f, dict) and f.get("required") is True and f.get("name")
+        }
+        field_names = {
+            f.get("name")
+            for f in schema
+            if isinstance(f, dict) and f.get("name")
+        }
+        if (
+            step_id == "presence"
+            and "presence_sensor_entity_id" in field_names
+            and set(normalized_patch.keys()) == {"use_presence_central_config"}
+            and normalized_patch.get("use_presence_central_config") is False
+        ):
+            sensor_val = None
+            suggested = _schema_suggested_value(schema, "presence_sensor_entity_id")
+            if isinstance(suggested, str) and suggested.strip():
+                sensor_val = suggested
+            elif "presence_sensor_entity_id" in before_options:
+                prev = before_options.get("presence_sensor_entity_id")
+                if isinstance(prev, str) and prev.strip():
+                    sensor_val = prev
+            if not sensor_val and "presence_sensor_entity_id" in required_fields:
+                return None, _integration_error(
+                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    "Options flow requires presence_sensor_entity_id when disabling central presence config.",
+                    context={"entry_id": entry_id, "step_id": step_id},
+                )
+            if sensor_val:
+                apply_result = await client.submit_options_flow_step(
+                    flow_id, {"presence_sensor_entity_id": sensor_val}
+                )
+
+    if apply_result.get("type") == "menu":
+        menu_options = apply_result.get("menu_options", []) or []
+        if "finalize" in menu_options:
+            apply_result = await client.submit_options_flow_step(flow_id, {"next_step_id": "finalize"})
+
+    if apply_result.get("type") == "form":
+        form_schema = apply_result.get("data_schema", [])
+        return None, _integration_error(
+            ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+            "Options flow requires additional form input; single-step apply is incomplete.",
+            details=str([f.get("name") for f in form_schema if isinstance(f, dict)]),
+            context={"entry_id": entry_id, "step_id": apply_result.get("step_id")},
+        )
+    return apply_result, None
+
+
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
@@ -637,91 +722,16 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"entry_id": entry_id},
                     )
 
-            flow = await client.start_options_flow(entry_id)
-            flow_id = flow.get("flow_id")
-            if not flow_id:
-                return _integration_error(
-                    ErrorCode.CONFIG_NOT_FOUND,
-                    "Options flow did not return a flow_id.",
-                    context={"entry_id": entry_id},
-                )
-
-            # Navigate from menu to target step (phase-1 only)
-            current = flow
-            if current.get("type") == "menu":
-                current = await client.submit_options_flow_step(
-                    flow_id, {"next_step_id": target_step}
-                )
-
-            if current.get("type") != "form":
-                return _integration_error(
-                    ErrorCode.CONFIG_INVALID,
-                    "Expected a form step for options submission.",
-                    context={"entry_id": entry_id, "target_step": target_step, "flow_type": current.get("type")},
-                )
-
-            submit_payload = {k: candidate.get(k) for k in normalized_patch}
-            apply_result = await client.submit_options_flow_step(flow_id, submit_payload)
-
-            # Room presence branch: if user disables central presence config,
-            # VT requires an additional presence_sensor_entity_id form step.
-            if apply_result.get("type") == "form":
-                step_id = apply_result.get("step_id")
-                schema = apply_result.get("data_schema", []) or []
-                required_fields = {
-                    f.get("name")
-                    for f in schema
-                    if isinstance(f, dict) and f.get("required") is True and f.get("name")
-                }
-                field_names = {
-                    f.get("name")
-                    for f in schema
-                    if isinstance(f, dict) and f.get("name")
-                }
-                if (
-                    step_id == "presence"
-                    and "presence_sensor_entity_id" in field_names
-                    and set(normalized_patch.keys()) == {"use_presence_central_config"}
-                    and normalized_patch.get("use_presence_central_config") is False
-                ):
-                    sensor_val = None
-                    suggested = _schema_suggested_value(
-                        schema, "presence_sensor_entity_id"
-                    )
-                    if isinstance(suggested, str) and suggested.strip():
-                        sensor_val = suggested
-                    elif "presence_sensor_entity_id" in before_options:
-                        prev = before_options.get("presence_sensor_entity_id")
-                        if isinstance(prev, str) and prev.strip():
-                            sensor_val = prev
-                    if not sensor_val and "presence_sensor_entity_id" in required_fields:
-                        return _integration_error(
-                            ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                            "Options flow requires presence_sensor_entity_id when disabling central presence config.",
-                            context={"entry_id": entry_id, "step_id": step_id},
-                        )
-                    if sensor_val:
-                        apply_result = await client.submit_options_flow_step(
-                            flow_id, {"presence_sensor_entity_id": sensor_val}
-                        )
-
-            # Some integrations return to menu and need explicit finalize.
-            if apply_result.get("type") == "menu":
-                menu_options = apply_result.get("menu_options", []) or []
-                if "finalize" in menu_options:
-                    apply_result = await client.submit_options_flow_step(
-                        flow_id, {"next_step_id": "finalize"}
-                    )
-
-            # If we are still in a form step, the write is incomplete.
-            if apply_result.get("type") == "form":
-                form_schema = apply_result.get("data_schema", [])
-                return _integration_error(
-                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                    "Options flow requires additional form input; single-step apply is incomplete.",
-                    details=str([f.get("name") for f in form_schema if isinstance(f, dict)]),
-                    context={"entry_id": entry_id, "step_id": apply_result.get("step_id")},
-                )
+            apply_result, apply_error = await _apply_options_via_flow(
+                client=client,
+                entry_id=entry_id,
+                target_step=target_step,
+                candidate=candidate,
+                normalized_patch=normalized_patch,
+                before_options=before_options,
+            )
+            if apply_error:
+                return apply_error
 
             # Read back persisted options
             updated_entry = await client.get_config_entry(entry_id)
