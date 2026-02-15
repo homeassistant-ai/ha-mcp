@@ -24,19 +24,18 @@ If `$ARGUMENTS` is `--help` or empty, show usage and stop:
 /bat-story-eval --agents gemini,claude --stories s01,s02 --branch v6.6.1
 ```
 
-## Step 1: Run Stories
+## Steps 1-2: Run and Verify Stories (ONE AT A TIME)
 
-Run `run_story.py` with `--keep-container` so the HA container stays alive for verification.
+**CRITICAL: Run each story individually, verify it, then move on.**
+Stories share a container per agent, so later stories can clobber earlier ones.
+You MUST verify each story before running the next.
+
+For EACH story in the list, repeat this loop:
+
+### 1a. Run ONE story
 
 ```bash
 cd /home/julien/github/ha-mcp/worktree/uat-stories
-uv run python tests/uat/stories/run_story.py \
-  --all --agents gemini --keep-container \
-  --results-file local/uat-results.jsonl
-```
-
-If `--stories` was specified, use specific files instead of `--all`:
-```bash
 uv run python tests/uat/stories/run_story.py \
   catalog/s01_automation_sunset_lights.yaml \
   --agents gemini --keep-container \
@@ -46,20 +45,12 @@ uv run python tests/uat/stories/run_story.py \
 **CAPTURE from stderr output:**
 - The HA container URL (e.g., `http://localhost:32771`)
 - The HA token
-- Session file paths for each story run
+- Session file path
 
-Save these values - you need them for the next steps.
+### 1b. Black-Box Verify THIS story immediately
 
-## Step 2: Black-Box Verification (REQUIRED)
+Read the story YAML to get `verify.questions`, then ask each one via ha_query.py:
 
-For EACH story that ran, query the LIVE HA container using `ha_query.py`.
-
-1. Read the story YAML to get `verify.questions`:
-```bash
-cat tests/uat/stories/catalog/s01_automation_sunset_lights.yaml
-```
-
-2. For EACH verify question, run ha_query.py against the live container:
 ```bash
 uv run python tests/uat/stories/scripts/ha_query.py \
   --ha-url http://localhost:PORT --ha-token TOKEN \
@@ -67,11 +58,19 @@ uv run python tests/uat/stories/scripts/ha_query.py \
   "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
 ```
 
-3. Record each answer as: **confirmed** / **denied** / **unclear**.
+Record each answer as: **confirmed** / **denied** / **unclear**.
 
 If ALL critical questions are confirmed -> black-box = PASS.
 If entity doesn't exist -> black-box = FAIL.
 If entity exists but wrong structure -> black-box = PARTIAL.
+
+### 1c. Stop the container before the next story
+
+```bash
+docker stop $(docker ps -q --filter "ancestor=ghcr.io/home-assistant/home-assistant:2026.1.3") 2>/dev/null
+```
+
+Then repeat 1a-1c for the next story. Each story gets a fresh container.
 
 ## Step 3: White-Box Analysis (REQUIRED)
 
@@ -175,8 +174,10 @@ If any story has trend = `decreased`, flag it prominently and suggest:
 
 ## Important Notes
 
-- ALWAYS use `--keep-container` so you can run ha_query.py after
+- Run ONE story at a time: run -> verify -> stop container -> next story
+- ALWAYS use `--keep-container` so you can run ha_query.py after each story
+- Stop the container after verifying, before running the next story
 - The working directory MUST be the worktree root for `uv run` to work
-- ha_query.py needs the container URL and token from Step 1's stderr output
+- ha_query.py needs the container URL and token from stderr output
 - Do NOT skip the black-box verification - it's the ground truth
 - Session files may be large; extract just tool calls, don't read entire files
