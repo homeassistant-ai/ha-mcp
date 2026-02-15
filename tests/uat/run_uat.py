@@ -200,6 +200,9 @@ def check_agent_available(name: str) -> bool:
 
 async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict:
     """Run a CLI command and capture output."""
+    # Strip CLAUDECODE env var to allow nested Claude CLI sessions
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -207,6 +210,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd else None,
+            env=env,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         duration_ms = int((time.time() - start) * 1000)
