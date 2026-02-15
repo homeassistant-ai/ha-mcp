@@ -116,6 +116,23 @@ Combine black-box and white-box into a final score:
 | Entity correct + wrong structure | Any | **partial** |
 | Entity not created | Any | **fail** |
 
+### Extract Billable Tokens
+
+For each story, extract tokens from the session file captured in Step 1:
+
+```python
+import json
+from pathlib import Path
+data = json.loads(Path(session_file).read_text())
+totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
+for msg in data.get("messages", []):
+    t = msg.get("tokens", {})
+    for k in totals: totals[k] += t.get(k, 0)
+billable = totals["input"] - totals["cached"] + totals["output"] + totals["thoughts"]
+```
+
+**Billable tokens** are the primary efficiency metric. Cached tokens are free and must NOT be used for evaluation.
+
 ## Step 5: Compare Against Baseline (REQUIRED)
 
 Read the JSONL results file and find the MOST RECENT passing result for the same story+agent:
@@ -147,19 +164,23 @@ record["eval_trend"] = "stable"  # or "new", "improved", "decreased"
 
 ## Step 7: Report
 
-Output a summary table to the user:
+Output a summary table to the user including **billable tokens** (the primary efficiency metric):
 
 ```
-| Story | Agent  | Score   | Trend   | Notes |
-|-------|--------|---------|---------|-------|
-| s01   | gemini | pass    | stable  | Sun triggers verified |
-| s02   | gemini | pass    | new     | First run, no baseline |
+| Story | Agent  | Score   | Trend   | Billable Tokens | Notes |
+|-------|--------|---------|---------|-----------------|-------|
+| s01   | gemini | pass    | stable  | 36,262          | Sun triggers verified |
+| s02   | gemini | pass    | new     | 77,111          | First run, no baseline |
 ```
+
+Billable tokens = non-cached input + output + thoughts. Never use cached tokens or wall time.
 
 If any story has trend = `decreased`, flag it prominently and suggest:
 1. Re-run to check for flakiness
 2. Run against baseline branch as control
 3. Check `git diff` between baseline SHA and current
+
+If billable tokens increased >30% vs baseline, flag as a **cost regression** even if the story passed.
 
 ## Key Files
 
@@ -172,37 +193,12 @@ If any story has trend = `decreased`, flag it prominently and suggest:
 | `references/evaluation-protocol.md` | Detailed scoring criteria (read if unsure) |
 | `references/regression-protocol.md` | Full regression investigation protocol |
 
-## Step 8: Token Efficiency Analysis (when comparing versions)
+## Step 8: Investigate Outliers
 
-When running with `--branch` for version comparison, extract token data from session files.
-
-**Billable tokens = non-cached input + output + thoughts.** Cached tokens are free and MUST be excluded from cost evaluation.
-
-### Extract tokens from Gemini session
+When a story has >30% more billable tokens than baseline, check for **KV-cache misses**:
 
 ```python
-import json
-from pathlib import Path
-
-def extract_gemini_tokens(session_path):
-    data = json.loads(Path(session_path).read_text())
-    totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
-    for msg in data.get("messages", []):
-        t = msg.get("tokens", {})
-        totals["input"] += t.get("input", 0)
-        totals["output"] += t.get("output", 0)
-        totals["cached"] += t.get("cached", 0)
-        totals["thoughts"] += t.get("thoughts", 0)
-    billable = totals["input"] - totals["cached"] + totals["output"] + totals["thoughts"]
-    return {**totals, "billable": billable}
-```
-
-### Investigate slow stories
-
-When a story is significantly slower (>30%) on one version, check for **KV-cache misses** in the Gemini session:
-
-```python
-# Turn-by-turn timing reveals cache misses
+# Turn-by-turn cache analysis
 for i, msg in enumerate(data["messages"]):
     tok = msg.get("tokens", {})
     cached = tok.get("cached", 0)
@@ -210,7 +206,7 @@ for i, msg in enumerate(data["messages"]):
     print(f"Turn {i+1}: input={total:,} cached={cached:,} non-cached={total-cached:,}")
 ```
 
-A turn with `cached=0` after a non-cold-start turn indicates a **KV-cache miss**. This is a Gemini-side issue (often caused by different tool/response shapes changing the conversation prefix), NOT a code regression. The regression protocol should still be followed to confirm.
+A turn with `cached=0` after a non-cold-start turn indicates a **KV-cache miss** -- a Gemini-side issue (different tool/response shapes change the conversation prefix), NOT a code regression. Follow the regression protocol to confirm.
 
 ## Step 9: Tool Description Size (when comparing versions)
 

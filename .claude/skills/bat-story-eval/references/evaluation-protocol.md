@@ -85,9 +85,11 @@ Look for patterns in the session file:
 ### Efficiency Metrics
 
 Track but don't heavily penalize:
+- **Billable tokens** (non-cached input + output + thoughts) — primary cost metric
 - Total tool calls (compare against baseline)
 - Total turns (fewer is generally better)
-- Time to completion
+
+**Important**: Never use cached tokens or wall time as efficiency metrics. Cached tokens are free (and vary based on Gemini KV-cache behavior). Wall time is noisy (cache misses, network, server load).
 
 ## Scoring Matrix
 

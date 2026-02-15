@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import discover_stories, run_setup_steps, run_teardown_steps
+from .conftest import discover_stories, run_setup_steps
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +42,16 @@ class TestStory:
 
     async def test_story(self, story: dict, mcp_client, ha_container):
         """
-        Execute a story: setup → agent prompt → teardown.
+        Execute a story: setup → agent prompt → evaluate.
 
-        The setup and teardown run via FastMCP in-memory (fast, deterministic).
+        Setup runs via FastMCP in-memory (fast, deterministic).
         The test prompt runs via the BAT runner (real AI agent interaction).
+        No teardown needed — pytest uses a session-scoped container.
         """
         story_id = story["id"]
         title = story["title"]
         prompt = story["prompt"]
         setup_steps = story.get("setup") or []
-        teardown_steps = story.get("teardown") or []
 
         logger.info(f"{'='*60}")
         logger.info(f"Story {story_id}: {title}")
@@ -62,32 +62,25 @@ class TestStory:
             logger.info(f"[{story_id}] Running {len(setup_steps)} setup steps...")
             await run_setup_steps(mcp_client, setup_steps)
 
-        try:
-            # --- Test via BAT runner ---
-            logger.info(f"[{story_id}] Running agent prompt via BAT...")
+        # --- Test via BAT runner ---
+        logger.info(f"[{story_id}] Running agent prompt via BAT...")
 
-            scenario = {"test_prompt": prompt.strip()}
+        scenario = {"test_prompt": prompt.strip()}
 
-            # Determine which agents are available
-            agent = _detect_agent()
-            if not agent:
-                pytest.skip("No AI agent CLI available (need 'claude' or 'gemini')")
+        # Determine which agents are available
+        agent = _detect_agent()
+        if not agent:
+            pytest.skip("No AI agent CLI available (need 'claude' or 'gemini')")
 
-            result = _run_bat_scenario(
-                scenario,
-                agent=agent,
-                ha_url=ha_container["url"],
-                ha_token=ha_container["token"],
-            )
+        result = _run_bat_scenario(
+            scenario,
+            agent=agent,
+            ha_url=ha_container["url"],
+            ha_token=ha_container["token"],
+        )
 
-            # --- Evaluate ---
-            _evaluate_result(story, result, agent)
-
-        finally:
-            # --- Teardown via FastMCP ---
-            if teardown_steps:
-                logger.info(f"[{story_id}] Running {len(teardown_steps)} teardown steps...")
-                await run_teardown_steps(mcp_client, teardown_steps)
+        # --- Evaluate ---
+        _evaluate_result(story, result, agent)
 
 
 def _detect_agent() -> str | None:

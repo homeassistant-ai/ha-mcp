@@ -7,7 +7,7 @@ User acceptance stories for ha-mcp Bot Acceptance Testing (BAT). Each story repr
 These stories serve as:
 1. **Regression detection** - Run before stable releases to catch behavioral regressions
 2. **Tool refactoring validation** - Compare agent behavior before/after tool changes
-3. **Benchmark** - Measure agent capability across common tasks (tool calls, turns, duration)
+3. **Benchmark** - Measure agent capability and efficiency across common tasks (billable tokens, tool calls, success rate)
 
 ## How Stories Work
 
@@ -31,14 +31,18 @@ prompt: >
   Create an automation that turns on the porch light at sunset.
   Report what you created.
 
-# Teardown: MCP tool calls to clean up
-teardown:
-  - tool: ha_config_remove_automation
-    args: {automation_id: "automation.sunset_porch_light"}
+# Teardown removed — containers are ephemeral (one per agent)
+teardown: []
+
+# Verification questions asked against live HA after the test
+verify:
+  questions:
+    - "Does an automation with alias 'Sunset Porch Light' exist?"
+    - "Does it have sun triggers for sunset and sunrise?"
 
 # Expected outcomes for evaluation
 expected:
-  tools_used:
+  tools_should_use:
     - ha_config_set_automation
 ```
 
@@ -57,14 +61,20 @@ uv run pytest tests/uat/stories/ -v -k "automation"
 uv run pytest tests/uat/stories/ -v -m "critical"
 ```
 
-### Standalone via BAT runner
+### Standalone via story runner
 
 ```bash
-# Convert a story to BAT format and run
-python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
+# Run a single story (each agent gets a fresh HA container)
+uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
 
-# Run all stories standalone
-python tests/uat/stories/run_story.py --all --agents gemini
+# Run all stories
+uv run python tests/uat/stories/run_story.py --all --agents gemini
+
+# Run against a specific release tag (for comparison)
+uv run python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
+
+# Keep container alive after run (for verification)
+uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini --keep-container
 ```
 
 ## Story Design Principles
@@ -80,9 +90,10 @@ python tests/uat/stories/run_story.py --all --agents gemini
 
 1. Create a YAML file in `catalog/` following the naming convention: `sNN_category_brief_name.yaml`
 2. Set an appropriate weight (1-5) based on how common the use case is
-3. Ensure setup creates any needed state and teardown cleans up
-4. Test that the story works: `uv run pytest tests/uat/stories/ -v -k "sNN"`
-5. Add a brief entry to `TODO.md` if you discover follow-up stories during testing
+3. Ensure setup creates any needed state (teardown is not needed — containers are ephemeral)
+4. Add `verify.questions` for black-box evaluation against the live HA instance
+5. Test that the story works: `uv run pytest tests/uat/stories/ -v -k "sNN"`
+6. Add a brief entry to `TODO.md` if you discover follow-up stories during testing
 
 ## Categories
 
@@ -105,7 +116,10 @@ stories/
 ├── TODO.md             # Weighted backlog of future stories
 ├── conftest.py         # Pytest fixtures: story loading, HA container, FastMCP client
 ├── test_stories.py     # Parametrized test runner
-├── run_story.py        # Standalone story runner (converts YAML → BAT)
+├── run_story.py        # Standalone story runner (container-per-agent, JSONL tracking)
+├── scripts/
+│   ├── ha_query.py     # Query live HA via agent+MCP (for black-box verification)
+│   └── measure_tools.py # Measure tool description sizes across versions
 └── catalog/            # Story definitions (YAML)
     ├── s01_automation_sunset_lights.yaml
     ├── s02_automation_motion_light.yaml
@@ -116,5 +130,6 @@ stories/
 
 Stories build on top of the BAT framework (`tests/uat/run_uat.py`):
 - BAT provides the raw agent execution engine (run prompts, collect results)
-- Stories provide the **what to test** (realistic use cases with setup/teardown)
-- The pytest integration adds programmatic setup/teardown via FastMCP for speed and determinism
+- Stories provide the **what to test** (realistic use cases with setup and verification)
+- `run_story.py` manages containers, setup via FastMCP, and JSONL result tracking with token data
+- The `/bat-story-eval` skill orchestrates evaluation: run stories, black-box verify via `ha_query.py`, white-box analyze session files, score, and detect regressions
