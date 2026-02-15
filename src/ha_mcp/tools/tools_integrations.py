@@ -578,6 +578,52 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             submit_payload = {k: candidate.get(k) for k in normalized_patch}
             apply_result = await client.submit_options_flow_step(flow_id, submit_payload)
 
+            # Room presence branch: if user disables central presence config,
+            # VT requires an additional presence_sensor_entity_id form step.
+            if apply_result.get("type") == "form":
+                step_id = apply_result.get("step_id")
+                schema = apply_result.get("data_schema", []) or []
+                required_fields = {
+                    f.get("name")
+                    for f in schema
+                    if isinstance(f, dict) and f.get("required") is True and f.get("name")
+                }
+                field_names = {
+                    f.get("name")
+                    for f in schema
+                    if isinstance(f, dict) and f.get("name")
+                }
+                if (
+                    step_id == "presence"
+                    and "presence_sensor_entity_id" in field_names
+                    and set(normalized_patch.keys()) == {"use_presence_central_config"}
+                    and normalized_patch.get("use_presence_central_config") is False
+                ):
+                    sensor_val = None
+                    suggested = _schema_suggested_value(
+                        schema, "presence_sensor_entity_id"
+                    )
+                    if isinstance(suggested, str) and suggested.strip():
+                        sensor_val = suggested
+                    elif "presence_sensor_entity_id" in before_options:
+                        prev = before_options.get("presence_sensor_entity_id")
+                        if isinstance(prev, str) and prev.strip():
+                            sensor_val = prev
+                    if not sensor_val and "presence_sensor_entity_id" in required_fields:
+                        return _error(
+                            "FLOW_STEP_INVALID",
+                            "Options flow requires presence_sensor_entity_id when disabling central presence config.",
+                            {
+                                "entry_id": entry_id,
+                                "step_id": step_id,
+                                "required_fields": sorted(required_fields),
+                            },
+                        )
+                    if sensor_val:
+                        apply_result = await client.submit_options_flow_step(
+                            flow_id, {"presence_sensor_entity_id": sensor_val}
+                        )
+
             # Some integrations return to menu and need explicit finalize.
             if apply_result.get("type") == "menu":
                 menu_options = apply_result.get("menu_options", []) or []
@@ -643,6 +689,39 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Keep original mismatch behavior on verification failure.
                     pass
             if mismatched:
+                # Room presence toggle can be persisted through options flow, but in
+                # some HA/VT combinations there is no reliable readback surface
+                # (config_entry data/options and flow suggested/default remain static).
+                # In that case, if flow completed with create_entry, return applied
+                # with explicit unverifiable warning.
+                if (
+                    set(normalized_patch.keys()) == {"use_presence_central_config"}
+                    and apply_result.get("type") == "create_entry"
+                ):
+                    response_unverified: dict[str, Any] = {
+                        "success": True,
+                        "applied": True,
+                        "entry_id": entry_id,
+                        "domain": domain,
+                        "title": title,
+                        "before_options": before_options,
+                        "after_options": deepcopy(candidate),
+                        "diff": _diff_options(before_options, candidate),
+                        "warnings": [
+                            "Applied via options flow, but persistence could not be directly verified from exposed HA APIs."
+                        ],
+                        "meta": {
+                            "request_id": request_id,
+                            "target_step": target_step,
+                            "apply_flow_result_type": apply_result.get("type"),
+                            "apply_flow_step_id": apply_result.get("step_id"),
+                            "verification": "unverified",
+                        },
+                    }
+                    if backup_info:
+                        response_unverified["backup_info"] = backup_info
+                    return response_unverified
+
                 return _error(
                     "WRITE_CONFLICT",
                     "Options write could not be verified from persisted config-entry options.",
