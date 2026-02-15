@@ -482,6 +482,23 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     normalized_patch[key] = coerced
                     key_steps.add(str(cfg.get("step_id")))
 
+            # Explicit dependency rule for room presence branch:
+            # if disabling central presence config, caller must provide room sensor.
+            if (
+                entry_kind == "room"
+                and normalized_patch.get("use_presence_central_config") is False
+                and "presence_sensor_entity_id" not in normalized_patch
+            ):
+                return _error(
+                    "MISSING_DEPENDENCY",
+                    "presence_sensor_entity_id is required when use_presence_central_config=false.",
+                    {
+                        "entry_id": entry_id,
+                        "missing": ["presence_sensor_entity_id"],
+                        "dependency_of": "use_presence_central_config",
+                    },
+                )
+
             if key_errors:
                 code = "STRICT_KEYS_REJECTED" if strict_keys_bool else "INVALID_KEY"
                 return _error(code, "Patch validation failed.", {"errors": key_errors})
@@ -505,6 +522,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             base_response: dict[str, Any] = {
                 "success": True,
                 "applied": False,
+                "verified": False,
+                "verification_method": "none",
                 "entry_id": entry_id,
                 "domain": domain,
                 "title": title,
@@ -520,6 +539,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if not diff:
                 base_response["warnings"] = ["No-op patch; options already match requested values."]
+                base_response["verified"] = True
+                base_response["verification_method"] = "none"
                 return base_response
 
             if dry_run_bool:
@@ -706,6 +727,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     response_unverified: dict[str, Any] = {
                         "success": True,
                         "applied": True,
+                        "verified": False,
+                        "verification_method": "none",
                         "entry_id": entry_id,
                         "domain": domain,
                         "title": title,
@@ -741,6 +764,12 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             response: dict[str, Any] = {
                 "success": True,
                 "applied": True,
+                "verified": True,
+                "verification_method": (
+                    "flow_suggested"
+                    if set(normalized_patch.keys()) == {"presence_sensor_entity_id"}
+                    else "config_entry"
+                ),
                 "entry_id": entry_id,
                 "domain": domain,
                 "title": title,
