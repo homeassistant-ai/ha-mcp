@@ -41,7 +41,7 @@ from test_constants import TEST_TOKEN  # noqa: E402
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
 HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2025.12.4"
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
 
 
