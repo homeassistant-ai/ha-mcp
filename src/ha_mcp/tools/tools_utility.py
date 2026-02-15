@@ -666,6 +666,26 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     },
                 },
             },
+            "python_transform_security": {
+                "allowed": [
+                    "Dictionary/list access: config['views'][0]['cards'][1]",
+                    "Assignment: config['key'] = 'value'",
+                    "Deletion: del config['key'] or config.pop('key')",
+                    "List methods: append, insert, pop, remove, clear, extend",
+                    "Dict methods: update, get, setdefault, keys, values, items",
+                    "Loops: for, while, if/else",
+                    "Comprehensions: [x for x in ...]",
+                    "String methods: startswith, endswith, lower, upper, split, join",
+                ],
+                "forbidden": [
+                    "Imports: import, from, __import__",
+                    "File operations: open, read, write",
+                    "Dunder access: __class__, __bases__, __subclasses__",
+                    "Dangerous builtins: eval, exec, compile",
+                    "Function definitions: def, class",
+                    "Exception handling: try/except",
+                ],
+            },
         },
         "template": {
             "topic": "Jinja2 template evaluation in Home Assistant",
@@ -757,6 +777,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "conversation": "Home Assistant Assist",
                 "cloud.alexa": "Amazon Alexa via Nabu Casa",
                 "cloud.google_assistant": "Google Assistant via Nabu Casa",
+            },
+            "clearing_values": {
+                "area_id": "Use empty string '' to unassign entity from its current area",
+                "name": "Use empty string '' to remove custom name and revert to default",
+                "icon": "Use empty string '' to remove custom icon and revert to default",
             },
             "examples": {
                 "single_entity": {
