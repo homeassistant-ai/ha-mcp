@@ -73,8 +73,12 @@ def load_story(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # HA Container
 # ---------------------------------------------------------------------------
-def _start_container() -> dict:
-    """Start a HA test container, return {url, token, container, config_dir}."""
+def _start_container(*, keep_alive: bool = False) -> dict:
+    """Start a HA test container, return {url, token, container, config_dir}.
+
+    Args:
+        keep_alive: If True, disable ryuk so the container survives process exit.
+    """
     import os
     import shutil
     import tempfile
@@ -83,6 +87,9 @@ def _start_container() -> dict:
     from testcontainers.core.container import DockerContainer
 
     from test_constants import TEST_TOKEN
+
+    if keep_alive:
+        os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
     HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
@@ -365,7 +372,7 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
         ha_url = args.ha_url
         ha_token = args.ha_token
         if not using_external_ha:
-            ha = _start_container()
+            ha = _start_container(keep_alive=args.keep_container)
             ha_url = ha["url"]
             ha_token = ha["token"]
 
