@@ -98,25 +98,17 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_config_set_script(
-        script_id: Annotated[
-            str, Field(description="Script identifier (e.g., 'morning_routine')")
-        ],
-        config: Annotated[
-            str | dict[str, Any],
-            Field(
-                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
-            ),
-        ],
+        script_id: str,
+        config: str | dict[str, Any],
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('script'). You MUST call ha_get_tool_guide('script') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('script')"
             ),
         ],
         wait: Annotated[
             bool | str,
             Field(
-                description="Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.",
                 default=True,
             ),
         ] = True,

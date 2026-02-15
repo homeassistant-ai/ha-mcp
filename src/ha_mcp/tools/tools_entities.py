@@ -281,84 +281,48 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_set_entity(
-        entity_id: Annotated[
-            str | list[str],
-            Field(
-                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels and expose_to parameters."
-            ),
-        ],
+        entity_id: str | list[str],
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('entity'). You MUST call ha_get_tool_guide('entity') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('entity')"
             ),
         ],
         area_id: Annotated[
             str | None,
-            Field(
-                description="Area/room ID to assign the entity to. Use empty string '' to unassign from current area. Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         name: Annotated[
             str | None,
-            Field(
-                description="Display name for the entity. Use empty string '' to remove custom name and revert to default. Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         icon: Annotated[
             str | None,
-            Field(
-                description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         enabled: Annotated[
             bool | str | None,
-            Field(
-                description="True to enable the entity, False to disable it. Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         hidden: Annotated[
             bool | str | None,
-            Field(
-                description="True to hide the entity from UI, False to show it. Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         aliases: Annotated[
             str | list[str] | None,
-            Field(
-                description="List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         labels: Annotated[
             str | list[str] | None,
-            Field(
-                description="List of label IDs for the entity. Behavior depends on label_operation parameter. Supports bulk operations.",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         label_operation: Annotated[
             Literal["set", "add", "remove"],
-            Field(
-                description="How to apply labels: 'set' replaces all labels, 'add' adds to existing, 'remove' removes specified labels.",
-                default="set",
-            ),
+            Field(default="set"),
         ] = "set",
         expose_to: Annotated[
             str | dict[str, bool] | None,
-            Field(
-                description=(
-                    "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "
-                    "Valid assistants: 'conversation' (Assist), 'cloud.alexa', 'cloud.google_assistant'. "
-                    "Example: {\"conversation\": true, \"cloud.alexa\": false}. Supports bulk operations."
-                ),
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
     ) -> dict[str, Any]:
         """Update entity registry properties (area, name, icon, enabled, hidden, aliases, labels, expose_to).

@@ -18,7 +18,6 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..utils.python_sandbox import (
     PythonSandboxError,
-    get_security_documentation,
     safe_execute,
 )
 from .helpers import log_tool_usage
@@ -420,80 +419,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     )
     @log_tool_usage
     async def ha_config_set_dashboard(
-        url_path: Annotated[
-            str,
-            Field(
-                description="Dashboard URL path (e.g., 'my-dashboard'). "
-                "Use 'default' or 'lovelace' for the default dashboard. "
-                "New dashboards must use a hyphenated path."
-            ),
-        ],
+        url_path: str,
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('dashboard'). You MUST call ha_get_tool_guide('dashboard') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('dashboard')"
             ),
         ],
-        config: Annotated[
-            str | dict[str, Any] | None,
-            Field(
-                description="Dashboard configuration with views and cards. "
-                "Can be dict or JSON string. "
-                "Omit or set to None to create dashboard without initial config. "
-                "Mutually exclusive with jq_transform."
-            ),
-        ] = None,
-        jq_transform: Annotated[
-            str | None,
-            Field(
-                description="jq expression to transform existing dashboard config. "
-                "Mutually exclusive with config and python_transform. Requires config_hash for validation. "
-                "Examples: '.views[0].sections[1].cards[0].icon = \"mdi:thermometer\"', "
-                '\'.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]\', '
-                "'del(.views[0].sections[0].cards[2])'. "
-                "MULTI-OP: Chain with '|': 'del(.views[0].cards[2]) | .views[0].cards[0].icon = \"mdi:new\"'. "
-                "Use ha_dashboard_find_card() to get jq_path for targeted edits."
-            ),
-        ] = None,
-        python_transform: Annotated[
-            str | None,
-            Field(
-                description="Python expression to transform existing dashboard config. "
-                "Mutually exclusive with config and jq_transform. "
-                "Requires config_hash for validation. "
-                "See PYTHON TRANSFORM SECURITY below for allowed operations. "
-                "Examples: "
-                "Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" "
-                "Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" "
-                "Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" "
-                "\n\n" + get_security_documentation(),
-            ),
-        ] = None,
-        config_hash: Annotated[
-            str | None,
-            Field(
-                description="Config hash from ha_config_get_dashboard for optimistic locking. "
-                "REQUIRED for jq_transform (validates dashboard unchanged). "
-                "Optional for config (validates before full replacement if provided)."
-            ),
-        ] = None,
-        title: Annotated[
-            str | None,
-            Field(description="Dashboard display name shown in sidebar"),
-        ] = None,
-        icon: Annotated[
-            str | None,
-            Field(
-                description="MDI icon name (e.g., 'mdi:home', 'mdi:cellphone'). "
-                "Defaults to 'mdi:view-dashboard'"
-            ),
-        ] = None,
-        require_admin: Annotated[
-            bool, Field(description="Restrict dashboard to admin users only")
-        ] = False,
-        show_in_sidebar: Annotated[
-            bool, Field(description="Show dashboard in sidebar navigation")
-        ] = True,
+        config: str | dict[str, Any] | None = None,
+        jq_transform: str | None = None,
+        python_transform: str | None = None,
+        config_hash: str | None = None,
+        title: str | None = None,
+        icon: str | None = None,
+        require_admin: bool = False,
+        show_in_sidebar: bool = True,
     ) -> dict[str, Any]:
         """Create or update a dashboard. url_path must contain a hyphen.
 

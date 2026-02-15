@@ -131,7 +131,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('search')"
             ),
         ],
         domain_filter: str | None = None,
@@ -139,7 +139,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         limit: int = 10,
         offset: Annotated[
             int | str,
-            Field(default=0, description="Number of results to skip for pagination (default: 0)"),
+            Field(default=0),
         ] = 0,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
@@ -416,39 +416,31 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('search')"
             ),
         ],
         detail_level: Annotated[
             Literal["minimal", "standard", "full"],
             Field(
                 default="minimal",
-                description=(
-                    "'minimal': 10 entities per domain sample (default); "
-                    "'standard': ALL entities per domain (friendly_name only); "
-                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
-                ),
             ),
         ] = "minimal",
         max_entities_per_domain: Annotated[
             int | None,
             Field(
                 default=None,
-                description="Override max entities per domain (None = all). Minimal defaults to 10.",
             ),
         ] = None,
         include_state: Annotated[
             bool | str | None,
             Field(
                 default=None,
-                description="Include state field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
         include_entity_id: Annotated[
             bool | str | None,
             Field(
                 default=None,
-                description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
     ) -> dict[str, Any]:
@@ -512,17 +504,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('search'). You MUST call ha_get_tool_guide('search') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('search')"
             ),
         ],
         search_types: Annotated[
             str | list[str] | None,
             Field(
                 default=None,
-                description=(
-                    "Types to search: 'automation', 'script', 'helper'. "
-                    "Pass as list or JSON array string. Default: all types."
-                ),
             ),
         ] = None,
         limit: int = 5,
@@ -531,10 +519,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             bool | str,
             Field(
                 default=False,
-                description=(
-                    "Include full config in results. Default: False (returns summary only). "
-                    "Use ha_config_get_automation/ha_config_get_script for individual configs."
-                ),
             ),
         ] = False,
     ) -> dict[str, Any]:

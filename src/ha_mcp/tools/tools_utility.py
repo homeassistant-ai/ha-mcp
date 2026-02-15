@@ -236,7 +236,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('template'). You MUST call ha_get_tool_guide('template') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('template')"
             ),
         ],
         timeout: int = 3,

@@ -104,52 +104,32 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Entity History"})
     @log_tool_usage
     async def ha_get_history(
-        entity_ids: Annotated[
-            str | list[str],
-            Field(
-                description="Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array."
-            ),
-        ],
+        entity_ids: str | list[str],
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('history'). You MUST call ha_get_tool_guide('history') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('history')"
             ),
         ],
         start_time: Annotated[
             str | None,
-            Field(
-                description="Start time: ISO datetime or relative (e.g., '24h', '7d', '2w'). Default: 24h ago",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         end_time: Annotated[
             str | None,
-            Field(
-                description="End time: ISO datetime. Default: now",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         minimal_response: Annotated[
             bool,
-            Field(
-                description="Return only states/timestamps without attributes. Default: true",
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
         significant_changes_only: Annotated[
             bool,
-            Field(
-                description="Filter to significant state changes only. Default: true",
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
         limit: Annotated[
             int | str | None,
-            Field(
-                description="Max state changes per entity. Default: 100, Max: 1000",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
     ) -> dict[str, Any]:
         """Retrieve state change history for entities (last ~10 days from recorder).
@@ -361,45 +341,28 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Statistics"})
     @log_tool_usage
     async def ha_get_statistics(
-        entity_ids: Annotated[
-            str | list[str],
-            Field(
-                description="Entity ID(s) to query. Must have state_class attribute. Can be single ID, comma-separated, or JSON array."
-            ),
-        ],
+        entity_ids: str | list[str],
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('history'). You MUST call ha_get_tool_guide('history') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('history')"
             ),
         ],
         start_time: Annotated[
             str | None,
-            Field(
-                description="Start time: ISO datetime or relative (e.g., '30d', '6m', '12m'). Default: 30d ago",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         end_time: Annotated[
             str | None,
-            Field(
-                description="End time: ISO datetime. Default: now",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
         period: Annotated[
             str,
-            Field(
-                description="Aggregation period: '5minute', 'hour', 'day', 'week', 'month'. Default: 'day'",
-                default="day",
-            ),
+            Field(default="day"),
         ] = "day",
         statistic_types: Annotated[
             str | list[str] | None,
-            Field(
-                description="Statistics types: 'mean', 'min', 'max', 'sum', 'state', 'change'. Default: all",
-                default=None,
-            ),
+            Field(default=None),
         ] = None,
     ) -> dict[str, Any]:
         """Retrieve long-term statistics for entities with state_class attribute.

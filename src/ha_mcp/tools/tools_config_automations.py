@@ -276,29 +276,22 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
     )
     @log_tool_usage
     async def ha_config_set_automation(
-        config: Annotated[
-            str | dict[str, Any],
-            Field(
-                description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'"
-            ),
-        ],
+        config: str | dict[str, Any],
         guide_response: Annotated[
             str | dict[str, Any],
             Field(
-                description="REQUIRED: Paste the complete output from ha_get_tool_guide('automation'). You MUST call ha_get_tool_guide('automation') first and pass its full response here."
+                description="REQUIRED: Output from ha_get_tool_guide('automation')"
             ),
         ],
         identifier: Annotated[
             str | None,
             Field(
-                description="Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.",
                 default=None,
             ),
         ] = None,
         wait: Annotated[
             bool | str,
             Field(
-                description="Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.",
                 default=True,
             ),
         ] = True,
