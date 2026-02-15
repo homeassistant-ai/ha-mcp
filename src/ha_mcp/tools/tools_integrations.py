@@ -7,11 +7,13 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
+import time
 from copy import deepcopy
 from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import coerce_bool_param
 
@@ -32,15 +34,14 @@ VT_OPTIONS_PHASE1_KEYS: dict[str, dict[str, Any]] = {
 }
 
 
-def _error(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {
-        "success": False,
-        "error": {
-            "code": code,
-            "message": message,
-            "details": details or {},
-        },
-    }
+def _integration_error(
+    code: ErrorCode,
+    message: str,
+    *,
+    details: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return create_error_response(code, message, details=details, context=context)
 
 
 def _diff_options(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
@@ -100,6 +101,101 @@ def _schema_suggested_value(
             return item.get("default")
         return None
     return None
+
+
+def _parse_options_patch(options_patch: dict[str, Any] | str) -> tuple[dict[str, Any] | None, str | None]:
+    if isinstance(options_patch, str):
+        import json
+
+        try:
+            parsed = json.loads(options_patch)
+        except json.JSONDecodeError as exc:
+            return None, f"Invalid JSON for options_patch: {exc}"
+        return parsed, None
+    return options_patch, None
+
+
+def _validate_vt_patch(
+    *,
+    entry_kind: str,
+    options_patch_obj: dict[str, Any],
+    strict_keys: bool,
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    normalized_patch: dict[str, Any] = {}
+    key_steps: set[str] = set()
+    key_errors: list[dict[str, Any]] = []
+
+    for key, value in options_patch_obj.items():
+        cfg = VT_OPTIONS_PHASE1_KEYS.get(key)
+        if not cfg:
+            if strict_keys:
+                key_errors.append(
+                    {"key": key, "reason": "unknown key", "expected": "known VT phase-1 key"}
+                )
+            continue
+
+        if cfg.get("entry_type") != entry_kind:
+            key_errors.append(
+                {
+                    "key": key,
+                    "reason": "key not valid for this entry type",
+                    "entry_type": entry_kind,
+                    "expected_entry_type": cfg.get("entry_type"),
+                }
+            )
+            continue
+
+        ok, coerced, err = _coerce_patch_value(key, value)
+        if not ok:
+            key_errors.append({"key": key, "reason": err, "value": value})
+            continue
+        normalized_patch[key] = coerced
+        key_steps.add(str(cfg.get("step_id")))
+
+    if (
+        entry_kind == "room"
+        and normalized_patch.get("use_presence_central_config") is False
+        and "presence_sensor_entity_id" not in normalized_patch
+    ):
+        key_errors.append(
+            {
+                "key": "presence_sensor_entity_id",
+                "reason": "required when use_presence_central_config=false",
+            }
+        )
+
+    target_step = next(iter(key_steps), "")
+    return normalized_patch, target_step, key_errors
+
+
+async def _verify_presence_sensor_with_timeout(
+    *,
+    client: Any,
+    entry_id: str,
+    expected: str,
+    timeout_seconds: float = 2.0,
+    poll_interval_seconds: float = 0.35,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        verify_flow = await client.start_options_flow(entry_id)
+        verify_flow_id = verify_flow.get("flow_id")
+        verify_presence = None
+        if verify_flow.get("type") == "menu" and verify_flow_id:
+            verify_presence = await client.submit_options_flow_step(
+                verify_flow_id, {"next_step_id": "presence"}
+            )
+        elif verify_flow.get("type") == "form":
+            verify_presence = verify_flow
+
+        suggested = _schema_suggested_value(
+            (verify_presence or {}).get("data_schema"),
+            "presence_sensor_entity_id",
+        )
+        if suggested == expected:
+            return True
+        await asyncio.sleep(poll_interval_seconds)
+    return False
 
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -364,10 +460,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return result
         except Exception as e:
             logger.error(f"Failed to get integration options: {e}")
-            return _error(
-                "OPTIONS_UNAVAILABLE",
+            return _integration_error(
+                ErrorCode.CONFIG_NOT_FOUND,
                 "Failed to retrieve integration options.",
-                {"entry_id": entry_id, "reason": str(e)},
+                details=str(e),
+                context={"entry_id": entry_id},
             )
 
     @mcp.tool(
@@ -421,94 +518,59 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             auto_backup_bool = coerce_bool_param(auto_backup, "auto_backup", default=True)
             strict_keys_bool = coerce_bool_param(strict_keys, "strict_keys", default=True)
 
-            if isinstance(options_patch, str):
-                import json
-
-                options_patch_obj = json.loads(options_patch)
-            else:
-                options_patch_obj = options_patch
+            options_patch_obj, parse_error = _parse_options_patch(options_patch)
+            if parse_error:
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "options_patch must be valid JSON.",
+                    details=parse_error,
+                    context={"entry_id": entry_id},
+                )
 
             if not isinstance(options_patch_obj, dict) or not options_patch_obj:
-                return _error(
-                    "INVALID_VALUE",
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "options_patch must be a non-empty object.",
-                    {"entry_id": entry_id},
+                    context={"entry_id": entry_id},
                 )
 
             entry = await client.get_config_entry(entry_id)
             domain = entry.get("domain")
             title = entry.get("title")
             if domain != "versatile_thermostat":
-                return _error(
-                    "DOMAIN_NOT_SUPPORTED",
+                return _integration_error(
+                    ErrorCode.CONFIG_INVALID,
                     "Only versatile_thermostat is supported in phase-1.",
-                    {"entry_id": entry_id, "domain": domain},
+                    context={"entry_id": entry_id, "domain": domain},
                 )
 
             entry_kind = _entry_type(entry)
-            normalized_patch: dict[str, Any] = {}
-            key_steps: set[str] = set()
-            key_errors: list[dict[str, Any]] = []
-
-            for key, value in options_patch_obj.items():
-                cfg = VT_OPTIONS_PHASE1_KEYS.get(key)
-                if not cfg:
-                    if strict_keys_bool:
-                        key_errors.append(
-                            {"key": key, "reason": "unknown key", "expected": "known VT phase-1 key"}
-                        )
-                    else:
-                        continue
-                else:
-                    if cfg.get("entry_type") != entry_kind:
-                        key_errors.append(
-                            {
-                                "key": key,
-                                "reason": "key not valid for this entry type",
-                                "entry_type": entry_kind,
-                                "expected_entry_type": cfg.get("entry_type"),
-                            }
-                        )
-                        continue
-                    ok, coerced, err = _coerce_patch_value(key, value)
-                    if not ok:
-                        key_errors.append({"key": key, "reason": err, "value": value})
-                        continue
-                    normalized_patch[key] = coerced
-                    key_steps.add(str(cfg.get("step_id")))
-
-            # Explicit dependency rule for room presence branch:
-            # if disabling central presence config, caller must provide room sensor.
-            if (
-                entry_kind == "room"
-                and normalized_patch.get("use_presence_central_config") is False
-                and "presence_sensor_entity_id" not in normalized_patch
-            ):
-                return _error(
-                    "MISSING_DEPENDENCY",
-                    "presence_sensor_entity_id is required when use_presence_central_config=false.",
-                    {
-                        "entry_id": entry_id,
-                        "missing": ["presence_sensor_entity_id"],
-                        "dependency_of": "use_presence_central_config",
-                    },
-                )
+            normalized_patch, target_step, key_errors = _validate_vt_patch(
+                entry_kind=entry_kind,
+                options_patch_obj=options_patch_obj,
+                strict_keys=strict_keys_bool,
+            )
 
             if key_errors:
-                code = "STRICT_KEYS_REJECTED" if strict_keys_bool else "INVALID_KEY"
-                return _error(code, "Patch validation failed.", {"errors": key_errors})
-
-            if not normalized_patch:
-                return _error("INVALID_VALUE", "No valid patch keys remained after validation.")
-
-            if len(key_steps) != 1:
-                return _error(
-                    "MULTI_STEP_UNSUPPORTED",
-                    "Patch keys must belong to a single options-flow step in phase-1.",
-                    {"steps": sorted(key_steps)},
+                return _integration_error(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Patch validation failed.",
+                    details=str(key_errors),
+                    context={"entry_id": entry_id},
                 )
 
-            target_step = next(iter(key_steps))
+            if not normalized_patch:
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No valid patch keys remained after validation.",
+                    context={"entry_id": entry_id},
+                )
+            if not target_step:
+                return _integration_error(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Patch keys must belong to a single options-flow step in phase-1.",
+                    context={"entry_id": entry_id},
+                )
             before_options = deepcopy(entry.get("options", {}) or {})
             candidate = deepcopy(before_options)
             candidate.update(normalized_patch)
@@ -542,10 +604,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return base_response
 
             if not confirm_bool:
-                return _error(
-                    "CONFIRM_REQUIRED",
+                return _integration_error(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
                     "confirm=true is required for non-dry-run apply.",
-                    {"entry_id": entry_id},
+                    context={"entry_id": entry_id},
                 )
 
             backup_info: dict[str, Any] | None = None
@@ -562,24 +624,26 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     msg = str(e).lower()
                     if "404" in msg or "not found" in msg:
-                        return _error(
-                            "BACKUP_UNAVAILABLE",
+                        return _integration_error(
+                            ErrorCode.RESOURCE_NOT_FOUND,
                             "Backup service is unavailable in this Home Assistant environment.",
-                            {"reason": str(e)},
+                            details=str(e),
+                            context={"entry_id": entry_id},
                         )
-                    return _error(
-                        "BACKUP_FAILED",
+                    return _integration_error(
+                        ErrorCode.SERVICE_CALL_FAILED,
                         "Backup attempt failed before applying options.",
-                        {"reason": str(e)},
+                        details=str(e),
+                        context={"entry_id": entry_id},
                     )
 
             flow = await client.start_options_flow(entry_id)
             flow_id = flow.get("flow_id")
             if not flow_id:
-                return _error(
-                    "FLOW_UNAVAILABLE",
+                return _integration_error(
+                    ErrorCode.CONFIG_NOT_FOUND,
                     "Options flow did not return a flow_id.",
-                    {"flow_result": flow},
+                    context={"entry_id": entry_id},
                 )
 
             # Navigate from menu to target step (phase-1 only)
@@ -590,10 +654,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if current.get("type") != "form":
-                return _error(
-                    "FLOW_STEP_INVALID",
+                return _integration_error(
+                    ErrorCode.CONFIG_INVALID,
                     "Expected a form step for options submission.",
-                    {"target_step": target_step, "flow_type": current.get("type"), "step_id": current.get("step_id")},
+                    context={"entry_id": entry_id, "target_step": target_step, "flow_type": current.get("type")},
                 )
 
             submit_payload = {k: candidate.get(k) for k in normalized_patch}
@@ -631,14 +695,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if isinstance(prev, str) and prev.strip():
                             sensor_val = prev
                     if not sensor_val and "presence_sensor_entity_id" in required_fields:
-                        return _error(
-                            "FLOW_STEP_INVALID",
+                        return _integration_error(
+                            ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
                             "Options flow requires presence_sensor_entity_id when disabling central presence config.",
-                            {
-                                "entry_id": entry_id,
-                                "step_id": step_id,
-                                "required_fields": sorted(required_fields),
-                            },
+                            context={"entry_id": entry_id, "step_id": step_id},
                         )
                     if sensor_val:
                         apply_result = await client.submit_options_flow_step(
@@ -656,14 +716,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # If we are still in a form step, the write is incomplete.
             if apply_result.get("type") == "form":
                 form_schema = apply_result.get("data_schema", [])
-                return _error(
-                    "FLOW_STEP_INVALID",
+                return _integration_error(
+                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
                     "Options flow requires additional form input; single-step apply is incomplete.",
-                    {
-                        "entry_id": entry_id,
-                        "step_id": apply_result.get("step_id"),
-                        "required_fields": [f.get("name") for f in form_schema if isinstance(f, dict)],
-                    },
+                    details=str([f.get("name") for f in form_schema if isinstance(f, dict)]),
+                    context={"entry_id": entry_id, "step_id": apply_result.get("step_id")},
                 )
 
             # Read back persisted options
@@ -685,27 +742,15 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if mismatched and set(normalized_patch.keys()) == {"presence_sensor_entity_id"}:
                 try:
                     expected = normalized_patch["presence_sensor_entity_id"]
-                    for _ in range(5):
-                        verify_flow = await client.start_options_flow(entry_id)
-                        verify_flow_id = verify_flow.get("flow_id")
-                        verify_presence = None
-                        if verify_flow.get("type") == "menu" and verify_flow_id:
-                            verify_presence = await client.submit_options_flow_step(
-                                verify_flow_id, {"next_step_id": "presence"}
-                            )
-                        elif verify_flow.get("type") == "form":
-                            verify_presence = verify_flow
-
-                        suggested = _schema_suggested_value(
-                            (verify_presence or {}).get("data_schema"),
-                            "presence_sensor_entity_id",
-                        )
-                        if suggested == expected:
-                            mismatched = []
-                            verify_diff = _diff_options(before_options, candidate)
-                            after_options = deepcopy(candidate)
-                            break
-                        await asyncio.sleep(0.35)
+                    verified = await _verify_presence_sensor_with_timeout(
+                        client=client,
+                        entry_id=entry_id,
+                        expected=expected,
+                    )
+                    if verified:
+                        mismatched = []
+                        verify_diff = _diff_options(before_options, candidate)
+                        after_options = deepcopy(candidate)
                 except Exception:
                     # Keep original mismatch behavior on verification failure.
                     pass
@@ -745,15 +790,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         response_unverified["backup_info"] = backup_info
                     return response_unverified
 
-                return _error(
-                    "WRITE_CONFLICT",
+                return _integration_error(
+                    ErrorCode.RESOURCE_LOCKED,
                     "Options write could not be verified from persisted config-entry options.",
-                    {
-                        "entry_id": entry_id,
-                        "mismatched_keys": mismatched,
-                        "apply_flow_result_type": apply_result.get("type"),
-                        "apply_flow_step_id": apply_result.get("step_id"),
-                    },
+                    details=str(mismatched),
+                    context={"entry_id": entry_id},
                 )
 
             response: dict[str, Any] = {
@@ -783,10 +824,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return response
         except Exception as e:
             logger.error(f"Failed to set integration options: {e}")
-            return _error(
-                "UNKNOWN",
+            return _integration_error(
+                ErrorCode.INTERNAL_ERROR,
                 "Failed to set integration options.",
-                {"entry_id": entry_id, "reason": str(e)},
+                details=str(e),
+                context={"entry_id": entry_id},
             )
 
     @mcp.tool(
