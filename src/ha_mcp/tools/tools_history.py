@@ -20,7 +20,12 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .helpers import get_connected_ws_client, log_tool_usage
-from .util_helpers import add_timezone_metadata, coerce_int_param, parse_string_list_param, validate_guide_response
+from .util_helpers import (
+    add_timezone_metadata,
+    coerce_int_param,
+    parse_string_list_param,
+    validate_guide_response,
+)
 
 logger = logging.getLogger(__name__)
 

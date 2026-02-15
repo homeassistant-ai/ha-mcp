@@ -7,14 +7,14 @@ information and HACS-specific suggestions.
 
 import json
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_mcp_component import (
-    register_mcp_component_tools,
     FEATURE_FLAG,
+    register_mcp_component_tools,
 )
 
 

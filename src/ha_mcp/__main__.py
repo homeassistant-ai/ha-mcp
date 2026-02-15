@@ -33,6 +33,7 @@ class OAuthProxyClient:
     def _get_oauth_client(self):
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
+
         from ha_mcp.client.rest_client import HomeAssistantClient
 
         # Get the access token from the current request context
@@ -169,11 +170,8 @@ def _check_stdin_available() -> bool:
         return True
 
     # Block character devices that aren't TTYs (like /dev/null in Docker without -i)
-    if stat.S_ISCHR(mode):
-        return False
-
     # Unknown type - allow it and let the server handle any issues
-    return True
+    return not stat.S_ISCHR(mode)
 
 
 def _handle_config_error(error: Exception) -> None:
@@ -271,7 +269,9 @@ def _create_server():
     from pydantic import ValidationError
 
     try:
-        from ha_mcp.server import HomeAssistantSmartMCPServer  # type: ignore[import-not-found]
+        from ha_mcp.server import (
+            HomeAssistantSmartMCPServer,  # type: ignore[import-not-found]
+        )
 
         return HomeAssistantSmartMCPServer()
     except ValidationError as e:

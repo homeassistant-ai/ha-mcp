@@ -10,7 +10,11 @@ import logging
 import time
 from typing import Any
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +151,7 @@ def parse_json_param(
                 )
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}")
+            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
     raise ValueError(
         f"{param_name} must be string, dict, list, or None, got {type(param).__name__}"
@@ -200,6 +204,14 @@ def validate_guide_response(
             f"and pass the successful output here."
         )
 
+    # Verify the guide topic matches what the tool expects
+    guide_topic = parsed.get("topic", "unknown")
+    if guide_topic != expected_topic:
+        raise ValueError(
+            f"Guide topic mismatch: expected '{expected_topic}', got '{guide_topic}'. "
+            f"Call ha_get_tool_guide('{expected_topic}') for the correct guide."
+        )
+
 
 def parse_string_list_param(
     param: str | list[str] | None, param_name: str = "parameter"
@@ -222,7 +234,7 @@ def parse_string_list_param(
                 raise ValueError(f"{param_name} must be a JSON array of strings")
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}")
+            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
     raise ValueError(f"{param_name} must be string, list, or None")
 

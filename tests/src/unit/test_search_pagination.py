@@ -127,7 +127,7 @@ class TestExactMatchSearchPagination:
         client = MockClient(many_lights)
         result = await _exact_match_search(client, "light", None, 3, offset=0)
 
-        assert PAGINATION_FIELDS <= result.keys()
+        assert result.keys() >= PAGINATION_FIELDS
         assert result["total_matches"] == 10
         assert result["offset"] == 0
         assert result["limit"] == 3
@@ -179,7 +179,7 @@ class TestPartialResultsSearchPagination:
         client = MockClient(many_entities)
         result = await _partial_results_search(client, "anything", None, 3, offset=0)
 
-        assert PAGINATION_FIELDS <= result.keys()
+        assert result.keys() >= PAGINATION_FIELDS
         assert result["total_matches"] == 10
         assert result["offset"] == 0
         assert result["limit"] == 3

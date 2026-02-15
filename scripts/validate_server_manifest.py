@@ -10,7 +10,6 @@ from pathlib import Path
 
 from jsonschema import validate
 
-
 SCHEMA_URL = "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
 
 

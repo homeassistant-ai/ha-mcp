@@ -920,7 +920,15 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         in their description. Without this guide, you lack essential context for correct usage."""
         topic_lower = topic.lower().strip()
         if topic_lower in _TOOL_GUIDES:
-            return {"success": True, **_TOOL_GUIDES[topic_lower]}
+            guide = _TOOL_GUIDES[topic_lower]
+            return {
+                "success": True,
+                **guide,
+                # Override the descriptive 'topic' with the canonical key
+                # so validate_guide_response() can verify topic matches
+                "topic": topic_lower,
+                "topic_description": guide.get("topic", ""),
+            }
         available_topics = list(_TOOL_GUIDES.keys())
         return create_error_response(
             code=ErrorCode.RESOURCE_NOT_FOUND,
