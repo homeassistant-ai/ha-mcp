@@ -46,7 +46,7 @@ class TestGetToolDetails:
         assert data["tool_name"] == "ha_config_get_label"
         for key in ("description", "parameters", "schema_hash", "usage"):
             assert key in data
-        assert len(data["schema_hash"]) == 8
+        assert len(data["schema_hash"]) == 12
 
     async def test_get_details_not_found(self, mcp_client):
         result = await mcp_client.call_tool(
