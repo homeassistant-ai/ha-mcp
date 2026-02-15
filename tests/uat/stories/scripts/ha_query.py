@@ -123,8 +123,12 @@ def run_claude_query(
             }
         }
     }
-    config_file = Path(tempfile.mktemp(suffix=".json", prefix="ha_query_claude_"))
-    config_file.write_text(json.dumps(config))
+    f = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="ha_query_claude_", delete=False
+    )
+    json.dump(config, f)
+    f.close()
+    config_file = Path(f.name)
 
     try:
         result = subprocess.run(

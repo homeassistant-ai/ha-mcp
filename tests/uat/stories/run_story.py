@@ -165,8 +165,12 @@ def _stop_container(ha: dict) -> None:
 # ---------------------------------------------------------------------------
 # Session file detection
 # ---------------------------------------------------------------------------
-def _find_latest_session_file(agent: str) -> str | None:
-    """Find the most recent session file for an agent after a run.
+def _find_latest_session_file(agent: str, after: float) -> str | None:
+    """Find the most recent session file for an agent created after a timestamp.
+
+    Args:
+        agent: Agent name ("gemini" or "claude").
+        after: Only consider files modified after this unix timestamp.
 
     Gemini: ~/.gemini/tmp/<hash>/chats/session-*.json
     Claude: ~/.claude/projects/<dir>/<session>.jsonl
@@ -177,8 +181,10 @@ def _find_latest_session_file(agent: str) -> str | None:
         gemini_tmp = home / ".gemini" / "tmp"
         if not gemini_tmp.exists():
             return None
-        # Find the most recently modified session file
-        session_files = list(gemini_tmp.glob("*/chats/session-*.json"))
+        session_files = [
+            p for p in gemini_tmp.glob("*/chats/session-*.json")
+            if p.stat().st_mtime > after
+        ]
         if not session_files:
             return None
         return str(max(session_files, key=lambda p: p.stat().st_mtime))
@@ -187,7 +193,10 @@ def _find_latest_session_file(agent: str) -> str | None:
         claude_projects = home / ".claude" / "projects"
         if not claude_projects.exists():
             return None
-        session_files = list(claude_projects.glob("*/*.jsonl"))
+        session_files = [
+            p for p in claude_projects.glob("*/*.jsonl")
+            if p.stat().st_mtime > after
+        ]
         if not session_files:
             return None
         return str(max(session_files, key=lambda p: p.stat().st_mtime))
@@ -392,6 +401,7 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
 
                 # Test via agent CLI
                 log(f"[{agent}/{sid}] Running test prompt...")
+                run_start = time.time()
                 rc, summary = _run_test_prompt(
                     story["prompt"],
                     agent,
@@ -401,8 +411,8 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
                     args.extra_args or None,
                 )
 
-                # Detect session file
-                session_file = _find_latest_session_file(agent)
+                # Detect session file created during this run
+                session_file = _find_latest_session_file(agent, after=run_start)
 
                 all_results.append((agent, sid, story, rc, summary, session_file))
 
