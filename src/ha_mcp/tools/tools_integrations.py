@@ -558,10 +558,50 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             submit_payload = {k: candidate.get(k) for k in normalized_patch}
             apply_result = await client.submit_options_flow_step(flow_id, submit_payload)
 
+            # Some integrations return to menu and need explicit finalize.
+            if apply_result.get("type") == "menu":
+                menu_options = apply_result.get("menu_options", []) or []
+                if "finalize" in menu_options:
+                    apply_result = await client.submit_options_flow_step(
+                        flow_id, {"next_step_id": "finalize"}
+                    )
+
+            # If we are still in a form step, the write is incomplete.
+            if apply_result.get("type") == "form":
+                form_schema = apply_result.get("data_schema", [])
+                return _error(
+                    "FLOW_STEP_INVALID",
+                    "Options flow requires additional form input; single-step apply is incomplete.",
+                    {
+                        "entry_id": entry_id,
+                        "step_id": apply_result.get("step_id"),
+                        "required_fields": [f.get("name") for f in form_schema if isinstance(f, dict)],
+                    },
+                )
+
             # Read back persisted options
             updated_entry = await client.get_config_entry(entry_id)
             after_options = deepcopy(updated_entry.get("options", {}) or {})
             verify_diff = _diff_options(before_options, after_options)
+
+            mismatched: list[dict[str, Any]] = []
+            for key, expected_val in normalized_patch.items():
+                actual_val = after_options.get(key)
+                if actual_val != expected_val:
+                    mismatched.append(
+                        {"key": key, "expected": expected_val, "actual": actual_val}
+                    )
+            if mismatched:
+                return _error(
+                    "WRITE_CONFLICT",
+                    "Options write could not be verified from persisted config-entry options.",
+                    {
+                        "entry_id": entry_id,
+                        "mismatched_keys": mismatched,
+                        "apply_flow_result_type": apply_result.get("type"),
+                        "apply_flow_step_id": apply_result.get("step_id"),
+                    },
+                )
 
             response: dict[str, Any] = {
                 "success": True,
