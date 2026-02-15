@@ -29,13 +29,7 @@ prompt: >
   Look up what entities are available first, then build the dashboard.
   Show me what cards you created.
 
-teardown:
-  - tool: ha_config_delete_dashboard
-    args:
-      dashboard_id: "living-room-test"
-  - tool: ha_config_remove_area
-    args:
-      area_id: "living_room_test"
+teardown: []
 
 expected:
   tools_should_use:

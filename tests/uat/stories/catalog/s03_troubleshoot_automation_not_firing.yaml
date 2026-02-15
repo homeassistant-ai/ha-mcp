@@ -38,10 +38,7 @@ prompt: >
   Check the automation config, its traces, and the relevant history. Tell me what
   you found and what might be causing the issue.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "morning_bedroom_lights_test"
+teardown: []
 
 expected:
   tools_should_use:

@@ -24,14 +24,7 @@ prompt: >
      someone being home
   Show me both the helper and the automation you created.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "vacation_mode_lights"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "vacation_mode"
+teardown: []
 
 expected:
   tools_should_use:

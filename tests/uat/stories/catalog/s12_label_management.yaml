@@ -26,13 +26,7 @@ prompt: >
   4. Tell me which light entities might be good candidates for the
      "Critical" label based on their names
 
-teardown:
-  - tool: ha_config_remove_label
-    args:
-      label_id: "critical"
-  - tool: ha_config_remove_label
-    args:
-      label_id: "battery"
+teardown: []
 
 expected:
   tools_should_use:

@@ -23,10 +23,7 @@ prompt: >
   be enabled. Tell me the entity_id of the automation you created and show me
   its trigger and action configuration.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "sunset_porch_light"
+teardown: []
 
 expected:
   tools_should_use:

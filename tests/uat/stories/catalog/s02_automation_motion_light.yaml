@@ -29,14 +29,7 @@ prompt: >
   Make sure it handles repeated motion correctly (restarts the timer).
   Show me what you created.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "kitchen_motion_light"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "kitchen_motion_sensor_test"
+teardown: []
 
 expected:
   tools_should_use:

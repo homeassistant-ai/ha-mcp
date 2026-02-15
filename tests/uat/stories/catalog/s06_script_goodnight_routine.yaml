@@ -25,10 +25,7 @@ prompt: >
   First check what lights and climate entities I have, then build the script.
   Show me the full sequence you created.
 
-teardown:
-  - tool: ha_config_remove_script
-    args:
-      script_id: "goodnight_routine"
+teardown: []
 
 expected:
   tools_should_use:

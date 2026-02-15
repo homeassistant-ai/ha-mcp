@@ -22,16 +22,7 @@ prompt: >
   should belong to based on its name. Don't actually move them yet, just show
   me your recommendations in a clear table format.
 
-teardown:
-  - tool: ha_config_remove_area
-    args:
-      area_id: "kitchen_test"
-  - tool: ha_config_remove_area
-    args:
-      area_id: "bedroom_test"
-  - tool: ha_config_remove_area
-    args:
-      area_id: "garage_test"
+teardown: []
 
 expected:
   tools_should_use:

@@ -40,22 +40,7 @@ prompt: >
     then turns it off
   Use native Home Assistant conditions, not templates. Show me what you created.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "door_alert_lights"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "front_door_sensor_test"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "back_door_sensor_test"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "alarm_home_mode_test"
+teardown: []
 
 expected:
   tools_should_use:

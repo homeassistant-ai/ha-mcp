@@ -44,14 +44,7 @@ prompt: >
   indicates presence. Add a condition to the automation that checks if this boolean
   is on. Don't change anything else about the automation. Show me the updated config.
 
-teardown:
-  - tool: ha_config_remove_automation
-    args:
-      identifier: "evening_lights_test"
-  - tool: ha_config_remove_helper
-    args:
-      helper_type: "input_boolean"
-      helper_id: "someone_home_test"
+teardown: []
 
 expected:
   tools_should_use:
