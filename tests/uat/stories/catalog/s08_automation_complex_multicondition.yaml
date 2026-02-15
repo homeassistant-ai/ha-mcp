@@ -42,6 +42,14 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does an automation with alias 'Door Alert Lights' exist?"
+    - "Does it have triggers for both front_door_sensor_test and back_door_sensor_test?"
+    - "Does it have a sun condition (below_horizon/after sunset)?"
+    - "Does it have a state condition checking alarm_home_mode_test is on?"
+    - "Does it turn on light.bed_light and then turn it off after a delay?"
+
 expected:
   tools_should_use:
     - ha_config_set_automation

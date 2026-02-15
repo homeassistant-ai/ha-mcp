@@ -26,6 +26,11 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "What is the current state of light.bed_light?"
+    - "Does light.bed_light have any history entries in the last 24 hours?"
+
 expected:
   tools_should_use:
     - ha_get_history

@@ -27,6 +27,13 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does a script with alias 'Goodnight Routine' exist? Show its entity_id."
+    - "Does it contain actions to turn off lights?"
+    - "Does it contain an action to set climate/thermostat to 18 degrees?"
+    - "Does it include delay steps between actions?"
+
 expected:
   tools_should_use:
     - ha_search_entities

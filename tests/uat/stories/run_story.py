@@ -3,10 +3,10 @@
 Standalone story runner.
 
 Runs YAML stories against a HA test instance:
-- Setup/teardown: FastMCP in-memory (sub-second, deterministic)
+- Setup: FastMCP in-memory (sub-second, deterministic)
 - Test prompt: AI agent CLI via run_uat.py (gemini/claude)
+- Each agent gets a fresh HA container (clean state)
 
-One HA container is shared across all stories in a run.
 Results are appended to a JSONL file for historical tracking.
 
 Usage:
@@ -21,6 +21,9 @@ Usage:
 
     # Use an existing HA instance instead of starting a container
     uv run python tests/uat/stories/run_story.py --all --agents gemini --ha-url http://localhost:8123
+
+    # Keep container alive after run (for verification/debugging)
+    uv run python tests/uat/stories/run_story.py --all --agents gemini --keep-container
 
     # Just print the BAT scenario JSON
     uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --dry-run
@@ -68,7 +71,7 @@ def load_story(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# HA Container (reuses run_uat.py's HAContainer)
+# HA Container
 # ---------------------------------------------------------------------------
 def _start_container() -> dict:
     """Start a HA test container, return {url, token, container, config_dir}."""
@@ -153,7 +156,40 @@ def _stop_container(ha: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# FastMCP in-memory setup/teardown
+# Session file detection
+# ---------------------------------------------------------------------------
+def _find_latest_session_file(agent: str) -> str | None:
+    """Find the most recent session file for an agent after a run.
+
+    Gemini: ~/.gemini/tmp/<hash>/chats/session-*.json
+    Claude: ~/.claude/projects/<dir>/<session>.jsonl
+    """
+    home = Path.home()
+
+    if agent == "gemini":
+        gemini_tmp = home / ".gemini" / "tmp"
+        if not gemini_tmp.exists():
+            return None
+        # Find the most recently modified session file
+        session_files = list(gemini_tmp.glob("*/chats/session-*.json"))
+        if not session_files:
+            return None
+        return str(max(session_files, key=lambda p: p.stat().st_mtime))
+
+    if agent == "claude":
+        claude_projects = home / ".claude" / "projects"
+        if not claude_projects.exists():
+            return None
+        session_files = list(claude_projects.glob("*/*.jsonl"))
+        if not session_files:
+            return None
+        return str(max(session_files, key=lambda p: p.stat().st_mtime))
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# FastMCP in-memory setup
 # ---------------------------------------------------------------------------
 async def _run_mcp_steps(
     ha_url: str, ha_token: str, steps: list[dict], phase: str
@@ -194,19 +230,19 @@ async def _run_mcp_steps(
 # ---------------------------------------------------------------------------
 def _run_test_prompt(
     prompt: str,
-    agents: str,
+    agent: str,
     ha_url: str,
     ha_token: str,
     branch: str | None = None,
     extra_args: list[str] | None = None,
 ) -> tuple[int, dict | None]:
-    """Run test prompt via run_uat.py. Returns (exit_code, parsed_summary)."""
+    """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
     scenario = {"test_prompt": prompt.strip()}
 
     cmd = [
         sys.executable,
         str(RUN_UAT),
-        "--agents", agents,
+        "--agents", agent,
         "--ha-url", ha_url,
         "--ha-token", ha_token,
     ]
@@ -272,6 +308,7 @@ def append_result(
     describe: str,
     branch: str | None,
     bat_summary: dict,
+    session_file: str | None = None,
 ) -> None:
     """Append a single story result as one JSONL line."""
     agent_data = bat_summary.get("agents", {}).get(agent, {})
@@ -294,6 +331,8 @@ def append_result(
         "tool_failures": aggregate.get("total_tool_fail"),
         "turns": test_phase.get("num_turns"),
     }
+    if session_file:
+        record["session_file"] = session_file
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "a") as f:
@@ -304,79 +343,101 @@ def append_result(
 # Main
 # ---------------------------------------------------------------------------
 async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]]) -> int:
-    """Run all stories: container → (setup → test → teardown) per story."""
+    """Run stories with a fresh container per agent.
+
+    For each agent: start container -> run all stories -> stop container.
+    When --ha-url is provided, all agents share the external instance.
+    """
     sha, describe = get_git_info()
     agent_list = [a.strip() for a in args.agents.split(",")]
+    using_external_ha = bool(args.ha_url)
 
-    # Start or connect to HA
-    ha = None
-    ha_url = args.ha_url
-    ha_token = args.ha_token
-    if not ha_url:
-        ha = _start_container()
-        ha_url = ha["url"]
-        ha_token = ha["token"]
+    all_results: list[tuple[str, str, dict, int, dict | None, str | None]] = []
+    # Each entry: (agent, story_id, story, exit_code, summary, session_file)
 
-    try:
-        results = []
-        for path, story in filtered:
-            sid = story["id"]
-            log(f"\n{'='*60}")
-            log(f"Story {sid}: {story['title']}")
-            log(f"{'='*60}")
+    for agent in agent_list:
+        log(f"\n{'#'*60}")
+        log(f"Agent: {agent}")
+        log(f"{'#'*60}")
 
-            setup_steps = story.get("setup") or []
-            teardown_steps = story.get("teardown") or []
+        # Start a fresh container for this agent (or use external HA)
+        ha = None
+        ha_url = args.ha_url
+        ha_token = args.ha_token
+        if not using_external_ha:
+            ha = _start_container()
+            ha_url = ha["url"]
+            ha_token = ha["token"]
 
-            # Setup via FastMCP in-memory
-            if setup_steps:
-                log(f"[{sid}] Setup ({len(setup_steps)} steps via FastMCP)...")
-                await _run_mcp_steps(ha_url, ha_token, setup_steps, "setup")
+        try:
+            for _path, story in filtered:
+                sid = story["id"]
+                log(f"\n{'='*60}")
+                log(f"[{agent}] Story {sid}: {story['title']}")
+                log(f"{'='*60}")
 
-            # Test via agent CLI
-            log(f"[{sid}] Test via {args.agents}...")
-            rc, summary = _run_test_prompt(
-                story["prompt"],
-                args.agents,
-                ha_url,
-                ha_token,
-                args.branch,
-                args.extra_args or None,
-            )
-            results.append((story, rc, summary))
+                setup_steps = story.get("setup") or []
 
-            # Append JSONL result
-            if summary:
-                for agent in agent_list:
+                # Setup via FastMCP in-memory
+                if setup_steps:
+                    log(f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)...")
+                    await _run_mcp_steps(ha_url, ha_token, setup_steps, "setup")
+
+                # Test via agent CLI
+                log(f"[{agent}/{sid}] Running test prompt...")
+                rc, summary = _run_test_prompt(
+                    story["prompt"],
+                    agent,
+                    ha_url,
+                    ha_token,
+                    args.branch,
+                    args.extra_args or None,
+                )
+
+                # Detect session file
+                session_file = _find_latest_session_file(agent)
+
+                all_results.append((agent, sid, story, rc, summary, session_file))
+
+                # Append JSONL result
+                if summary:
                     append_result(
                         args.results_file, story, agent, sha, describe,
-                        args.branch, summary,
+                        args.branch, summary, session_file,
                     )
 
-            # Teardown via FastMCP in-memory
-            if teardown_steps:
-                log(f"[{sid}] Teardown ({len(teardown_steps)} steps via FastMCP)...")
-                await _run_mcp_steps(ha_url, ha_token, teardown_steps, "teardown")
+                if session_file:
+                    log(f"[{agent}/{sid}] Session file: {session_file}")
 
-        # Summary
-        log(f"\n--- Summary ---")
-        for story, rc, _ in results:
-            status = "PASS" if rc == 0 else "FAIL"
-            log(f"  [{status}] {story['id']}: {story['title']}")
+        finally:
+            if ha:
+                if args.keep_container:
+                    log(f"\n[{agent}] Container kept alive: {ha['url']}")
+                    log(f"[{agent}] Token: {ha['token']}")
+                    log(f"[{agent}] Config dir: {ha['config_dir']}")
+                    log(f"[{agent}] Stop manually: docker stop <container>")
+                else:
+                    _stop_container(ha)
 
-        log(f"\nResults appended to {args.results_file}")
+    # Summary
+    log(f"\n{'='*60}")
+    log("Summary")
+    log(f"{'='*60}")
+    for agent, sid, story, rc, _, session_file in all_results:
+        status = "PASS" if rc == 0 else "FAIL"
+        session_info = f" (session: {session_file})" if session_file else ""
+        log(f"  [{status}] {agent}/{sid}: {story['title']}{session_info}")
 
-        failed = sum(1 for _, rc, _ in results if rc != 0)
-        if failed:
-            log(f"\n{failed}/{len(results)} stories failed")
-            return 1
-        else:
-            log(f"\nAll {len(results)} stories passed")
-            return 0
+    log(f"\nResults appended to {args.results_file}")
 
-    finally:
-        if ha:
-            _stop_container(ha)
+    failed = sum(1 for _, _, _, rc, _, _ in all_results if rc != 0)
+    total = len(all_results)
+    if failed:
+        log(f"\n{failed}/{total} story runs failed")
+        return 1
+    else:
+        log(f"\nAll {total} story runs passed")
+        return 0
 
 
 def main() -> None:
@@ -392,6 +453,11 @@ def main() -> None:
     parser.add_argument("--ha-token", help="HA long-lived access token")
     parser.add_argument("--dry-run", action="store_true", help="Print BAT scenario JSON")
     parser.add_argument("--min-weight", type=int, default=1, help="Minimum story weight")
+    parser.add_argument(
+        "--keep-container",
+        action="store_true",
+        help="Keep HA container alive after run (for verification/debugging)",
+    )
     parser.add_argument(
         "--results-file",
         type=Path,
@@ -427,8 +493,6 @@ def main() -> None:
             print(f"# {story['id']}: {story['title']}")
             if story.get("setup"):
                 print(f"# Setup: {len(story['setup'])} steps (FastMCP in-memory)")
-            if story.get("teardown"):
-                print(f"# Teardown: {len(story['teardown'])} steps (FastMCP in-memory)")
             print(json.dumps(scenario, indent=2))
             print()
         return

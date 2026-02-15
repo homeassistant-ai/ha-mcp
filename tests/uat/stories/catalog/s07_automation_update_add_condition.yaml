@@ -46,6 +46,12 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does automation 'Evening Lights Test' still exist with its original time trigger at 18:00?"
+    - "Does it now have a condition checking input_boolean.someone_home_test is on?"
+    - "Does it still have the original action to turn on light.bed_light at 80% brightness?"
+
 expected:
   tools_should_use:
     - ha_config_get_automation

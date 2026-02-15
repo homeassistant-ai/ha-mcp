@@ -24,6 +24,11 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "How many areas are configured in this HA instance?"
+    - "How many light entities exist? How many automation entities?"
+
 expected:
   tools_should_use:
     - ha_config_list_areas

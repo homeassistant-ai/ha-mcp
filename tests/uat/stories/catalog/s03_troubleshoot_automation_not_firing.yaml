@@ -40,6 +40,11 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does automation 'Morning Bedroom Lights Test' exist? What is its current state (enabled/disabled)?"
+    - "Are there any traces for this automation?"
+
 expected:
   tools_should_use:
     - ha_config_get_automation

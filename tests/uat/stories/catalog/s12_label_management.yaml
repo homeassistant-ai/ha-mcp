@@ -28,6 +28,12 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does a label called 'Critical' exist with red color?"
+    - "Does a label called 'Battery' exist with yellow color?"
+    - "How many labels are currently configured?"
+
 expected:
   tools_should_use:
     - ha_config_set_label

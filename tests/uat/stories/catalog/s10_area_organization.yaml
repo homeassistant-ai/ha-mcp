@@ -24,6 +24,11 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Do areas 'Kitchen Test', 'Bedroom Test', and 'Garage Test' all exist?"
+    - "Were any entities actually moved to these areas? (They should NOT have been moved.)"
+
 expected:
   tools_should_use:
     - ha_config_set_area

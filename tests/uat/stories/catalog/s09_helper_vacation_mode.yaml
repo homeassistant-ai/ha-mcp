@@ -26,6 +26,13 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does an input_boolean helper for 'Vacation Mode' exist?"
+    - "Does at least one automation exist that references the vacation mode helper?"
+    - "Does the automation have time-based triggers (around 7pm and/or 11pm)?"
+    - "Does the automation control light.bed_light?"
+
 expected:
   tools_should_use:
     - ha_config_set_helper

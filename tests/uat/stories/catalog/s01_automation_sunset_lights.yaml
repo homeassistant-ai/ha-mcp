@@ -25,6 +25,12 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
+    - "Does it have sun triggers for both sunset and sunrise?"
+    - "Does it control light.bed_light in its actions?"
+
 expected:
   tools_should_use:
     - ha_config_set_automation

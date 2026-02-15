@@ -31,6 +31,13 @@ prompt: >
 
 teardown: []
 
+verify:
+  questions:
+    - "Does an automation with alias 'Kitchen Motion Light' exist?"
+    - "Does it have a state trigger on input_boolean.kitchen_motion_sensor_test?"
+    - "Does it use mode 'restart' or 'single' for handling repeated triggers?"
+    - "Does it include a delay or wait action for the 5-minute timeout?"
+
 expected:
   tools_should_use:
     - ha_search_entities
