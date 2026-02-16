@@ -15,23 +15,23 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `backup_hint` | Backup strength preference | `normal` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
 | `enable_webhook_proxy` | Enable remote access via webhook proxy | `false` |
-| `remote_url` | Remote base URL (optional, auto-detects Nabu Casa if blank) | `""` |
+| `remote_url` | Your external URL (optional, auto-detects Nabu Casa if blank) | `""` |
 
-## Remote Access via Webhook Proxy
+## Remote Access via Webhook Proxy (Dev Feature)
 
-This feature allows external MCP clients (Claude.ai, Open WebUI, etc.) to connect to the add-on remotely through any reverse proxy setup — Nabu Casa, Cloudflare, DuckDNS, nginx, etc.
+The dev addon includes an opt-in webhook proxy that enables remote MCP access through any reverse proxy — Nabu Casa, Cloudflare, DuckDNS, nginx, etc.
 
-### How It Works
+### How it works
 
-When enabled, the add-on auto-installs a lightweight `mcp_proxy` custom integration into Home Assistant. This integration registers an unauthenticated webhook endpoint that proxies MCP requests (including SSE streaming) to the add-on, bypassing the ingress session cookie requirement that external clients can't provide.
+When `enable_webhook_proxy` is turned on, the addon auto-installs a lightweight `mcp_proxy` custom integration into Home Assistant. This integration registers an unauthenticated webhook endpoint (`/api/webhook/<id>`) that proxies MCP requests to the addon, bypassing the ingress session cookie requirement that external MCP clients can't provide.
 
 ### Setup
 
-1. Go to the add-on's **Configuration** tab
-2. Set `enable_webhook_proxy` to **true**
-3. *(Optional)* Set `remote_url` to your external URL (e.g. `https://my-ha.duckdns.org`). Leave blank to auto-detect Nabu Casa.
-4. Click **Save**, then **Restart** the add-on
-5. Check the add-on **Logs** — on first install you'll see:
+1. Go to the addon's **Configuration** tab
+2. Toggle `enable_webhook_proxy` **on**
+3. *(Optional)* Set `remote_url` to your external URL (e.g. `https://ha.example.com`). Leave blank for Nabu Casa auto-detection.
+4. Click **Save**, then **Start** (or **Restart**) the addon
+5. Check the addon **Log** tab — on first install you'll see:
    ```
    ************************************************************
      RESTART HOME ASSISTANT to load the new integration,
@@ -39,19 +39,22 @@ When enabled, the add-on auto-installs a lightweight `mcp_proxy` custom integrat
      (Settings > System > Restart)
    ************************************************************
    ```
-6. **Restart Home Assistant** (Settings > System > Restart) — this is a one-time step to load the `mcp_proxy` integration
-7. **Restart the add-on** again
-8. Copy the **MCP Server URL (remote)** from the add-on logs and paste it into your MCP client
+6. Restart Home Assistant (Settings > System > Restart)
+7. Restart the addon
+8. Copy the remote URL from the logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+9. Paste that URL into your MCP client (Claude Desktop, Open WebUI, etc.)
 
-### URL Auto-Detection
+### URL auto-detection
 
-- If `remote_url` is left blank and Nabu Casa is enabled, the add-on auto-detects your Nabu Casa URL
-- If `remote_url` is set, that URL is used as the base (works with any reverse proxy)
-- The full remote URL is displayed in the add-on logs after setup
+- **Nabu Casa subscribers**: Leave `remote_url` blank — the addon reads your Nabu Casa domain automatically
+- **Other reverse proxies**: Set `remote_url` to your external URL (e.g. `https://ha.example.com`)
 
 ### Disabling
 
-Set `enable_webhook_proxy` back to **false** and restart the add-on. The proxy config and config entry will be cleaned up automatically.
+Toggle `enable_webhook_proxy` off and restart the addon. The proxy config and config entry are cleaned up automatically.
 
 ## Updates
 
