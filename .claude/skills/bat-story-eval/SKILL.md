@@ -48,21 +48,20 @@ Classify changed files:
 
 Skip if `--stories` or `--all-stories` was passed.
 
-1. Read all `tests/uat/stories/catalog/s*.yaml`
-2. For each changed `tools_*.py`, find tool names:
-   ```bash
-   grep -oP 'async def \K(ha_\w+)' src/ha_mcp/tools/tools_automation.py
-   ```
-3. Match against each story's `expected.tools_should_use`
+1. Read the diff from 0a
+2. Read all story YAMLs in `tests/uat/stories/catalog/s*.yaml` (title, description, prompt, setup)
+3. For each story, reason about whether the diff could affect its outcome:
+   - What tools/code paths would this story exercise?
+   - Do any of those overlap with what changed?
 4. Rules:
-   - Story uses a changed tool -> **selected**
-   - Core code changed -> **all stories selected**
+   - Story likely exercises changed code -> **selected**
+   - Core code changed (`client/`, `server.py`, `errors.py`) -> **all stories selected**
    - No src/ changes -> 2 representative stories as smoke test
-5. Report which stories were selected and why
+5. Report which stories were selected and why (one sentence per story)
 
 ### 0c. Design Custom Stories (at least 1)
 
-Analyze the diff to find code paths NOT covered by selected pre-built stories. For each gap, design a scenario that a real user might trigger.
+Read the diff carefully. Identify code paths that changed but are NOT exercised by the selected pre-built stories. For each gap, design a scenario that a real user might trigger.
 
 Write each as `/tmp/custom_c<NN>.yaml` using the standard story format:
 
