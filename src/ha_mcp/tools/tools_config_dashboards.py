@@ -437,8 +437,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     ) -> dict[str, Any]:
         """Create or update a dashboard. url_path must contain a hyphen.
 
-        The guide_response parameter enforces that ha_get_tool_guide('dashboard')
-        was called first. The guide contains mode selection guidance, transform examples,
+        REQUIRED: You MUST call ha_get_tool_guide("dashboard") before using this tool.
+        The guide contains mode selection guidance, transform examples,
         index shifting warnings, and modern best practices.
         Modes: config (full replacement/new), python_transform (recommended for edits),
         jq_transform (legacy, needs jq binary). Only one mode at a time.

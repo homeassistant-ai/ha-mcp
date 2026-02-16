@@ -937,12 +937,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ],
     ) -> dict[str, Any]:
-        """PREREQUISITE: Must be called before using ha-mcp tools that reference it.
+        """PREREQUISITE for search, entity, automation, script, dashboard, history, and template tools.
 
-        Returns the complete usage guide for a topic including required/optional fields,
-        examples, critical warnings, best practices, and troubleshooting.
-        Tools that require this guide will state 'REQUIRED: You MUST call ha_get_tool_guide()'
-        in their description. Without this guide, you lack essential context for correct usage."""
+        Call this BEFORE using: ha_search_entities, ha_deep_search, ha_set_entity,
+        ha_config_set_automation, ha_config_set_script, ha_config_set_dashboard,
+        ha_get_history, ha_get_statistics, or ha_eval_template.
+        Returns required/optional fields, examples, critical warnings, and best practices.
+        Tools that require this guide have a 'guide_response' parameter — pass this tool's
+        output as that parameter."""
         topic_lower = topic.lower().strip()
         if topic_lower in _TOOL_GUIDES:
             guide = _TOOL_GUIDES[topic_lower]

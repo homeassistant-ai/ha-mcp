@@ -10,6 +10,9 @@ import pytest
 
 from ha_mcp.tools.tools_search import register_search_tools
 
+# Valid guide_response for tools requiring ha_get_tool_guide()
+_GR = {"success": True, "topic": "search"}
+
 
 class TestDeepSearchErrorHandling:
     """Test ha_deep_search error path produces structured errors without traceback leaks."""
@@ -64,7 +67,7 @@ class TestDeepSearchErrorHandling:
             side_effect=RuntimeError("Connection refused")
         )
 
-        result = await deep_search_tool(query="test_query")
+        result = await deep_search_tool(query="test_query", guide_response=_GR)
 
         assert result["success"] is False
         assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
@@ -82,7 +85,7 @@ class TestDeepSearchErrorHandling:
             side_effect=RuntimeError("Something went wrong")
         )
 
-        result = await deep_search_tool(query="test_query")
+        result = await deep_search_tool(query="test_query", guide_response=_GR)
 
         suggestions = result["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
@@ -112,7 +115,7 @@ class TestDeepSearchErrorHandling:
             side_effect=exception_cls(exception_msg)
         )
 
-        result = await deep_search_tool(query="test_query")
+        result = await deep_search_tool(query="test_query", guide_response=_GR)
 
         assert result["success"] is False
         assert result["error"]["code"] == expected_code

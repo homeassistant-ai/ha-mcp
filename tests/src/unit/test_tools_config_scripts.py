@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Valid guide_response for tools requiring ha_get_tool_guide()
-_GR = {"success": True}
+_GR = {"success": True, "topic": "script"}
 
 
 class TestScriptToolsValidation:

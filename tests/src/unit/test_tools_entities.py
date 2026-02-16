@@ -8,7 +8,7 @@ import pytest
 from ha_mcp.tools.tools_entities import register_entity_tools
 
 # Valid guide_response for tools requiring ha_get_tool_guide()
-_GR = {"success": True}
+_GR = {"success": True, "topic": "entity"}
 
 
 class TestHaSetEntityLabels:

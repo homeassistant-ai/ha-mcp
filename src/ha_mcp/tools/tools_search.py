@@ -466,50 +466,45 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_overview(
-        guide_response: Annotated[
-            str | dict[str, Any],
-            Field(
-                description="REQUIRED: Output from ha_get_tool_guide('search')"
-            ),
-        ],
         detail_level: Annotated[
             Literal["minimal", "standard", "full"],
             Field(
                 default="minimal",
+                description=(
+                    "'minimal': 10 entities per domain sample (default); "
+                    "'standard': ALL entities per domain (friendly_name only); "
+                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
+                ),
             ),
         ] = "minimal",
         max_entities_per_domain: Annotated[
             int | None,
             Field(
                 default=None,
+                description="Override max entities per domain (None = all). Minimal defaults to 10.",
             ),
         ] = None,
         include_state: Annotated[
             bool | str | None,
             Field(
                 default=None,
+                description="Include state field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
         include_entity_id: Annotated[
             bool | str | None,
             Field(
                 default=None,
+                description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get system overview with entity counts, domain stats, and area analysis.
+        """Get AI-friendly system overview with intelligent categorization.
 
-        REQUIRED: You MUST call ha_get_tool_guide("search") before using this tool.
-        The guide contains overview level recommendations, search workflow patterns,
-        and tips that are essential for effective system discovery.
-        Use 'standard' (default) for most queries, 'minimal' for quick orientation,
-        'full' for maximum detail including system_info and service catalog."""
-        # Validate guide_response - enforces ha_get_tool_guide() was called first
-        try:
-            validate_guide_response(guide_response, "search")
-        except ValueError as e:
-            return {"success": False, "error": str(e)}
-
+        Returns comprehensive system information at the requested detail level,
+        including Home Assistant base_url, version, location, timezone, and entity overview.
+        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+        """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
             include_state, "include_state", default=None

@@ -121,8 +121,8 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Create or update a script. Config must include 'sequence' or 'use_blueprint'.
 
-        The guide_response parameter enforces that ha_get_tool_guide('script')
-        was called first. The guide contains examples, field details, and critical
+        REQUIRED: You MUST call ha_get_tool_guide("script") before using this tool.
+        The guide contains examples, field details, and critical
         warnings about native actions vs templates.
         Optional: alias, description, icon, mode (single/restart/queued/parallel), max, fields.
         Also: ha_get_domain_docs("script") for HA action/sequence reference."""

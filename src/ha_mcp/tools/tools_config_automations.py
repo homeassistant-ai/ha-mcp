@@ -304,8 +304,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
     ) -> dict[str, Any]:
         """Create or update an automation. Omit identifier to create new.
 
-        The guide_response parameter enforces that ha_get_tool_guide('automation')
-        was called first. The guide contains required field schemas, examples, and
+        REQUIRED: You MUST call ha_get_tool_guide("automation") before using this tool.
+        The guide contains required field schemas, examples, and
         critical warnings about native vs template usage.
         Required fields: alias, trigger, action (or use_blueprint with path+input).
         Optional: description, condition, mode (single/restart/queued/parallel), max, variables.
