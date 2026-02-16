@@ -205,6 +205,35 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
     return None
 
 
+def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
+    """Count tool calls from an agent session file."""
+    if not session_file or not Path(session_file).exists():
+        return None
+
+    try:
+        if agent == "gemini":
+            data = json.loads(Path(session_file).read_text())
+            count = 0
+            for msg in data.get("messages", []):
+                count += len(msg.get("toolCalls", []))
+            return count
+
+        if agent == "claude":
+            count = 0
+            for line in Path(session_file).read_text().splitlines():
+                entry = json.loads(line)
+                if entry.get("type") == "assistant":
+                    for block in entry.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_use":
+                            count += 1
+            return count
+    except Exception as exc:
+        log(f"  Tool call extraction failed: {exc}")
+        return None
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Session file detection
 # ---------------------------------------------------------------------------
@@ -401,6 +430,10 @@ def append_result(
     cost_usd = test_phase.get("cost_usd")
     if cost_usd is not None:
         record["cost_usd"] = cost_usd
+
+    # Extract tool call count from session file if not in summary
+    if record["tool_calls"] is None:
+        record["tool_calls"] = _extract_tool_calls(session_file, agent)
 
     # Extract token usage from session file
     tokens = _extract_tokens(session_file, agent)
