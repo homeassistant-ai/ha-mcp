@@ -16,7 +16,7 @@ tags:
   - logbook
 
 setup:
-  # Create a disabled automation (simulates "didn't fire" scenario)
+  # Create automation, then explicitly disable it (initial_state only affects HA restart)
   - tool: ha_config_set_automation
     args:
       config:
@@ -31,6 +31,12 @@ setup:
               entity_id: light.bed_light
         initial_state: false
         mode: single
+  - tool: ha_call_service
+    args:
+      domain: automation
+      service: turn_off
+      target:
+        entity_id: automation.morning_bedroom_lights_test
 
 prompt: >
   My "Morning Bedroom Lights Test" automation was supposed to turn on the bedroom

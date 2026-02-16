@@ -45,4 +45,4 @@ expected:
   description: >
     Agent should create an automation with state trigger on the motion sensor,
     and use a delay or wait_for_trigger pattern for the timeout. Mode should
-    be 'restart' or 'single' to handle repeated triggers correctly.
+    be 'restart' to handle repeated triggers correctly (restarts the timer).

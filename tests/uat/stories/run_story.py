@@ -318,6 +318,7 @@ def _run_test_prompt(
         input=json.dumps(scenario),
         capture_output=True,
         text=True,
+        timeout=600,
     )
 
     if result.stderr:
