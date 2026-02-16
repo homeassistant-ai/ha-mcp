@@ -51,7 +51,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
