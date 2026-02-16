@@ -29,11 +29,11 @@ REPO_ROOT = TESTS_DIR.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(TESTS_DIR))
 
-from fastmcp import Client
+from fastmcp import Client  # noqa: E402
+from test_constants import TEST_TOKEN  # noqa: E402
 
-from ha_mcp.client import HomeAssistantClient
-from ha_mcp.server import HomeAssistantSmartMCPServer
-from test_constants import TEST_TOKEN
+from ha_mcp.client import HomeAssistantClient  # noqa: E402
+from ha_mcp.server import HomeAssistantSmartMCPServer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def event_loop():
 # FastMCP client for setup/teardown
 # ---------------------------------------------------------------------------
 @pytest.fixture
-async def mcp_client(ha_container) -> AsyncGenerator[Client, None]:
+async def mcp_client(ha_container) -> AsyncGenerator[Client]:
     """FastMCP in-memory client for programmatic setup/teardown."""
     import ha_mcp.config
 

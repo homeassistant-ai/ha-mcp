@@ -38,7 +38,7 @@ import logging
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -84,9 +84,8 @@ def _start_container(*, keep_alive: bool = False) -> dict:
     import tempfile
 
     import requests
-    from testcontainers.core.container import DockerContainer
-
     from test_constants import TEST_TOKEN
+    from testcontainers.core.container import DockerContainer
 
     if keep_alive:
         os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
@@ -260,7 +259,6 @@ async def _run_mcp_steps(
         return
 
     import ha_mcp.config
-
     from ha_mcp.client import HomeAssistantClient
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -383,7 +381,7 @@ def append_result(
         "sha": sha,
         "version": describe,
         "branch": branch,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "agent": agent,
         "story": story["id"],
         "category": story["category"],

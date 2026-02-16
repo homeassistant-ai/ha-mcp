@@ -34,12 +34,11 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 async def measure_local() -> dict:
     """Measure tools from local code via FastMCP in-memory."""
-    import ha_mcp.config
+    from fastmcp import Client
 
+    import ha_mcp.config
     from ha_mcp.client import HomeAssistantClient
     from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    from fastmcp import Client
 
     ha_mcp.config._settings = None
     client = HomeAssistantClient(base_url="http://localhost:1", token="dummy")
@@ -155,7 +154,7 @@ def print_report(data: dict, label: str) -> None:
     print(f"Total description chars: {data['total_desc_chars']:,}")
     print(f"Total schema chars: {data['total_schema_chars']:,}")
     print(f"Total combined chars: {data['total_chars']:,}")
-    print(f"\nTop 20 tools by size:")
+    print("\nTop 20 tools by size:")
     print(f"{'Tool':<45} {'Desc':>6} {'Schema':>7} {'Total':>7}")
     print("-" * 70)
     for t in data["tools"][:20]:

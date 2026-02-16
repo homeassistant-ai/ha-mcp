@@ -127,12 +127,11 @@ def run_claude_query(
             }
         }
     }
-    f = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="ha_query_claude_", delete=False
-    )
-    json.dump(config, f)
-    f.close()
-    config_file = Path(f.name)
+    ) as f:
+        json.dump(config, f)
+        config_file = Path(f.name)
 
     try:
         # Strip CLAUDECODE to allow nested sessions
