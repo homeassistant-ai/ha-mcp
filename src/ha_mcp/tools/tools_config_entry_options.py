@@ -23,40 +23,6 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
 
     @mcp.tool(
         annotations={
-            "readOnlyHint": True,
-            "tags": ["config"],
-            "title": "List Config Entries",
-        }
-    )
-    @log_tool_usage
-    async def ha_list_config_entries() -> dict[str, Any]:
-        """List all config entries (integrations).
-
-        Returns entry_id, domain, title, and state for each integration.
-        Use entry_id with ha_start_config_entry_options_flow to configure an integration.
-        """
-        try:
-            entries = await client.get_config_entries()
-            return {
-                "success": True,
-                "count": len(entries),
-                "entries": [
-                    {
-                        "entry_id": e.get("entry_id"),
-                        "domain": e.get("domain"),
-                        "title": e.get("title"),
-                        "state": e.get("state"),
-                        "supports_options": e.get("supports_options", False),
-                    }
-                    for e in entries
-                ],
-            }
-        except Exception as e:
-            logger.error(f"Error listing config entries: {e}")
-            return exception_to_structured_error(e)
-
-    @mcp.tool(
-        annotations={
             "destructiveHint": False,
             "tags": ["config"],
             "title": "Start Options Flow",
@@ -66,11 +32,12 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
     async def ha_start_config_entry_options_flow(
         entry_id: Annotated[
             str,
-            Field(description="Config entry ID (from ha_list_config_entries)"),
+            Field(description="Config entry ID. Use ha_get_integration() to find entries with supports_options=true."),
         ],
     ) -> dict[str, Any]:
         """Start options flow for a config entry.
 
+        Use ha_get_integration() to discover entry IDs (look for supports_options=true).
         Returns flow_id and first step info (menu_options or data_schema).
         Use the flow_id with ha_submit_config_entry_options_step to navigate the flow.
 
@@ -119,7 +86,9 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         For form steps: {"field1": "value1", "field2": true, ...}
 
         Returns next step info or completion status.
-        Repeat until you're back at the main menu, then use ha_finish_config_entry_options_flow.
+        Repeat until the flow completes. Successful flows complete automatically
+        when the final form step is submitted. Use ha_abort_config_entry_options_flow
+        only if you need to cancel without saving.
         """
         try:
             # Parse data if string
@@ -154,26 +123,28 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         annotations={
             "destructiveHint": True,
             "tags": ["config"],
-            "title": "Finish Options Flow",
+            "title": "Abort Options Flow",
         }
     )
     @log_tool_usage
-    async def ha_finish_config_entry_options_flow(
+    async def ha_abort_config_entry_options_flow(
         flow_id: Annotated[
             str,
-            Field(description="Flow ID to complete"),
+            Field(description="Flow ID to abort"),
         ],
     ) -> dict[str, Any]:
-        """Complete or abort an options flow.
+        """Abort an in-progress options flow without saving changes.
 
-        Call this when you're done configuring and back at the main menu.
+        Successful flows complete automatically when the final form step is submitted
+        via ha_submit_config_entry_options_step. Only call this tool if you need to
+        cancel the flow without applying changes.
         """
         try:
-            result = await client.finish_options_flow(flow_id)
+            result = await client.abort_options_flow(flow_id)
             return {
                 "success": True,
                 "result": result,
             }
         except Exception as e:
-            logger.error(f"Error finishing options flow {flow_id}: {e}")
+            logger.error(f"Error aborting options flow {flow_id}: {e}")
             return exception_to_structured_error(e, context={"flow_id": flow_id})

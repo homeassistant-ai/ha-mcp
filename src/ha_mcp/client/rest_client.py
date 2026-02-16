@@ -684,16 +684,6 @@ class HomeAssistantClient:
             status_code=404,
         )
 
-    async def get_config_entries(self) -> list[dict[str, Any]]:
-        """
-        Get all config entries.
-
-        Returns:
-            List of config entry data (entry_id, domain, title, state, etc.)
-        """
-        logger.debug("Getting all config entries")
-        return await self._request("GET", "/config/config_entries/entry")
-
     async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
         """
         Start an options flow for a config entry.
@@ -735,20 +725,20 @@ class HomeAssistantClient:
             "POST", f"/config/config_entries/options/flow/{flow_id}", json=user_input
         )
 
-    async def finish_options_flow(self, flow_id: str) -> dict[str, Any]:
+    async def abort_options_flow(self, flow_id: str) -> dict[str, Any]:
         """
-        Complete or abort an options flow.
+        Abort an in-progress options flow without saving changes.
 
         Args:
-            flow_id: Flow ID to complete
+            flow_id: Flow ID to abort
 
         Returns:
-            Completion status
+            Abort status
 
         Raises:
-            HomeAssistantAPIError: If flow completion fails
+            HomeAssistantAPIError: If flow abort fails
         """
-        logger.debug(f"Finishing options flow: {flow_id}")
+        logger.debug(f"Aborting options flow: {flow_id}")
         return await self._request(
             "DELETE", f"/config/config_entries/options/flow/{flow_id}"
         )
