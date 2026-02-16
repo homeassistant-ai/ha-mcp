@@ -61,9 +61,9 @@ Skip if `--stories` or `--all-stories` was passed.
 
 ### 0c. Design Custom Stories (at least 1)
 
-Read the diff carefully. Identify the most important code paths that changed but are NOT exercised by the selected pre-built stories. Prioritize by risk — focus on paths most likely to break.
+Read the diff carefully. Your job is to catch regressions. For each changed code path NOT covered by selected pre-built stories, ask: "could this break something a user would notice?" If yes, design a custom story to test that hypothesis.
 
-**Limits**: minimum 1, maximum = number of selected pre-built stories (keeps ~50-50 split). Pick the highest-risk gaps.
+**Guidelines**: Always create at least 1 custom story. Each must test a distinct regression hypothesis — don't create stories that overlap. Stop when you've covered the risky gaps.
 
 Write each as `/tmp/custom_c<NN>.yaml` using the standard story format:
 
@@ -103,7 +103,7 @@ expected:
 - Plausible user scenarios, not synthetic edge cases
 - Setup creates realistic HA state via FastMCP in-memory steps
 - Prompts are what a real user would type
-- At least 1, at most = number of pre-built selected (~50-50 split)
+- At least 1. Each tests a distinct regression hypothesis. Stop when gaps are covered.
 
 ## Step 1: Run Baseline Version
 
