@@ -61,7 +61,9 @@ Skip if `--stories` or `--all-stories` was passed.
 
 ### 0c. Design Custom Stories (at least 1)
 
-Read the diff carefully. Identify code paths that changed but are NOT exercised by the selected pre-built stories. For each gap, design a scenario that a real user might trigger.
+Read the diff carefully. Identify the most important code paths that changed but are NOT exercised by the selected pre-built stories. Prioritize by risk — focus on paths most likely to break.
+
+**Limits**: minimum 1, maximum = number of selected pre-built stories (keeps ~50-50 split). Pick the highest-risk gaps.
 
 Write each as `/tmp/custom_c<NN>.yaml` using the standard story format:
 
@@ -101,7 +103,7 @@ expected:
 - Plausible user scenarios, not synthetic edge cases
 - Setup creates realistic HA state via FastMCP in-memory steps
 - Prompts are what a real user would type
-- Target ~50-50 split with pre-built (at least 1 custom, always)
+- At least 1, at most = number of pre-built selected (~50-50 split)
 
 ## Step 1: Run Baseline Version
 
