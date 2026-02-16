@@ -894,13 +894,14 @@ Located in `.claude/skills/`:
 
 | Skill | Command | Purpose | When to Use |
 |-------|---------|---------|-------------|
-| `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
+| `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing - validates MCP tools with dynamically generated scenarios | PR validation, quick regression checks, one-off integration verification |
+| `bat-story-eval` | `/bat-story-eval --baseline v6.6.1 [--agents gemini]` | Diff-based story evaluation: triage, pre-built + custom stories, two-version comparison | Version comparison, regression detection, hypothesis-driven testing |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
 | `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
-### BAT (Bot Acceptance Testing)
+### BAT Ad-Hoc Testing
 
-**Usage:** `/bat [scenario-description]`
+**Usage:** `/bat-adhoc [scenario-description]`
 
 Quick summary:
 - Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
@@ -908,7 +909,21 @@ Quick summary:
 - Use for PR validation, regression detection, and end-to-end integration verification
 - Progressive disclosure: only read `results_file` when you need to dig deeper
 
-For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read `.claude/skills/bat/SKILL.md`.
+For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat-adhoc --help` or read `.claude/skills/bat-adhoc/SKILL.md`.
+
+### BAT Story Evaluation
+
+**Usage:** `/bat-story-eval --baseline v6.6.1 [--agents gemini] [--stories s01,s02]`
+
+Quick summary:
+- Compares MCP tool behavior between target (local code) and baseline (released version)
+- Diff-based triage: analyzes `git diff` to select relevant pre-built stories
+- Generates custom stories (~50-50 with pre-built) to test code paths the diff affects but pre-built stories don't cover
+- Black-box verification via `ha_query.py`, white-box analysis via session files
+- Scores each story: pass/partial/fail with regression detection
+- Report includes full custom story details (rationale, setup, prompts, verification)
+
+For complete workflow and evaluation criteria, invoke `/bat-story-eval --help` or read `.claude/skills/bat-story-eval/SKILL.md`.
 
 ### Contributor PR Review
 

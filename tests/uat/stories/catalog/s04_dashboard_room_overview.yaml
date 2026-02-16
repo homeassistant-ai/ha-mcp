@@ -1,0 +1,48 @@
+id: s04
+title: "Create room overview dashboard"
+category: dashboard
+weight: 4
+description: >
+  User asks for a dashboard showing a room's key information. Tests the agent's
+  ability to discover entities in an area, select appropriate card types, and
+  compose a functional dashboard. Dashboard creation is an emerging high-value
+  use case per research.
+
+tags:
+  - dashboard
+  - create
+  - cards
+  - search
+
+setup:
+  # Ensure an area exists with entities
+  - tool: ha_config_set_area
+    args:
+      name: "Living Room Test"
+
+prompt: >
+  Create a new dashboard called "Living Room" with URL path "living-room-test".
+  It should show:
+  1. All the lights in the home (with toggle controls)
+  2. Any temperature or climate entities you can find
+  3. A button to turn off all lights at once
+  Look up what entities are available first, then build the dashboard.
+  Show me what cards you created.
+
+teardown: []
+
+verify:
+  questions:
+    - "Does a dashboard with URL path 'living-room-test' exist?"
+    - "Does it contain cards that show light entities with toggle controls?"
+    - "Does it contain any climate or temperature-related cards?"
+
+expected:
+  tools_should_use:
+    - ha_search_entities
+    - ha_config_set_dashboard
+  description: >
+    Agent should first search for light and climate entities, then create a
+    dashboard with appropriate cards (entities card for lights, possibly a
+    thermostat card, and a button/script for "all off"). Should use
+    ha_get_card_types or ha_get_dashboard_guide for card reference.

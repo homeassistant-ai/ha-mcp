@@ -1,0 +1,60 @@
+id: s08
+title: "Create complex multi-condition automation"
+category: automation
+weight: 4
+description: >
+  User wants an automation with multiple triggers AND multiple conditions.
+  Tests the agent's ability to compose complex automation logic with
+  proper use of native HA conditions (not templates). Per research,
+  agents tend to over-use templates - this story validates correct behavior.
+
+tags:
+  - automation
+  - create
+  - conditions
+  - triggers
+  - complex
+
+setup:
+  # Create helpers to simulate sensors
+  - tool: ha_config_set_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Front Door Sensor Test"
+  - tool: ha_config_set_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Back Door Sensor Test"
+  - tool: ha_config_set_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Alarm Home Mode Test"
+
+prompt: >
+  Create an automation called "Door Alert Lights" that works like this:
+  - Triggers when either the front door sensor (input_boolean.front_door_sensor_test)
+    or the back door sensor (input_boolean.back_door_sensor_test) turns on
+  - But ONLY runs if it's after sunset AND the alarm is in home mode
+    (input_boolean.alarm_home_mode_test is on)
+  - When triggered, turns on light.bed_light at 100% brightness for 30 seconds,
+    then turns it off
+  Use native Home Assistant conditions, not templates. Show me what you created.
+
+teardown: []
+
+verify:
+  questions:
+    - "Does an automation with alias 'Door Alert Lights' exist?"
+    - "Does it have triggers for both front_door_sensor_test and back_door_sensor_test?"
+    - "Does it have a sun condition (below_horizon/after sunset)?"
+    - "Does it have a state condition checking alarm_home_mode_test is on?"
+    - "Does it turn on light.bed_light and then turn it off after a delay?"
+
+expected:
+  tools_should_use:
+    - ha_config_set_automation
+  description: >
+    Agent should create an automation with multiple state triggers (OR logic),
+    multiple conditions combined with AND (sun condition + state condition),
+    and a sequence action with delay. Conditions should use native HA syntax
+    (condition: sun, condition: state) not Jinja2 templates.
