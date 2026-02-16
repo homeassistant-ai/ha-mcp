@@ -895,7 +895,7 @@ Located in `.claude/skills/`:
 | Skill | Command | Purpose | When to Use |
 |-------|---------|---------|-------------|
 | `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing - validates MCP tools with dynamically generated scenarios | PR validation, quick regression checks, one-off integration verification |
-| `bat-story-eval` | `/bat-story-eval [--agents gemini] [--stories s01]` | Structured story evaluation with AI-driven scoring and regression detection | Full story catalog evaluation, baseline comparison, regression protocol |
+| `bat-story-eval` | `/bat-story-eval --baseline v6.6.1 [--agents gemini]` | Diff-based story evaluation: triage, pre-built + custom stories, two-version comparison | Version comparison, regression detection, hypothesis-driven testing |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
 | `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
@@ -913,14 +913,15 @@ For complete workflow, scenario design guidelines, examples, and output format, 
 
 ### BAT Story Evaluation
 
-**Usage:** `/bat-story-eval [--agents gemini] [--stories s01,s02] [--branch v6.6.1]`
+**Usage:** `/bat-story-eval --baseline v6.6.1 [--agents gemini] [--stories s01,s02]`
 
 Quick summary:
-- Runs structured story catalog against live HA container (one container per agent)
-- Black-box verification: queries live HA via `ha_query.py` using `verify.questions` from stories
-- White-box analysis: reads agent session files for tool selection, error recovery, efficiency
-- Scores each story: pass/partial/fail with regression detection against baseline
-- Regression protocol: re-run, cross-agent check, git diff analysis
+- Compares MCP tool behavior between target (local code) and baseline (released version)
+- Diff-based triage: analyzes `git diff` to select relevant pre-built stories
+- Generates custom stories (~50-50 with pre-built) to test code paths the diff affects but pre-built stories don't cover
+- Black-box verification via `ha_query.py`, white-box analysis via session files
+- Scores each story: pass/partial/fail with regression detection
+- Report includes full custom story details (rationale, setup, prompts, verification)
 
 For complete workflow and evaluation criteria, invoke `/bat-story-eval --help` or read `.claude/skills/bat-story-eval/SKILL.md`.
 

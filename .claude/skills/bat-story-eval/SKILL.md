@@ -1,8 +1,8 @@
 ---
 name: bat-story-eval
-description: Run UAT stories, verify results against live HA, score pass/partial/fail, detect regressions.
+description: Compare MCP tool behavior between target and baseline versions using pre-built and custom stories with diff-based triage.
 disable-model-invocation: true
-argument-hint: [--agents gemini] [--stories s01,s02] [--branch v6.6.1]
+argument-hint: --baseline v6.6.1 [--agents gemini] [--stories s01,s02]
 allowed-tools: Bash, Read, Write, Glob, Grep, Task
 ---
 
@@ -13,192 +13,296 @@ You are the evaluator. Follow these steps IN ORDER. Do not skip steps.
 ## Parse Arguments
 
 From `$ARGUMENTS`, extract:
+- `--baseline`: REQUIRED. Git tag/branch of the released version (e.g., `v6.6.1`).
 - `--agents`: Agent list (default: `gemini`). Comma-separated.
-- `--stories`: Story IDs (default: all). Comma-separated, e.g. `s01,s02`.
-- `--branch`: Git branch/tag (default: local code).
-- `--keep-container`: Keep HA container alive after run.
+- `--stories`: Force specific pre-built story IDs (e.g., `s01,s02`). Overrides triage selection.
+- `--all-stories`: Skip triage, run ALL pre-built stories.
+- `--keep-container`: Keep HA containers alive after run for manual inspection.
+- `--model`: Model for Claude agent (e.g., `haiku`, `sonnet`).
 
-If `$ARGUMENTS` is `--help` or empty, show usage and stop:
+If `$ARGUMENTS` is `--help` or missing `--baseline`, show usage and stop:
 ```
-/bat-story-eval --agents gemini --stories s01
-/bat-story-eval --agents gemini,claude --stories s01,s02 --branch v6.6.1
+/bat-story-eval --baseline v6.6.1
+/bat-story-eval --baseline v6.6.1 --agents gemini,claude
+/bat-story-eval --baseline v6.6.1 --stories s01,s02
+/bat-story-eval --baseline v6.6.1 --all-stories --agents claude --model haiku
 ```
 
-## Steps 1-2: Run and Verify Stories (ONE AT A TIME)
+## Step 0: Triage (Diff Analysis + Custom Story Design)
 
-**CRITICAL: Run each story individually, verify it, then move on.**
-Stories share a container per agent, so later stories can clobber earlier ones.
-You MUST verify each story before running the next.
+### 0a. Compute Diff
 
-For EACH story in the list, repeat this loop:
+```bash
+cd /home/julien/github/ha-mcp/worktree/uat-stories
+git diff <baseline>..HEAD -- src/ha_mcp/ --stat
+git diff <baseline>..HEAD -- src/ha_mcp/ --name-only
+```
 
-### 1a. Run ONE story
+Classify changed files:
+- **Tool modules** (`tools/tools_*.py`): specific tool implementations changed
+- **Core code** (`client/`, `server.py`, `errors.py`, `tools/util_helpers.py`): affects all tools
+- **Utilities** (`utils/`, `resources/`): may affect all tools
+- **No src/ changes**: only tests/docs/config — select 2 smoke-test stories
+
+### 0b. Select Pre-built Stories
+
+Skip if `--stories` or `--all-stories` was passed.
+
+1. Read all `tests/uat/stories/catalog/s*.yaml`
+2. For each changed `tools_*.py`, find tool names:
+   ```bash
+   grep -oP 'async def \K(ha_\w+)' src/ha_mcp/tools/tools_automation.py
+   ```
+3. Match against each story's `expected.tools_should_use`
+4. Rules:
+   - Story uses a changed tool -> **selected**
+   - Core code changed -> **all stories selected**
+   - No src/ changes -> 2 representative stories as smoke test
+5. Report which stories were selected and why
+
+### 0c. Design Custom Stories (at least 1)
+
+Analyze the diff to find code paths NOT covered by selected pre-built stories. For each gap, design a scenario that a real user might trigger.
+
+Write each as `/tmp/custom_c<NN>.yaml` using the standard story format:
+
+```yaml
+id: c01
+title: "Short description of what is being tested"
+category: custom
+weight: 5
+description: >
+  Rationale: [what changed in the diff and why this scenario tests it]
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: "input_boolean"
+      name: "Test Entity Name"
+
+prompt: >
+  [Natural language request a real user would make that exercises the changed code]
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent achieve the expected outcome?"
+    - "Did it use the expected tools?"
+
+expected:
+  tools_should_use:
+    - ha_search_entities
+  description: >
+    [What a correct agent should do]
+```
+
+**Design principles:**
+- Focus on code paths that changed in the diff
+- Plausible user scenarios, not synthetic edge cases
+- Setup creates realistic HA state via FastMCP in-memory steps
+- Prompts are what a real user would type
+- Target ~50-50 split with pre-built (at least 1 custom, always)
+
+## Step 1: Run Baseline Version
+
+For EACH agent, run all stories against the **baseline** version. One container per agent, reused across all stories.
+
+### 1a. Start container with first story
 
 ```bash
 cd /home/julien/github/ha-mcp/worktree/uat-stories
 uv run python tests/uat/stories/run_story.py \
-  catalog/s01_automation_sunset_lights.yaml \
-  --agents gemini --keep-container \
+  catalog/<first_story>.yaml \
+  --agents <agent> --keep-container \
+  --branch <baseline> \
   --results-file local/uat-results.jsonl
 ```
 
-**CAPTURE from stderr output:**
-- The HA container URL (e.g., `http://localhost:32771`)
-- The HA token
-- Session file path
+**CAPTURE from stderr**: HA URL (e.g., `http://localhost:32771`), token, session file path.
 
-### 1b. Black-Box Verify THIS story immediately
+### 1b. Verify, then run remaining pre-built stories
 
-Read the story YAML to get `verify.questions`, then ask each one via ha_query.py:
-
+After each story, verify via ha_query.py using the story's `verify.questions`:
 ```bash
 uv run python tests/uat/stories/scripts/ha_query.py \
   --ha-url http://localhost:PORT --ha-token TOKEN \
-  --agent gemini \
-  "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
+  --agent <agent> \
+  "Does an automation with alias 'Sunset Porch Light' exist?"
 ```
+Record each answer as **confirmed** / **denied** / **unclear**.
 
-Record each answer as: **confirmed** / **denied** / **unclear**.
+Run remaining pre-built stories on the same container:
+```bash
+uv run python tests/uat/stories/run_story.py \
+  catalog/<next_story>.yaml \
+  --agents <agent> --ha-url http://localhost:PORT --ha-token TOKEN \
+  --branch <baseline> \
+  --results-file local/uat-results.jsonl
+```
+Verify each immediately after running.
 
-If ALL critical questions are confirmed -> black-box = PASS.
-If entity doesn't exist -> black-box = FAIL.
-If entity exists but wrong structure -> black-box = PARTIAL.
+### 1c. Run custom stories on same container
 
-### 1c. Stop the container before the next story
+```bash
+uv run python tests/uat/stories/run_story.py \
+  /tmp/custom_c01.yaml \
+  --agents <agent> --ha-url http://localhost:PORT --ha-token TOKEN \
+  --branch <baseline> \
+  --results-file local/uat-results.jsonl
+```
+Verify each via ha_query.py using the custom story's `verify.questions`.
+
+### 1d. Stop container
 
 ```bash
 docker stop $(docker ps -q --filter "ancestor=ghcr.io/home-assistant/home-assistant:2026.1.3") 2>/dev/null
 ```
 
-Then repeat 1a-1c for the next story. Each story gets a fresh container.
+## Step 2: Run Target Version
 
-## Step 3: White-Box Analysis (REQUIRED)
+Repeat Step 1 for the **target** (local code). Same stories, same order, fresh container.
 
-For EACH story that ran, read the session file captured in Step 1.
+The only difference: omit `--branch` so run_story.py uses local code.
 
-**Gemini sessions** (JSON file):
 ```bash
-cat /path/to/session-*.json | python3 -c "
+uv run python tests/uat/stories/run_story.py \
+  catalog/<first_story>.yaml \
+  --agents <agent> --keep-container \
+  --results-file local/uat-results.jsonl
+```
+
+Same container reuse for remaining stories (`--ha-url`). Same verification after each.
+
+## Step 3: White-Box Analysis
+
+For each story on each version, read the session file captured during the run.
+
+**Gemini sessions** (JSON):
+```bash
+python3 -c "
 import json, sys
-data = json.load(sys.stdin)
+data = json.load(open(sys.argv[1]))
 for msg in data.get('messages', []):
     for tc in msg.get('toolCalls', []):
-        status = tc.get('status', '?')
-        print(f\"  {tc['name']} ({status})\")
-"
+        print(f\"  {tc['name']} ({tc.get('status', '?')})\")
+" /path/to/session.json
 ```
 
-**Claude sessions** (JSONL file):
+**Claude sessions** (JSONL):
 ```bash
-grep '"tool_use"' /path/to/session.jsonl | python3 -c "
+python3 -c "
 import json, sys
-for line in sys.stdin:
+for line in open(sys.argv[1]):
     entry = json.loads(line)
-    for block in entry.get('message', {}).get('content', []):
-        if block.get('type') == 'tool_use':
-            print(f\"  {block['name']}\")
-"
+    if entry.get('type') == 'assistant':
+        for b in entry.get('message', {}).get('content', []):
+            if b.get('type') == 'tool_use':
+                print(f\"  {b['name']}\")
+" /path/to/session.jsonl
 ```
 
-Then read the story YAML `expected.tools_should_use` and compare:
-- Were all expected tools used? (High weight)
-- Were there tool failures followed by recovery? (Medium weight)
-- How many total tool calls? (Low weight, just note it)
+Compare against `expected.tools_should_use`:
+- All expected tools used? (High weight)
+- Tool failures with recovery? (Medium weight)
+- Total tool call count (Low weight, note it)
 
-## Step 4: Score Each Story
+## Step 4: Score & Compare
 
-Combine black-box and white-box into a final score:
+### Scoring Matrix
 
 | Black-Box | White-Box | Score |
 |-----------|-----------|-------|
-| Entity correct + right structure | Right tools used | **pass** |
+| Entity correct + right structure | Right tools | **pass** |
 | Entity correct + right structure | Wrong tools or recovered errors | **pass** (with notes) |
 | Entity correct + wrong structure | Any | **partial** |
 | Entity not created | Any | **fail** |
 
-### Extract Billable Tokens
+### Billable Tokens
 
-For each story, extract tokens from the session file captured in Step 1:
-
+Extract from session files:
 ```python
-import json
-from pathlib import Path
-data = json.loads(Path(session_file).read_text())
-totals = {"input": 0, "output": 0, "cached": 0, "thoughts": 0}
-for msg in data.get("messages", []):
-    t = msg.get("tokens", {})
-    for k in totals: totals[k] += t.get(k, 0)
-billable = totals["input"] - totals["cached"] + totals["output"] + totals["thoughts"]
+# Gemini: input includes cached, so subtract
+billable = (input - cached) + output + thoughts
+
+# Claude: input_tokens is already non-cached
+billable = input + output
 ```
 
-**Billable tokens** are the primary efficiency metric. Cached tokens are free and must NOT be used for evaluation.
+### Trend (target vs baseline)
 
-## Step 5: Compare Against Baseline (REQUIRED)
+For each story+agent:
+- Both pass -> **stable**
+- Target pass, baseline fail -> **improved**
+- Target fail, baseline pass -> **decreased** (REGRESSION)
+- Custom story, first run -> **new**
+- Billable tokens >30% higher -> **cost regression** (even if pass)
 
-Read the JSONL results file and find the MOST RECENT passing result for the same story+agent:
+## Step 5: Update JSONL
 
-```bash
-grep '"story":"s01"' local/uat-results.jsonl | grep '"agent":"gemini"' | grep '"passed":true' | tail -1
-```
-
-Compare:
-- If no baseline exists: trend = `new`
-- If current passed and baseline passed: trend = `stable`
-- If current passed but baseline failed: trend = `improved`
-- If current failed but baseline passed: trend = `decreased` (REGRESSION)
-
-## Step 6: Update JSONL with Eval Results
-
-For EACH scored story, append a NEW line to the JSONL (do NOT modify existing lines).
-Read the LAST line for this story+agent to get the raw data, then write a new line with eval fields added:
-
+Append eval results as NEW lines (never modify existing):
 ```python
-import json
-# Read the last result for this story+agent
-# Add these fields:
 record["eval_score"] = "pass"  # or "partial" or "fail"
-record["eval_notes"] = "Entity created correctly, sun triggers verified, correct tools used"
+record["eval_notes"] = "Entity created, triggers verified"
 record["eval_trend"] = "stable"  # or "new", "improved", "decreased"
-# Write as new JSONL line
 ```
 
-## Step 7: Report
+## Step 6: Report
 
-Output a summary table to the user including **billable tokens** (the primary efficiency metric):
+### Triage Summary
 
 ```
-| Story | Agent  | Score   | Trend   | Billable Tokens | Notes |
-|-------|--------|---------|---------|-----------------|-------|
-| s01   | gemini | pass    | stable  | 36,262          | Sun triggers verified |
-| s02   | gemini | pass    | new     | 77,111          | First run, no baseline |
+Diff: <baseline>..HEAD — N files changed in src/ha_mcp/
+Selected pre-built: s01, s03, s05 (3 stories — tools_automation.py, tools_search.py changed)
+Custom stories: c01, c02 (2 stories — covering error handling, fuzzy search threshold)
+Skipped: s02, s04, s06-s12 (tools unchanged)
 ```
 
-Billable tokens = non-cached input + output + thoughts. Never use cached tokens or wall time.
+### Pre-built Story Results
 
-If any story has trend = `decreased`, flag it prominently and suggest:
-1. Re-run to check for flakiness
-2. Run against baseline branch as control
-3. Check `git diff` between baseline SHA and current
+```
+| Story | Agent  | Baseline | Target | Trend  | Baseline Tokens | Target Tokens | Delta |
+|-------|--------|----------|--------|--------|-----------------|---------------|-------|
+| s01   | gemini | pass     | pass   | stable | 36,262          | 34,100        | -6%   |
+| s03   | gemini | pass     | pass   | stable | 42,000          | 41,500        | -1%   |
+```
 
-If billable tokens increased >30% vs baseline, flag as a **cost regression** even if the story passed.
+### Custom Story Details
 
-## Key Files
+For EACH custom story, output a full section:
 
-| File | Purpose |
-|------|---------|
-| `tests/uat/stories/run_story.py` | Story runner (starts container, runs agents) |
-| `tests/uat/stories/scripts/ha_query.py` | Query live HA via agent+MCP |
-| `tests/uat/stories/catalog/s*.yaml` | Story definitions with `verify` + `expected` |
-| `local/uat-results.jsonl` | Historical results (gitignored) |
-| `references/evaluation-protocol.md` | Detailed scoring criteria (read if unsure) |
-| `references/regression-protocol.md` | Full regression investigation protocol |
+```
+#### c01: [Title]
 
-## Step 8: Investigate Outliers
+**Rationale**: [What changed in the diff and why this tests it]
 
-When a story has >30% more billable tokens than baseline, check for **KV-cache misses**:
+**Setup**:
+- Created input_boolean "Sophisticated Kitchen Sensor" via FastMCP
+
+**Test prompt**: "[The exact prompt sent to the agent]"
+
+**Verification**:
+| Question | Baseline | Target |
+|----------|----------|--------|
+| Found the entity? | confirmed | confirmed |
+| Used ha_search_entities? | confirmed | confirmed |
+
+**Score**: baseline=pass, target=pass, trend=stable
+**Tokens**: baseline=28,500, target=27,200 (-5%)
+```
+
+### Regressions
+
+If any trend = `decreased`:
+1. Flag prominently
+2. Suggest re-run to check flakiness
+3. Show relevant section of `git diff <baseline>..HEAD`
+
+## Step 7: Investigate Outliers
+
+When a story has >30% more billable tokens vs baseline, check for KV-cache misses:
 
 ```python
-# Turn-by-turn cache analysis
 for i, msg in enumerate(data["messages"]):
     tok = msg.get("tokens", {})
     cached = tok.get("cached", 0)
@@ -206,29 +310,37 @@ for i, msg in enumerate(data["messages"]):
     print(f"Turn {i+1}: input={total:,} cached={cached:,} non-cached={total-cached:,}")
 ```
 
-A turn with `cached=0` after a non-cold-start turn indicates a **KV-cache miss** -- a Gemini-side issue (different tool/response shapes change the conversation prefix), NOT a code regression. Follow the regression protocol to confirm.
+A turn with `cached=0` after a non-cold-start turn = KV-cache miss (provider-side, not a code regression).
 
-## Step 9: Tool Description Size (when comparing versions)
+## Step 8: Tool Description Size
 
-Use `measure_tools.py` to measure total tool description size:
+Compare tool description sizes between versions:
 
 ```bash
 uv run python tests/uat/stories/scripts/measure_tools.py \
-  --output local/tool-sizes-master.json \
-  --compare local/tool-sizes-v661.json
+  --output local/tool-sizes-target.json
+uv run python tests/uat/stories/scripts/measure_tools.py \
+  --output local/tool-sizes-baseline.json --branch <baseline>
 ```
 
-Tool description size directly impacts token cost (larger descriptions = more input tokens per turn). Track changes between versions and flag large increases (>5% total).
+Flag >5% total size increase (directly impacts token cost per turn).
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `tests/uat/stories/run_story.py` | Story runner (container, setup, agent CLI) |
+| `tests/uat/stories/scripts/ha_query.py` | Query live HA via agent+MCP for verification |
+| `tests/uat/stories/catalog/s*.yaml` | Pre-built story definitions |
+| `local/uat-results.jsonl` | Historical results (gitignored) |
 
 ## Important Notes
 
-- Run ONE story at a time: run -> verify -> stop container -> next story
-- ALWAYS use `--keep-container` so you can run ha_query.py after each story
-- Stop the container after verifying, before running the next story
-- The working directory MUST be the worktree root for `uv run` to work
-- ha_query.py needs the container URL and token from stderr output
-- Do NOT skip the black-box verification - it's the ground truth
-- Session files may be large; extract just tool calls, don't read entire files
-- **Never use cached tokens** for cost evaluation - they are free and highly variable
-- When comparing versions, always compare **billable tokens** (non-cached input + output + thoughts)
-- A slow story is NOT necessarily a regression - check for KV-cache misses first
+- `--baseline` is required: it's both the diff source and the control group
+- Run pre-built stories BEFORE custom stories (cleanest state)
+- ALWAYS verify each story via ha_query.py before running the next
+- Reuse containers: first story starts it (`--keep-container`), rest use `--ha-url`
+- Custom story YAMLs go to `/tmp/` (ephemeral); full details reported in Step 6
+- Never use cached tokens for cost evaluation (they're free and variable)
+- Compare **billable tokens**: non-cached input + output + thoughts
+- The working directory MUST be `/home/julien/github/ha-mcp/worktree/uat-stories` for `uv run`
