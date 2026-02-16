@@ -209,6 +209,19 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Session file detection
 # ---------------------------------------------------------------------------
+def _find_session_file_by_id(session_id: str) -> str | None:
+    """Find a Claude session file by its session_id (UUID).
+
+    Claude stores sessions at ~/.claude/projects/<dir>/<session_id>.jsonl
+    """
+    home = Path.home()
+    claude_projects = home / ".claude" / "projects"
+    if not claude_projects.exists():
+        return None
+    matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))
+    return str(matches[0]) if matches else None
+
+
 def _find_latest_session_file(agent: str, after: float) -> str | None:
     """Find the most recent session file for an agent created after a timestamp.
 
@@ -217,7 +230,7 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
         after: Only consider files modified after this unix timestamp.
 
     Gemini: ~/.gemini/tmp/<hash>/chats/session-*.json
-    Claude: ~/.claude/projects/<dir>/<session>.jsonl
+    Claude: Use session_id from JSON output instead (see _find_session_file_by_id).
     """
     home = Path.home()
 
@@ -227,18 +240,6 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
             return None
         session_files = [
             p for p in gemini_tmp.glob("*/chats/session-*.json")
-            if p.stat().st_mtime > after
-        ]
-        if not session_files:
-            return None
-        return str(max(session_files, key=lambda p: p.stat().st_mtime))
-
-    if agent == "claude":
-        claude_projects = home / ".claude" / "projects"
-        if not claude_projects.exists():
-            return None
-        session_files = [
-            p for p in claude_projects.glob("*/*.jsonl")
             if p.stat().st_mtime > after
         ]
         if not session_files:
@@ -295,6 +296,7 @@ def _run_test_prompt(
     ha_token: str,
     branch: str | None = None,
     extra_args: list[str] | None = None,
+    model: str | None = None,
 ) -> tuple[int, dict | None]:
     """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
     scenario = {"test_prompt": prompt.strip()}
@@ -308,6 +310,8 @@ def _run_test_prompt(
     ]
     if branch:
         cmd.extend(["--branch", branch])
+    if model:
+        cmd.extend(["--model", model])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -394,6 +398,11 @@ def append_result(
     if session_file:
         record["session_file"] = session_file
 
+    # Cost from Claude's JSON output (direct, no session file needed)
+    cost_usd = test_phase.get("cost_usd")
+    if cost_usd is not None:
+        record["cost_usd"] = cost_usd
+
     # Extract token usage from session file
     tokens = _extract_tokens(session_file, agent)
     if tokens:
@@ -461,10 +470,17 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
                     ha_token,
                     args.branch,
                     args.extra_args or None,
+                    model=args.model,
                 )
 
                 # Detect session file created during this run
-                session_file = _find_latest_session_file(agent, after=run_start)
+                session_file = None
+                test_phase = (summary or {}).get("agents", {}).get(agent, {}).get("test", {})
+                claude_session_id = test_phase.get("session_id")
+                if claude_session_id:
+                    session_file = _find_session_file_by_id(claude_session_id)
+                if not session_file:
+                    session_file = _find_latest_session_file(agent, after=run_start)
 
                 all_results.append((agent, sid, story, rc, summary, session_file))
 
@@ -532,6 +548,10 @@ def main() -> None:
         type=Path,
         default=DEFAULT_RESULTS_FILE,
         help=f"JSONL file to append results to (default: {DEFAULT_RESULTS_FILE})",
+    )
+    parser.add_argument(
+        "--model",
+        help="Model to use for Claude agent (e.g., haiku, sonnet, opus)",
     )
     parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
     args = parser.parse_args()
