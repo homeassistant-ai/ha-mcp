@@ -130,16 +130,16 @@ class ToolProxyRegistry:
     def build_tool_catalog(self, category: str) -> list[dict[str, Any]]:
         """Build a detailed catalog of tools in a category (for action=list)."""
         tools = self.get_tools_for_category(category)
-        catalog = []
-        for tool in tools:
-            catalog.append({
+        return [
+            {
                 "tool_name": tool["name"],
                 "description": tool["description"],
                 "parameters": self._format_parameters(tool["parameters"]),
                 "required_parameters": tool["parameters"].get("required", []),
                 "is_read_only": tool["annotations"].get("readOnlyHint", False),
-            })
-        return catalog
+            }
+            for tool in tools
+        ]
 
     def build_summary_lines(self, category: str) -> list[str]:
         """Build concise one-liner summaries for the gateway MCP description."""
