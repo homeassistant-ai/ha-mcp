@@ -1,0 +1,40 @@
+id: s01
+title: "Create sunset/sunrise lights automation"
+category: automation
+weight: 5
+description: >
+  User asks the AI to create a time-based automation with sun triggers.
+  This is the #1 most common automation request. Tests that the agent can
+  discover available lights and create a well-structured automation with
+  sunset/sunrise triggers.
+
+tags:
+  - automation
+  - create
+  - triggers
+  - sun
+
+setup: []
+  # No setup needed - uses existing demo light entities
+
+prompt: >
+  Create an automation called "Sunset Porch Light" that turns on light.bed_light
+  when the sun sets, and turns it off when the sun rises. The automation should
+  be enabled. Tell me the entity_id of the automation you created and show me
+  its trigger and action configuration.
+
+teardown: []
+
+verify:
+  questions:
+    - "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
+    - "Does it have sun triggers for both sunset and sunrise?"
+    - "Does it control light.bed_light in its actions?"
+
+expected:
+  tools_should_use:
+    - ha_config_set_automation
+  description: >
+    Agent should create an automation with two triggers (sunset and sunrise)
+    and corresponding actions. The automation should use platform: sun with
+    event: sunset/sunrise, not time-based templates.

@@ -211,41 +211,34 @@ def register_service_tools(mcp, client, **kwargs):
                     ),
                 }
             # Non-timeout connection errors are real failures
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 error,
                 context={
                     "domain": domain,
                     "service": service,
                     "entity_id": entity_id,
                 },
-                raise_error=False,
+                suggestions=_build_service_suggestions(domain, service, entity_id),
             )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = _build_service_suggestions(domain, service, entity_id)
-            raise_tool_error(error_response)
         except ToolError:
             raise
         except Exception as error:
             # Use structured error response
-            error_response = exception_to_structured_error(
-                error,
-                context={
-                    "domain": domain,
-                    "service": service,
-                    "entity_id": entity_id,
-                },
-                raise_error=False,
-            )
             suggestions = _build_service_suggestions(domain, service, entity_id)
             if entity_id:
                 suggestions.extend([
                     f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
                     f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
                 ])
-            # Merge suggestions into error response
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = suggestions
-            raise_tool_error(error_response)
+            exception_to_structured_error(
+                error,
+                context={
+                    "domain": domain,
+                    "service": service,
+                    "entity_id": entity_id,
+                },
+                suggestions=suggestions,
+            )
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     @log_tool_usage
