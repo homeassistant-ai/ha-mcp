@@ -75,14 +75,19 @@ uv run python tests/uat/stories/run_story.py \
 - Both agents regressed: Code-level regression (a tool changed behavior). Continue to Step 4.
 - Only one agent regressed: Agent-specific issue (model update, prompt sensitivity). Note as agent-specific.
 
-## Token-Based Regression Detection
+## Token-Based Regression Detection (Secondary)
 
-In addition to pass/fail regression, check for **token cost regression**:
+Token cost is a **secondary metric** — it triggers investigation, not automatic failure.
+
 - Extract billable tokens (non-cached input + output + thoughts) from session files
-- Compare against baseline: >30% increase in billable tokens = investigate
-- Wall time is NOT a reliable indicator (KV-cache misses cause false positives)
+- Compare against baseline: >30% increase = investigate (check for KV-cache misses first, see SKILL.md Step 7)
+- Common false positives: KV-cache misses (provider-side), agent exploring differently between runs
 
-A story can pass functionally but regress on cost (more tool calls, extra exploration, larger tool descriptions).
+**Also secondary:**
+- Cached tokens / cache hit ratio — useful for diagnosing billable token spikes, but varies provider-side
+- Duration — noisy (network latency, cache misses, server load), only flag large (>2x) outliers
+
+A story can pass functionally but show higher token cost. Investigate the cause before labeling it a regression.
 
 ## Step 4: Diagnose
 
