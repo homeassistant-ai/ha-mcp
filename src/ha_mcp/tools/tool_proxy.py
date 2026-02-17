@@ -26,6 +26,7 @@ from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
+from pydantic_core import PydanticUndefined
 
 from ..errors import (
     ErrorCode,
@@ -170,8 +171,8 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
             continue
 
         param_schema: dict[str, Any] = {"type": "string"}
-        origin = getattr(hint, "__origin__", None)
-        args = getattr(hint, "__args__", ())
+        origin = typing.get_origin(hint)
+        args = typing.get_args(hint)
 
         if origin is Annotated:
             type_to_inspect = args[0] if args else str
@@ -180,7 +181,11 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
                     field_info = metadata
                     if hasattr(field_info, "description") and field_info.description:
                         param_schema["description"] = field_info.description
-                    if hasattr(field_info, "default") and field_info.default is not None:
+                    if (
+                        hasattr(field_info, "default")
+                        and field_info.default is not None
+                        and field_info.default is not PydanticUndefined
+                    ):
                         param_schema["default"] = field_info.default
         else:
             type_to_inspect = hint
