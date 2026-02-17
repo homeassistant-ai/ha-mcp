@@ -90,9 +90,8 @@ These are **secondary metrics** — report them but don't use them to decide pas
 - **Tool call count** — compare against baseline, but expect variation between runs due to agent exploration.
 - **Total turns** — fewer is generally better, but not conclusive on its own.
 
-**Not used for evaluation:**
-- **Cached tokens** — free and vary based on provider-side KV-cache behavior.
-- **Wall-clock time** — too noisy for meaningful comparison (network latency, KV-cache misses, server load).
+- **Cached tokens** / cache hit ratio — useful context for cost analysis, but varies provider-side.
+- **Duration** — noisy (network latency, KV-cache misses, server load), only flag large (>2x) outliers.
 
 ## Scoring Matrix
 

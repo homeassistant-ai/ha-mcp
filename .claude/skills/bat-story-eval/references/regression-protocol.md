@@ -83,9 +83,9 @@ Token cost is a **secondary metric** — it triggers investigation, not automati
 - Compare against baseline: >30% increase = investigate (check for KV-cache misses first, see SKILL.md Step 7)
 - Common false positives: KV-cache misses (provider-side), agent exploring differently between runs
 
-**Not used for regression detection:**
-- Cached tokens — free and vary based on provider-side KV-cache behavior
-- Wall-clock time — too noisy (network latency, cache misses, server load)
+**Also secondary:**
+- Cached tokens / cache hit ratio — useful for diagnosing billable token spikes, but varies provider-side
+- Duration — noisy (network latency, cache misses, server load), only flag large (>2x) outliers
 
 A story can pass functionally but show higher token cost. Investigate the cause before labeling it a regression.
 

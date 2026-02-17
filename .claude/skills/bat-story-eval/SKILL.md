@@ -228,12 +228,10 @@ Compare against `expected.tools_should_use`:
 
 **Secondary metrics** (report but don't decide on these alone):
 - Billable tokens — directional cost signal, flag >30% increase for investigation but don't auto-fail
+- Cached tokens / cache hit ratio — useful context for cost analysis, but varies based on provider-side KV-cache behavior
 - Tool call count / turns — varies between runs due to agent exploration
+- Duration — noisy (network, KV-cache misses, server load), only flag large (>2x) outliers
 - Tool description size delta (Step 8)
-
-**Not used for evaluation:**
-- Cached tokens — free and vary based on provider-side KV-cache behavior
-- Wall-clock time — too noisy for meaningful comparison (network, KV-cache misses, server load)
 
 #### Extracting Billable Tokens
 
