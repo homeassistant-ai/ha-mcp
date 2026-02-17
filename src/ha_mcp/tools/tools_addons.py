@@ -519,7 +519,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             )
 
     @mcp.tool(annotations={
-        "destructiveHint": False,
+        "destructiveHint": True,
         "idempotentHint": False,
         "readOnlyHint": False,
         "tags": ["addon"],
