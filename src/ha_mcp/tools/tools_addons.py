@@ -22,7 +22,11 @@ from ..errors import (
     create_timeout_error,
     create_validation_error,
 )
-from .helpers import exception_to_structured_error, get_connected_ws_client, log_tool_usage
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +518,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     @mcp.tool(annotations={
         "destructiveHint": False,
         "idempotentHint": False,
+        "readOnlyHint": False,
         "tags": ["addon"],
         "title": "Call Add-on API",
     })
