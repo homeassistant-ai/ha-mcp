@@ -348,19 +348,18 @@ def discover_proxy_tools(
             mock = _MockMCP()
             register_func(mock, client, **kwargs)
 
-            # Determine category for this module's tools
-            category = categories[0]
-
+            # Register tools in all categories this module belongs to
             for tool_info in mock.captured_tools:
-                registry.register_tool(
-                    name=tool_info["name"],
-                    description=tool_info["description"],
-                    parameters=tool_info["parameters"],
-                    annotations=tool_info["annotations"],
-                    implementation=tool_info["implementation"],
-                    module=module_name,
-                    category=category,
-                )
+                for category in categories:
+                    registry.register_tool(
+                        name=tool_info["name"],
+                        description=tool_info["description"],
+                        parameters=tool_info["parameters"],
+                        annotations=tool_info["annotations"],
+                        implementation=tool_info["implementation"],
+                        module=module_name,
+                        category=category,
+                    )
 
             logger.debug(
                 f"Proxy: captured {len(mock.captured_tools)} tools from {module_name}"
