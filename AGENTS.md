@@ -49,26 +49,7 @@ git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
 git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
 ```
 
-**Working in a worktree:**
-```bash
-# Navigate to your worktree
-cd worktree/issue-42
-
-# Work normally - you have full access to .claude/agents/
-git status
-git commit -m "feat: implement feature"
-git push
-
-# When done, return to main repo and clean up
-cd /home/julien/github/ha-mcp
-git worktree remove worktree/issue-42
-```
-
-**Cleaning up stale worktrees:**
-```bash
-# If worktree directories were deleted but git still tracks them
-git worktree prune
-```
+**Cleanup:** `git worktree remove worktree/<name>` or `git worktree prune` for stale references.
 
 ### Agent Workflows
 
@@ -294,23 +275,6 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-**Example PR comment:**
-```markdown
-## Implementation Summary
-
-**Choices Made:**
-- Used context-aware recursion to preserve `conditions` in choose blocks while normalizing at root level
-- Added both unit tests (fast feedback) and E2E tests (real API validation)
-- Fixed unrelated `test_script_traces` failure by adding polling logic
-
-**Problems Encountered:**
-- Initial implementation incorrectly passed `in_choose_or_if` flag recursively, causing conditions inside sequence blocks to not be normalized
-- Gemini suggested logbook verification in E2E test, but manual trigger bypasses conditions - simplified to structural validation instead
-
-**Suggested Improvements:**
-- Consider adding integration test with actual state changes to verify choose block execution (currently only validates structure)
-```
-
 ### Implementing Improvements in Separate PRs
 
 **When you identify improvements with long-term benefit, implement them in separate PRs:**
@@ -348,22 +312,6 @@ git checkout -b improve/description-depends-on-main-pr
 3. Create separate PR(s) for improvements
 4. Mention improvement PRs in main PR final comment
 5. Return control to user with status of all PRs
-
-**Example final comment mentioning improvements:**
-```markdown
-## Implementation Summary
-
-**Main PR (#123):**
-- ✅ All checks passing, ready for merge
-- Feature X implemented with tests
-
-**Improvement PRs created:**
-- PR #124: Update CLAUDE.md with better CI failure debugging commands
-- PR #125: Refactor common validation logic into shared utility
-
-**Choices Made:** [...]
-**Problems Encountered:** [...]
-```
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -451,42 +399,7 @@ Balance improvement against regression risk. Consider:
 - Minor parameter additions to well-tested tools
 - Internal utilities already covered by E2E tests
 
-**Examples:**
-
-```python
-# GOOD: Adding test for new behavior without refactoring
-def test_new_automation_trigger():
-    # Test the specific feature you added
-    pass
-
-# GOOD: Improving tool description clarity
-"""
-Create a helper entity in Home Assistant.
-
-OLD: "Make helper with config"
-NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified configuration.
-     Use ha_get_domain_docs('input_boolean') for schema details."
-"""
-
-# BAD: Large refactor while implementing a feature
-# Instead: Open issue #XYZ "Refactor helper creation logic" and stay focused on your feature
-
-# GOOD: Low-risk quality improvement
-# Renaming a confusing variable while fixing a bug in that function
-
-# BAD: High-risk refactor
-# Extracting shared logic into new abstractions while fixing a bug
-# Instead: Fix the bug, then open an issue to track the refactor opportunity
-```
-
-**When to open an issue instead:**
-
-- Refactoring would touch many files
-- Unclear how to improve without breaking changes
-- Improvement requires design decisions
-- Would significantly expand PR scope
-
-**Remember**: Small, continuous improvements beat large, risky refactors. Better tests, clearer docs, and obvious code wins compound over time.
+**When to open an issue instead:** Refactoring would touch many files, requires design decisions, or would significantly expand PR scope.
 
 ## CI/CD Workflows
 
@@ -675,14 +588,7 @@ A change is **BREAKING** only if it removes functionality that users depend on w
 - Removing a feature that has no replacement in any other tool
 - Making something impossible that was previously possible
 
-**NOT Breaking Changes (these are improvements):**
-- Tool consolidation (combining multiple tools into one) — **encouraged**
-- Tool refactoring (restructuring how tools work internally)
-- Parameter changes (as long as same outcome achievable via other means)
-- Return value restructuring (as long as data still accessible)
-- Tool renaming with functionality preserved
-
-**Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only mark as breaking when functionality is genuinely lost forever, not when it's restructured or consolidated.
+Tool consolidation, refactoring, parameter/return changes, and renaming are **NOT breaking** as long as the same outcome is achievable.
 
 ## Tool Waiting Behavior
 
@@ -726,20 +632,7 @@ Context engineering treats LLM context as a finite resource with diminishing ret
 - Rely on documentation tools rather than embedding extensive docs in every tool description
 - Trust that model knowledge + on-demand docs = sufficient context
 
-**Example - pass-through approach:**
-```python
-# Let HA validate and return its own error messages
-message = {"type": f"{helper_type}/create", "name": name}
-for param, value in [("latitude", latitude), ("longitude", longitude)]:
-    if value is not None:
-        message[param] = value
-result = await client.send_websocket_message(message)
-```
-
-**When tool-side logic adds value:**
-- Format normalization for UX convenience (e.g., `"09:00"` → `"09:00:00"`)
-- Parsing JSON strings from MCP clients that stringify arrays
-- Combining multiple HA API calls into one logical operation
+**When tool-side logic adds value:** format normalization, parsing JSON strings from MCP clients, combining multiple HA API calls into one logical operation. Otherwise, let HA validate and return its own error messages (pass-through).
 
 ### Progressive Disclosure
 
@@ -777,26 +670,11 @@ This reveals:
 - What gaps exist (target these with `ha_get_domain_docs()` hints)
 - Confidence levels across model tiers (haiku vs sonnet vs opus)
 
-**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against actual source code or documentation:
+**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against HA Core source:
 ```bash
-# Check HA Core for actual API schema
 gh api /repos/home-assistant/core/contents/homeassistant/components/{domain}/__init__.py \
   --jq '.content' | base64 -d | grep -A 20 "CREATE_FIELDS\|vol.Schema"
 ```
-
-**Example findings from helper analysis:**
-| Model | counter | schedule | zone | tag |
-|-------|---------|----------|------|-----|
-| Haiku | ~60% confident | ~30% uncertain | ~50% | ~20% |
-| Sonnet | ~80% accurate | ~75% knows format | ~85% | ~50% |
-
-This informs whether to embed docs (low model knowledge) or just hint at `ha_get_domain_docs()` (sufficient model knowledge).
-
-### References
-- [Anthropic: Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
-- [Context Engineering Guide](https://www.promptingguide.ai/guides/context-engineering-guide)
-- [Nielsen Norman Group: Progressive Disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
-- [Progressive Context Enrichment for LLMs](https://www.inferable.ai/blog/posts/llm-progressive-context-encrichment)
 
 ## Home Assistant Add-on
 
@@ -877,16 +755,6 @@ feat: Add dark mode                             # User-facing
 | Stable | Weekly (Tuesday 10:00 UTC) |
 
 Manual release: Actions > SemVer Release > Run workflow.
-
-## Custom Agents
-
-Located in `.claude/agents/`:
-
-| Agent | Purpose |
-|-------|---------|
-| `issue-analysis` | Deep issue analysis: codebase exploration, implementation planning, complexity assessment |
-| `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
-| `my-pr-checker` | Review YOUR OWN PRs: comments, CI status, resolve threads, monitor until ready |
 
 ## Skills
 
