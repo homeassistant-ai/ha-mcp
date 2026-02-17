@@ -15,7 +15,14 @@ import httpx
 from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
-from .helpers import get_connected_ws_client, log_tool_usage
+from ..errors import (
+    ErrorCode,
+    create_connection_error,
+    create_error_response,
+    create_timeout_error,
+    create_validation_error,
+)
+from .helpers import exception_to_structured_error, get_connected_ws_client, log_tool_usage
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +55,9 @@ async def _supervisor_api_call(
     try:
         ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error or ws_client is None:
-            return error or {
-                "success": False,
-                "error": "Failed to establish WebSocket connection",
-            }
+            return error or create_connection_error(
+                "Failed to establish WebSocket connection",
+            )
 
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
         if data is not None:
@@ -64,27 +70,30 @@ async def _supervisor_api_call(
         if not result.get("success"):
             error_msg = str(result.get("error", ""))
             if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                return {
-                    "success": False,
-                    "error": "Supervisor API not available",
-                    "suggestion": "This feature requires Home Assistant OS or Supervised installation",
-                    "details": result,
-                }
-            return {
-                "success": False,
-                "error": f"Supervisor API call failed: {endpoint}",
-                "details": result,
-            }
+                return create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "Supervisor API not available",
+                    details=str(result),
+                    suggestions=[
+                        "This feature requires Home Assistant OS or Supervised installation",
+                    ],
+                )
+            return create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Supervisor API call failed: {endpoint}",
+                details=str(result),
+            )
 
         return {"success": True, "result": result.get("result", {})}
 
     except Exception as e:
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
-        return {
-            "success": False,
-            "error": f"Supervisor API call failed: {e!s}",
-            "suggestion": "Check Home Assistant connection and Supervisor availability",
-        }
+        return exception_to_structured_error(
+            e,
+            context={"endpoint": endpoint},
+            raise_error=False,
+            suggestions=["Check Home Assistant connection and Supervisor availability"],
+        )
     finally:
         if ws_client:
             try:
@@ -275,59 +284,71 @@ async def _call_addon_api(
     Returns:
         Dictionary with response data, status code, and content type.
     """
-    # 1. Get add-on info to verify ingress support and get entry path
+    # 1. Sanitize path to prevent traversal attacks
+    normalized = path.lstrip("/")
+    if ".." in normalized.split("/"):
+        return create_validation_error(
+            "Path contains '..' traversal component",
+            parameter="path",
+            details=f"Rejected path: {path}",
+        )
+
+    # 2. Get add-on info to verify ingress support and get entry path
     addon_response = await get_addon_info(client, slug)
     if not addon_response.get("success"):
         return addon_response
 
     addon = addon_response["addon"]
+    addon_name = addon.get("name", slug)
 
-    # 2. Verify add-on supports Ingress
+    # 3. Verify add-on supports Ingress
     if not addon.get("ingress"):
-        return {
-            "success": False,
-            "error": f"Add-on '{addon.get('name', slug)}' does not support Ingress",
-            "suggestion": "Check if this add-on exposes a direct port instead. "
-            "Use ha_get_addon(slug='" + slug + "') to see port mappings.",
-            "slug": slug,
-        }
+        return create_error_response(
+            ErrorCode.VALIDATION_FAILED,
+            f"Add-on '{addon_name}' does not support Ingress",
+            suggestions=[
+                "Check if this add-on exposes a direct port instead",
+                f"Use ha_get_addon(slug='{slug}') to see port mappings",
+            ],
+            context={"slug": slug},
+        )
 
-    # 3. Verify add-on is running
+    # 4. Verify add-on is running
     if addon.get("state") != "started":
-        return {
-            "success": False,
-            "error": f"Add-on '{addon.get('name', slug)}' is not running (state: {addon.get('state')})",
-            "suggestion": "Start the add-on first with: "
-            f"ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
-            "slug": slug,
-            "state": addon.get("state"),
-        }
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
+            suggestions=[
+                f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
+            ],
+            context={"slug": slug, "state": addon.get("state")},
+        )
 
-    # 4. Build Ingress URL
+    # 5. Build Ingress URL
     ingress_entry = addon.get("ingress_entry", "")
     if not ingress_entry:
-        return {
-            "success": False,
-            "error": f"Add-on '{addon.get('name', slug)}' has Ingress enabled but no ingress_entry path",
-            "slug": slug,
-        }
+        return create_error_response(
+            ErrorCode.INTERNAL_ERROR,
+            f"Add-on '{addon_name}' has Ingress enabled but no ingress_entry path",
+            context={"slug": slug},
+        )
 
-    url = f"{client.base_url}{ingress_entry}/{path.lstrip('/')}"
+    url = f"{client.base_url}{ingress_entry}/{normalized}"
 
-    # 5. Make HTTP request through Ingress
-    headers = {
+    # 6. Make HTTP request through Ingress
+    headers: dict[str, str] = {
         "Authorization": f"Bearer {client.token}",
     }
 
     # Set content type based on body type
     if isinstance(body, dict):
         headers["Content-Type"] = "application/json"
-        content = json.dumps(body).encode()
+        request_content = json.dumps(body).encode()
     elif isinstance(body, str):
         headers["Content-Type"] = "application/json"
-        content = body.encode()
+        request_content = body.encode()
     else:
-        content = None
+        request_content = None
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http_client:
@@ -335,23 +356,21 @@ async def _call_addon_api(
                 method=method.upper(),
                 url=url,
                 headers=headers,
-                content=content,
+                content=request_content,
             )
     except httpx.TimeoutException:
-        return {
-            "success": False,
-            "error": f"Request to add-on '{addon.get('name', slug)}' timed out after {timeout}s",
-            "suggestion": "The add-on may be slow to respond. Try increasing the timeout or check if the add-on is healthy.",
-            "slug": slug,
-            "path": path,
-        }
+        return create_timeout_error(
+            f"add-on API call to '{addon_name}'",
+            timeout,
+            details=f"path={path}, method={method}",
+            context={"slug": slug, "path": path},
+        )
     except httpx.ConnectError as e:
-        return {
-            "success": False,
-            "error": f"Failed to connect to add-on '{addon.get('name', slug)}': {e!s}",
-            "suggestion": "Check that the add-on is running and Home Assistant Ingress is working.",
-            "slug": slug,
-        }
+        return create_connection_error(
+            f"Failed to connect to add-on '{addon_name}': {e!s}",
+            details="Check that the add-on is running and Home Assistant Ingress is working",
+            context={"slug": slug},
+        )
 
     # 6. Parse response
     content_type = response.headers.get("content-type", "")
@@ -381,7 +400,7 @@ async def _call_addon_api(
         "status_code": response.status_code,
         "response": response_data,
         "content_type": content_type,
-        "addon_name": addon.get("name"),
+        "addon_name": addon_name,
         "slug": slug,
     }
 
@@ -486,14 +505,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         elif effective_source == "installed":
             return await list_addons(client, include_stats)
         else:
-            return {
-                "success": False,
-                "error": f"Invalid source: {source}. Must be 'installed' or 'available'.",
-                "valid_sources": ["installed", "available"],
-            }
+            return create_validation_error(
+                f"Invalid source: {source}. Must be 'installed' or 'available'.",
+                parameter="source",
+                details="Valid sources: installed, available",
+            )
 
     @mcp.tool(annotations={
-        "destructiveHint": True,
+        "destructiveHint": False,
         "idempotentHint": False,
         "tags": ["addon"],
         "title": "Call Add-on API",
@@ -549,10 +568,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         # Validate HTTP method
         valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
         if method.upper() not in valid_methods:
-            return {
-                "success": False,
-                "error": f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
-            }
+            return create_validation_error(
+                f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
+                parameter="method",
+            )
 
         return await _call_addon_api(
             client=client,
