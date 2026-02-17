@@ -98,7 +98,8 @@ EOF
 *Secondary (report but don't decide on these alone):*
 - **Tool call count**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns` — directional signal, not conclusive (agent exploration varies between runs)
 - **Duration**: Compare `aggregate.total_duration_ms` — noisy due to network, cache misses, server load. Only flag large (>2x) regressions.
-- **Variation testing**: Ask the same task in different ways to test robustness
+
+**Robustness tip:** Ask the same task in different ways (variation testing) to check if results are consistent across phrasings.
 
 **Quick comparison** (single command):
 
