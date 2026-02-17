@@ -185,13 +185,19 @@ def _extract_tool_metadata(func: Any) -> tuple[str, str, dict[str, Any]]:
         else:
             type_to_inspect = hint
 
-        json_type = _python_type_to_json(type_to_inspect)
-        param_schema["type"] = json_type
+        # Extract Literal values as enum constraint
+        literal_values = _extract_literal_values(type_to_inspect)
+        if literal_values is not None:
+            param_schema["enum"] = literal_values
+            param_schema["type"] = "string"
+        else:
+            json_type = _python_type_to_json(type_to_inspect)
+            param_schema["type"] = json_type
 
-        if json_type == "array":
-            item_schema = _get_array_items_schema(type_to_inspect)
-            if item_schema:
-                param_schema["items"] = item_schema
+            if json_type == "array":
+                item_schema = _get_array_items_schema(type_to_inspect)
+                if item_schema:
+                    param_schema["items"] = item_schema
 
         properties[param_name] = param_schema
 
@@ -219,6 +225,25 @@ def _get_array_items_schema(python_type: Any) -> dict[str, str] | None:
     type_args = getattr(effective, "__args__", ())
     if type_args:
         return {"type": _python_type_to_json(type_args[0])}
+    return None
+
+
+def _extract_literal_values(python_type: Any) -> list[str] | None:
+    """Extract allowed values from Literal type hints (e.g., Literal["a", "b"])."""
+    origin = getattr(python_type, "__origin__", None)
+
+    # Handle Optional[Literal[...]] / Literal[...] | None
+    if origin is types.UnionType:
+        for arg in python_type.__args__:
+            if arg is not type(None):
+                result = _extract_literal_values(arg)
+                if result is not None:
+                    return result
+        return None
+
+    if origin is typing.Literal:
+        return list(python_type.__args__)
+
     return None
 
 
@@ -484,6 +509,18 @@ def _register_single_gateway(
                 message=f"Missing required parameter(s): {', '.join(sorted(missing))}",
                 context={"missing_parameters": sorted(missing)},
             )
+
+        # Validate enum constraints (Literal types) — mirrors FastMCP's
+        # schema-level validation which the gateway bypasses.
+        properties = params_schema.get("properties", {})
+        for param_name, value in parsed_args.items():
+            prop = properties.get(param_name, {})
+            allowed = prop.get("enum")
+            if allowed is not None and value not in allowed:
+                raise ToolError(
+                    f"Invalid value '{value}' for parameter '{param_name}'. "
+                    f"Allowed values: {allowed}"
+                )
 
         # Execute
         try:
