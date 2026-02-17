@@ -82,14 +82,17 @@ Look for patterns in the session file:
 - Tool calls with `status: "error"` with no recovery: Penalize
 - Repeated identical failing calls: Penalize
 
-### Efficiency Metrics
+### Efficiency Metrics (Secondary)
 
-Track but don't heavily penalize:
-- **Billable tokens** (non-cached input + output + thoughts) — primary cost metric
-- Total tool calls (compare against baseline)
-- Total turns (fewer is generally better)
+These are **secondary metrics** — report them but don't use them to decide pass/fail:
 
-**Important**: Never use cached tokens or wall time as efficiency metrics. Cached tokens are free (and vary based on Gemini KV-cache behavior). Wall time is noisy (cache misses, network, server load).
+- **Billable tokens** (non-cached input + output + thoughts) — directional cost signal. Flag >30% increase for investigation, but check for KV-cache misses before concluding regression.
+- **Tool call count** — compare against baseline, but expect variation between runs due to agent exploration.
+- **Total turns** — fewer is generally better, but not conclusive on its own.
+
+**Not used for evaluation:**
+- **Cached tokens** — free and vary based on provider-side KV-cache behavior.
+- **Wall-clock time** — too noisy for meaningful comparison (network latency, KV-cache misses, server load).
 
 ## Scoring Matrix
 

@@ -89,9 +89,15 @@ EOF
 4. **Run on branch**: Run same scenario, compare stats
 
 **Compare these metrics:**
+
+*Primary (decide pass/fail on these):*
 - **Task completion**: Did both pass? Any new failures?
 - **Accuracy**: Check agent output quality - did it understand the task correctly?
-- **Efficiency**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns`, `aggregate.total_duration_ms`
+- **Tool success rate**: Compare `aggregate.total_tool_calls` vs `total_tool_fail`
+
+*Secondary (report but don't decide on these alone):*
+- **Tool call count**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns` — directional signal, not conclusive (agent exploration varies between runs)
+- **Duration**: Compare `aggregate.total_duration_ms` — noisy due to network, cache misses, server load. Only flag large (>2x) regressions.
 - **Variation testing**: Ask the same task in different ways to test robustness
 
 **Quick comparison** (single command):
