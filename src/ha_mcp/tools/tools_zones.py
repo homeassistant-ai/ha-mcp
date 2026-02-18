@@ -1,7 +1,7 @@
 """
 Configuration management tools for Home Assistant zones.
 
-This module provides tools for listing, creating, updating, and deleting
+This module provides tools for listing, creating/updating, and removing
 Home Assistant zones (location-based areas for presence automation).
 """
 
@@ -103,25 +103,44 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Create Zone"})
+    @mcp.tool(annotations={"destructiveHint": False, "idempotentHint": True, "tags": ["zone"], "title": "Set Zone"})
     @log_tool_usage
-    async def ha_create_zone(
-        name: Annotated[str, Field(description="Display name for the zone")],
-        latitude: Annotated[
-            float,
-            Field(description="Latitude coordinate of the zone center"),
-        ],
-        longitude: Annotated[
-            float,
-            Field(description="Longitude coordinate of the zone center"),
-        ],
-        radius: Annotated[
-            float,
+    async def ha_set_zone(
+        name: Annotated[
+            str | None,
             Field(
-                description="Radius of the zone in meters (default: 100)",
-                default=100,
+                description="Display name for the zone (required for create)",
+                default=None,
             ),
-        ] = 100,
+        ] = None,
+        latitude: Annotated[
+            float | None,
+            Field(
+                description="Latitude coordinate of the zone center (required for create)",
+                default=None,
+            ),
+        ] = None,
+        longitude: Annotated[
+            float | None,
+            Field(
+                description="Longitude coordinate of the zone center (required for create)",
+                default=None,
+            ),
+        ] = None,
+        zone_id: Annotated[
+            str | None,
+            Field(
+                description="Zone ID to update (omit to create new zone, use ha_get_zone to find IDs)",
+                default=None,
+            ),
+        ] = None,
+        radius: Annotated[
+            float | None,
+            Field(
+                description="Radius of the zone in meters (default for create: 100)",
+                default=None,
+            ),
+        ] = None,
         icon: Annotated[
             str | None,
             Field(
@@ -130,227 +149,155 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         passive: Annotated[
-            bool,
-            Field(
-                description="If True, zone will not trigger automations on enter/exit (default: False)",
-                default=False,
-            ),
-        ] = False,
-    ) -> dict[str, Any]:
-        """
-        Create a new Home Assistant zone for presence detection.
-
-        Zones are location-based areas that can trigger automations when
-        devices enter or exit. Common use cases include:
-        - Home, Work, School locations
-        - Gym, Shopping areas
-        - Family members' locations
-
-        EXAMPLES:
-        - Create office zone: ha_create_zone("Office", 40.7128, -74.0060, radius=150, icon="mdi:briefcase")
-        - Create gym zone: ha_create_zone("Gym", 40.7580, -73.9855, radius=50, icon="mdi:dumbbell")
-        - Create passive zone: ha_create_zone("City Center", 40.7484, -73.9857, radius=500, passive=True)
-
-        Note: The 'home' zone is typically defined in configuration.yaml and cannot be created via this API.
-        """
-        try:
-            # Validate coordinates
-            if not (-90 <= latitude <= 90):
-                return {
-                    "success": False,
-                    "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                }
-            if not (-180 <= longitude <= 180):
-                return {
-                    "success": False,
-                    "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                }
-            if radius <= 0:
-                return {
-                    "success": False,
-                    "error": f"Invalid radius: {radius}. Must be greater than 0.",
-                }
-
-            # Build create message
-            message: dict[str, Any] = {
-                "type": "zone/create",
-                "name": name,
-                "latitude": latitude,
-                "longitude": longitude,
-                "radius": radius,
-                "passive": passive,
-            }
-
-            if icon:
-                message["icon"] = icon
-
-            result = await client.send_websocket_message(message)
-
-            if result.get("success"):
-                zone_data = result.get("result", {})
-                return {
-                    "success": True,
-                    "zone_data": zone_data,
-                    "zone_id": zone_data.get("id"),
-                    "message": f"Successfully created zone: {name}",
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to create zone: {result.get('error', 'Unknown error')}",
-                    "name": name,
-                }
-
-        except Exception as e:
-            logger.error(f"Error creating zone: {e}")
-            return {
-                "success": False,
-                "error": f"Zone creation failed: {str(e)}",
-                "name": name,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify coordinates are valid",
-                    "Ensure zone name is unique",
-                ],
-            }
-
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Update Zone"})
-    @log_tool_usage
-    async def ha_update_zone(
-        zone_id: Annotated[
-            str,
-            Field(description="Zone ID to update (from ha_get_zone)"),
-        ],
-        name: Annotated[
-            str | None,
-            Field(description="New display name for the zone", default=None),
-        ] = None,
-        latitude: Annotated[
-            float | None,
-            Field(description="New latitude coordinate", default=None),
-        ] = None,
-        longitude: Annotated[
-            float | None,
-            Field(description="New longitude coordinate", default=None),
-        ] = None,
-        radius: Annotated[
-            float | None,
-            Field(description="New radius in meters", default=None),
-        ] = None,
-        icon: Annotated[
-            str | None,
-            Field(description="New Material Design Icon", default=None),
-        ] = None,
-        passive: Annotated[
             bool | None,
-            Field(description="New passive mode setting", default=None),
+            Field(
+                description="If True, zone will not trigger automations on enter/exit (default for create: False)",
+                default=None,
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        Update an existing Home Assistant zone.
+        Create or update a Home Assistant zone.
 
-        Only the fields you specify will be updated. Other fields remain unchanged.
+        Omit zone_id to create a new zone (name, latitude, longitude required).
+        Provide zone_id to update an existing zone (only specified fields change).
 
         EXAMPLES:
-        - Update zone name: ha_update_zone("abc123", name="New Office")
-        - Update zone radius: ha_update_zone("abc123", radius=200)
-        - Update zone location: ha_update_zone("abc123", latitude=40.7128, longitude=-74.0060)
-        - Update multiple fields: ha_update_zone("abc123", name="Gym", radius=75, icon="mdi:dumbbell")
+        - Create: ha_set_zone(name="Office", latitude=40.7128, longitude=-74.0060, radius=150, icon="mdi:briefcase")
+        - Update name: ha_set_zone(zone_id="abc123", name="New Office")
+        - Update radius: ha_set_zone(zone_id="abc123", radius=200)
+        - Update location: ha_set_zone(zone_id="abc123", latitude=40.7128, longitude=-74.0060)
 
-        **TIP:** Use ha_get_zone() to get the zone_id for the zone you want to update.
+        Note: The 'home' zone is typically defined in YAML and cannot be modified via this API.
         """
+        operation = "create"
         try:
-            # Validate that at least one field is being updated
-            update_fields = {
-                "name": name,
-                "latitude": latitude,
-                "longitude": longitude,
-                "radius": radius,
-                "icon": icon,
-                "passive": passive,
-            }
-            fields_to_update = {k: v for k, v in update_fields.items() if v is not None}
+            if zone_id:
+                # UPDATE operation
+                operation = "update"
+                update_fields = {
+                    "name": name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius": radius,
+                    "icon": icon,
+                    "passive": passive,
+                }
+                fields_to_update = {k: v for k, v in update_fields.items() if v is not None}
 
-            if not fields_to_update:
-                return {
-                    "success": False,
-                    "error": "No fields to update. Provide at least one field to change.",
+                if not fields_to_update:
+                    return {
+                        "success": False,
+                        "error": "No fields to update. Provide at least one field to change.",
+                        "zone_id": zone_id,
+                    }
+
+                # Validate coordinates if provided
+                if latitude is not None and not (-90 <= latitude <= 90):
+                    return {
+                        "success": False,
+                        "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                    }
+                if longitude is not None and not (-180 <= longitude <= 180):
+                    return {
+                        "success": False,
+                        "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                    }
+                if radius is not None and radius <= 0:
+                    return {
+                        "success": False,
+                        "error": f"Invalid radius: {radius}. Must be greater than 0.",
+                    }
+
+                message: dict[str, Any] = {
+                    "type": "zone/update",
                     "zone_id": zone_id,
+                    **fields_to_update,
                 }
+            else:
+                # CREATE operation
+                if name is None or latitude is None or longitude is None:
+                    return {
+                        "success": False,
+                        "error": "name, latitude, and longitude are required when creating a zone.",
+                    }
 
-            # Validate coordinates if provided
-            if latitude is not None and not (-90 <= latitude <= 90):
-                return {
-                    "success": False,
-                    "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                }
-            if longitude is not None and not (-180 <= longitude <= 180):
-                return {
-                    "success": False,
-                    "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                }
-            if radius is not None and radius <= 0:
-                return {
-                    "success": False,
-                    "error": f"Invalid radius: {radius}. Must be greater than 0.",
-                }
+                # Validate coordinates
+                if not (-90 <= latitude <= 90):
+                    return {
+                        "success": False,
+                        "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                    }
+                if not (-180 <= longitude <= 180):
+                    return {
+                        "success": False,
+                        "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                    }
+                if radius is not None and radius <= 0:
+                    return {
+                        "success": False,
+                        "error": f"Invalid radius: {radius}. Must be greater than 0.",
+                    }
 
-            # Build update message
-            message: dict[str, Any] = {
-                "type": "zone/update",
-                "zone_id": zone_id,
-                **fields_to_update,
-            }
+                message = {
+                    "type": "zone/create",
+                    "name": name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius": radius if radius is not None else 100,
+                    "passive": passive if passive is not None else False,
+                }
+                if icon:
+                    message["icon"] = icon
 
             result = await client.send_websocket_message(message)
 
             if result.get("success"):
                 zone_data = result.get("result", {})
-                return {
+                response: dict[str, Any] = {
                     "success": True,
                     "zone_data": zone_data,
-                    "zone_id": zone_id,
-                    "updated_fields": list(fields_to_update.keys()),
-                    "message": f"Successfully updated zone: {zone_id}",
+                    "zone_id": zone_data.get("id", zone_id),
+                    "message": f"Successfully {'updated' if zone_id else 'created'} zone",
                 }
+                if zone_id and fields_to_update:
+                    response["updated_fields"] = list(fields_to_update.keys())
+                return response
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to update zone: {result.get('error', 'Unknown error')}",
-                    "zone_id": zone_id,
+                    "error": f"Failed to {operation} zone: {result.get('error', 'Unknown error')}",
                 }
 
         except Exception as e:
-            logger.error(f"Error updating zone: {e}")
+            logger.error(f"Error in ha_set_zone ({operation}): {e}")
             return {
                 "success": False,
-                "error": f"Zone update failed: {str(e)}",
-                "zone_id": zone_id,
+                "error": f"Zone {operation} failed: {str(e)}",
                 "suggestions": [
                     "Check Home Assistant connection",
-                    "Verify zone_id exists using ha_get_zone()",
-                    "Ensure values are valid",
+                    "Verify coordinates are valid" if operation == "create" else "Verify zone_id exists using ha_get_zone()",
                 ],
             }
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["zone"], "title": "Delete Zone"})
+    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["zone"], "title": "Remove Zone"})
     @log_tool_usage
-    async def ha_delete_zone(
+    async def ha_remove_zone(
         zone_id: Annotated[
             str,
-            Field(description="Zone ID to delete (from ha_get_zone)"),
+            Field(description="Zone ID to remove (use ha_get_zone to find IDs)"),
         ],
     ) -> dict[str, Any]:
         """
-        Delete a Home Assistant zone.
+        Remove a Home Assistant zone.
 
         EXAMPLES:
-        - Delete zone: ha_delete_zone("abc123")
+        - Remove zone: ha_remove_zone("abc123")
 
-        **WARNING:** Deleting a zone that is used in automations may cause those automations to fail.
-        Use ha_get_zone() to get the zone_id for the zone you want to delete.
+        **WARNING:** Removing a zone used in automations may cause those automations to fail.
+        Use ha_get_zone() to find the zone_id for the zone you want to remove.
 
-        **NOTE:** The 'home' zone cannot be deleted as it is typically defined in configuration.yaml.
+        **NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.
         """
         try:
             message: dict[str, Any] = {
@@ -364,20 +311,20 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": True,
                     "zone_id": zone_id,
-                    "message": f"Successfully deleted zone: {zone_id}",
+                    "message": f"Successfully removed zone: {zone_id}",
                 }
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to delete zone: {result.get('error', 'Unknown error')}",
+                    "error": f"Failed to remove zone: {result.get('error', 'Unknown error')}",
                     "zone_id": zone_id,
                 }
 
         except Exception as e:
-            logger.error(f"Error deleting zone: {e}")
+            logger.error(f"Error removing zone: {e}")
             return {
                 "success": False,
-                "error": f"Zone deletion failed: {str(e)}",
+                "error": f"Zone removal failed: {str(e)}",
                 "zone_id": zone_id,
                 "suggestions": [
                     "Check Home Assistant connection",
