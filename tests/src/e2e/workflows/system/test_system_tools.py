@@ -311,6 +311,11 @@ class TestSystemTools:
         components_loaded = system_info.get("components_loaded", 0)
         assert components_loaded > 0, "Should have at least some components loaded"
 
+        # Verify notification_count is present (included at all detail levels)
+        assert "notification_count" in data, "Missing 'notification_count' field"
+        assert isinstance(data["notification_count"], int)
+        logger.info(f"Notification count: {data['notification_count']}")
+
         logger.info("Get system overview test completed successfully")
 
     @pytest.mark.asyncio
@@ -450,3 +455,83 @@ class TestSystemToolsIntegration:
         logger.info("=" * 60)
 
         logger.info("System overview test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_notifications_opt_out(self, mcp_client):
+        """Test that include_notifications=False omits notification data from overview."""
+        logger.info("Testing ha_get_overview with include_notifications=False")
+
+        result = await mcp_client.call_tool(
+            "ha_get_overview",
+            {"detail_level": "minimal", "include_notifications": False},
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("success") is True
+        assert "notification_count" not in data, (
+            "Expected no 'notification_count' when include_notifications=False"
+        )
+        assert "notifications" not in data, (
+            "Expected no 'notifications' when include_notifications=False"
+        )
+        logger.info("Notification opt-out test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_notification_lifecycle(self, mcp_client):
+        """Test that creating and dismissing a notification is reflected in the overview."""
+        logger.info("Testing notification lifecycle via overview")
+
+        # Create a test notification
+        create_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "persistent_notification",
+                "service": "create",
+                "service_data": {
+                    "title": "Test Notification",
+                    "message": "E2E test notification",
+                    "notification_id": "e2e_test_overview_notif",
+                },
+            },
+        )
+        parse_mcp_result(create_result)
+
+        # Verify it appears in the overview
+        result = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"},
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("notification_count", 0) > 0, "Expected at least 1 notification"
+        assert "notifications" in data
+
+        found = any(
+            n["notification_id"] == "e2e_test_overview_notif"
+            for n in data["notifications"]
+        )
+        assert found, "Expected to find the test notification in overview"
+
+        # Dismiss the notification
+        await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "persistent_notification",
+                "service": "dismiss",
+                "service_data": {"notification_id": "e2e_test_overview_notif"},
+            },
+        )
+
+        # Verify it's gone
+        result2 = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"},
+        )
+        data2 = parse_mcp_result(result2)
+
+        if data2.get("notifications"):
+            not_found = all(
+                n["notification_id"] != "e2e_test_overview_notif"
+                for n in data2["notifications"]
+            )
+            assert not_found, "Test notification should be dismissed"
+
+        logger.info("Notification lifecycle test completed successfully")
