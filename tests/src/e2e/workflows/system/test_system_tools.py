@@ -487,7 +487,7 @@ class TestSystemToolsIntegration:
             {
                 "domain": "persistent_notification",
                 "service": "create",
-                "service_data": {
+                "data": {
                     "title": "Test Notification",
                     "message": "E2E test notification",
                     "notification_id": "e2e_test_overview_notif",
@@ -517,7 +517,7 @@ class TestSystemToolsIntegration:
             {
                 "domain": "persistent_notification",
                 "service": "dismiss",
-                "service_data": {"notification_id": "e2e_test_overview_notif"},
+                "data": {"notification_id": "e2e_test_overview_notif"},
             },
         )
 

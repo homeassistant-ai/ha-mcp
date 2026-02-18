@@ -557,6 +557,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Include active persistent notifications
         if include_notifications_bool:
+            result["notification_count"] = 0
             try:
                 ws_result = await client.send_websocket_message(
                     {"type": "persistent_notification/get"}
