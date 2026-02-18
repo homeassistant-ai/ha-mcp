@@ -517,9 +517,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         include_notifications_bool = coerce_bool_param(
             include_notifications, "include_notifications", default=True
         )
-        # Default to True if coercion returns None
-        if include_notifications_bool is None:
-            include_notifications_bool = True
 
         result = await smart_tools.get_system_overview(
             detail_level,
