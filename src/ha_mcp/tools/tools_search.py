@@ -492,11 +492,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
+        include_notifications: Annotated[
+            bool | str | None,
+            Field(
+                default=True,
+                description="Include active persistent notifications (default: True). Set False to skip.",
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
         Returns comprehensive system information at the requested detail level,
-        including Home Assistant base_url, version, location, timezone, and entity overview.
+        including Home Assistant base_url, version, location, timezone, entity overview,
+        and active persistent notifications (if any).
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
@@ -506,6 +514,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         include_entity_id_bool = coerce_bool_param(
             include_entity_id, "include_entity_id", default=None
         )
+        include_notifications_bool = coerce_bool_param(
+            include_notifications, "include_notifications", default=True
+        )
+        # Default to True if coercion returns None
+        if include_notifications_bool is None:
+            include_notifications_bool = True
 
         result = await smart_tools.get_system_overview(
             detail_level,
@@ -543,6 +557,28 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result["system_info"] = system_info
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
+
+        # Include active persistent notifications
+        if include_notifications_bool:
+            try:
+                ws_result = await client.send_websocket_message(
+                    {"type": "persistent_notification/get"}
+                )
+                if ws_result.get("success"):
+                    notifications = ws_result.get("result", [])
+                    result["notification_count"] = len(notifications)
+                    if notifications:
+                        result["notifications"] = [
+                            {
+                                "notification_id": n.get("notification_id"),
+                                "title": n.get("title"),
+                                "message": n.get("message"),
+                                "created_at": n.get("created_at"),
+                            }
+                            for n in notifications
+                        ]
+            except Exception as e:
+                logger.debug(f"Failed to fetch notifications for overview: {e}")
 
         return result
 
