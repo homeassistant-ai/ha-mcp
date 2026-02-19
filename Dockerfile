@@ -5,7 +5,7 @@
 # Base images pinned by digest - Renovate will create PRs for updates
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca AS builder
+FROM ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim@sha256:a4174f4f3f3bc082b09e7c7d4de288c66b5a70c3cce22bbec35f23f0d24a8679 AS builder
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 # --- Runtime stage: clean image without uv ---
-FROM python:3.14-slim-bookworm@sha256:f0540d0436a220db0a576ccfe75631ab072391e43a24b88972ef9833f699095f
+FROM python:3.13-slim@sha256:3de9a8d7aedbb7984dc18f2dff178a7850f16c1ae7c34ba9d7ecc23d0755e35f
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \

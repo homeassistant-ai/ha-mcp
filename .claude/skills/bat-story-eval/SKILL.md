@@ -219,9 +219,22 @@ Compare against `expected.tools_should_use`:
 | Entity correct + wrong structure | Any | **partial** |
 | Entity not created | Any | **fail** |
 
-### Billable Tokens
+### Metrics
 
-Extract from session files:
+**Primary metrics** (decide pass/fail on these):
+- Black-box score (entity correct, structure correct)
+- White-box tool selection (expected tools used)
+- Error recovery (failures handled gracefully)
+
+**Secondary metrics** (report but don't decide on these alone):
+- Billable tokens — directional cost signal, flag >30% increase for investigation but don't auto-fail
+- Cached tokens / cache hit ratio — useful context for cost analysis, but varies based on provider-side KV-cache behavior
+- Tool call count / turns — varies between runs due to agent exploration
+- Duration — noisy (network, KV-cache misses, server load), only flag large (>2x) outliers
+- Tool description size delta (Step 8)
+
+#### Extracting Billable Tokens
+
 ```python
 # Gemini: input includes cached, so subtract
 billable = (input - cached) + output + thoughts
@@ -237,7 +250,7 @@ For each story+agent:
 - Target pass, baseline fail -> **improved**
 - Target fail, baseline pass -> **decreased** (REGRESSION)
 - Custom story, first run -> **new**
-- Billable tokens >30% higher -> **cost regression** (even if pass)
+- Billable tokens >30% higher -> **cost investigation** (even if pass — check Step 7 for KV-cache misses before concluding regression)
 
 ## Step 5: Update JSONL
 
@@ -342,6 +355,5 @@ Flag >5% total size increase (directly impacts token cost per turn).
 - ALWAYS verify each story via ha_query.py before running the next
 - Reuse containers: first story starts it (`--keep-container`), rest use `--ha-url`
 - Custom story YAMLs go to `/tmp/` (ephemeral); full details reported in Step 6
-- Never use cached tokens for cost evaluation (they're free and variable)
-- Compare **billable tokens**: non-cached input + output + thoughts
+- See "Metrics" section in Step 4 for primary vs secondary metric classification
 - The working directory MUST be `/home/julien/github/ha-mcp/worktree/uat-stories` for `uv run`
