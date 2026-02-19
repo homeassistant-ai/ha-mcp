@@ -1,17 +1,14 @@
 """
-Category Gateway Proxy — domain-named tool groups with 1-step discovery + execution.
+Category Gateway Proxy — domain-named tool groups with direct execution.
 
 Instead of registering all tools directly with MCP (high idle context cost),
-lesser-used tools are grouped into domain-named gateways that combine
-discovery and execution in a single MCP tool:
+lesser-used tools are grouped into domain-named gateways:
 
-  ha_manage_dashboards()                              — list available sub-tools
   ha_manage_dashboards(tool="ha_config_set_dashboard", args='{"url_path": "..."}')
-                                                      — execute a sub-tool
 
-Each gateway's MCP description is concise (tool names + one-liners).
-Full parameter schemas are returned on-demand when the gateway is called
-with no arguments (action="list").
+Each gateway's MCP description includes tool signatures with required
+parameters so LLMs can call tools directly without a discovery round-trip.
+Optional: call with no arguments for detailed parameter documentation.
 
 See: https://www.anthropic.com/engineering/code-execution-with-mcp
 """
@@ -46,7 +43,6 @@ PROXY_CATEGORIES: dict[str, list[str]] = {
 }
 
 # Gateway descriptions — concise summaries for the MCP tool listing.
-# Full parameter schemas are only loaded on-demand (action="list").
 GATEWAY_DESCRIPTIONS: dict[str, str] = {
     "ha_manage_dashboards": (
         "Create, update, delete, and customize Home Assistant dashboards "
@@ -143,12 +139,35 @@ class ToolProxyRegistry:
         ]
 
     def build_summary_lines(self, category: str) -> list[str]:
-        """Build concise one-liner summaries for the gateway MCP description."""
+        """Build tool signatures with required params for the gateway description.
+
+        Format: ``- tool_name(required_param, ...): First line of description``
+        The ``...`` indicates optional parameters exist.  This gives LLMs enough
+        info to call tools directly without a discovery round-trip.
+        """
         tools = self.get_tools_for_category(category)
         lines = []
         for tool in tools:
             first_line = tool["description"].strip().split("\n")[0]
-            lines.append(f"- {tool['name']}: {first_line}")
+
+            # Build parameter signature showing required params
+            params = tool["parameters"]
+            properties = params.get("properties", {})
+            required_set = set(params.get("required", []))
+
+            required_names = [n for n in properties if n in required_set]
+            has_optional = len(properties) > len(required_names)
+
+            if required_names and has_optional:
+                sig = ", ".join(required_names) + ", ..."
+            elif required_names:
+                sig = ", ".join(required_names)
+            elif has_optional:
+                sig = "..."
+            else:
+                sig = ""
+
+            lines.append(f"- {tool['name']}({sig}): {first_line}")
         return lines
 
 
@@ -294,13 +313,15 @@ class _MockMCP:
 
             name, description, parameters = _extract_tool_metadata(inner)
 
-            self.captured_tools.append({
-                "name": name,
-                "description": description,
-                "parameters": parameters,
-                "annotations": annotations,
-                "implementation": func,
-            })
+            self.captured_tools.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                    "annotations": annotations,
+                    "implementation": func,
+                }
+            )
             return func
 
         return decorator
@@ -405,8 +426,8 @@ def _register_single_gateway(
     description = (
         f"{gateway_summary}\n\n"
         f"Available tools:\n{tools_list}\n\n"
-        f"Call with no arguments to see full parameter schemas for all tools.\n"
-        f"Call with tool and args to execute a specific tool."
+        f"Call with tool='<name>' and args='{{\"param\": \"value\"}}' to execute.\n"
+        f"Optionally call with no arguments for detailed parameter help."
     )
 
     # Determine if any sub-tool is destructive
@@ -429,10 +450,7 @@ def _register_single_gateway(
             str | None,
             Field(
                 default=None,
-                description=(
-                    "Tool name to execute (e.g., 'ha_config_set_dashboard'). "
-                    "Omit to list all available tools with full parameter schemas."
-                ),
+                description=("Tool name to execute. Omit for detailed parameter help."),
             ),
         ] = None,
         args: Annotated[
@@ -456,7 +474,7 @@ def _register_single_gateway(
                 "count": len(catalog),
                 "usage": (
                     f"Call {category_name}(tool='<tool_name>', "
-                    f"args='{{\"param\": \"value\"}}') to execute a tool."
+                    f'args=\'{{"param": "value"}}\') to execute a tool.'
                 ),
             }
 
@@ -464,8 +482,7 @@ def _register_single_gateway(
         tool_entry = proxy_registry.get_tool(tool)
         if not tool_entry:
             available = [
-                t["name"]
-                for t in proxy_registry.get_tools_for_category(category_name)
+                t["name"] for t in proxy_registry.get_tools_for_category(category_name)
             ]
             return create_resource_not_found_error(
                 resource_type="Tool",
