@@ -88,8 +88,9 @@ def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: Literal[False] = False,
-) -> dict[str, Any]: ...
+    raise_error: Literal[True] = True,
+    suggestions: list[str] | None = None,
+) -> NoReturn: ...
 
 
 @overload
@@ -97,37 +98,38 @@ def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: Literal[True],
-) -> NoReturn: ...
+    raise_error: Literal[False],
+    suggestions: list[str] | None = None,
+) -> dict[str, Any]: ...
 
 
 def exception_to_structured_error(
     error: Exception,
     context: dict[str, Any] | None = None,
     *,
-    raise_error: bool = False,
+    raise_error: bool = True,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Convert an exception to a structured error response.
 
     This function maps common exception types to appropriate error codes
-    and creates informative error responses.
+    and creates informative error responses. By default, it raises a ToolError
+    to signal the error at the MCP protocol level (isError=true).
 
     Args:
         error: The exception to convert
         context: Additional context to include in the response
-        raise_error: If True, raises ToolError with the structured error.
-                    If False (default), returns the error dict.
-
-                    NOTE: The default will change to True in a future PR once
-                    all tools are updated to use ToolError. New code should
-                    explicitly pass raise_error=True for forward compatibility.
+        raise_error: If True (default), raises ToolError with the structured error.
+                    If False, returns the error dict for further modification.
+        suggestions: Optional list of actionable suggestions to embed in the error.
+                    Saves callers from manually inserting suggestions after the call.
 
     Returns:
         Structured error response dictionary (only if raise_error=False)
 
     Raises:
-        ToolError: If raise_error=True, raises with JSON-serialized error
+        ToolError: If raise_error=True (default), raises with JSON-serialized error
     """
     error_str = str(error).lower()
     error_msg = str(error)
@@ -137,15 +139,15 @@ def exception_to_structured_error(
     # Handle specific exception types
     if isinstance(error, HomeAssistantConnectionError):
         if "timeout" in error_str:
-            error_response = create_connection_error(error_msg, timeout=True)
+            error_response = create_connection_error(error_msg, timeout=True, context=context)
         else:
-            error_response = create_connection_error(error_msg)
+            error_response = create_connection_error(error_msg, context=context)
 
     elif isinstance(error, HomeAssistantAuthError):
         if "expired" in error_str:
-            error_response = create_auth_error(error_msg, expired=True)
+            error_response = create_auth_error(error_msg, expired=True, context=context)
         else:
-            error_response = create_auth_error(error_msg)
+            error_response = create_auth_error(error_msg, context=context)
 
     elif isinstance(error, HomeAssistantAPIError):
         # Check for specific error patterns
@@ -162,7 +164,7 @@ def exception_to_structured_error(
                         context=context,
                     )
             case 401 | 403:
-                error_response = create_auth_error(error_msg)
+                error_response = create_auth_error(error_msg, context=context)
             case 400:
                 error_response = create_validation_error(error_msg, context=context)
             case _:
@@ -176,10 +178,10 @@ def exception_to_structured_error(
     elif isinstance(error, TimeoutError):
         operation = context.get("operation", "request") if context else "request"
         timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg)
+        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
 
     elif isinstance(error, ValueError):
-        error_response = create_validation_error(error_msg)
+        error_response = create_validation_error(error_msg, context=context)
 
     # Check for common error patterns in error message
     elif "not found" in error_str or "404" in error_str:
@@ -194,22 +196,25 @@ def exception_to_structured_error(
             )
 
     elif "timeout" in error_str:
-        error_response = create_timeout_error("operation", 30, details=error_msg)
+        error_response = create_timeout_error("operation", 30, details=error_msg, context=context)
 
     elif "connection" in error_str or "connect" in error_str:
-        error_response = create_connection_error(error_msg)
+        error_response = create_connection_error(error_msg, context=context)
 
     elif "auth" in error_str or "token" in error_str or "401" in error_str:
-        error_response = create_auth_error(error_msg)
+        error_response = create_auth_error(error_msg, context=context)
 
     else:
-        # Default to internal error
+        # Default to internal error -- use generic message to avoid leaking internals
         error_response = create_error_response(
             ErrorCode.INTERNAL_ERROR,
-            error_msg,
-            details="An unexpected error occurred",
+            "An unexpected error occurred",
+            details=error_msg,
             context=context,
         )
+
+    if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
+        error_response["error"]["suggestions"] = suggestions
 
     if raise_error:
         raise_tool_error(error_response)

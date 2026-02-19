@@ -10,11 +10,17 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
-from .util_helpers import parse_string_list_param
+from .helpers import log_tool_usage, raise_tool_error
+from .util_helpers import (
+    coerce_bool_param,
+    parse_string_list_param,
+    wait_for_entity_registered,
+    wait_for_entity_removed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +362,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities.
@@ -387,10 +400,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 labels = parse_string_list_param(labels, "labels")
                 options = parse_string_list_param(options, "options")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid list parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update based on helper_id
             action = "update" if helper_id else "create"
@@ -589,32 +602,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     entity_id = helper_data.get("entity_id")
 
                     # Wait for entity to be properly registered before proceeding
-                    if entity_id:
-                        logger.debug(f"Waiting for {entity_id} to be registered...")
-                        # Give the entity a moment to register in the system
-                        await asyncio.sleep(0.2)
-
-                        # Verify the entity is accessible via state API
-                        max_verification_attempts = 5
-                        for attempt in range(max_verification_attempts):
-                            try:
-                                state_check = await client.get_state(entity_id)
-                                if state_check:
-                                    logger.debug(
-                                        f"Entity {entity_id} verified via state API"
-                                    )
-                                    break
-                            except Exception:
-                                pass
-
-                            if attempt < max_verification_attempts - 1:
-                                wait_time = 0.1 * (
-                                    attempt + 1
-                                )  # 0.1s, 0.2s, 0.3s, 0.4s
-                                logger.debug(
-                                    f"Entity {entity_id} not yet accessible, waiting {wait_time}s..."
-                                )
-                                await asyncio.sleep(wait_time)
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    if wait_bool and entity_id:
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                helper_data["warning"] = f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
+                        except Exception as e:
+                            helper_data["warning"] = f"Helper created but verification failed: {e}"
 
                     # Update entity registry if area_id or labels specified
                     if (area_id or labels) and entity_id:
@@ -682,7 +677,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if result.get("success"):
                     entity_data = result.get("result", {}).get("entity_entry", {})
-                    return {
+
+                    # Wait for entity to reflect the update
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
@@ -690,6 +688,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "updated_data": entity_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
+                    if wait_bool:
+                        try:
+                            registered = await wait_for_entity_registered(client, entity_id)
+                            if not registered:
+                                response["warning"] = f"Update applied but {entity_id} not yet queryable."
+                        except Exception as e:
+                            response["warning"] = f"Update applied but verification failed: {e}"
+                    return response
                 else:
                     return {
                         "success": False,
@@ -703,6 +709,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "error": f"Unexpected action: {action}",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             return {
                 "success": False,
@@ -749,6 +757,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Helper ID to delete (e.g., 'my_button' or 'input_button.my_button')"
             ),
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for helper entity to be fully removed before returning. Default: True.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Delete a Home Assistant helper entity.
@@ -786,7 +801,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Check if entity exists via state API first (faster check)
                 try:
-                    state_check = await client.get_state(entity_id)
+                    state_check = await client.get_entity_state(entity_id)
                     if not state_check:
                         # Entity doesn't exist in state, wait a bit for registration
                         if attempt < max_retries - 1:
@@ -847,7 +862,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result = await client.send_websocket_message(delete_msg)
 
                 if result.get("success"):
-                    return {
+                    # Wait for entity to be removed
+                    wait_bool = coerce_bool_param(wait, "wait", default=True)
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "delete",
                         "helper_type": helper_type,
@@ -856,10 +873,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "method": "fallback_direct_id",
                         "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
                     }
+                    if wait_bool:
+                        try:
+                            removed = await wait_for_entity_removed(client, entity_id)
+                            if not removed:
+                                response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                        except Exception as e:
+                            response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                    return response
 
                 # Fallback strategy 2: Check if entity was already deleted
                 try:
-                    final_state_check = await client.get_state(entity_id)
+                    final_state_check = await client.get_entity_state(entity_id)
                     if not final_state_check:
                         logger.info(
                             f"Entity {entity_id} no longer exists, considering deletion successful"
@@ -896,7 +921,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.info(f"WebSocket delete response: {result}")
 
             if result.get("success"):
-                return {
+                # Wait for entity to be removed
+                wait_bool = coerce_bool_param(wait, "wait", default=True)
+                response = {
                     "success": True,
                     "action": "delete",
                     "helper_type": helper_type,
@@ -906,6 +933,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "method": "standard",
                     "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
                 }
+                if wait_bool:
+                    try:
+                        removed = await wait_for_entity_removed(client, entity_id)
+                        if not removed:
+                            response["warning"] = f"Deletion confirmed but {entity_id} may still appear briefly."
+                    except Exception as e:
+                        response["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                return response
             else:
                 error_msg = result.get("error", "Unknown error")
                 # Handle specific HA error messages

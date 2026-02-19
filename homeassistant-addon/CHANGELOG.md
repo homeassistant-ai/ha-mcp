@@ -3,6 +3,173 @@
 <!-- version list -->
 
 
+## v6.7.0 (2026-02-17)
+
+### Added
+
+- Add user acceptance stories for BAT framework
+  ([#583](https://github.com/homeassistant-ai/ha-mcp/pull/583))
+- Add ha_get_states tool for bulk entity state retrieval
+  ([#588](https://github.com/homeassistant-ai/ha-mcp/pull/588))
+- Add offset pagination to ha_search_entities and ha_hacs_search (#605)
+  ([#619](https://github.com/homeassistant-ai/ha-mcp/pull/619))
+- Add wait parameter to config and service call tools (#381)
+  ([#564](https://github.com/homeassistant-ai/ha-mcp/pull/564))
+
+### Changed
+
+- Classify BAT metrics as primary vs secondary
+  ([#639](https://github.com/homeassistant-ai/ha-mcp/pull/639))
+- Update safety annotations with correct MCP spec definitions
+  ([`59787a2`](https://github.com/homeassistant-ai/ha-mcp/commit/59787a261a60d41dc9e314dd3a851bb4a55d0f14))
+- Add @maxperron as contributor for beta testing
+  ([`0220708`](https://github.com/homeassistant-ai/ha-mcp/commit/0220708325aeca55c78349cb118423f9bad802ef))
+- Update contributors - promote sergeykad and kingpanther13 to maintainers, add airlabno and ryphez
+  ([`44f42b9`](https://github.com/homeassistant-ai/ha-mcp/commit/44f42b92de72b5a9e59279c19c8664c0a02b3f2a))
+- Add Codex Desktop UI MCP quick setup
+  ([#615](https://github.com/homeassistant-ai/ha-mcp/pull/615))
+
+### Fixed
+
+- Enable stateless_http in add-on and fix runtime Python version
+  ([#626](https://github.com/homeassistant-ai/ha-mcp/pull/626))
+- Treat 504 proxy error as expected during ha_restart
+  ([#621](https://github.com/homeassistant-ai/ha-mcp/pull/621))
+- Remove internal info leaks from error responses (#517)
+  ([#586](https://github.com/homeassistant-ai/ha-mcp/pull/586))
+- Reduce per-call token usage by slimming search responses and deep_search defaults
+  ([#579](https://github.com/homeassistant-ai/ha-mcp/pull/579))
+- Prevent ha_deep_search timeout on large HA instances
+  ([#575](https://github.com/homeassistant-ai/ha-mcp/pull/575))
+- Detect correct PR number when multiple PR refs exist in commit message
+  ([#613](https://github.com/homeassistant-ai/ha-mcp/pull/613))
+- Allow editing default dashboard without hyphen in url_path (#591)
+  ([#592](https://github.com/homeassistant-ai/ha-mcp/pull/592))
+- **tests**: Poll for entity registration in deep search E2E tests
+  ([#589](https://github.com/homeassistant-ai/ha-mcp/pull/589))
+
+### Refactoring
+
+- Improve ruff linter config and fix violations
+  ([#624](https://github.com/homeassistant-ai/ha-mcp/pull/624))
+- **__main__**: Fix security issues, bugs, and reduce duplication
+  ([#609](https://github.com/homeassistant-ai/ha-mcp/pull/609))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- Add ruff pre-commit hook and CI lint job
+  ([#604](https://github.com/homeassistant-ai/ha-mcp/pull/604))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.9.30
+  ([#597](https://github.com/homeassistant-ai/ha-mcp/pull/597))
+- **deps**: Update python docker tag to v3.14
+  ([#598](https://github.com/homeassistant-ai/ha-mcp/pull/598))
+- Enforce LF line endings via .gitattributes
+  ([#596](https://github.com/homeassistant-ai/ha-mcp/pull/596))
+
+### Continuous Integration
+
+- **deps**: Bump actions/cache from 4 to 5
+  ([#632](https://github.com/homeassistant-ai/ha-mcp/pull/632))
+- **deps**: Bump renovatebot/github-action from 46.0.2 to 46.1.1
+  ([#631](https://github.com/homeassistant-ai/ha-mcp/pull/631))
+- Add unit tests to PR pipeline and pre-commit hook
+  ([#620](https://github.com/homeassistant-ai/ha-mcp/pull/620))
+- **deps**: Bump renovatebot/github-action from 46.0.1 to 46.0.2
+  ([#584](https://github.com/homeassistant-ai/ha-mcp/pull/584))
+</details>
+
+
+## v6.6.1 (2026-02-10)
+
+### Fixed
+
+- Sync uv.lock with v6.6.0 version bump (#594)
+  ([#599](https://github.com/homeassistant-ai/ha-mcp/pull/599))
+
+
+## v6.6.0 (2026-02-10)
+
+### Added
+
+- Add human-readable timestamps to logs, apply ruff fixes (#574)
+  ([#580](https://github.com/homeassistant-ai/ha-mcp/pull/580))
+- Add Gemini Code Assist configuration and update documentation
+  ([#582](https://github.com/homeassistant-ai/ha-mcp/pull/582))
+- Add contrib-pr-review skill for external contribution review
+  ([`0618bf9`](https://github.com/homeassistant-ai/ha-mcp/commit/0618bf9270b9db944b4a0a52ca2ae28e7af61e1d))
+- Add aggregate stats to BAT summary for branch comparison
+  ([`8fe8ab8`](https://github.com/homeassistant-ai/ha-mcp/commit/8fe8ab815ae7a62ce0418d81860f5f5fc8f1b479))
+- Add /bat skill for bot acceptance testing
+  ([`906e22f`](https://github.com/homeassistant-ai/ha-mcp/commit/906e22f076ed0b310e2d06343b08296a3ee65cd1))
+- Add UAT framework for agent-driven acceptance testing
+  ([`b561ad4`](https://github.com/homeassistant-ai/ha-mcp/commit/b561ad447cb3b780715899bac8ae9ea6220e57ad))
+- Add domain filter and options support to ha_get_integration
+  ([#542](https://github.com/homeassistant-ai/ha-mcp/pull/542))
+
+### Changed
+
+- Add comment formatting guidelines to contrib-pr-review
+  ([`c014e8a`](https://github.com/homeassistant-ai/ha-mcp/commit/c014e8a08be26421d55e00299648b68f7689d1fb))
+- Add contrib-pr-review skill to AGENTS.md
+  ([`4aa29c3`](https://github.com/homeassistant-ai/ha-mcp/commit/4aa29c3662942c005336288613a207177091b2c7))
+- Add warning to review PRs sequentially, not in parallel
+  ([`d69c576`](https://github.com/homeassistant-ai/ha-mcp/commit/d69c576c09b2214a6c5fbf6112bfccfb3d7bd4ae))
+
+### Fixed
+
+- Address review comments on UAT runner
+  ([`6a2bf04`](https://github.com/homeassistant-ai/ha-mcp/commit/6a2bf0430261e6a07b0738e3a5e98532bccfb636))
+- Handle service call timeouts gracefully and add missing @log_tool usage (fixes #550)
+  ([#555](https://github.com/homeassistant-ai/ha-mcp/pull/555))
+- Optimize Dockerfiles with multi-stage builds
+  ([#546](https://github.com/homeassistant-ai/ha-mcp/pull/546))
+
+### Performance Improvements
+
+- Run agents sequentially instead of in parallel
+  ([`b3032f4`](https://github.com/homeassistant-ai/ha-mcp/commit/b3032f4fb745516e184ee2278cd900b440afd964))
+
+### Refactoring
+
+- Rename pr-checker to my-pr-checker for clarity
+  ([`a02533c`](https://github.com/homeassistant-ai/ha-mcp/commit/a02533c16a1b7ea8f4f3f0f51cd949f0b1bc01a3))
+- Rename UAT to BAT and add progressive disclosure output
+  ([`8a6d43e`](https://github.com/homeassistant-ai/ha-mcp/commit/8a6d43e9cd2e20a3d7ca6fbd1be5b986901bd8cf))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Changed
+
+- Clarify worktree workflow and symlink convention in AGENTS.md
+  ([`9946be5`](https://github.com/homeassistant-ai/ha-mcp/commit/9946be57ee69a267054a7ac31ffb6b408cc3a99b))
+- Restructure worktree workflow and documentation
+  ([#547](https://github.com/homeassistant-ai/ha-mcp/pull/547))
+
+### Build System
+
+- **deps**: Bump astral-sh/uv
+  ([#535](https://github.com/homeassistant-ai/ha-mcp/pull/535))
+
+### Chores
+
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026
+  ([#508](https://github.com/homeassistant-ai/ha-mcp/pull/508))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action from 44.2.6 to 46.0.1
+  ([#536](https://github.com/homeassistant-ai/ha-mcp/pull/536))
+</details>
+
+
 ## v6.5.0 (2026-02-03)
 
 ### Added

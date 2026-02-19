@@ -420,6 +420,82 @@ async def wait_for_state_change(
     return None
 
 
+async def wait_for_tool_result(
+    mcp_client,
+    tool_name: str,
+    arguments: dict[str, Any],
+    predicate: Callable[[dict[str, Any]], bool],
+    timeout: int = 15,
+    poll_interval: float = 0.5,
+    description: str = "tool result",
+) -> dict[str, Any]:
+    """
+    Poll an MCP tool until the result satisfies a predicate.
+
+    Useful when an entity was just created and needs time to be registered
+    in Home Assistant before it becomes visible to search/query tools.
+
+    Args:
+        mcp_client: FastMCP client instance
+        tool_name: MCP tool to call repeatedly
+        arguments: Arguments to pass to the tool
+        predicate: Function that receives parsed tool result and returns
+                   True when the desired condition is met
+        timeout: Maximum wait time in seconds
+        poll_interval: Time between calls in seconds
+        description: Human-readable description for logging
+
+    Returns:
+        The parsed tool result that satisfied the predicate.
+
+    Raises:
+        TimeoutError: If the predicate is not satisfied within the timeout.
+    """
+    start_time = time.time()
+    last_data: dict[str, Any] = {}
+
+    logger.info(f"⏳ Waiting for {description} (timeout: {timeout}s)")
+
+    while True:
+        # Call the tool — catch tool/network errors to keep polling
+        try:
+            result = await mcp_client.call_tool(tool_name, arguments)
+            last_data = parse_mcp_result(result)
+        except Exception as e:
+            logger.debug(f"⚠️ Error calling {tool_name}: {e}")
+            if time.time() - start_time >= timeout:
+                raise TimeoutError(
+                    f"{description}: timed out after {timeout}s (last error: {e})"
+                ) from e
+            await asyncio.sleep(poll_interval)
+            continue
+
+        # Skip MCP error responses — entity may not be registered yet
+        if last_data.get("success") is False:
+            logger.debug(
+                f"⚠️ {tool_name} returned error: {last_data.get('error')}, retrying..."
+            )
+            if time.time() - start_time >= timeout:
+                raise TimeoutError(
+                    f"{description}: timed out after {timeout}s "
+                    f"(last MCP error: {last_data.get('error')})"
+                )
+            await asyncio.sleep(poll_interval)
+            continue
+
+        # Run predicate OUTSIDE try/except so bugs (TypeError, KeyError) propagate
+        if predicate(last_data):
+            elapsed = time.time() - start_time
+            logger.info(f"✅ {description} satisfied after {elapsed:.1f}s")
+            return last_data
+
+        if time.time() - start_time >= timeout:
+            raise TimeoutError(
+                f"{description}: timed out after {timeout}s (predicate not satisfied)"
+            )
+        await asyncio.sleep(poll_interval)
+
+
 class WaitHelper:
     """
     Helper class for common waiting patterns with a specific MCP client.
@@ -481,3 +557,23 @@ class WaitHelper:
     ) -> bool:
         """Wait for custom condition."""
         return await wait_for_condition(condition_func, timeout, condition_name=name)
+
+    async def tool_result(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        predicate: Callable[[dict[str, Any]], bool],
+        timeout: int = 15,
+        poll_interval: float = 0.5,
+        description: str = "tool result",
+    ) -> dict[str, Any]:
+        """Wait for tool result to satisfy predicate."""
+        return await wait_for_tool_result(
+            self.client,
+            tool_name,
+            arguments,
+            predicate,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            description=description,
+        )

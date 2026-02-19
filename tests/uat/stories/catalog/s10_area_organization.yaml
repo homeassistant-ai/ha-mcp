@@ -1,0 +1,41 @@
+id: s10
+title: "Create areas and organize entities"
+category: organization
+weight: 3
+description: >
+  User wants to organize their home by creating areas and assigning entities.
+  Tests area CRUD and entity assignment. Organization is cited as a common
+  use case in the Paulus discussion - "help me organize my 200 entities."
+
+tags:
+  - organization
+  - areas
+  - entities
+  - assignment
+
+setup: []
+
+prompt: >
+  Help me organize my smart home. First, create these areas if they don't exist:
+  "Kitchen Test", "Bedroom Test", and "Garage Test".
+  Then show me all available light entities and suggest which area each one
+  should belong to based on its name. Don't actually move them yet, just show
+  me your recommendations in a clear table format.
+
+teardown: []
+
+verify:
+  questions:
+    - "Do areas 'Kitchen Test', 'Bedroom Test', and 'Garage Test' all exist?"
+    - "Were any entities actually moved to these areas? (They should NOT have been moved.)"
+
+expected:
+  tools_should_use:
+    - ha_config_set_area
+    - ha_search_entities
+    - ha_config_list_areas
+  description: >
+    Agent should create the three areas, then search for light entities,
+    and present a recommendation mapping. Should use entity names to infer
+    area assignment (e.g., "bed_light" → Bedroom). Should NOT move entities
+    without confirmation (the prompt says "don't actually move them yet").

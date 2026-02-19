@@ -17,7 +17,11 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
-from ..utils.usage_logger import AVG_LOG_ENTRIES_PER_TOOL, get_recent_logs, get_startup_logs
+from ..utils.usage_logger import (
+    AVG_LOG_ENTRIES_PER_TOOL,
+    get_recent_logs,
+    get_startup_logs,
+)
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)

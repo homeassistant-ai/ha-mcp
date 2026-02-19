@@ -18,6 +18,10 @@ project_root = Path(__file__).parent.parent.parent
 # Demo server: https://ha-mcp-demo-server.qc-h.net (login: mcp/mcp, resets weekly)
 DEMO_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
 
+# OAuth mode sentinel values — when these are present, HA credentials come from OAuth tokens
+OAUTH_MODE_URL = "http://oauth-mode"
+OAUTH_MODE_TOKEN = "oauth-mode-token"
+
 # Support for different environment files via HAMCP_ENV_FILE
 env_file = os.getenv("HAMCP_ENV_FILE", ".env")
 env_path = project_root / env_file
@@ -37,8 +41,8 @@ class Settings(BaseSettings):
 
     # Home Assistant connection
     # In OAuth mode, these are optional and provided per-request
-    homeassistant_url: str = Field(default="http://oauth-mode", alias="HOMEASSISTANT_URL")
-    homeassistant_token: str = Field(default="oauth-mode-token", alias="HOMEASSISTANT_TOKEN")
+    homeassistant_url: str = Field(default=OAUTH_MODE_URL, alias="HOMEASSISTANT_URL")
+    homeassistant_token: str = Field(default=OAUTH_MODE_TOKEN, alias="HOMEASSISTANT_TOKEN")
 
     # Server configuration
     timeout: int = Field(30, alias="HA_TIMEOUT")
@@ -85,7 +89,7 @@ class Settings(BaseSettings):
     def validate_homeassistant_url(cls, v: str) -> str:
         """Ensure URL is properly formatted."""
         # Allow OAuth mode placeholder
-        if v == "http://oauth-mode":
+        if v == OAUTH_MODE_URL:
             return v
         if not v.startswith(("http://", "https://")):
             raise ValueError("Home Assistant URL must start with http:// or https://")
@@ -96,7 +100,7 @@ class Settings(BaseSettings):
     def validate_homeassistant_token(cls, v: str) -> str:
         """Ensure token is not empty. Use 'demo' for public demo environment."""
         # Allow OAuth mode placeholder
-        if v == "oauth-mode-token":
+        if v == OAUTH_MODE_TOKEN:
             return v
         if not v or v == "your_long_lived_access_token_here":
             raise ValueError("Home Assistant token must be provided")

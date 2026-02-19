@@ -1,5 +1,5 @@
 ---
-name: bat
+name: bat-adhoc
 description: Run bot acceptance tests to validate MCP tools work correctly from a real AI agent's perspective. Use when testing PRs, detecting regressions, or verifying tool changes end-to-end with Claude/Gemini CLIs.
 disable-model-invocation: true
 argument-hint: [scenario-description or --help]
@@ -89,10 +89,17 @@ EOF
 4. **Run on branch**: Run same scenario, compare stats
 
 **Compare these metrics:**
+
+*Primary (decide pass/fail on these):*
 - **Task completion**: Did both pass? Any new failures?
 - **Accuracy**: Check agent output quality - did it understand the task correctly?
-- **Efficiency**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns`, `aggregate.total_duration_ms`
-- **Variation testing**: Ask the same task in different ways to test robustness
+- **Tool success rate**: Compare `aggregate.total_tool_calls` vs `total_tool_fail`
+
+*Secondary (report but don't decide on these alone):*
+- **Tool call count**: Compare `aggregate.total_tool_calls`, `aggregate.total_turns` — directional signal, not conclusive (agent exploration varies between runs)
+- **Duration**: Compare `aggregate.total_duration_ms` — noisy due to network, cache misses, server load. Only flag large (>2x) regressions.
+
+**Robustness tip:** Ask the same task in different ways (variation testing) to check if results are consistent across phrasings.
 
 **Quick comparison** (single command):
 
@@ -114,11 +121,11 @@ Each scenario invocation costs API credits (one per agent per phase). Design sce
 
 ## Handling Arguments
 
-When `/bat` is invoked with arguments:
+When `/bat-adhoc` is invoked with arguments:
 
 **If arguments contain a scenario description**, generate the JSON scenario and run it:
 ```
-/bat test automation create with sunrise trigger then modify to sunset
+/bat-adhoc test automation create with sunrise trigger then modify to sunset
 ```
 → Generate appropriate scenario JSON and execute
 

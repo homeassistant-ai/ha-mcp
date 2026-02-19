@@ -41,7 +41,7 @@ from test_constants import TEST_TOKEN  # noqa: E402
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
 HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2025.12.4"
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
 
 
@@ -165,9 +165,8 @@ def write_claude_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> P
             }
         }
     }
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="claude_mcp_", delete=False)
-    json.dump(config, f)
-    f.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="claude_mcp_", delete=False) as f:
+        json.dump(config, f)
     return Path(f.name)
 
 
@@ -201,6 +200,9 @@ def check_agent_available(name: str) -> bool:
 
 async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict:
     """Run a CLI command and capture output."""
+    # Strip CLAUDECODE env var to allow nested Claude CLI sessions
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -208,6 +210,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd else None,
+            env=env,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         duration_ms = int((time.time() - start) * 1000)
@@ -225,6 +228,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         output_text = stdout_text
         num_turns = None
         tool_stats = None
+        session_id = None
+        cost_usd = None
         if raw_json and isinstance(raw_json, dict):
             # Claude JSON format
             if "result" in raw_json:
@@ -234,6 +239,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
                 output_text = raw_json.get("response", stdout_text)
             num_turns = raw_json.get("num_turns")
             tool_stats = raw_json.get("tool_stats")
+            session_id = raw_json.get("session_id")
+            cost_usd = raw_json.get("total_cost_usd") or raw_json.get("cost_usd")
             # Gemini stats
             if "stats" in raw_json and isinstance(raw_json["stats"], dict):
                 tool_stats = raw_json["stats"].get("tools")
@@ -249,6 +256,10 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["num_turns"] = num_turns
         if tool_stats is not None:
             result["tool_stats"] = tool_stats
+        if session_id is not None:
+            result["session_id"] = session_id
+        if cost_usd is not None:
+            result["cost_usd"] = cost_usd
         if raw_json is not None:
             result["raw_json"] = raw_json
         return result
@@ -269,7 +280,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         }
 
 
-def build_claude_cmd(prompt: str, mcp_config_path: Path) -> list[str]:
+def build_claude_cmd(prompt: str, mcp_config_path: Path, model: str = "sonnet") -> list[str]:
     return [
         "claude",
         "-p", prompt,
@@ -277,9 +288,8 @@ def build_claude_cmd(prompt: str, mcp_config_path: Path) -> list[str]:
         "--strict-mcp-config",
         "--allowedTools", "mcp__home-assistant",
         "--output-format", "json",
-        "--no-session-persistence",
         "--permission-mode", "bypassPermissions",
-        "--model", "sonnet",
+        "--model", model,
     ]
 
 
@@ -300,6 +310,7 @@ async def run_agent_scenario(
     ha_token: str,
     branch: str | None,
     timeout: int,
+    model: str | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
@@ -325,7 +336,7 @@ async def run_agent_scenario(
 
             if agent_name == "claude":
                 assert claude_config_path is not None
-                cmd = build_claude_cmd(prompt, claude_config_path)
+                cmd = build_claude_cmd(prompt, claude_config_path, model=model or "sonnet")
                 result = await run_cli(cmd, timeout)
             elif agent_name == "gemini":
                 cmd = build_gemini_cmd(prompt)
@@ -370,6 +381,10 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
     # Always include stats (for comparison between branches)
     if phase_result.get("num_turns") is not None:
         summary["num_turns"] = phase_result["num_turns"]
+    if phase_result.get("session_id") is not None:
+        summary["session_id"] = phase_result["session_id"]
+    if phase_result.get("cost_usd") is not None:
+        summary["cost_usd"] = phase_result["cost_usd"]
     if phase_result.get("tool_stats") is not None:
         summary["tool_stats"] = phase_result["tool_stats"]
     return summary
@@ -446,7 +461,7 @@ async def run(args: argparse.Namespace) -> dict:
     """Execute the BAT scenario and return results."""
     # Read scenario
     if args.scenario_file:
-        scenario = json.loads(Path(args.scenario_file).read_text())
+        scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
     else:
         scenario = json.loads(sys.stdin.read())
 
@@ -487,7 +502,8 @@ async def run(args: argparse.Namespace) -> dict:
         agent_results = {}
         for name in active_agents:
             agent_results[name] = await run_agent_scenario(
-                name, scenario, ha_url, ha_token, args.branch, args.timeout
+                name, scenario, ha_url, ha_token, args.branch, args.timeout,
+                model=getattr(args, "model", None),
             )
 
         # Add unavailable agents
@@ -546,6 +562,10 @@ Examples:
         default=DEFAULT_TIMEOUT,
         help=f"Timeout per phase in seconds (default: {DEFAULT_TIMEOUT})",
     )
+    parser.add_argument(
+        "--model",
+        help="Model to use for Claude agent (e.g., haiku, sonnet, opus). Default: sonnet",
+    )
     args = parser.parse_args()
 
     try:
@@ -555,11 +575,10 @@ Examples:
         sys.exit(1)
 
     # Write full results to temp file
-    results_file = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="bat_results_", delete=False
-    )
-    json.dump(full_results, results_file, indent=2)
-    results_file.close()
+    ) as results_file:
+        json.dump(full_results, results_file, indent=2)
 
     # Output concise summary + file path to stdout
     summary = make_summary(full_results)

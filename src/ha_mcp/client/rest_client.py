@@ -17,19 +17,16 @@ logger = logging.getLogger(__name__)
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
 
-    pass
 
 
 class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
 
-    pass
 
 
 class HomeAssistantAuthError(HomeAssistantError):
     """Authentication error with Home Assistant."""
 
-    pass
 
 
 class HomeAssistantAPIError(HomeAssistantError):
@@ -432,7 +429,7 @@ class HomeAssistantClient:
                 raise HomeAssistantAPIError(
                     f"Failed to resolve automation {identifier}: {str(e)}",
                     status_code=404,
-                )
+                ) from e
         else:
             # Assume it's already a unique_id
             return identifier
@@ -463,7 +460,7 @@ class HomeAssistantClient:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
-                )
+                ) from e
             raise
 
     async def upsert_automation_config(
@@ -548,7 +545,7 @@ class HomeAssistantClient:
             if "400" in str(e):
                 raise HomeAssistantAPIError(
                     f"Invalid automation configuration: {str(e)}", status_code=400
-                )
+                ) from e
             raise
 
     async def delete_automation_config(self, identifier: str) -> dict[str, Any]:
@@ -582,7 +579,7 @@ class HomeAssistantClient:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
-                )
+                ) from e
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
                     f"Cannot delete automation '{identifier}': The HTTP DELETE method is blocked. "
@@ -595,14 +592,14 @@ class HomeAssistantClient:
                     f"(e.g., 'DELETE_{identifier}') so you can identify and manually delete it later "
                     f"via the Home Assistant UI (Settings > Automations & Scenes).",
                     status_code=405,
-                )
+                ) from e
             raise
         except Exception as e:
             if "404" in str(e):
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
-                )
+                ) from e
             raise
 
     async def start_config_flow(
@@ -845,7 +842,7 @@ class HomeAssistantClient:
             if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Script not found: {script_id}", status_code=404
-                )
+                ) from e
             raise
         except Exception as e:
             logger.error(f"Failed to get script config for {script_id}: {e}")
@@ -897,7 +894,7 @@ class HomeAssistantClient:
             if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Script not found: {script_id}", status_code=404
-                )
+                ) from e
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(
                     f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked. "
@@ -912,9 +909,7 @@ class HomeAssistantClient:
                     f"(e.g., 'DELETE_{script_id}') so you can identify and manually delete it later "
                     f"via the Home Assistant UI (Settings > Automations & Scenes > Scripts).",
                     status_code=405,
-                )
-            raise
-        except Exception as e:
+                ) from e
             raise
 
 

@@ -97,8 +97,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
             logger.info(f"Downloading HACS frontend {tag_name}...")
 
-            with urllib.request.urlopen(tarball_url, timeout=120) as response:
-                with tarfile.open(fileobj=response, mode="r:gz") as tar:
+            with urllib.request.urlopen(tarball_url, timeout=120) as response, tarfile.open(fileobj=response, mode="r:gz") as tar:
                     # Extract to temp location first
                     temp_extract = Path(tempfile.mkdtemp())
                     tar.extractall(temp_extract)
@@ -165,7 +164,8 @@ def ha_container_with_fresh_config():
 
     # Create testcontainer with port configuration
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    container = DockerContainer("ghcr.io/home-assistant/home-assistant:2026.1.3")
+    HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+    container = DockerContainer(HA_IMAGE)
 
     # Check for custom port via environment variable
     custom_port = os.environ.get("HA_TEST_PORT")

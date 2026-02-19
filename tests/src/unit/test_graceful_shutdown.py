@@ -97,9 +97,8 @@ class TestSignalHandler:
         main_module._shutdown_event = MagicMock()
 
         # Make get_running_loop raise RuntimeError (no running loop)
-        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running loop")):
-            with pytest.raises(SystemExit) as exc_info:
-                main_module._signal_handler(signal.SIGTERM, None)
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running loop")), pytest.raises(SystemExit) as exc_info:
+            main_module._signal_handler(signal.SIGTERM, None)
 
         assert exc_info.value.code == 0
 
@@ -114,11 +113,10 @@ class TestCleanupResources:
 
         mock_stop = AsyncMock()
 
-        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", mock_stop):
-            with patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock())):
-                main_module._server = None
-                await main_module._cleanup_resources()
-                mock_stop.assert_called_once()
+        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", mock_stop), patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock())):
+            main_module._server = None
+            await main_module._cleanup_resources()
+            mock_stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_disconnects_websocket_manager(self):
@@ -128,12 +126,11 @@ class TestCleanupResources:
         mock_manager = MagicMock()
         mock_manager.disconnect = AsyncMock()
 
-        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock()):
-            with patch("ha_mcp.client.websocket_client.websocket_manager", mock_manager):
-                main_module._server = None
-                await main_module._cleanup_resources()
+        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock()), patch("ha_mcp.client.websocket_client.websocket_manager", mock_manager):
+            main_module._server = None
+            await main_module._cleanup_resources()
 
-                mock_manager.disconnect.assert_called_once()
+            mock_manager.disconnect.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_closes_server(self):
@@ -144,11 +141,10 @@ class TestCleanupResources:
         mock_server.close = AsyncMock()
         main_module._server = mock_server
 
-        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock()):
-            with patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock())):
-                await main_module._cleanup_resources()
+        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock()), patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock())):
+            await main_module._cleanup_resources()
 
-                mock_server.close.assert_called_once()
+            mock_server.close.assert_called_once()
 
         # Reset global state
         main_module._server = None
@@ -159,11 +155,10 @@ class TestCleanupResources:
         import ha_mcp.__main__ as main_module
 
         # Make everything raise exceptions
-        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock(side_effect=Exception("test error"))):
-            with patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock(side_effect=Exception("test error")))):
-                main_module._server = None
-                # Should not raise
-                await main_module._cleanup_resources()
+        with patch("ha_mcp.client.websocket_listener.stop_websocket_listener", AsyncMock(side_effect=Exception("test error"))), patch("ha_mcp.client.websocket_client.websocket_manager", MagicMock(disconnect=AsyncMock(side_effect=Exception("test error")))):
+            main_module._server = None
+            # Should not raise
+            await main_module._cleanup_resources()
 
 
 class TestShutdownTimeout:
@@ -192,30 +187,29 @@ class TestGracefulShutdownIntegration:
 
         mock_mcp.run_async = mock_run_async
 
-        with patch.object(main_module, "_get_mcp", return_value=mock_mcp):
-            with patch.object(main_module, "_cleanup_resources", new_callable=AsyncMock):
-                # Reset state
-                main_module._shutdown_event = None
-                main_module._shutdown_in_progress = False
+        with patch.object(main_module, "_get_mcp", return_value=mock_mcp), patch.object(main_module, "_cleanup_resources", new_callable=AsyncMock):
+            # Reset state
+            main_module._shutdown_event = None
+            main_module._shutdown_in_progress = False
 
-                # Start the server in a task
-                server_coro = main_module._run_with_graceful_shutdown()
-                server_task = asyncio.create_task(server_coro)
+            # Start the server in a task
+            server_coro = main_module._run_with_graceful_shutdown()
+            server_task = asyncio.create_task(server_coro)
 
-                # Give it time to start
-                await asyncio.sleep(0.1)
+            # Give it time to start
+            await asyncio.sleep(0.1)
 
-                # Trigger shutdown
-                if main_module._shutdown_event:
-                    main_module._shutdown_event.set()
+            # Trigger shutdown
+            if main_module._shutdown_event:
+                main_module._shutdown_event.set()
 
-                # Wait for shutdown with timeout
-                try:
-                    await asyncio.wait_for(server_task, timeout=3.0)
-                except TimeoutError:
-                    pytest.fail("Server did not shut down within timeout")
-                except asyncio.CancelledError:
-                    pass  # Expected
+            # Wait for shutdown with timeout
+            try:
+                await asyncio.wait_for(server_task, timeout=3.0)
+            except TimeoutError:
+                pytest.fail("Server did not shut down within timeout")
+            except asyncio.CancelledError:
+                pass  # Expected
 
     @pytest.mark.asyncio
     async def test_cleanup_called_on_shutdown(self):
@@ -234,25 +228,24 @@ class TestGracefulShutdownIntegration:
 
         mock_mcp.run_async = mock_run_async
 
-        with patch.object(main_module, "_get_mcp", return_value=mock_mcp):
-            with patch.object(main_module, "_cleanup_resources", side_effect=mock_cleanup):
-                main_module._shutdown_event = None
-                main_module._shutdown_in_progress = False
+        with patch.object(main_module, "_get_mcp", return_value=mock_mcp), patch.object(main_module, "_cleanup_resources", side_effect=mock_cleanup):
+            main_module._shutdown_event = None
+            main_module._shutdown_in_progress = False
 
-                server_task = asyncio.create_task(main_module._run_with_graceful_shutdown())
+            server_task = asyncio.create_task(main_module._run_with_graceful_shutdown())
 
-                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
-                if main_module._shutdown_event:
-                    main_module._shutdown_event.set()
+            if main_module._shutdown_event:
+                main_module._shutdown_event.set()
 
-                try:
-                    await asyncio.wait_for(server_task, timeout=3.0)
-                except (TimeoutError, asyncio.CancelledError):
-                    pass
+            try:
+                await asyncio.wait_for(server_task, timeout=3.0)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
 
-                # Verify cleanup was called
-                assert cleanup_called.is_set(), "Cleanup was not called"
+            # Verify cleanup was called
+            assert cleanup_called.is_set(), "Cleanup was not called"
 
 
 class TestStdinDetection:
@@ -260,48 +253,42 @@ class TestStdinDetection:
 
     def test_stdin_available_when_tty(self):
         """Stdin should be available when connected to a tty."""
-        from ha_mcp.__main__ import _check_stdin_available
         import stat as stat_module
 
-        with patch("sys.stdin") as mock_stdin:
+        from ha_mcp.__main__ import _check_stdin_available
+
+        with patch("sys.stdin") as mock_stdin, patch("os.fstat") as mock_fstat, patch("os.isatty", return_value=True):
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
+            mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
 
-            with patch("os.fstat") as mock_fstat:
-                mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
-
-                with patch("os.isatty", return_value=True):
-                    assert _check_stdin_available() is True
+            assert _check_stdin_available() is True
 
     def test_stdin_available_when_pipe(self):
         """Stdin should be available when connected to a pipe (FIFO)."""
-        from ha_mcp.__main__ import _check_stdin_available
         import stat as stat_module
 
-        with patch("sys.stdin") as mock_stdin:
+        from ha_mcp.__main__ import _check_stdin_available
+
+        with patch("sys.stdin") as mock_stdin, patch("os.fstat") as mock_fstat, patch("os.isatty", return_value=False):
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
+            mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFIFO)
 
-            with patch("os.fstat") as mock_fstat:
-                mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFIFO)
-
-                with patch("os.isatty", return_value=False):
-                    assert _check_stdin_available() is True
+            assert _check_stdin_available() is True
 
     def test_stdin_available_when_regular_file(self):
         """Stdin should be available when connected to a regular file."""
-        from ha_mcp.__main__ import _check_stdin_available
         import stat as stat_module
 
-        with patch("sys.stdin") as mock_stdin:
+        from ha_mcp.__main__ import _check_stdin_available
+
+        with patch("sys.stdin") as mock_stdin, patch("os.fstat") as mock_fstat, patch("os.isatty", return_value=False):
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
+            mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFREG)
 
-            with patch("os.fstat") as mock_fstat:
-                mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFREG)
-
-                with patch("os.isatty", return_value=False):
-                    assert _check_stdin_available() is True
+            assert _check_stdin_available() is True
 
     def test_stdin_not_available_when_closed(self):
         """Stdin should not be available when closed."""
@@ -320,18 +307,16 @@ class TestStdinDetection:
 
     def test_stdin_not_available_when_char_device_not_tty(self):
         """Stdin should not be available when char device but not tty (like /dev/null)."""
-        from ha_mcp.__main__ import _check_stdin_available
         import stat as stat_module
 
-        with patch("sys.stdin") as mock_stdin:
+        from ha_mcp.__main__ import _check_stdin_available
+
+        with patch("sys.stdin") as mock_stdin, patch("os.fstat") as mock_fstat, patch("os.isatty", return_value=False):
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
+            mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
 
-            with patch("os.fstat") as mock_fstat:
-                mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
-
-                with patch("os.isatty", return_value=False):
-                    assert _check_stdin_available() is False
+            assert _check_stdin_available() is False
 
     def test_stdin_not_available_when_fileno_raises(self):
         """Stdin should not be available when fileno() raises."""
@@ -346,23 +331,20 @@ class TestStdinDetection:
         """Stdin should not be available when fstat() raises."""
         from ha_mcp.__main__ import _check_stdin_available
 
-        with patch("sys.stdin") as mock_stdin:
+        with patch("sys.stdin") as mock_stdin, patch("os.fstat", side_effect=OSError("fstat failed")):
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
 
-            with patch("os.fstat", side_effect=OSError("fstat failed")):
-                assert _check_stdin_available() is False
+            assert _check_stdin_available() is False
 
     def test_main_exits_when_stdin_not_available(self):
         """Main should exit with error when stdin is not available."""
         import ha_mcp.__main__ as main_module
 
-        with patch.object(sys, "argv", ["ha-mcp"]):
-            with patch.object(main_module, "_check_stdin_available", return_value=False):
-                with pytest.raises(SystemExit) as exc_info:
-                    main_module.main()
+        with patch.object(sys, "argv", ["ha-mcp"]), patch.object(main_module, "_check_stdin_available", return_value=False), pytest.raises(SystemExit) as exc_info:
+            main_module.main()
 
-                assert exc_info.value.code == 1
+        assert exc_info.value.code == 1
 
 
 class TestMainEntryPoint:
@@ -374,13 +356,11 @@ class TestMainEntryPoint:
 
         mock_smoke_test = MagicMock(return_value=0)
 
-        with patch.object(sys, "argv", ["ha-mcp", "--smoke-test"]):
-            with patch("ha_mcp.smoke_test.main", mock_smoke_test):
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
+        with patch.object(sys, "argv", ["ha-mcp", "--smoke-test"]), patch("ha_mcp.smoke_test.main", mock_smoke_test), pytest.raises(SystemExit) as exc_info:
+            main()
 
-                assert exc_info.value.code == 0
-                mock_smoke_test.assert_called_once()
+        assert exc_info.value.code == 0
+        mock_smoke_test.assert_called_once()
 
     def test_main_sets_up_signal_handlers(self):
         """Main should set up signal handlers before running."""
@@ -396,11 +376,8 @@ class TestMainEntryPoint:
         main_module._shutdown_in_progress = False
         main_module._shutdown_event = None
 
-        with patch.object(main_module, "_check_stdin_available", return_value=True):
-            with patch.object(main_module, "_setup_signal_handlers", side_effect=mock_setup):
-                with patch.object(main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock):
-                    with pytest.raises(SystemExit):
-                        main_module.main()
+        with patch.object(main_module, "_check_stdin_available", return_value=True), patch.object(main_module, "_setup_signal_handlers", side_effect=mock_setup), patch.object(main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock), pytest.raises(SystemExit):
+            main_module.main()
 
         assert setup_called, "Signal handlers were not set up"
 
@@ -427,10 +404,8 @@ class TestHTTPEntryPoints:
         with patch.dict(os.environ, {
             "HOMEASSISTANT_URL": "http://test.local:8123",
             "HOMEASSISTANT_TOKEN": "test_token"
-        }):
-            with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
-                with pytest.raises(SystemExit):
-                    main_module.main_web()
+        }), patch.object(main_module, "_run_http_server", side_effect=mock_run_http), pytest.raises(SystemExit):
+            main_module.main_web()
 
         assert transport_used == "streamable-http"
 
@@ -453,10 +428,8 @@ class TestHTTPEntryPoints:
         with patch.dict(os.environ, {
             "HOMEASSISTANT_URL": "http://test.local:8123",
             "HOMEASSISTANT_TOKEN": "test_token"
-        }):
-            with patch.object(main_module, "_run_http_server", side_effect=mock_run_http):
-                with pytest.raises(SystemExit):
-                    main_module.main_sse()
+        }), patch.object(main_module, "_run_http_server", side_effect=mock_run_http), pytest.raises(SystemExit):
+            main_module.main_sse()
 
         assert transport_used == "sse"
 
@@ -484,3 +457,12 @@ class TestHTTPEntryPoints:
 
         assert port == 8086
         assert path == "/mcp"
+
+    def test_http_runtime_invalid_port_exits(self):
+        """Non-integer MCP_PORT should cause sys.exit(1)."""
+        from ha_mcp.__main__ import _get_http_runtime
+
+        with patch.dict(os.environ, {"MCP_PORT": "not-a-number"}), pytest.raises(SystemExit) as exc_info:
+            _get_http_runtime()
+
+        assert exc_info.value.code == 1
