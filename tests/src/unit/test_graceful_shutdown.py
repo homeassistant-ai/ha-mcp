@@ -385,8 +385,8 @@ class TestMainEntryPoint:
 class TestHTTPEntryPoints:
     """Tests for HTTP entry points (main_web, main_sse)."""
 
-    def test_main_web_uses_streamable_http_transport(self):
-        """main_web should use streamable-http transport."""
+    def test_main_web_uses_http_transport(self):
+        """main_web should use http transport."""
         import ha_mcp.__main__ as main_module
 
         transport_used = None
