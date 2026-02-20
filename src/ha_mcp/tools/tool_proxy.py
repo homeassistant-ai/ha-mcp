@@ -423,12 +423,23 @@ def _register_single_gateway(
     tools_list = "\n".join(summary_lines)
 
     gateway_summary = GATEWAY_DESCRIPTIONS.get(category_name, "")
-    description = (
-        f"{gateway_summary}\n\n"
-        f"Available tools:\n{tools_list}\n\n"
-        f"Call with tool='<name>' and args='{{\"param\": \"value\"}}' to execute.\n"
-        f"Optionally call with no arguments for detailed parameter help."
-    )
+    # Pick the first tool with a required param for the example
+    example_tool = ""
+    for line in summary_lines:
+        # Find a tool with at least one required param for a useful example
+        if "(" in line and "(...)" not in line.split(":")[0]:
+            tool_name = line.split("(")[0].lstrip("- ")
+            # Extract first required param name
+            sig_part = line.split("(")[1].split(")")[0]
+            first_param = sig_part.split(",")[0].strip()
+            if first_param and first_param != "...":
+                example_tool = (
+                    f"\n\nExample: {category_name}"
+                    f'(tool="{tool_name}", args={{"{first_param}": "..."}})'
+                )
+                break
+
+    description = f"{gateway_summary}\n\nAvailable tools:\n{tools_list}{example_tool}"
 
     # Determine if any sub-tool is destructive
     tools_in_category = proxy_registry.get_tools_for_category(category_name)
@@ -454,11 +465,11 @@ def _register_single_gateway(
             ),
         ] = None,
         args: Annotated[
-            str | None,
+            dict | str | None,
             Field(
                 default=None,
                 description=(
-                    "JSON object of arguments to pass to the tool. "
+                    "Arguments to pass to the tool as a JSON object. "
                     "Required when tool is specified."
                 ),
             ),
