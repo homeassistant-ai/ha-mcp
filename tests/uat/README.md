@@ -1,6 +1,6 @@
 # BAT Framework - Bot Acceptance Testing
 
-Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini) against a Home Assistant test instance. Designed to be driven by a calling agent that generates scenarios dynamically, runs them, and evaluates results.
+Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini, OpenAI-compatible) against a Home Assistant test instance. Designed to be driven by a calling agent that generates scenarios dynamically, runs them, and evaluates results.
 
 ## Architecture
 
@@ -62,6 +62,13 @@ echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch feat/tool-er
 # Local code (default) vs branch
 python tests/uat/run_uat.py                    # uses: uv run --project . ha-mcp
 python tests/uat/run_uat.py --branch pr-551    # uses: uvx --from git+...@pr-551 ha-mcp
+
+# OpenAI-compatible local LLM (LM Studio, Ollama, vLLM, etc.)
+echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --agents openai --base-url http://localhost:1234/v1
+
+# With a specific model and API key
+echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --agents openai \
+  --base-url http://localhost:1234/v1 --model my-model --api-key sk-xxx
 ```
 
 ### Options
@@ -74,6 +81,9 @@ python tests/uat/run_uat.py --branch pr-551    # uses: uvx --from git+...@pr-551
 | `--ha-token` | test token | HA long-lived access token |
 | `--branch` | (local code) | Git branch/tag for ha-mcp |
 | `--timeout` | 120 | Timeout per phase in seconds |
+| `--base-url` | — | OpenAI-compatible API base URL (required for `openai` agent) |
+| `--api-key` | `no-key` | API key for OpenAI-compatible endpoint |
+| `--model` | (auto-detect) | Model name (auto-detected from `/v1/models` for openai) |
 
 ## Output Format
 
@@ -125,7 +135,7 @@ The calling agent receives a compact summary. On success, phase outputs are omit
 
 **Aggregate stats** provide overall efficiency metrics for comparing branches:
 - `total_duration_ms` - Total wall clock time across all phases
-- `total_turns` - Total agentic turns (available for Claude, Gemini)
+- `total_turns` - Total agentic turns (available for Claude, Gemini, OpenAI)
 - `total_tool_calls` - Total MCP tool invocations
 - `total_tool_success` / `total_tool_fail` - Success/failure counts
 
@@ -174,9 +184,10 @@ echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch master --age
 
 ## Dependencies
 
-Uses existing dev dependencies only:
+Uses dev dependencies:
 - `testcontainers` - HA container management
 - `requests` - Health check polling
+- `openai` - OpenAI-compatible API client (for openai agent)
 - `tests/initial_test_state/` - Pre-configured HA state
 - `tests/test_constants.py` - Test token
 
@@ -186,5 +197,6 @@ Uses existing dev dependencies only:
 |-------|-----|------------|-------|
 | `claude` | `claude` | Temp JSON file via `--mcp-config` | Uses `--permission-mode bypassPermissions` |
 | `gemini` | `gemini` | `.gemini/settings.json` in temp cwd | Uses `--approval-mode yolo` |
+| `openai` | `openai_agent.py` | Temp JSON file via `--mcp-config` | Any OpenAI-compatible API (LM Studio, Ollama, vLLM, etc.). Requires `--base-url`. |
 
-Unavailable agents are skipped with a warning (no error).
+Unavailable agents are skipped with a warning (no error). The `openai` agent is always available since it's a local script.
