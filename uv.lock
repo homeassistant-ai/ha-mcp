@@ -434,6 +434,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx", extra = ["socks"] },
     { name = "jq", marker = "sys_platform != 'win32'" },
+    { name = "mcp" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "truststore" },
@@ -459,9 +460,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=45.0.7" },
-    { name = "fastmcp", specifier = ">=2.11.0" },
+    { name = "fastmcp", specifier = ">=2.11.0,<3.0.0" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.27.0,<1.0" },
     { name = "jq", marker = "sys_platform != 'win32'", specifier = ">=1.8.0" },
+    { name = "mcp", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "truststore", specifier = ">=0.10.0" },
