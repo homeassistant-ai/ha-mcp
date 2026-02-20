@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.11.0,<3.0.0",  # Pin: v3.0.0 has breaking changes (see #644, #645, #648)
+    "fastmcp>=3.0.0,<4.0.0",
     "mcp>=1.24.0",  # Required for protocol version 2025-11-25 support (see #651)
     "httpx[socks]>=0.27.0,<1.0",
     'jq>=1.8.0; sys_platform != "win32"',

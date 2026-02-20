@@ -407,7 +407,7 @@ class TestHTTPEntryPoints:
         }), patch.object(main_module, "_run_http_server", side_effect=mock_run_http), pytest.raises(SystemExit):
             main_module.main_web()
 
-        assert transport_used == "streamable-http"
+        assert transport_used == "http"
 
     def test_main_sse_uses_sse_transport(self):
         """main_sse should use sse transport."""
