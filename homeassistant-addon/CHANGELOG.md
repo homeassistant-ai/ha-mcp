@@ -3,6 +3,18 @@
 <!-- version list -->
 
 
+## v6.7.1 (2026-02-20)
+
+### Fixed
+
+- Sync uv.lock with pyproject.toml changes
+  ([`0bf6f53`](https://github.com/homeassistant-ai/ha-mcp/commit/0bf6f537bffdd181416681b5152b6515efe87597))
+- Pin fastmcp<3.0.0 to prevent silent server crashes
+  ([#650](https://github.com/homeassistant-ai/ha-mcp/pull/650))
+- Sync Docker runtime Python with builder and harden Renovate config
+  ([#628](https://github.com/homeassistant-ai/ha-mcp/pull/628))
+
+
 ## v6.7.0 (2026-02-17)
 
 ### Added
