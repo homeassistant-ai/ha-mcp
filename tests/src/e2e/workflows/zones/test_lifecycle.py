@@ -60,7 +60,7 @@ class TestZoneLifecycle:
             # 1. CREATE: Basic zone
             zone_name = "Test Office E2E"
             create_data = await mcp.call_tool_success(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": zone_name,
                     "latitude": 40.7128,
@@ -101,7 +101,7 @@ class TestZoneLifecycle:
 
             # 3. UPDATE: Modify zone properties
             update_data = await mcp.call_tool_success(
-                "ha_update_zone",
+                "ha_set_zone",
                 {
                     "zone_id": zone_id,
                     "name": "Updated Office E2E",
@@ -136,7 +136,7 @@ class TestZoneLifecycle:
 
             # 5. DELETE: Remove zone
             await mcp.call_tool_success(
-                "ha_delete_zone",
+                "ha_remove_zone",
                 {"zone_id": zone_id},
             )
             logger.info("Zone deleted successfully")
@@ -161,7 +161,7 @@ class TestZoneLifecycle:
         async with MCPAssertions(mcp_client) as mcp:
             zone_name = "Test Passive Zone E2E"
             create_data = await mcp.call_tool_success(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": zone_name,
                     "latitude": 40.7580,
@@ -189,7 +189,7 @@ class TestZoneLifecycle:
 
             # Update passive mode to False
             await mcp.call_tool_success(
-                "ha_update_zone",
+                "ha_set_zone",
                 {
                     "zone_id": zone_id,
                     "passive": False,
@@ -210,7 +210,7 @@ class TestZoneLifecycle:
 
             # Cleanup
             await mcp.call_tool_success(
-                "ha_delete_zone",
+                "ha_remove_zone",
                 {"zone_id": zone_id},
             )
             logger.info("Passive zone cleaned up")
@@ -227,7 +227,7 @@ class TestZoneLifecycle:
             # Create initial zone
             zone_name = "Test Coordinates E2E"
             create_data = await mcp.call_tool_success(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": zone_name,
                     "latitude": 40.0,
@@ -242,7 +242,7 @@ class TestZoneLifecycle:
 
             # Update latitude only
             await mcp.call_tool_success(
-                "ha_update_zone",
+                "ha_set_zone",
                 {
                     "zone_id": zone_id,
                     "latitude": 41.0,
@@ -264,7 +264,7 @@ class TestZoneLifecycle:
 
             # Update both coordinates
             await mcp.call_tool_success(
-                "ha_update_zone",
+                "ha_set_zone",
                 {
                     "zone_id": zone_id,
                     "latitude": 42.0,
@@ -288,7 +288,7 @@ class TestZoneLifecycle:
 
             # Cleanup
             await mcp.call_tool_success(
-                "ha_delete_zone",
+                "ha_remove_zone",
                 {"zone_id": zone_id},
             )
             logger.info("Coordinates test zone cleaned up")
@@ -304,7 +304,7 @@ class TestZoneLifecycle:
         async with MCPAssertions(mcp_client) as mcp:
             # Test: Invalid latitude (out of range)
             await mcp.call_tool_failure(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": "Invalid Latitude",
                     "latitude": 100.0,  # Invalid: must be -90 to 90
@@ -317,7 +317,7 @@ class TestZoneLifecycle:
 
             # Test: Invalid longitude (out of range)
             await mcp.call_tool_failure(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": "Invalid Longitude",
                     "latitude": 40.0,
@@ -330,7 +330,7 @@ class TestZoneLifecycle:
 
             # Test: Invalid radius (zero or negative)
             await mcp.call_tool_failure(
-                "ha_create_zone",
+                "ha_set_zone",
                 {
                     "name": "Invalid Radius",
                     "latitude": 40.0,
@@ -343,7 +343,7 @@ class TestZoneLifecycle:
 
             # Test: Update with no fields
             await mcp.call_tool_failure(
-                "ha_update_zone",
+                "ha_set_zone",
                 {
                     "zone_id": "some_zone_id",
                 },
@@ -353,7 +353,7 @@ class TestZoneLifecycle:
 
             # Test: Delete non-existent zone
             await mcp.call_tool_failure(
-                "ha_delete_zone",
+                "ha_remove_zone",
                 {
                     "zone_id": "nonexistent_zone_xyz_123",
                 },
@@ -400,7 +400,7 @@ class TestZoneLifecycle:
             # Create multiple zones
             for zone_config in zones_to_create:
                 create_data = await mcp.call_tool_success(
-                    "ha_create_zone",
+                    "ha_set_zone",
                     zone_config,
                 )
                 zone_id = create_data.get("zone_id")
@@ -424,7 +424,7 @@ class TestZoneLifecycle:
             # Update all zones
             for zone_id in created_zone_ids:
                 await mcp.call_tool_success(
-                    "ha_update_zone",
+                    "ha_set_zone",
                     {
                         "zone_id": zone_id,
                         "radius": 250,  # Update all to same radius
@@ -435,7 +435,7 @@ class TestZoneLifecycle:
             # Delete all zones
             for zone_id in created_zone_ids:
                 await mcp.call_tool_success(
-                    "ha_delete_zone",
+                    "ha_remove_zone",
                     {"zone_id": zone_id},
                 )
             logger.info("All zones deleted")

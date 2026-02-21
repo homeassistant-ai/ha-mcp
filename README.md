@@ -110,7 +110,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (97 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (96 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -122,7 +122,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
-| **Zones** | `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
+| **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
 | **Todo Lists** | `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event` |
