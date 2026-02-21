@@ -133,7 +133,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Camera** | `ha_get_camera_image` |
 | **History & Statistics** | `ha_get_history`, `ha_get_statistics` |
 | **Automation Traces** | `ha_get_automation_traces` |
-| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates` |
+| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates`, `ha_check_update_notes` |
 | **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
 | **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_get_integration` |
 

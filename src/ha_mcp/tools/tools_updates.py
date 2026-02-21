@@ -5,6 +5,7 @@ This module provides tools for listing available updates, getting release notes,
 and retrieving system version information.
 """
 
+import asyncio
 import logging
 import re
 from typing import Annotated, Any
@@ -12,10 +13,194 @@ from typing import Annotated, Any
 import httpx
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
+
+_GITHUB_CORE_RELEASE_URL = (
+    "https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
+)
+_MAX_MONTHLY_VERSIONS = 12
+
+
+def _parse_version(version_str: str) -> tuple[int, ...] | None:
+    """Parse '2025.11.3' into a comparable tuple, or None on failure."""
+    if not version_str:
+        return None
+    try:
+        return tuple(int(x) for x in version_str.split("."))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _get_monthly_versions_between(current: str, target: str) -> list[str]:
+    """Return .0 monthly versions between current (exclusive) and target (inclusive)."""
+    current_parts = _parse_version(current)
+    target_parts = _parse_version(target)
+    if not current_parts or not target_parts or len(current_parts) < 2 or len(target_parts) < 2:
+        if target_parts and len(target_parts) >= 2:
+            return [f"{target_parts[0]}.{target_parts[1]}.0"]
+        return []
+
+    versions: list[str] = []
+    year, month = current_parts[0], current_parts[1] + 1
+    while (year, month) <= (target_parts[0], target_parts[1]):
+        versions.append(f"{year}.{month}.0")
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+        if len(versions) >= _MAX_MONTHLY_VERSIONS:
+            break
+    return versions
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML tags and normalise whitespace for readable plain text."""
+    text = re.sub(r"<br\s*/?>", "\n", html)
+    text = re.sub(r"<p[^>]*>", "\n", text)
+    text = re.sub(r"</p>", "\n", text)
+    text = re.sub(r"<li[^>]*>", "\n- ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _extract_blog_content(html: str) -> str:
+    """Extract article body from an HA blog post as plain text."""
+    article = re.search(r"<article[^>]*>(.*?)</article>", html, re.DOTALL)
+    if article:
+        return _strip_html(article.group(1))
+    content = re.search(
+        r"(<h[12][^>]*>.*?)(?=<div[^>]*id=\"discourse|<footer[^>]*>|</body>)",
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    if content:
+        return _strip_html(content.group(1))
+    return _strip_html(html)
+
+
+def _parse_breaking_changes_html(html: str, source_url: str) -> dict[str, Any] | None:
+    """Extract 'Backward-incompatible changes' section entries from blog HTML."""
+    section_match = re.search(
+        r'id="backward-incompatible-changes"[^>]*>.*?</h2>(.*?)(?=<h2[ >]|</article>|</main>)',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    if not section_match:
+        return None
+
+    entries: list[dict[str, str]] = []
+    for match in re.finditer(
+        r"<h3[^>]*>(.*?)</h3>(.*?)(?=<h3[^>]*>|$)", section_match.group(1), re.DOTALL
+    ):
+        name = _strip_html(match.group(1)).strip()
+        desc = _strip_html(match.group(2)).strip()
+        if name:
+            entries.append({"integration": name, "description": desc})
+
+    if not entries:
+        return None
+    return {"entries": entries, "count": len(entries), "source_url": source_url}
+
+
+def _parse_patch_breaking_changes(body: str, version: str) -> dict[str, Any] | None:
+    """Parse (breaking-change) tagged items from a GitHub patch-release body."""
+    entries: list[dict[str, str]] = []
+    for line in body.split("\n"):
+        if "(breaking-change)" not in line.lower():
+            continue
+        clean = re.sub(r"\(breaking-change\)", "", line, flags=re.IGNORECASE).lstrip("-*").strip()
+        if not clean:
+            continue
+        doc_match = re.search(r"\[([^\]]+?)\s+(?:docs|documentation)\]", clean, re.IGNORECASE)
+        integration = doc_match.group(1).strip() if doc_match else "unknown"
+        entries.append({"integration": integration, "description": clean})
+
+    if not entries:
+        return None
+    return {
+        "entries": entries,
+        "count": len(entries),
+        "source_url": f"https://github.com/home-assistant/core/releases/tag/{version}",
+    }
+
+
+async def _fetch_release_data_for_version(
+    http_client: httpx.AsyncClient, version: str
+) -> dict[str, Any] | None:
+    """Fetch release notes and breaking changes for a single HA Core version."""
+    try:
+        resp = await http_client.get(_GITHUB_CORE_RELEASE_URL.format(version=version))
+        if resp.status_code != 200:
+            return None
+        body = resp.json().get("body", "").strip()
+
+        if body.startswith("https://www.home-assistant.io/blog/"):
+            blog_resp = await http_client.get(body)
+            if blog_resp.status_code == 200:
+                bc = _parse_breaking_changes_html(blog_resp.text, body)
+                return {
+                    "entries": bc["entries"] if bc else [],
+                    "count": bc["count"] if bc else 0,
+                    "source_url": body,
+                    "release_notes": _extract_blog_content(blog_resp.text),
+                }
+
+        if "(breaking-change)" in body.lower():
+            return _parse_patch_breaking_changes(body, version)
+        return None
+    except (httpx.RequestError, ValueError, KeyError) as e:
+        logger.debug(f"Failed to fetch release data for {version}: {e}")
+        return None
+
+
+async def _fetch_release_data(current_version: str, target_version: str) -> dict[str, Any]:
+    """Fetch release notes and breaking changes for all monthly versions in range."""
+    monthly = _get_monthly_versions_between(current_version, target_version)
+    if not monthly:
+        return {"entries": [], "count": 0, "versions_checked": [], "release_notes": []}
+
+    async with httpx.AsyncClient(
+        timeout=20.0, follow_redirects=True,
+        headers={"User-Agent": "HomeAssistant-MCP-Server", "Accept": "application/vnd.github+json"},
+    ) as http_client:
+        results = await asyncio.gather(
+            *[_fetch_release_data_for_version(http_client, v) for v in monthly],
+            return_exceptions=True,
+        )
+
+    all_entries: list[dict[str, Any]] = []
+    versions_checked: list[str] = []
+    release_notes: list[dict[str, str]] = []
+
+    for version, result in zip(monthly, results, strict=True):
+        if not isinstance(result, dict):
+            continue
+        versions_checked.append(version)
+        src = result.get("source_url", "")
+        for entry in result.get("entries", []):
+            all_entries.append({**entry, "version": version})
+        notes = result.get("release_notes", "")
+        if notes:
+            release_notes.append({"version": version, "content": notes, "source_url": src})
+
+    return {
+        "entries": all_entries, "count": len(all_entries),
+        "versions_checked": versions_checked, "release_notes": release_notes,
+    }
+
+
+async def _get_installed_integration_domains(client: Any) -> set[str]:
+    """Get installed integration domains from config entries."""
+    try:
+        entries = await client._request("GET", "/config/config_entries/entry")
+        if isinstance(entries, list):
+            return {e.get("domain", "") for e in entries} - {""}
+        return set()
+    except (httpx.RequestError, ValueError, KeyError):
+        return set()
 
 
 def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -229,6 +414,9 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Update details including installed/latest versions
         - Release notes (fetched from WebSocket API or GitHub)
         - Category and installation status
+
+        TIP: Before updating, use ha_check_update_notes() to review release
+        notes, breaking changes, and your installed integrations.
         """
         try:
             if entity_id is None:
@@ -259,6 +447,103 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify API access permissions",
                 ],
             }
+
+    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["update"], "title": "Check Update Notes"})
+    @log_tool_usage
+    async def ha_check_update_notes(
+        version: Annotated[
+            str | None,
+            Field(
+                description="Target HA Core version to check (e.g., '2026.2.0'). "
+                "If omitted, uses the latest available Core update version.",
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """
+        Check for changes that may affect the user before updating HA Core.
+
+        Fetches HA release blog posts for every monthly version between the
+        current installed version and the target. Returns full release notes
+        (feature changes, deprecations, behavior changes, renamed entities,
+        UI changes) and structured breaking change entries.
+
+        Call before update.install to review ALL changes — not just breaking
+        ones — that may require adjusting automations, dashboards, or
+        integrations.
+
+        RETURNS:
+        - release_notes[]: Full text per version {version, content, source_url}
+        - breaking_changes.entries[]: Each has integration, description, version
+        - installed_integrations: Your integration domains for cross-referencing
+        """
+        try:
+            # Find core update entity and determine versions
+            current_version = None
+            target_version = version
+
+            states = await client.get_states()
+            for state in states:
+                eid = state.get("entity_id", "")
+                if eid.startswith("update.") and _categorize_update(
+                    eid, state.get("attributes", {})
+                ) == "core":
+                    attrs = state.get("attributes", {})
+                    current_version = attrs.get("installed_version")
+                    if not target_version:
+                        target_version = attrs.get("latest_version")
+                    break
+
+            if not current_version:
+                return create_error_response(
+                    code=ErrorCode.ENTITY_NOT_FOUND,
+                    message="Could not determine current HA Core version",
+                    suggestions=["Ensure Home Assistant Core update entity exists"],
+                )
+
+            if not target_version:
+                return {
+                    "success": True,
+                    "current_version": current_version,
+                    "message": "No Core update available - already on latest version",
+                }
+
+            # Fetch release data and installed integrations in parallel
+            rd_result, domains_result = await asyncio.gather(
+                _fetch_release_data(current_version, target_version),
+                _get_installed_integration_domains(client),
+                return_exceptions=True,
+            )
+
+            rd = rd_result if isinstance(rd_result, dict) else {}
+            domains = domains_result if isinstance(domains_result, set) else set()
+
+            return {
+                "success": True,
+                "current_version": current_version,
+                "target_version": target_version,
+                "installed_integrations": sorted(domains),
+                "release_notes": rd.get("release_notes", []),
+                "breaking_changes": {
+                    "entries": rd.get("entries", []),
+                    "count": rd.get("count", 0),
+                    "versions_checked": rd.get("versions_checked", []),
+                },
+            }
+
+        except httpx.RequestError as e:
+            logger.error(f"Failed to check update notes: {e}")
+            return create_error_response(
+                code=ErrorCode.CONNECTION_FAILED,
+                message=f"Failed to check update notes: {e}",
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error checking update notes: {e}")
+            return create_error_response(
+                code=ErrorCode.INTERNAL_ERROR,
+                message=f"Unexpected error checking update notes: {e}",
+            )
+
 
 def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
     """
