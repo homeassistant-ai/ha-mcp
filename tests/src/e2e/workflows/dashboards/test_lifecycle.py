@@ -140,13 +140,14 @@ class TestDashboardLifecycle:
         )
         assert update_data["success"] is True
 
-        # 5. Update metadata (change title)
+        # 5. Update metadata (change title) via ha_config_set_dashboard
         logger.info("Updating dashboard metadata...")
         meta_data = await mcp.call_tool_success(
-            "ha_config_update_dashboard_metadata",
-            {"dashboard_id": dashboard_id, "title": "Updated E2E Dashboard"},
+            "ha_config_set_dashboard",
+            {"url_path": "test-e2e-dashboard", "title": "Updated E2E Dashboard"},
         )
         assert meta_data["success"] is True
+        assert meta_data.get("metadata_updated") is True
 
         # 6. Delete dashboard
         logger.info("Deleting test dashboard...")
@@ -252,13 +253,13 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-        # Update only title
+        # Update only title via ha_config_set_dashboard
         meta_data = await mcp.call_tool_success(
-            "ha_config_update_dashboard_metadata",
-            {"dashboard_id": dashboard_id, "title": "New Title"},
+            "ha_config_set_dashboard",
+            {"url_path": "test-partial-update", "title": "New Title"},
         )
         assert meta_data["success"] is True
-        assert "title" in meta_data.get("updated_fields", {})
+        assert meta_data.get("metadata_updated") is True
 
         # Cleanup
         await mcp.call_tool_success(
@@ -297,19 +298,33 @@ class TestDashboardLifecycle:
 
         logger.info("Dashboard without config test completed successfully")
 
-    async def test_metadata_update_requires_at_least_one_field(self, mcp_client):
-        """Test that metadata update requires at least one field."""
-        logger.info("Starting metadata update validation test")
+    async def test_metadata_update_via_set_dashboard(self, mcp_client):
+        """Test updating dashboard metadata via ha_config_set_dashboard."""
+        logger.info("Starting metadata update via set_dashboard test")
+        mcp = MCPAssertions(mcp_client)
 
-        # Try to update metadata with no fields
-        result = await mcp_client.call_tool(
-            "ha_config_update_dashboard_metadata", {"dashboard_id": "test-dashboard"}
+        # Create dashboard
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": "test-meta-via-set", "title": "Original Title"},
         )
-        data = parse_mcp_result(result)
-        assert data["success"] is False
-        assert "at least one field" in data.get("error", "").lower()
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
 
-        logger.info("Metadata update validation test completed successfully")
+        # Update title without changing config
+        meta_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": "test-meta-via-set", "title": "Updated Title"},
+        )
+        assert meta_data["success"] is True
+        assert meta_data.get("metadata_updated") is True
+
+        # Cleanup
+        await mcp.call_tool_success(
+            "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
+        )
+
+        logger.info("Metadata update via set_dashboard test completed successfully")
 
 
 class TestDashboardErrorHandling:
@@ -368,11 +383,11 @@ class TestDashboardDocumentationTools:
         logger.info("ha_get_dashboard_guide test passed")
 
     async def test_get_card_types(self, mcp_client):
-        """Test ha_get_card_types returns all card types."""
-        logger.info("Testing ha_get_card_types")
+        """Test ha_get_card_documentation returns all card types when called without card_type."""
+        logger.info("Testing ha_get_card_documentation (list mode)")
         mcp = MCPAssertions(mcp_client)
 
-        data = await mcp.call_tool_success("ha_get_card_types", {})
+        data = await mcp.call_tool_success("ha_get_card_documentation", {})
 
         assert data["success"] is True
         assert data["action"] == "get_card_types"
@@ -385,7 +400,7 @@ class TestDashboardDocumentationTools:
         assert "light" in card_types
         assert "entity" in card_types
 
-        logger.info("ha_get_card_types test passed")
+        logger.info("ha_get_card_documentation (list mode) test passed")
 
     async def test_get_card_documentation_invalid(self, mcp_client):
         """Test ha_get_card_documentation with invalid card type."""
