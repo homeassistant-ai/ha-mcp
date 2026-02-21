@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "6.7.0"
+version = "6.7.1"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -24,7 +24,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.11.0",
+    "fastmcp>=3.0.0,<4.0.0",
+    "mcp>=1.24.0",  # Required for protocol version 2025-11-25 support (see #651)
     "httpx[socks]>=0.27.0,<1.0",
     'jq>=1.8.0; sys_platform != "win32"',
     "pydantic>=2.5.0",
@@ -153,6 +154,7 @@ dev = [
     "build>=1.2.2",
     "docker>=7.1.0",
     "mypy>=1.17.0",
+    "openai>=1.0.0",
     "psutil>=7.0.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",

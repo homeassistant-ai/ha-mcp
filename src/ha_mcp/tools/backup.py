@@ -16,7 +16,7 @@ from ..client.websocket_client import HomeAssistantWebSocketClient
 from .helpers import get_connected_ws_client, log_tool_usage
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 

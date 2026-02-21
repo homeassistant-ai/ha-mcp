@@ -4,7 +4,7 @@ Standalone story runner.
 
 Runs YAML stories against a HA test instance:
 - Setup: FastMCP in-memory (sub-second, deterministic)
-- Test prompt: AI agent CLI via run_uat.py (gemini/claude)
+- Test prompt: AI agent CLI via run_uat.py (gemini/claude/openai)
 - Each agent gets a fresh HA container (clean state)
 
 Results are appended to a JSONL file for historical tracking.
@@ -15,6 +15,9 @@ Usage:
 
     # Run all stories
     uv run python tests/uat/stories/run_story.py --all --agents gemini
+
+    # Run with a local OpenAI-compatible LLM (LM Studio, Ollama, etc.)
+    uv run python tests/uat/stories/run_story.py --all --agents openai --base-url http://localhost:1234/v1
 
     # Run against a specific branch/tag
     uv run python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
@@ -193,10 +196,9 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
                     usage = entry.get("message", {}).get("usage", {})
                     totals["input"] += usage.get("input_tokens", 0)
                     totals["output"] += usage.get("output_tokens", 0)
-                    totals["cached"] += (
-                        usage.get("cache_read_input_tokens", 0)
-                        + usage.get("cache_creation_input_tokens", 0)
-                    )
+                    totals["cached"] += usage.get(
+                        "cache_read_input_tokens", 0
+                    ) + usage.get("cache_creation_input_tokens", 0)
             return totals
     except Exception as exc:
         log(f"  Token extraction failed: {exc}")
@@ -267,7 +269,8 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
         if not gemini_tmp.exists():
             return None
         session_files = [
-            p for p in gemini_tmp.glob("*/chats/session-*.json")
+            p
+            for p in gemini_tmp.glob("*/chats/session-*.json")
             if p.stat().st_mtime > after
         ]
         if not session_files:
@@ -324,6 +327,8 @@ def _run_test_prompt(
     branch: str | None = None,
     extra_args: list[str] | None = None,
     model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[int, dict | None]:
     """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
     scenario = {"test_prompt": prompt.strip()}
@@ -331,14 +336,21 @@ def _run_test_prompt(
     cmd = [
         sys.executable,
         str(RUN_UAT),
-        "--agents", agent,
-        "--ha-url", ha_url,
-        "--ha-token", ha_token,
+        "--agents",
+        agent,
+        "--ha-url",
+        ha_url,
+        "--ha-token",
+        ha_token,
     ]
     if branch:
         cmd.extend(["--branch", branch])
     if model:
         cmd.extend(["--model", model])
+    if base_url:
+        cmd.extend(["--base-url", base_url])
+    if api_key:
+        cmd.extend(["--api-key", api_key])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -373,7 +385,9 @@ def get_git_info() -> tuple[str, str]:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
         )
         sha = result.stdout.strip()
     except Exception:
@@ -381,7 +395,9 @@ def get_git_info() -> tuple[str, str]:
     try:
         result = subprocess.run(
             ["git", "describe", "--tags", "--always"],
-            capture_output=True, text=True, cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
         )
         describe = result.stdout.strip()
     except Exception:
@@ -451,7 +467,9 @@ def append_result(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]]) -> int:
+async def run_stories(
+    args: argparse.Namespace, filtered: list[tuple[Path, dict]]
+) -> int:
     """Run stories with a fresh container per agent.
 
     For each agent: start container -> run all stories -> stop container.
@@ -465,9 +483,9 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
     # Each entry: (agent, story_id, story, exit_code, summary, session_file)
 
     for agent in agent_list:
-        log(f"\n{'#'*60}")
+        log(f"\n{'#' * 60}")
         log(f"Agent: {agent}")
-        log(f"{'#'*60}")
+        log(f"{'#' * 60}")
 
         # Start a fresh container for this agent (or use external HA)
         ha = None
@@ -481,15 +499,17 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
         try:
             for _path, story in filtered:
                 sid = story["id"]
-                log(f"\n{'='*60}")
+                log(f"\n{'=' * 60}")
                 log(f"[{agent}] Story {sid}: {story['title']}")
-                log(f"{'='*60}")
+                log(f"{'=' * 60}")
 
                 setup_steps = story.get("setup") or []
 
                 # Setup via FastMCP in-memory
                 if setup_steps:
-                    log(f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)...")
+                    log(
+                        f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)..."
+                    )
                     await _run_mcp_steps(ha_url, ha_token, setup_steps, "setup")
 
                 # Test via agent CLI
@@ -503,11 +523,15 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
                     args.branch,
                     args.extra_args or None,
                     model=args.model,
+                    base_url=args.base_url,
+                    api_key=args.api_key,
                 )
 
                 # Detect session file created during this run
                 session_file = None
-                test_phase = (summary or {}).get("agents", {}).get(agent, {}).get("test", {})
+                test_phase = (
+                    (summary or {}).get("agents", {}).get(agent, {}).get("test", {})
+                )
                 claude_session_id = test_phase.get("session_id")
                 if claude_session_id:
                     session_file = _find_session_file_by_id(claude_session_id)
@@ -519,8 +543,14 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
                 # Append JSONL result
                 if summary:
                     append_result(
-                        args.results_file, story, agent, sha, describe,
-                        args.branch, summary, session_file,
+                        args.results_file,
+                        story,
+                        agent,
+                        sha,
+                        describe,
+                        args.branch,
+                        summary,
+                        session_file,
                     )
 
                 if session_file:
@@ -537,9 +567,9 @@ async def run_stories(args: argparse.Namespace, filtered: list[tuple[Path, dict]
                     _stop_container(ha)
 
     # Summary
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log("Summary")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
     for agent, sid, story, rc, _, session_file in all_results:
         status = "PASS" if rc == 0 else "FAIL"
         session_info = f" (session: {session_file})" if session_file else ""
@@ -563,13 +593,19 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("story_file", nargs="?", help="Path to story YAML file")
-    parser.add_argument("--all", action="store_true", help="Run all stories in catalog/")
+    parser.add_argument(
+        "--all", action="store_true", help="Run all stories in catalog/"
+    )
     parser.add_argument("--agents", default="gemini", help="Comma-separated agent list")
     parser.add_argument("--branch", help="Git branch/tag to install ha-mcp from")
     parser.add_argument("--ha-url", help="Use existing HA instance (skip container)")
     parser.add_argument("--ha-token", help="HA long-lived access token")
-    parser.add_argument("--dry-run", action="store_true", help="Print BAT scenario JSON")
-    parser.add_argument("--min-weight", type=int, default=1, help="Minimum story weight")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print BAT scenario JSON"
+    )
+    parser.add_argument(
+        "--min-weight", type=int, default=1, help="Minimum story weight"
+    )
     parser.add_argument(
         "--keep-container",
         action="store_true",
@@ -583,10 +619,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        help="Model to use for Claude agent (e.g., haiku, sonnet, opus)",
+        help="Model name (e.g., haiku, sonnet for Claude; auto-detected for openai)",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="OpenAI-compatible API base URL (required for openai agent)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default="no-key",
+        help="API key for OpenAI-compatible endpoint (default: no-key)",
     )
     parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
     args = parser.parse_args()
+
+    # Validate --base-url is provided when using the openai agent
+    agent_list = [a.strip() for a in args.agents.split(",")]
+    if "openai" in agent_list and not args.base_url:
+        parser.error("--base-url is required when using the openai agent")
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
