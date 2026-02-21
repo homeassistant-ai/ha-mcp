@@ -39,7 +39,7 @@ sys.path.insert(0, str(TESTS_DIR))
 from test_constants import TEST_TOKEN  # noqa: E402
 
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2025.12.4"
+HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
 
 DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
@@ -124,7 +124,7 @@ class HAContainer:
             self.url = f"http://localhost:{port}"
             log(f"HA container started on {self.url}")
             time.sleep(5)  # initial stabilization
-            wait_for_ha(self.url, self.token)
+            wait_for_ha(self.url, self.token, timeout=300)
             time.sleep(10)  # component stabilization
         except Exception:
             self.__exit__(None, None, None)
@@ -333,6 +333,7 @@ def build_openai_cmd(
     base_url: str,
     model: str | None = None,
     api_key: str = "no-key",
+    max_tools: int | None = None,
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -348,6 +349,8 @@ def build_openai_cmd(
     ]
     if model:
         cmd.extend(["--model", model])
+    if max_tools is not None:
+        cmd.extend(["--max-tools", str(max_tools)])
     return cmd
 
 
@@ -361,6 +364,7 @@ async def run_agent_scenario(
     model: str | None = None,
     base_url: str | None = None,
     api_key: str = "no-key",
+    max_tools: int | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
@@ -405,6 +409,7 @@ async def run_agent_scenario(
                     base_url=base_url,
                     model=model,
                     api_key=api_key,
+                    max_tools=max_tools,
                 )
                 result = await run_cli(cmd, timeout)
             else:
@@ -587,6 +592,7 @@ async def run(args: argparse.Namespace) -> dict:
                 model=getattr(args, "model", None),
                 base_url=getattr(args, "base_url", None),
                 api_key=getattr(args, "api_key", "no-key"),
+                max_tools=getattr(args, "max_tools", None),
             )
 
         # Add unavailable agents
@@ -657,6 +663,12 @@ Examples:
         "--api-key",
         default="no-key",
         help="API key for OpenAI-compatible endpoint (default: no-key)",
+    )
+    parser.add_argument(
+        "--max-tools",
+        type=int,
+        default=None,
+        help="Limit MCP tools passed to the openai agent (useful for small context windows)",
     )
     args = parser.parse_args()
 

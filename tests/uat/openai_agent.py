@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout", type=int, default=DEFAULT_TIMEOUT, help="Timeout in seconds"
     )
+    parser.add_argument(
+        "--max-tools",
+        type=int,
+        default=None,
+        help="Limit MCP tools passed to the model (useful for small context windows)",
+    )
     return parser.parse_args()
 
 
@@ -222,6 +228,8 @@ async def run_agent(
     # fastmcp.Client accepts a config dict (same format as Claude's --mcp-config)
     async with Client(config) as mcp_client:
         mcp_tools = await mcp_client.list_tools()
+        if args.max_tools is not None:
+            mcp_tools = mcp_tools[: args.max_tools]
         openai_tools = [mcp_tool_to_openai(t) for t in mcp_tools]
         log(f"Loaded {len(openai_tools)} MCP tools")
 
