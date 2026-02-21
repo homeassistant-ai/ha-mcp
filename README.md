@@ -6,7 +6,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-95+-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-86+-blue" alt="86+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -110,7 +110,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (97 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (86 MCP tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -119,7 +119,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
+| **Dashboards** | `ha_manage_dashboards` — gateway providing 12 sub-tools: get/set/delete dashboards, metadata updates, dashboard guide, card types & docs, find cards, and resource management. Call with no args to list all sub-tools with full parameter schemas. |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
