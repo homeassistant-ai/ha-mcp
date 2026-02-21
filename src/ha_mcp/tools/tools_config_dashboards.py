@@ -1492,8 +1492,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # Resource tools have been moved to tools_resources.py for better organization.
     # Available tools:
     # - ha_config_list_dashboard_resources: List all resources
-    # - ha_config_set_inline_dashboard_resource: Create/update inline code resources
-    # - ha_config_set_dashboard_resource: Create/update URL-based resources
+    # - ha_config_set_dashboard_resource: Create/update resources (inline code or URL)
     # - ha_config_delete_dashboard_resource: Delete resources
     # =========================================================================
 

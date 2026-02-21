@@ -82,7 +82,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
 
         Returns all registered resources. For inline resources (created with
-        ha_config_set_inline_dashboard_resource), shows a preview of the content
+        ha_config_set_dashboard_resource(content=...)), shows a preview of the content
         instead of the full encoded URL to save tokens.
 
         Args:
@@ -177,183 +177,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
     # =========================================================================
-    # Set Inline Dashboard Resource (upsert)
-    # =========================================================================
-
-    @mcp.tool(
-        annotations={
-            "destructiveHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "Set Inline Dashboard Resource",
-        }
-    )
-    @log_tool_usage
-    async def ha_config_set_inline_dashboard_resource(
-        content: Annotated[
-            str,
-            Field(description="JavaScript or CSS code to host (max ~24KB)"),
-        ],
-        resource_type: Annotated[
-            Literal["module", "css"],
-            Field(
-                description="Resource type: 'module' for ES6 JavaScript (custom cards), "
-                "'css' for stylesheets"
-            ),
-        ] = "module",
-        resource_id: Annotated[
-            str | None,
-            Field(
-                description="Resource ID to update. If omitted, creates a new resource. "
-                "Get IDs from ha_config_list_dashboard_resources()"
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Create or update an inline dashboard resource from code.
-
-        Converts inline JavaScript or CSS into a hosted URL and registers it
-        in Home Assistant. The code is embedded in the URL (via Cloudflare Worker)
-        so no file storage is needed.
-
-        WHEN TO USE:
-        - Custom card code you've written inline
-        - CSS styling for dashboards
-        - Small utility modules (<24KB)
-
-        For larger files or external cards, use ha_config_set_dashboard_resource
-        with a URL to /local/, /hacsfiles/, or external CDN.
-
-        EXAMPLES:
-
-        Create a custom card:
-        ha_config_set_inline_dashboard_resource(
-            content=\"\"\"
-            class MyCard extends HTMLElement {
-              setConfig(config) { this.config = config; }
-              set hass(hass) {
-                this.innerHTML = `<ha-card>Hello ${hass.states[this.config.entity]?.state}</ha-card>`;
-              }
-            }
-            customElements.define('my-card', MyCard);
-            \"\"\",
-            resource_type="module"
-        )
-
-        Update existing resource:
-        ha_config_set_inline_dashboard_resource(
-            content="/* updated CSS */",
-            resource_type="css",
-            resource_id="abc123"
-        )
-
-        Notes:
-        - URLs are deterministic (same content = same URL)
-        - Content is decoded on-the-fly, not stored
-        - Max size: ~24KB source code
-        - Use ha_get_dashboard_guide for custom card patterns
-        """
-        # Validate content
-        if not content or not content.strip():
-            return {
-                "success": False,
-                "error": "Content cannot be empty",
-            }
-
-        content_bytes = content.encode("utf-8")
-        content_size = len(content_bytes)
-
-        # Check size limit
-        if content_size > MAX_CONTENT_SIZE:
-            return {
-                "success": False,
-                "error": f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                "size": content_size,
-                "suggestions": [
-                    "Minify the code to reduce size",
-                    "Split into multiple smaller modules",
-                    "Use ha_config_set_dashboard_resource with /local/ URL for larger files",
-                ],
-            }
-
-        # Encode content
-        encoded, _, encoded_size = _encode_content(content)
-
-        if encoded_size > MAX_ENCODED_LENGTH:
-            return {
-                "success": False,
-                "error": f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
-                "size": content_size,
-            }
-
-        url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
-
-        try:
-            if resource_id:
-                # Update existing resource
-                result = await client.send_websocket_message(
-                    {
-                        "type": "lovelace/resources/update",
-                        "resource_id": resource_id,
-                        "url": url,
-                        "res_type": resource_type,
-                    }
-                )
-                action = "updated"
-            else:
-                # Create new resource
-                result = await client.send_websocket_message(
-                    {
-                        "type": "lovelace/resources/create",
-                        "url": url,
-                        "res_type": resource_type,
-                    }
-                )
-                action = "created"
-
-            # Check for errors
-            if isinstance(result, dict) and not result.get("success", True):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                return {
-                    "success": False,
-                    "action": action,
-                    "error": str(error_msg),
-                }
-
-            # Extract resource ID from response
-            resource_info = result.get("result") if isinstance(result, dict) else result
-            new_resource_id = resource_id
-            if isinstance(resource_info, dict):
-                new_resource_id = resource_info.get("id", resource_id)
-
-            logger.info(
-                f"Inline dashboard resource {action}: id={new_resource_id}, "
-                f"type={resource_type}, size={content_size}"
-            )
-
-            return {
-                "success": True,
-                "action": action,
-                "resource_id": new_resource_id,
-                "resource_type": resource_type,
-                "size": content_size,
-                "note": "Clear browser cache or hard refresh to load changes",
-            }
-        except Exception as e:
-            logger.error(f"Error setting inline dashboard resource: {e}")
-            return {
-                "success": False,
-                "action": "update" if resource_id else "create",
-                "error": str(e),
-                "suggestions": [
-                    "Ensure Home Assistant is running and accessible",
-                    "Check that you have admin permissions",
-                ],
-            }
-
-    # =========================================================================
-    # Set Dashboard Resource (upsert for external URLs)
+    # Set Dashboard Resource (upsert - supports both inline code and external URLs)
     # =========================================================================
 
     @mcp.tool(
@@ -365,20 +189,29 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_config_set_dashboard_resource(
+        content: Annotated[
+            str | None,
+            Field(
+                description="JavaScript or CSS code to host inline (max ~24KB). "
+                "The code is embedded in the URL via Cloudflare Worker - no file storage needed. "
+                "Mutually exclusive with url. Supports 'module' and 'css' types only."
+            ),
+        ] = None,
         url: Annotated[
-            str,
+            str | None,
             Field(
                 description="URL of the resource. Can be: "
                 "/local/file.js (www/ directory), "
                 "/hacsfiles/component/file.js (HACS), "
-                "https://cdn.example.com/card.js (external)"
+                "https://cdn.example.com/card.js (external). "
+                "Mutually exclusive with content."
             ),
-        ],
+        ] = None,
         resource_type: Annotated[
             Literal["module", "js", "css"],
             Field(
-                description="Resource type: 'module' for ES6 modules (modern cards), "
-                "'js' for legacy JavaScript, 'css' for stylesheets"
+                description="Resource type: 'module' for ES6 modules (modern cards, default), "
+                "'js' for legacy JavaScript (url mode only), 'css' for stylesheets"
             ),
         ] = "module",
         resource_id: Annotated[
@@ -390,21 +223,45 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Create or update a dashboard resource from a URL.
+        Create or update a dashboard resource (inline code or external URL).
 
-        Registers an external resource URL in Home Assistant. Use this for:
+        Provide exactly one of:
+        - content: Inline JavaScript or CSS code (embedded in URL, no file storage needed)
+        - url: External resource URL (/local/, /hacsfiles/, or https://...)
+
+        INLINE MODE (content=):
+        - Custom card code written inline
+        - CSS styling for dashboards
+        - Small utility modules (<24KB)
+        - URLs are deterministic (same content = same URL)
+        - Supports 'module' and 'css' types only (not 'js')
+
+        URL MODE (url=):
         - Files in /config/www/ directory (/local/...)
         - HACS-installed cards (/hacsfiles/...)
         - External CDN resources (https://...)
-
-        For inline code, use ha_config_set_inline_dashboard_resource instead.
+        - Supports all types: 'module', 'js', 'css'
 
         RESOURCE TYPES:
         - module: ES6 JavaScript modules (recommended for custom cards)
-        - js: Legacy JavaScript files (older custom cards)
+        - js: Legacy JavaScript files (older custom cards, url mode only)
         - css: CSS stylesheets (themes, global styles)
 
         EXAMPLES:
+
+        Inline custom card:
+        ha_config_set_dashboard_resource(
+            content=\"\"\"
+            class MyCard extends HTMLElement {
+              setConfig(config) { this.config = config; }
+              set hass(hass) {
+                this.innerHTML = `<ha-card>Hello ${hass.states[this.config.entity]?.state}</ha-card>`;
+              }
+            }
+            customElements.define('my-card', MyCard);
+            \"\"\",
+            resource_type="module"
+        )
 
         Add custom card from www/ directory:
         ha_config_set_dashboard_resource(
@@ -418,7 +275,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             resource_type="module"
         )
 
-        Update to new version:
+        Update existing resource:
         ha_config_set_dashboard_resource(
             url="/local/my-card-v2.js",
             resource_type="module",
@@ -428,18 +285,137 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Note: After adding a resource, clear browser cache or hard refresh
         (Ctrl+Shift+R) to load changes.
         """
-        # Validate resource type
-        valid_types = ["module", "js", "css"]
-        if resource_type not in valid_types:
+        # Validate: exactly one of content or url must be provided
+        if content is not None and url is not None:
             return {
                 "success": False,
-                "error": f"Invalid resource type '{resource_type}'",
-                "suggestions": [f"Valid types are: {', '.join(valid_types)}"],
+                "error": "Provide either 'content' (inline code) or 'url' (external), not both",
+                "suggestions": [
+                    "Use content= for inline JavaScript/CSS code",
+                    "Use url= for /local/, /hacsfiles/, or https:// resources",
+                ],
             }
+
+        if content is None and url is None:
+            return {
+                "success": False,
+                "error": "Either 'content' (inline code) or 'url' (external) is required",
+                "suggestions": [
+                    "Use content= for inline JavaScript/CSS code",
+                    "Use url= for /local/, /hacsfiles/, or https:// resources",
+                ],
+            }
+
+        # ---- Inline content mode ----
+        if content is not None:
+            if not content.strip():
+                return {
+                    "success": False,
+                    "error": "Content cannot be empty",
+                }
+
+            if resource_type == "js":
+                return {
+                    "success": False,
+                    "error": "Inline content does not support resource_type='js'",
+                    "suggestions": [
+                        "Use resource_type='module' for ES6 JavaScript (recommended)",
+                        "Use url= mode with resource_type='js' for legacy files",
+                    ],
+                }
+
+            content_bytes = content.encode("utf-8")
+            content_size = len(content_bytes)
+
+            if content_size > MAX_CONTENT_SIZE:
+                return {
+                    "success": False,
+                    "error": f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
+                    "size": content_size,
+                    "suggestions": [
+                        "Minify the code to reduce size",
+                        "Split into multiple smaller modules",
+                        "Use url= with a /local/ path for larger files",
+                    ],
+                }
+
+            encoded, _, encoded_size = _encode_content(content)
+
+            if encoded_size > MAX_ENCODED_LENGTH:
+                return {
+                    "success": False,
+                    "error": f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
+                    "size": content_size,
+                }
+
+            resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
+
+            try:
+                if resource_id:
+                    result = await client.send_websocket_message(
+                        {
+                            "type": "lovelace/resources/update",
+                            "resource_id": resource_id,
+                            "url": resource_url,
+                            "res_type": resource_type,
+                        }
+                    )
+                    action = "updated"
+                else:
+                    result = await client.send_websocket_message(
+                        {
+                            "type": "lovelace/resources/create",
+                            "url": resource_url,
+                            "res_type": resource_type,
+                        }
+                    )
+                    action = "created"
+
+                if isinstance(result, dict) and not result.get("success", True):
+                    error_msg = result.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    return {
+                        "success": False,
+                        "action": action,
+                        "error": str(error_msg),
+                    }
+
+                resource_info = result.get("result") if isinstance(result, dict) else result
+                new_resource_id = resource_id
+                if isinstance(resource_info, dict):
+                    new_resource_id = resource_info.get("id", resource_id)
+
+                logger.info(
+                    f"Inline dashboard resource {action}: id={new_resource_id}, "
+                    f"type={resource_type}, size={content_size}"
+                )
+
+                return {
+                    "success": True,
+                    "action": action,
+                    "resource_id": new_resource_id,
+                    "resource_type": resource_type,
+                    "size": content_size,
+                    "note": "Clear browser cache or hard refresh to load changes",
+                }
+            except Exception as e:
+                logger.error(f"Error setting inline dashboard resource: {e}")
+                return {
+                    "success": False,
+                    "action": "update" if resource_id else "create",
+                    "error": str(e),
+                    "suggestions": [
+                        "Ensure Home Assistant is running and accessible",
+                        "Check that you have admin permissions",
+                    ],
+                }
+
+        # ---- External URL mode ----
+        assert url is not None  # guaranteed by earlier validation
 
         try:
             if resource_id:
-                # Update existing resource
                 result = await client.send_websocket_message(
                     {
                         "type": "lovelace/resources/update",
@@ -450,7 +426,6 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
                 action = "updated"
             else:
-                # Create new resource
                 result = await client.send_websocket_message(
                     {
                         "type": "lovelace/resources/create",
@@ -460,13 +435,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
                 action = "created"
 
-            # Check for errors
             if isinstance(result, dict) and not result.get("success", True):
                 error_msg = result.get("error", {})
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
 
-                # Check for duplicate error on create
                 error_str = str(error_msg).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
                     return {
@@ -487,7 +460,6 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error": str(error_msg),
                 }
 
-            # Extract resource ID from response
             resource_info = result.get("result") if isinstance(result, dict) else result
             new_resource_id = resource_id
             if isinstance(resource_info, dict):
