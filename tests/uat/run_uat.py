@@ -124,7 +124,7 @@ class HAContainer:
             self.url = f"http://localhost:{port}"
             log(f"HA container started on {self.url}")
             time.sleep(5)  # initial stabilization
-            wait_for_ha(self.url, self.token, timeout=300)
+            wait_for_ha(self.url, self.token)
             time.sleep(10)  # component stabilization
         except Exception:
             self.__exit__(None, None, None)
