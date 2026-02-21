@@ -14,6 +14,47 @@ The dev add-on uses the same configuration as the stable version. See the main a
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
+| `enable_webhook_proxy` | Enable remote access via webhook proxy | `false` |
+| `remote_url` | Your external URL (optional, auto-detects Nabu Casa if blank) | `""` |
+
+## Remote Access via Webhook Proxy (Dev Feature)
+
+The dev addon includes an opt-in webhook proxy that enables remote MCP access through any reverse proxy — Nabu Casa, Cloudflare, DuckDNS, nginx, etc.
+
+### How it works
+
+When `enable_webhook_proxy` is turned on, the addon auto-installs a lightweight `mcp_proxy` custom integration into Home Assistant. This integration registers an unauthenticated webhook endpoint (`/api/webhook/<id>`) that proxies MCP requests to the addon, bypassing the ingress session cookie requirement that external MCP clients can't provide.
+
+### Setup
+
+1. Go to the addon's **Configuration** tab
+2. Toggle `enable_webhook_proxy` **on**
+3. *(Optional)* Set `remote_url` to your external URL (e.g. `https://ha.example.com`). Leave blank for Nabu Casa auto-detection.
+4. Click **Save**, then **Start** (or **Restart**) the addon
+5. Check the addon **Log** tab — on first install you'll see:
+   ```
+   ************************************************************
+     RESTART HOME ASSISTANT to load the new integration,
+     then restart this add-on to complete setup.
+     (Settings > System > Restart)
+   ************************************************************
+   ```
+6. Restart Home Assistant (Settings > System > Restart)
+7. Restart the addon
+8. Copy the remote URL from the logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+9. Paste that URL into your MCP client (Claude Desktop, Open WebUI, etc.)
+
+### URL auto-detection
+
+- **Nabu Casa subscribers**: Leave `remote_url` blank — the addon reads your Nabu Casa domain automatically
+- **Other reverse proxies**: Set `remote_url` to your external URL (e.g. `https://ha.example.com`)
+
+### Disabling
+
+Toggle `enable_webhook_proxy` off and restart the addon. The proxy config and config entry are cleaned up automatically.
 
 ## Updates
 
