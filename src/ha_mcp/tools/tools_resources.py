@@ -412,8 +412,6 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
         # ---- External URL mode ----
-        assert url is not None  # guaranteed by earlier validation
-
         try:
             if resource_id:
                 result = await client.send_websocket_message(

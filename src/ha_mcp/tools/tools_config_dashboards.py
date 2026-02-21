@@ -933,6 +933,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # If dashboard doesn't exist, create it
             dashboard_id = None
             metadata_updated = False
+            hint = None
             if not dashboard_exists:
                 # Use provided title or generate from url_path
                 dashboard_title = title or url_path.replace("-", " ").title()
@@ -1011,13 +1012,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                             ],
                         }
                     metadata_updated = True
-                else:
+                elif metadata_update_fields and dashboard_id is None:
+                    # Dashboard ID not found in storage list (e.g. default lovelace on
+                    # fresh installs). Metadata update via lovelace/dashboards/update
+                    # is not possible without a storage ID — config update still proceeds.
                     metadata_updated = False
+                    hint = (
+                        "Metadata fields were provided but could not be applied: "
+                        "dashboard has no storage ID (likely the built-in default dashboard). "
+                        "Config changes were still saved."
+                    )
 
             # Set config if provided
             config_updated = False
             existing_config_size = 0
-            hint = None
 
             if config is not None:
                 parsed_config = parse_json_param(config, "config")
@@ -1350,7 +1358,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ],
                 }
 
-            # Fetch documentation from GitHub
+            # Fetch documentation from GitHub (doc_url initialized here for exception handlers)
             doc_url = f"{CARD_DOCS_BASE_URL}/{card_type}.markdown"
 
             async with httpx.AsyncClient(timeout=10.0) as http_client:
