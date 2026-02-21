@@ -681,6 +681,65 @@ class HomeAssistantClient:
             status_code=404,
         )
 
+    async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
+        """
+        Start an options flow for a config entry.
+
+        Args:
+            entry_id: Config entry ID to configure
+
+        Returns:
+            Flow data with flow_id, step_id, type (menu|form),
+            menu_options or data_schema
+
+        Raises:
+            HomeAssistantAPIError: If flow start fails
+        """
+        payload = {"handler": entry_id}
+        logger.debug(f"Starting options flow for entry: {entry_id}")
+        return await self._request(
+            "POST", "/config/config_entries/options/flow", json=payload
+        )
+
+    async def submit_options_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Submit data for an options flow step.
+
+        Args:
+            flow_id: Flow ID from start_options_flow or previous step
+            user_input: Form data or menu selection (e.g., {"next_step_id": "sensors"})
+
+        Returns:
+            Flow result with next step info or completion status
+
+        Raises:
+            HomeAssistantAPIError: If flow submission fails
+        """
+        logger.debug(f"Submitting options flow step for flow_id: {flow_id}")
+        return await self._request(
+            "POST", f"/config/config_entries/options/flow/{flow_id}", json=user_input
+        )
+
+    async def abort_options_flow(self, flow_id: str) -> dict[str, Any]:
+        """
+        Abort an in-progress options flow without saving changes.
+
+        Args:
+            flow_id: Flow ID to abort
+
+        Returns:
+            Abort status
+
+        Raises:
+            HomeAssistantAPIError: If flow abort fails
+        """
+        logger.debug(f"Aborting options flow: {flow_id}")
+        return await self._request(
+            "DELETE", f"/config/config_entries/options/flow/{flow_id}"
+        )
+
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
 
