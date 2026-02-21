@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
@@ -287,14 +288,14 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:
-            return {
-                "success": False,
-                "error": "Provide either 'content' (inline code) or 'url' (external), not both",
-                "suggestions": [
+            return create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message="Provide either 'content' (inline code) or 'url' (external), not both",
+                suggestions=[
                     "Use content= for inline JavaScript/CSS code",
                     "Use url= for /local/, /hacsfiles/, or https:// resources",
                 ],
-            }
+            )
 
         if content is None and url is None:
             return {
@@ -315,14 +316,14 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             if resource_type == "js":
-                return {
-                    "success": False,
-                    "error": "Inline content does not support resource_type='js'",
-                    "suggestions": [
+                return create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Inline content does not support resource_type='js'",
+                    suggestions=[
                         "Use resource_type='module' for ES6 JavaScript (recommended)",
                         "Use url= mode with resource_type='js' for legacy files",
                     ],
-                }
+                )
 
             content_bytes = content.encode("utf-8")
             content_size = len(content_bytes)
@@ -375,11 +376,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     error_msg = result.get("error", {})
                     if isinstance(error_msg, dict):
                         error_msg = error_msg.get("message", str(error_msg))
-                    return {
-                        "success": False,
-                        "action": action,
-                        "error": str(error_msg),
-                    }
+                    return create_error_response(
+                        code=ErrorCode.SERVICE_CALL_FAILED,
+                        message=str(error_msg),
+                        context={"action": action},
+                    )
 
                 resource_info = result.get("result") if isinstance(result, dict) else result
                 new_resource_id = resource_id

@@ -114,8 +114,8 @@ class TestSetDashboardMetadataUpdate:
         result = await set_tool(url_path="my-dashboard", title="Unauthorized")
 
         assert result["success"] is False
-        assert "metadata" in result["error"].lower()
-        assert "Permission denied" in result["error"]
+        assert "metadata" in result["error"]["message"].lower()
+        assert "Permission denied" in result["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_metadata_update_skipped_when_dashboard_id_none(

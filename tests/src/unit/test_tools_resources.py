@@ -217,7 +217,7 @@ class TestHaConfigSetDashboardResource:
         result = await set_tool(content="const x = 1;", url="/local/card.js")
 
         assert result["success"] is False
-        assert "not both" in result["error"].lower()
+        assert "not both" in result["error"]["message"].lower()
 
     # ---- Inline content mode ----
 
@@ -314,7 +314,7 @@ class TestHaConfigSetDashboardResource:
         result = await set_tool(content="var x = 1;", resource_type="js")
 
         assert result["success"] is False
-        assert "js" in result["error"].lower()
+        assert "js" in result["error"]["message"].lower()
 
     # ---- URL mode ----
 

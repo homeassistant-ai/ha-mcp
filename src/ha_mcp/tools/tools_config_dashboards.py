@@ -21,6 +21,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import parse_json_param
 
@@ -1001,16 +1002,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         error_msg = meta_result.get("error", {})
                         if isinstance(error_msg, dict):
                             error_msg = error_msg.get("message", str(error_msg))
-                        return {
-                            "success": False,
-                            "action": "update",
-                            "url_path": url_path,
-                            "error": f"Failed to update dashboard metadata: {error_msg}",
-                            "suggestions": [
+                        return create_error_response(
+                            code=ErrorCode.SERVICE_CALL_FAILED,
+                            message=f"Failed to update dashboard metadata: {error_msg}",
+                            suggestions=[
                                 "Check that you have admin permissions",
                                 "Verify dashboard is in storage mode (not YAML mode)",
                             ],
-                        }
+                            context={"action": "update", "url_path": url_path},
+                        )
                     metadata_updated = True
                 elif metadata_update_fields and dashboard_id is None:
                     # Dashboard ID not found in storage list (e.g. default lovelace on
