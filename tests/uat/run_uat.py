@@ -154,7 +154,7 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
-def write_claude_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Path:
+def write_stdio_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Path:
     """Write a temporary Claude MCP config JSON file."""
     cmd = mcp_server_command(branch)
     config = {
@@ -370,17 +370,14 @@ async def run_agent_scenario(
     results: dict = {"available": True}
 
     # Prepare MCP config
-    claude_config_path: Path | None = None
+    stdio_config_path: Path | None = None
     gemini_workdir: Path | None = None
-    openai_config_path: Path | None = None
 
-    if agent_name == "claude":
-        claude_config_path = write_claude_mcp_config(ha_url, ha_token, branch)
+    if agent_name in ("claude", "openai"):
+        stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch)
     elif agent_name == "gemini":
         gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
         write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir)
-    elif agent_name == "openai":
-        openai_config_path = write_claude_mcp_config(ha_url, ha_token, branch)
 
     try:
         for phase in ("setup_prompt", "test_prompt", "teardown_prompt"):
@@ -392,20 +389,20 @@ async def run_agent_scenario(
             log(f"  [{agent_name}] Running {phase_key}...")
 
             if agent_name == "claude":
-                assert claude_config_path is not None
+                assert stdio_config_path is not None
                 cmd = build_claude_cmd(
-                    prompt, claude_config_path, model=model or "sonnet"
+                    prompt, stdio_config_path, model=model or "sonnet"
                 )
                 result = await run_cli(cmd, timeout)
             elif agent_name == "gemini":
                 cmd = build_gemini_cmd(prompt)
                 result = await run_cli(cmd, timeout, cwd=gemini_workdir)
             elif agent_name == "openai":
-                assert openai_config_path is not None
+                assert stdio_config_path is not None
                 assert base_url is not None  # validated in run()
                 cmd = build_openai_cmd(
                     prompt,
-                    openai_config_path,
+                    stdio_config_path,
                     base_url=base_url,
                     model=model,
                     api_key=api_key,
@@ -427,12 +424,10 @@ async def run_agent_scenario(
             )
     finally:
         # Cleanup temp files
-        if claude_config_path and claude_config_path.exists():
-            claude_config_path.unlink()
+        if stdio_config_path and stdio_config_path.exists():
+            stdio_config_path.unlink()
         if gemini_workdir and gemini_workdir.exists():
             shutil.rmtree(gemini_workdir, ignore_errors=True)
-        if openai_config_path and openai_config_path.exists():
-            openai_config_path.unlink()
 
     return results
 
