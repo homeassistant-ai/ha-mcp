@@ -5,15 +5,282 @@ This module provides tools to list, enable, disable, and delete Home Assistant
 integrations (config entries) via the REST and WebSocket APIs.
 """
 
+import asyncio
 import logging
+import time
+from copy import deepcopy
 from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
+
+# Phase-1 VT allowlist: single-step presence controls only
+VT_OPTIONS_PHASE1_KEYS: dict[str, dict[str, Any]] = {
+    "presence_sensor_entity_id": {
+        "entry_type": "central",
+        "type": "string",
+        "step_id": "presence",
+    },
+    "use_presence_central_config": {
+        "entry_type": "room",
+        "type": "boolean",
+        "step_id": "presence",
+    },
+}
+
+
+def _integration_error(
+    code: ErrorCode,
+    message: str,
+    *,
+    details: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return create_error_response(code, message, details=details, context=context)
+
+
+def _diff_options(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    keys = sorted(set(before.keys()) | set(after.keys()))
+    for key in keys:
+        b = before.get(key)
+        a = after.get(key)
+        if b != a:
+            diffs.append({"key": key, "before": b, "after": a})
+    return diffs
+
+
+def _entry_type(entry: dict[str, Any]) -> str:
+    title = str(entry.get("title", "")).strip().lower()
+    if title == "central configuration":
+        return "central"
+    return "room"
+
+
+def _coerce_patch_value(key: str, value: Any) -> tuple[bool, Any, str | None]:
+    cfg = VT_OPTIONS_PHASE1_KEYS.get(key)
+    if not cfg:
+        return False, None, "unknown key"
+    expected = cfg.get("type")
+    if expected == "string":
+        if isinstance(value, str) and value.strip():
+            return True, value, None
+        return False, None, "expected non-empty string"
+    if expected == "boolean":
+        if isinstance(value, bool):
+            return True, value, None
+        if isinstance(value, str):
+            val = value.strip().lower()
+            if val in ("true", "on", "1", "yes"):
+                return True, True, None
+            if val in ("false", "off", "0", "no"):
+                return True, False, None
+        return False, None, "expected boolean"
+    return False, None, "unsupported expected type"
+
+
+def _schema_suggested_value(
+    data_schema: list[dict[str, Any]] | None, field_name: str
+) -> Any | None:
+    if not data_schema:
+        return None
+    for item in data_schema:
+        if not isinstance(item, dict):
+            continue
+        if item.get("name") != field_name:
+            continue
+        desc = item.get("description")
+        if isinstance(desc, dict) and "suggested_value" in desc:
+            return desc.get("suggested_value")
+        if "default" in item:
+            return item.get("default")
+        return None
+    return None
+
+
+def _parse_options_patch(options_patch: dict[str, Any] | str) -> tuple[dict[str, Any] | None, str | None]:
+    if isinstance(options_patch, str):
+        import json
+
+        try:
+            parsed = json.loads(options_patch)
+        except json.JSONDecodeError as exc:
+            return None, f"Invalid JSON for options_patch: {exc}"
+        return parsed, None
+    return options_patch, None
+
+
+def _validate_vt_patch(
+    *,
+    entry_kind: str,
+    options_patch_obj: dict[str, Any],
+    strict_keys: bool,
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    normalized_patch: dict[str, Any] = {}
+    key_steps: set[str] = set()
+    key_errors: list[dict[str, Any]] = []
+
+    for key, value in options_patch_obj.items():
+        cfg = VT_OPTIONS_PHASE1_KEYS.get(key)
+        if not cfg:
+            if strict_keys:
+                key_errors.append(
+                    {"key": key, "reason": "unknown key", "expected": "known VT phase-1 key"}
+                )
+            continue
+
+        if cfg.get("entry_type") != entry_kind:
+            key_errors.append(
+                {
+                    "key": key,
+                    "reason": "key not valid for this entry type",
+                    "entry_type": entry_kind,
+                    "expected_entry_type": cfg.get("entry_type"),
+                }
+            )
+            continue
+
+        ok, coerced, err = _coerce_patch_value(key, value)
+        if not ok:
+            key_errors.append({"key": key, "reason": err, "value": value})
+            continue
+        normalized_patch[key] = coerced
+        key_steps.add(str(cfg.get("step_id")))
+
+    if (
+        entry_kind == "room"
+        and normalized_patch.get("use_presence_central_config") is False
+        and "presence_sensor_entity_id" not in normalized_patch
+    ):
+        key_errors.append(
+            {
+                "key": "presence_sensor_entity_id",
+                "reason": "required when use_presence_central_config=false",
+            }
+        )
+
+    target_step = next(iter(key_steps), "")
+    return normalized_patch, target_step, key_errors
+
+
+async def _verify_presence_sensor_with_timeout(
+    *,
+    client: Any,
+    entry_id: str,
+    expected: str,
+    timeout_seconds: float = 2.0,
+    poll_interval_seconds: float = 0.35,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        verify_flow = await client.start_options_flow(entry_id)
+        verify_flow_id = verify_flow.get("flow_id")
+        verify_presence = None
+        if verify_flow.get("type") == "menu" and verify_flow_id:
+            verify_presence = await client.submit_options_flow_step(
+                verify_flow_id, {"next_step_id": "presence"}
+            )
+        elif verify_flow.get("type") == "form":
+            verify_presence = verify_flow
+
+        suggested = _schema_suggested_value(
+            (verify_presence or {}).get("data_schema"),
+            "presence_sensor_entity_id",
+        )
+        if suggested == expected:
+            return True
+        await asyncio.sleep(poll_interval_seconds)
+    return False
+
+
+async def _apply_options_via_flow(
+    *,
+    client: Any,
+    entry_id: str,
+    target_step: str,
+    candidate: dict[str, Any],
+    normalized_patch: dict[str, Any],
+    before_options: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    flow = await client.start_options_flow(entry_id)
+    flow_id = flow.get("flow_id")
+    if not flow_id:
+        return None, _integration_error(
+            ErrorCode.CONFIG_NOT_FOUND,
+            "Options flow did not return a flow_id.",
+            context={"entry_id": entry_id},
+        )
+
+    current = flow
+    if current.get("type") == "menu":
+        current = await client.submit_options_flow_step(flow_id, {"next_step_id": target_step})
+    if current.get("type") != "form":
+        return None, _integration_error(
+            ErrorCode.CONFIG_INVALID,
+            "Expected a form step for options submission.",
+            context={"entry_id": entry_id, "target_step": target_step, "flow_type": current.get("type")},
+        )
+
+    submit_payload = {k: candidate.get(k) for k in normalized_patch}
+    apply_result = await client.submit_options_flow_step(flow_id, submit_payload)
+
+    if apply_result.get("type") == "form":
+        step_id = apply_result.get("step_id")
+        schema = apply_result.get("data_schema", []) or []
+        required_fields = {
+            f.get("name")
+            for f in schema
+            if isinstance(f, dict) and f.get("required") is True and f.get("name")
+        }
+        field_names = {
+            f.get("name")
+            for f in schema
+            if isinstance(f, dict) and f.get("name")
+        }
+        if (
+            step_id == "presence"
+            and "presence_sensor_entity_id" in field_names
+            and set(normalized_patch.keys()) == {"use_presence_central_config"}
+            and normalized_patch.get("use_presence_central_config") is False
+        ):
+            sensor_val = None
+            suggested = _schema_suggested_value(schema, "presence_sensor_entity_id")
+            if isinstance(suggested, str) and suggested.strip():
+                sensor_val = suggested
+            elif "presence_sensor_entity_id" in before_options:
+                prev = before_options.get("presence_sensor_entity_id")
+                if isinstance(prev, str) and prev.strip():
+                    sensor_val = prev
+            if not sensor_val and "presence_sensor_entity_id" in required_fields:
+                return None, _integration_error(
+                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    "Options flow requires presence_sensor_entity_id when disabling central presence config.",
+                    context={"entry_id": entry_id, "step_id": step_id},
+                )
+            if sensor_val:
+                apply_result = await client.submit_options_flow_step(
+                    flow_id, {"presence_sensor_entity_id": sensor_val}
+                )
+
+    if apply_result.get("type") == "menu":
+        menu_options = apply_result.get("menu_options", []) or []
+        if "finalize" in menu_options:
+            apply_result = await client.submit_options_flow_step(flow_id, {"next_step_id": "finalize"})
+
+    if apply_result.get("type") == "form":
+        form_schema = apply_result.get("data_schema", [])
+        return None, _integration_error(
+            ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+            "Options flow requires additional form input; single-step apply is incomplete.",
+            details=str([f.get("name") for f in form_schema if isinstance(f, dict)]),
+            context={"entry_id": entry_id, "step_id": apply_result.get("step_id")},
+        )
+    return apply_result, None
 
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -211,6 +478,368 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure your token has sufficient permissions",
                 ],
             }
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "tags": ["integration"],
+            "title": "Get Integration Options",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_integration_options(
+        entry_id: Annotated[
+            str,
+            Field(description="Config entry ID for which to retrieve current options and validation hints."),
+        ],
+        include_validation_hints: Annotated[
+            bool | str,
+            Field(
+                description="Include options-flow schema hints (data_schema) for supported steps.",
+                default=True,
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
+        """
+        Get current persisted integration options and optional options-flow validation hints.
+
+        Returns entry metadata, current options from config-entry resource, and
+        options-flow data_schema hints (currently phase-1 focused on VT presence step).
+        """
+        try:
+            include_hints = coerce_bool_param(
+                include_validation_hints, "include_validation_hints", default=True
+            )
+            entry = await client.get_config_entry(entry_id)
+            result: dict[str, Any] = {
+                "success": True,
+                "entry_id": entry_id,
+                "domain": entry.get("domain"),
+                "title": entry.get("title"),
+                "state": entry.get("state"),
+                "options": entry.get("options", {}),
+            }
+            if not include_hints:
+                return result
+
+            validation_hints: dict[str, Any] = {}
+            try:
+                flow = await client.start_options_flow(entry_id)
+                flow_id = flow.get("flow_id")
+                if flow.get("type") == "menu" and flow_id:
+                    # Phase-1: presence step discovery
+                    presence = await client.submit_options_flow_step(
+                        flow_id, {"next_step_id": "presence"}
+                    )
+                    validation_hints["presence"] = {
+                        "type": presence.get("type"),
+                        "step_id": presence.get("step_id"),
+                        "data_schema": presence.get("data_schema"),
+                        "errors": presence.get("errors"),
+                    }
+            except Exception as e:
+                validation_hints["error"] = str(e)
+
+            result["validation_hints"] = validation_hints
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get integration options: {e}")
+            return _integration_error(
+                ErrorCode.CONFIG_NOT_FOUND,
+                "Failed to retrieve integration options.",
+                details=str(e),
+                context={"entry_id": entry_id},
+            )
+
+    @mcp.tool(
+        annotations={
+            "destructiveHint": True,
+            "tags": ["integration"],
+            "title": "Set Integration Options",
+        }
+    )
+    @log_tool_usage
+    async def ha_set_integration_options(
+        entry_id: Annotated[str, Field(description="Config entry ID")],
+        options_patch: Annotated[
+            dict[str, Any] | str,
+            Field(description="Partial options object to patch."),
+        ],
+        confirm: Annotated[
+            bool | str,
+            Field(description="Must be true for non-dry-run apply.", default=False),
+        ] = False,
+        dry_run: Annotated[
+            bool | str,
+            Field(description="If true, validate and return diff only.", default=True),
+        ] = True,
+        auto_backup: Annotated[
+            bool | str,
+            Field(description="If true, attempt backup before apply.", default=True),
+        ] = True,
+        strict_keys: Annotated[
+            bool | str,
+            Field(description="If true, reject unknown patch keys.", default=True),
+        ] = True,
+        request_id: Annotated[
+            str | None,
+            Field(description="Optional request ID for correlation.", default=None),
+        ] = None,
+    ) -> dict[str, Any]:
+        """
+        Safely patch config-entry options via Home Assistant options flow.
+
+        Phase-1 constraints:
+        - Supports versatile_thermostat domain only.
+        - Supports presence-step keys only:
+          - presence_sensor_entity_id (central entries)
+          - use_presence_central_config (room entries)
+        - Single-step patch enforcement.
+        """
+        try:
+            dry_run_bool = coerce_bool_param(dry_run, "dry_run", default=True)
+            confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
+            auto_backup_bool = coerce_bool_param(auto_backup, "auto_backup", default=True)
+            strict_keys_bool = coerce_bool_param(strict_keys, "strict_keys", default=True)
+
+            options_patch_obj, parse_error = _parse_options_patch(options_patch)
+            if parse_error:
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "options_patch must be valid JSON.",
+                    details=parse_error,
+                    context={"entry_id": entry_id},
+                )
+
+            if not isinstance(options_patch_obj, dict) or not options_patch_obj:
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "options_patch must be a non-empty object.",
+                    context={"entry_id": entry_id},
+                )
+
+            entry = await client.get_config_entry(entry_id)
+            domain = entry.get("domain")
+            title = entry.get("title")
+            if domain != "versatile_thermostat":
+                return _integration_error(
+                    ErrorCode.CONFIG_INVALID,
+                    "Only versatile_thermostat is supported in phase-1.",
+                    context={"entry_id": entry_id, "domain": domain},
+                )
+
+            entry_kind = _entry_type(entry)
+            normalized_patch, target_step, key_errors = _validate_vt_patch(
+                entry_kind=entry_kind,
+                options_patch_obj=options_patch_obj,
+                strict_keys=strict_keys_bool,
+            )
+
+            if key_errors:
+                return _integration_error(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Patch validation failed.",
+                    details=str(key_errors),
+                    context={"entry_id": entry_id},
+                )
+
+            if not normalized_patch:
+                return _integration_error(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No valid patch keys remained after validation.",
+                    context={"entry_id": entry_id},
+                )
+            if not target_step:
+                return _integration_error(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Patch keys must belong to a single options-flow step in phase-1.",
+                    context={"entry_id": entry_id},
+                )
+            before_options = deepcopy(entry.get("options", {}) or {})
+            candidate = deepcopy(before_options)
+            candidate.update(normalized_patch)
+            diff = _diff_options(before_options, candidate)
+
+            base_response: dict[str, Any] = {
+                "success": True,
+                "applied": False,
+                "verified": False,
+                "verification_method": "none",
+                "entry_id": entry_id,
+                "domain": domain,
+                "title": title,
+                "before_options": before_options,
+                "diff": diff,
+                "meta": {
+                    "dry_run": dry_run_bool,
+                    "request_id": request_id,
+                    "target_step": target_step,
+                    "strict_keys": strict_keys_bool,
+                },
+            }
+
+            if not diff:
+                base_response["warnings"] = ["No-op patch; options already match requested values."]
+                base_response["verified"] = True
+                base_response["verification_method"] = "none"
+                return base_response
+
+            if dry_run_bool:
+                return base_response
+
+            if not confirm_bool:
+                return _integration_error(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "confirm=true is required for non-dry-run apply.",
+                    context={"entry_id": entry_id},
+                )
+
+            backup_info: dict[str, Any] | None = None
+            if auto_backup_bool:
+                try:
+                    backup_resp = await client._request(
+                        "POST", "/services/backup/create_automatic", json={}
+                    )
+                    backup_info = {
+                        "attempted": True,
+                        "status": "started",
+                        "result": backup_resp,
+                    }
+                except Exception as e:
+                    msg = str(e).lower()
+                    if "404" in msg or "not found" in msg:
+                        return _integration_error(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            "Backup service is unavailable in this Home Assistant environment.",
+                            details=str(e),
+                            context={"entry_id": entry_id},
+                        )
+                    return _integration_error(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Backup attempt failed before applying options.",
+                        details=str(e),
+                        context={"entry_id": entry_id},
+                    )
+
+            apply_result, apply_error = await _apply_options_via_flow(
+                client=client,
+                entry_id=entry_id,
+                target_step=target_step,
+                candidate=candidate,
+                normalized_patch=normalized_patch,
+                before_options=before_options,
+            )
+            if apply_error:
+                return apply_error
+
+            # Read back persisted options
+            updated_entry = await client.get_config_entry(entry_id)
+            after_options = deepcopy(updated_entry.get("options", {}) or {})
+            verify_diff = _diff_options(before_options, after_options)
+
+            mismatched: list[dict[str, Any]] = []
+            for key, expected_val in normalized_patch.items():
+                actual_val = after_options.get(key)
+                if actual_val != expected_val:
+                    mismatched.append(
+                        {"key": key, "expected": expected_val, "actual": actual_val}
+                    )
+
+            # Fallback verification for environments where config-entry options/data
+            # are masked by HA API. For phase-1 central presence key, we can verify
+            # persisted value through options-flow suggested_value.
+            if mismatched and set(normalized_patch.keys()) == {"presence_sensor_entity_id"}:
+                try:
+                    expected = normalized_patch["presence_sensor_entity_id"]
+                    verified = await _verify_presence_sensor_with_timeout(
+                        client=client,
+                        entry_id=entry_id,
+                        expected=expected,
+                    )
+                    if verified:
+                        mismatched = []
+                        verify_diff = _diff_options(before_options, candidate)
+                        after_options = deepcopy(candidate)
+                except Exception:
+                    # Keep original mismatch behavior on verification failure.
+                    pass
+            if mismatched:
+                # Room presence toggle can be persisted through options flow, but in
+                # some HA/VT combinations there is no reliable readback surface
+                # (config_entry data/options and flow suggested/default remain static).
+                # In that case, if flow completed with create_entry, return applied
+                # with explicit unverifiable warning.
+                if (
+                    set(normalized_patch.keys()) == {"use_presence_central_config"}
+                    and apply_result.get("type") == "create_entry"
+                ):
+                    response_unverified: dict[str, Any] = {
+                        "success": True,
+                        "applied": True,
+                        "verified": False,
+                        "verification_method": "none",
+                        "entry_id": entry_id,
+                        "domain": domain,
+                        "title": title,
+                        "before_options": before_options,
+                        "after_options": deepcopy(candidate),
+                        "diff": _diff_options(before_options, candidate),
+                        "warnings": [
+                            "Applied via options flow, but persistence could not be directly verified from exposed HA APIs."
+                        ],
+                        "meta": {
+                            "request_id": request_id,
+                            "target_step": target_step,
+                            "apply_flow_result_type": apply_result.get("type"),
+                            "apply_flow_step_id": apply_result.get("step_id"),
+                            "verification": "unverified",
+                        },
+                    }
+                    if backup_info:
+                        response_unverified["backup_info"] = backup_info
+                    return response_unverified
+
+                return _integration_error(
+                    ErrorCode.RESOURCE_LOCKED,
+                    "Options write could not be verified from persisted config-entry options.",
+                    details=str(mismatched),
+                    context={"entry_id": entry_id},
+                )
+
+            response: dict[str, Any] = {
+                "success": True,
+                "applied": True,
+                "verified": True,
+                "verification_method": (
+                    "flow_suggested"
+                    if set(normalized_patch.keys()) == {"presence_sensor_entity_id"}
+                    else "config_entry"
+                ),
+                "entry_id": entry_id,
+                "domain": domain,
+                "title": title,
+                "before_options": before_options,
+                "after_options": after_options,
+                "diff": verify_diff,
+                "meta": {
+                    "request_id": request_id,
+                    "target_step": target_step,
+                    "apply_flow_result_type": apply_result.get("type"),
+                    "apply_flow_step_id": apply_result.get("step_id"),
+                },
+            }
+            if backup_info:
+                response["backup_info"] = backup_info
+            return response
+        except Exception as e:
+            logger.error(f"Failed to set integration options: {e}")
+            return _integration_error(
+                ErrorCode.INTERNAL_ERROR,
+                "Failed to set integration options.",
+                details=str(e),
+                context={"entry_id": entry_id},
+            )
 
     @mcp.tool(
         annotations={
