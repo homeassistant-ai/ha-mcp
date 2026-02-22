@@ -409,7 +409,7 @@ Balance improvement against regression risk. Consider:
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Weekly Tue 10:00 UTC | Stable release |
+| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release |
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
@@ -752,7 +752,7 @@ feat: Add dark mode                             # User-facing
 | Channel | When Updated |
 |---------|--------------|
 | Dev (`.devN`) | Every master commit |
-| Stable | Weekly (Tuesday 10:00 UTC) |
+| Stable | Biweekly (Wednesday 10:00 UTC) |
 
 Manual release: Actions > SemVer Release > Run workflow.
 
