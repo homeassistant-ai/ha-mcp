@@ -1,6 +1,6 @@
 # Dev Channel
 
-Want to test the latest changes before the weekly Tuesday release? The dev channel provides early access to features, bug fixes, and improvements as soon as they're merged to master.
+Want to test the latest changes before the biweekly stable release? The dev channel provides early access to features, bug fixes, and improvements as soon as they're merged to master.
 
 **Who should use this:**
 - Contributors testing their PRs
@@ -14,7 +14,7 @@ Want to test the latest changes before the weekly Tuesday release? The dev chann
 | Channel | When Updated | Package/Tag |
 |---------|--------------|-------------|
 | **Dev** | Every push to master | `ha-mcp-dev` / `:dev` |
-| **Stable** | Weekly (Tuesday 10:00 UTC) | `ha-mcp` / `:latest` |
+| **Stable** | Biweekly (Wednesday 10:00 UTC) | `ha-mcp` / `:latest` |
 
 ## Installation Methods
 
@@ -147,7 +147,7 @@ The dev channel is available as a **separate add-on** in the Home Assistant add-
 | **Name** | Home Assistant MCP Server | Home Assistant MCP Server (Dev) |
 | **Slug** | `ha_mcp` | `ha_mcp_dev` |
 | **Stage** | Stable | Experimental |
-| **Updates** | Weekly (Tuesday) | Every master push |
+| **Updates** | Biweekly (Wednesday) | Every master push |
 
 **Can I run both?** Yes! Both add-ons can be installed simultaneously. They use different slugs and configuration.
 
