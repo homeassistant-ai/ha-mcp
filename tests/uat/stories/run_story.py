@@ -290,11 +290,22 @@ async def _run_mcp_steps(
     if not steps:
         return
 
+    import os
+
     import ha_mcp.config
     from ha_mcp.client import HomeAssistantClient
+    from ha_mcp.client.websocket_client import websocket_manager
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
+    # Point global settings at the test HA instance before resetting.
+    # The WebSocket client uses get_global_settings() (reads env vars), not the
+    # HomeAssistantClient base_url, so we must set env vars explicitly.
+    os.environ["HOMEASSISTANT_URL"] = ha_url
+    os.environ["HOMEASSISTANT_TOKEN"] = ha_token
     ha_mcp.config._settings = None
+
+    # Disconnect any cached WebSocket so it reconnects to the test instance.
+    await websocket_manager.disconnect()
 
     client = HomeAssistantClient(base_url=ha_url, token=ha_token)
     server = HomeAssistantSmartMCPServer(client=client)
