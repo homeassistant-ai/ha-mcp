@@ -291,7 +291,7 @@ The add-on provides 85+ MCP tools for controlling Home Assistant:
 - **Scripts**: `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`
 - **Automations**: `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`
 - **Groups**: `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group`
-- **Dashboards**: `ha_manage_dashboards` (gateway: get/set/delete dashboards, metadata updates, guide, card types & docs, find cards, resource management)
+- **Dashboards**: `ha_dashboard_info` (read-only: list/get dashboards, find cards, guides, card docs, list resources), `ha_manage_dashboards` (write: create/update/delete dashboards and resources)
 - **Areas & Floors**: `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor`
 - **Labels**: `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels`
 - **Zones**: `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`

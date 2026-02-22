@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import log_tool_usage
 
 logger = logging.getLogger(__name__)
@@ -298,22 +298,22 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         if content is None and url is None:
-            return {
-                "success": False,
-                "error": "Either 'content' (inline code) or 'url' (external) is required",
-                "suggestions": [
+            return create_error_response(
+                code=ErrorCode.VALIDATION_MISSING_PARAMETER,
+                message="Either 'content' (inline code) or 'url' (external) is required",
+                suggestions=[
                     "Use content= for inline JavaScript/CSS code",
                     "Use url= for /local/, /hacsfiles/, or https:// resources",
                 ],
-            }
+            )
 
         # ---- Inline content mode ----
         if content is not None:
             if not content.strip():
-                return {
-                    "success": False,
-                    "error": "Content cannot be empty",
-                }
+                return create_validation_error(
+                    message="Content cannot be empty",
+                    parameter="content",
+                )
 
             if resource_type == "js":
                 return create_error_response(

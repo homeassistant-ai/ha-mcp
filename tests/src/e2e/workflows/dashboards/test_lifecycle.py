@@ -326,6 +326,100 @@ class TestDashboardLifecycle:
 
         logger.info("Metadata update via set_dashboard test completed successfully")
 
+    async def test_combined_metadata_and_config_update(self, mcp_client):
+        """Test updating both metadata and config in a single call."""
+        logger.info("Starting combined metadata + config update test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Create dashboard
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": "test-combined-update",
+                "title": "Original Title",
+                "config": {
+                    "views": [
+                        {
+                            "title": "Original View",
+                            "cards": [{"type": "markdown", "content": "Original"}],
+                        }
+                    ]
+                },
+            },
+        )
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
+
+        try:
+            # Update both metadata and config simultaneously
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": "test-combined-update",
+                    "title": "Updated Title",
+                    "icon": "mdi:rocket",
+                    "config": {
+                        "views": [
+                            {
+                                "title": "Updated View",
+                                "cards": [
+                                    {"type": "markdown", "content": "Updated content"}
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+            assert update_data["success"] is True
+            assert update_data.get("metadata_updated") is True
+            assert update_data.get("config_updated") is True
+
+            # Verify config was actually updated
+            get_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-combined-update"},
+            )
+            assert get_data["config"]["views"][0]["title"] == "Updated View"
+
+            logger.info(
+                "Combined metadata + config update test completed successfully"
+            )
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
+            )
+
+    async def test_noop_update_returns_error(self, mcp_client):
+        """Test that calling set_dashboard with no changes returns an error."""
+        logger.info("Starting no-op update detection test")
+        mcp = MCPAssertions(mcp_client)
+
+        # Create dashboard
+        create_data = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": "test-noop-check", "title": "Noop Test"},
+        )
+        dashboard_id = create_data.get("dashboard_id")
+        assert dashboard_id is not None
+
+        try:
+            # Call with only url_path and no changes — should get validation error
+            result = await mcp_client.call_tool(
+                "ha_config_set_dashboard",
+                {"url_path": "test-noop-check"},
+            )
+            data = parse_mcp_result(result)
+            assert data["success"] is False
+            assert "no changes" in data.get("error", {}).get("message", "").lower()
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard", {"dashboard_id": dashboard_id}
+            )
+
+        logger.info("No-op update detection test completed successfully")
+
 
 class TestDashboardErrorHandling:
     """Test error handling and edge cases."""

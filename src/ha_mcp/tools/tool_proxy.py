@@ -37,17 +37,52 @@ logger = logging.getLogger(__name__)
 
 # Category gateway configuration.
 # Maps gateway tool name → list of tool modules to include.
-# To add a new gateway: add an entry here. No changes to tool modules needed.
+# Both gateways draw from the same modules; per-tool assignment is
+# controlled by TOOL_CATEGORY_OVERRIDES below.
 PROXY_CATEGORIES: dict[str, list[str]] = {
+    "ha_dashboard_info": ["tools_config_dashboards", "tools_resources"],
     "ha_manage_dashboards": ["tools_config_dashboards", "tools_resources"],
+}
+
+# Per-tool category assignment (tool_name → gateway_name).
+# Every tool captured from a proxied module MUST appear here.
+TOOL_CATEGORY_OVERRIDES: dict[str, str] = {
+    # Read-only tools → ha_dashboard_info
+    "ha_config_get_dashboard": "ha_dashboard_info",
+    "ha_dashboard_find_card": "ha_dashboard_info",
+    "ha_get_dashboard_guide": "ha_dashboard_info",
+    "ha_get_card_documentation": "ha_dashboard_info",
+    "ha_config_list_dashboard_resources": "ha_dashboard_info",
+    # Write/CRUD tools → ha_manage_dashboards
+    "ha_config_set_dashboard": "ha_manage_dashboards",
+    "ha_config_delete_dashboard": "ha_manage_dashboards",
+    "ha_config_set_dashboard_resource": "ha_manage_dashboards",
+    "ha_config_delete_dashboard_resource": "ha_manage_dashboards",
 }
 
 # Gateway descriptions — concise summaries for the MCP tool listing.
 GATEWAY_DESCRIPTIONS: dict[str, str] = {
-    "ha_manage_dashboards": (
-        "Create, update, delete, and customize Home Assistant dashboards "
-        "including views, cards, resources, and inline code."
+    "ha_dashboard_info": (
+        "Read-only dashboard tools: list/get dashboards, find cards, "
+        "get design guides, card documentation, and list resources."
     ),
+    "ha_manage_dashboards": (
+        "Create, update, and delete Home Assistant dashboards, "
+        "and manage dashboard resources (custom cards, CSS, JS)."
+    ),
+}
+
+# Gateway-level MCP annotations.
+GATEWAY_ANNOTATIONS: dict[str, dict[str, Any]] = {
+    "ha_dashboard_info": {
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "title": "Dashboard Info",
+    },
+    "ha_manage_dashboards": {
+        "destructiveHint": True,
+        "title": "Manage Dashboards",
+    },
 }
 
 
@@ -139,9 +174,9 @@ class ToolProxyRegistry:
         ]
 
     def build_summary_lines(self, category: str) -> list[str]:
-        """Build tool signatures with required params for the gateway description.
+        """Build tool signatures with typed required params for the gateway description.
 
-        Format: ``- tool_name(required_param, ...): First line of description``
+        Format: ``- tool_name(param: type, ...): First line of description``
         The ``...`` indicates optional parameters exist.  This gives LLMs enough
         info to call tools directly without a discovery round-trip.
         """
@@ -150,18 +185,22 @@ class ToolProxyRegistry:
         for tool in tools:
             first_line = tool["description"].strip().split("\n")[0]
 
-            # Build parameter signature showing required params
+            # Build parameter signature showing required params with types
             params = tool["parameters"]
             properties = params.get("properties", {})
             required_set = set(params.get("required", []))
 
-            required_names = [n for n in properties if n in required_set]
-            has_optional = len(properties) > len(required_names)
+            required_parts = []
+            for n in properties:
+                if n in required_set:
+                    ptype = properties[n].get("type", "string")
+                    required_parts.append(f"{n}: {ptype}")
+            has_optional = len(properties) > len(required_parts)
 
-            if required_names and has_optional:
-                sig = ", ".join(required_names) + ", ..."
-            elif required_names:
-                sig = ", ".join(required_names)
+            if required_parts and has_optional:
+                sig = ", ".join(required_parts) + ", ..."
+            elif required_parts:
+                sig = ", ".join(required_parts)
             elif has_optional:
                 sig = "..."
             else:
@@ -338,15 +377,12 @@ def discover_proxy_tools(
 
     registry = ToolProxyRegistry()
 
-    # Collect all unique modules across all categories
-    module_to_categories: dict[str, list[str]] = {}
-    for category, modules in proxy_categories.items():
-        for module_name in modules:
-            if module_name not in module_to_categories:
-                module_to_categories[module_name] = []
-            module_to_categories[module_name].append(category)
+    # Collect all unique modules (deduplicate across categories)
+    all_modules: set[str] = set()
+    for modules in proxy_categories.values():
+        all_modules.update(modules)
 
-    for module_name, categories in module_to_categories.items():
+    for module_name in all_modules:
         try:
             if module_name in EXPLICIT_MODULES:
                 module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
@@ -369,18 +405,24 @@ def discover_proxy_tools(
             mock = _MockMCP()
             register_func(mock, client, **kwargs)
 
-            # Register tools in all categories this module belongs to
+            # Assign each tool to its category via TOOL_CATEGORY_OVERRIDES
             for tool_info in mock.captured_tools:
-                for category in categories:
-                    registry.register_tool(
-                        name=tool_info["name"],
-                        description=tool_info["description"],
-                        parameters=tool_info["parameters"],
-                        annotations=tool_info["annotations"],
-                        implementation=tool_info["implementation"],
-                        module=module_name,
-                        category=category,
+                category = TOOL_CATEGORY_OVERRIDES.get(tool_info["name"])
+                if not category:
+                    logger.warning(
+                        f"Proxy: tool '{tool_info['name']}' from {module_name} "
+                        f"has no entry in TOOL_CATEGORY_OVERRIDES — skipping"
                     )
+                    continue
+                registry.register_tool(
+                    name=tool_info["name"],
+                    description=tool_info["description"],
+                    parameters=tool_info["parameters"],
+                    annotations=tool_info["annotations"],
+                    implementation=tool_info["implementation"],
+                    module=module_name,
+                    category=category,
+                )
 
             logger.debug(
                 f"Proxy: captured {len(mock.captured_tools)} tools from {module_name}"
@@ -428,10 +470,11 @@ def _register_single_gateway(
     for line in summary_lines:
         # Find a tool with at least one required param for a useful example
         if "(" in line and "(...)" not in line.split(":")[0]:
+            # Extract tool name (before the "(")
             tool_name = line.split("(")[0].lstrip("- ")
-            # Extract first required param name
+            # Extract first required param name (before the ":")
             sig_part = line.split("(")[1].split(")")[0]
-            first_param = sig_part.split(",")[0].strip()
+            first_param = sig_part.split(":")[0].strip()
             if first_param and first_param != "...":
                 example_tool = (
                     f"\n\nExample: {category_name}"
@@ -439,21 +482,30 @@ def _register_single_gateway(
                 )
                 break
 
-    description = f"{gateway_summary}\n\nAvailable tools:\n{tools_list}{example_tool}"
+    description = (
+        f"{gateway_summary}\n\n"
+        f"Available tools:\n{tools_list}{example_tool}\n\n"
+        f"Note: These tools are only available through this gateway, "
+        f"not as direct MCP tools."
+    )
 
-    # Determine if any sub-tool is destructive
-    tools_in_category = proxy_registry.get_tools_for_category(category_name)
-    has_destructive = any(
-        not t["annotations"].get("readOnlyHint", False) for t in tools_in_category
+    # Build Literal enum of valid tool names for this gateway
+    tool_names = [
+        t["name"] for t in proxy_registry.get_tools_for_category(category_name)
+    ]
+
+    # Use explicit annotations per gateway (read-only vs destructive)
+    annotations = GATEWAY_ANNOTATIONS.get(
+        category_name,
+        {
+            "title": category_name.replace("ha_", "").replace("_", " ").title(),
+        },
     )
 
     @mcp.tool(
         name=category_name,
         description=description,
-        annotations={
-            "destructiveHint": has_destructive,
-            "title": category_name.replace("ha_", "").replace("_", " ").title(),
-        },
+        annotations=annotations,
     )
     @log_tool_usage
     async def gateway_handler(
@@ -461,7 +513,8 @@ def _register_single_gateway(
             str | None,
             Field(
                 default=None,
-                description=("Tool name to execute. Omit for detailed parameter help."),
+                description="Tool name to execute. Omit for detailed parameter help.",
+                json_schema_extra={"enum": tool_names},
             ),
         ] = None,
         args: Annotated[
@@ -493,7 +546,8 @@ def _register_single_gateway(
         tool_entry = proxy_registry.get_tool(tool)
         if not tool_entry:
             available = [
-                t["name"] for t in proxy_registry.get_tools_for_category(category_name)
+                t["name"]
+                for t in proxy_registry.get_tools_for_category(category_name)
             ]
             return create_resource_not_found_error(
                 resource_type="Tool",

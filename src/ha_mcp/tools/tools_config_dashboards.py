@@ -16,7 +16,7 @@ import httpx
 from pydantic import Field
 
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -930,6 +930,29 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # but isn't listed by lovelace/dashboards/list on fresh installs
             if url_path == "lovelace":
                 dashboard_exists = True
+
+            # Early exit: no-op detection for existing dashboards
+            if dashboard_exists and config is None:
+                metadata_fields = {
+                    k: v
+                    for k, v in {
+                        "title": title,
+                        "icon": icon,
+                        "require_admin": require_admin,
+                        "show_in_sidebar": show_in_sidebar,
+                    }.items()
+                    if v is not None
+                }
+                if not metadata_fields:
+                    return create_validation_error(
+                        message=f"No changes requested for existing dashboard '{url_path}'",
+                        suggestions=[
+                            "Provide 'config' for full config replacement",
+                            "Provide 'jq_transform' for targeted edits",
+                            "Provide metadata fields (title, icon, require_admin, show_in_sidebar) to update metadata",
+                        ],
+                        context={"url_path": url_path},
+                    )
 
             # If dashboard doesn't exist, create it
             dashboard_id = None
