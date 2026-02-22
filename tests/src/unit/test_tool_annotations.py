@@ -64,8 +64,11 @@ def get_all_tools() -> list[dict]:
     tools_dir = get_tools_dir()
     all_tools = []
 
+    # Skip tool_proxy.py — gateway tools use runtime-assigned annotations
+    # that regex-based static analysis cannot parse.
+    skip_files = {"tool_proxy.py"}
     for py_file in sorted(tools_dir.glob("*.py")):
-        if py_file.name.startswith("_"):
+        if py_file.name.startswith("_") or py_file.name in skip_files:
             continue
         tools = extract_tool_decorators(py_file)
         all_tools.extend(tools)

@@ -16,7 +16,7 @@ import httpx
 from pydantic import Field
 
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..errors import ErrorCode, create_error_response
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -932,7 +932,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 dashboard_exists = True
 
             # Early exit: no-op detection for existing dashboards
-            if dashboard_exists and config is None:
+            if (
+                dashboard_exists
+                and config is None
+                and jq_transform is None
+                and python_transform is None
+            ):
                 metadata_fields = {
                     k: v
                     for k, v in {
@@ -944,7 +949,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     if v is not None
                 }
                 if not metadata_fields:
-                    return create_validation_error(
+                    return create_error_response(
+                        code=ErrorCode.VALIDATION_FAILED,
                         message=f"No changes requested for existing dashboard '{url_path}'",
                         suggestions=[
                             "Provide 'config' for full config replacement",
