@@ -467,6 +467,7 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
     total_tool_calls = 0
     total_tool_success = 0
     total_tool_fail = 0
+    has_turn_data = False
     has_tool_stats = False
 
     for phase_key in ("setup", "test", "teardown"):
@@ -474,7 +475,9 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
             continue
         phase = agent_data[phase_key]
         total_duration += phase.get("duration_ms", 0)
-        total_turns += phase.get("num_turns", 0)
+        if "num_turns" in phase:
+            has_turn_data = True
+            total_turns += phase["num_turns"]
 
         # Extract tool call counts from tool_stats
         tool_stats = phase.get("tool_stats")
@@ -489,7 +492,7 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
 
     return {
         "total_duration_ms": total_duration,
-        "total_turns": total_turns if total_turns > 0 else None,
+        "total_turns": total_turns if has_turn_data else None,
         # Use has_tool_stats to distinguish "no data" (None) from "0 calls" (0).
         # A local model that answers without calling tools should show 0, not null.
         "total_tool_calls": total_tool_calls if has_tool_stats else None,
