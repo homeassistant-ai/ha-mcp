@@ -209,7 +209,7 @@ class TestHaConfigSetDashboardResource:
         result = await set_tool()
 
         assert result["success"] is False
-        assert "required" in result["error"].lower()
+        assert "required" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_both_content_and_url_error(self, set_tool, mock_client):
@@ -288,7 +288,7 @@ class TestHaConfigSetDashboardResource:
         result = await set_tool(content="")
 
         assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        assert "empty" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_inline_whitespace_only_error(self, set_tool, mock_client):
@@ -296,7 +296,7 @@ class TestHaConfigSetDashboardResource:
         result = await set_tool(content="   \n\t  ")
 
         assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        assert "empty" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_inline_content_too_large_error(self, set_tool, mock_client):
