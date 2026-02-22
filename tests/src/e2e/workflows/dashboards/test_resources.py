@@ -449,7 +449,7 @@ class TestInlineDashboardResource:
         # Create inline resource
         content = "class TestCard extends HTMLElement { connectedCallback() { this.innerHTML = 'Test'; } } customElements.define('test-card', TestCard);"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content, "resource_type": "module"},
         )
 
@@ -496,7 +496,7 @@ class TestInlineDashboardResource:
 
         content = ".my-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; }"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content, "resource_type": "css"},
         )
 
@@ -518,7 +518,7 @@ class TestInlineDashboardResource:
         logger.info("Starting inline empty content error test")
 
         result = await mcp_client.call_tool(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": ""},
         )
         data = parse_mcp_result(result)
@@ -535,7 +535,7 @@ class TestInlineDashboardResource:
         # Create initial resource
         content_v1 = "const VERSION = 1;"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content_v1, "resource_type": "module"},
         )
         resource_id = create_data.get("resource_id")
@@ -547,7 +547,7 @@ class TestInlineDashboardResource:
             # Update with new content
             content_v2 = "const VERSION = 2; // Updated"
             update_data = await mcp.call_tool_success(
-                "ha_config_set_inline_dashboard_resource",
+                "ha_config_set_dashboard_resource",
                 {
                     "content": content_v2,
                     "resource_type": "module",
