@@ -63,18 +63,18 @@ class TestSetDashboardMetadataUpdate:
         assert meta_call["title"] == "New Title"
 
     @pytest.mark.asyncio
-    async def test_metadata_updated_false_when_no_metadata_params(
+    async def test_noop_returns_validation_error_when_no_params(
         self, set_tool, mock_client
     ):
-        """metadata_updated=False when no metadata params given for existing dashboard."""
+        """No-op detection: existing dashboard with no changes returns validation error."""
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),  # lovelace/dashboards/list
         ]
 
         result = await set_tool(url_path="my-dashboard")
 
-        assert result["success"] is True
-        assert result["metadata_updated"] is False
+        assert result["success"] is False
+        assert "no changes" in result["error"]["message"].lower()
         # Only one WS call (list), no metadata update
         assert mock_client.send_websocket_message.call_count == 1
 

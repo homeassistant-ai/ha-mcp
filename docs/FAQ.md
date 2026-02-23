@@ -18,7 +18,7 @@ You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://ho
 
 | Feature | Built-in HA MCP | ha-mcp |
 |---------|-----------------|--------|
-| Tools | ~15 basic tools | 80+ comprehensive tools |
+| Tools | ~15 basic tools | 85+ comprehensive tools |
 | Focus | Device control | Full system administration |
 | Automations | Limited | Create, edit, debug, trace |
 | Dashboards | No | Full dashboard management |

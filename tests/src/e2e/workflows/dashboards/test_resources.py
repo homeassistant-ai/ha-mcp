@@ -523,7 +523,9 @@ class TestInlineDashboardResource:
         )
         data = parse_mcp_result(result)
         assert data["success"] is False
-        assert "empty" in data.get("error", "").lower()
+        error = data.get("error", {})
+        error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
+        assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
 
