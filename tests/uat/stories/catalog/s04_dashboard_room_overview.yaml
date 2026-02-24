@@ -45,4 +45,4 @@ expected:
     Agent should first search for light and climate entities, then create a
     dashboard with appropriate cards (entities card for lights, possibly a
     thermostat card, and a button/script for "all off"). Should use
-    ha_get_card_types or ha_get_dashboard_guide for card reference.
+    ha_get_card_documentation or ha_get_dashboard_guide for card reference.

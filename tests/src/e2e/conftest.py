@@ -326,7 +326,7 @@ async def mcp_server(
 
     # Create server with the client
     server = HomeAssistantSmartMCPServer(client=client)
-    tools = await server.mcp.get_tools()
+    tools = await server.mcp.list_tools()
     logger.info(
         f"✅ MCP server initialized with {len(tools)} tools connected to {base_url}"
     )

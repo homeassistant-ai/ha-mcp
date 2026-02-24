@@ -18,7 +18,7 @@ jobs:
     name: Ruff Lint
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -35,7 +35,7 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:

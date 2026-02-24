@@ -28,6 +28,16 @@
   ],
   "packageRules": [
     {
+      "description": "Python runtime images - managed by asdf postUpgradeTasks, not independently",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Python version upgrades - wait 6 months after release",
       "matchManagers": [
         "asdf"
@@ -45,21 +55,27 @@
           "sed -i \"s/requires-python = \\\">=3\\.[0-9]\\+,<3\\.[0-9]\\+\\\"/requires-python = \\\">=${PYTHON_VERSION},<${PYTHON_NEXT}\\\"/\" pyproject.toml",
           "sed -i '/Programming Language :: Python :: 3\\.[0-9]\\+/d' pyproject.toml",
           "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_VERSION}\\\",\" pyproject.toml",
-          "sed -i \"s/python3\\.[0-9]\\+-bookworm-slim/python${PYTHON_VERSION}-bookworm-slim/\" Dockerfile",
-          "sed -i \"s/python3\\.[0-9]\\+-bookworm/python${PYTHON_VERSION}-bookworm/\" homeassistant-addon/Dockerfile",
-          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_VERSION} - Security/\" Dockerfile homeassistant-addon/Dockerfile",
-          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml",
-          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml"
+          "sed -i \"s/python3\\.[0-9]\\+\\(-[a-z]\\+-slim\\)/python${PYTHON_VERSION}\\1/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml",
+          "sed -i \"s/python:3\\.[0-9]\\+-slim/python:${PYTHON_VERSION}-slim/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
+          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_VERSION} - Security/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
+          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/hotfix-release.yml .github/workflows/performance-tests.yml",
+          "sed -i \"s/python-version: '3\\.[0-9]\\+'/python-version: '${PYTHON_VERSION}'/\" .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml",
+          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/hotfix-release.yml .github/workflows/performance-tests.yml .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml"
         ],
         "fileFilters": [
           ".python-version",
           "pyproject.toml",
           "Dockerfile",
           "homeassistant-addon/Dockerfile",
+          "homeassistant-addon-dev/Dockerfile",
           ".github/workflows/pr.yml",
           ".github/workflows/test.yml",
           ".github/workflows/e2e-tests.yml",
-          ".github/workflows/semver-release.yml"
+          ".github/workflows/semver-release.yml",
+          ".github/workflows/hotfix-release.yml",
+          ".github/workflows/performance-tests.yml",
+          ".github/workflows/_build-and-release.yml",
+          ".github/workflows/build-binary.yml"
         ],
         "executionMode": "branch"
       }

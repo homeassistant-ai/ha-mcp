@@ -16,6 +16,7 @@ import httpx
 from pydantic import Field
 
 from ..config import get_global_settings
+from ..errors import ErrorCode, create_error_response
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -483,11 +484,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = None,
         require_admin: Annotated[
-            bool, Field(description="Restrict dashboard to admin users only")
-        ] = False,
+            bool | None,
+            Field(
+                description="Restrict dashboard to admin users only. "
+                "For existing dashboards, only updated when explicitly provided."
+            ),
+        ] = None,
         show_in_sidebar: Annotated[
-            bool, Field(description="Show dashboard in sidebar navigation")
-        ] = True,
+            bool | None,
+            Field(
+                description="Show dashboard in sidebar navigation. "
+                "For existing dashboards, only updated when explicitly provided."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant dashboard.
@@ -543,7 +552,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         DASHBOARD DOCUMENTATION:
         - ha_get_dashboard_guide() - Complete guide (structure, views, cards, features, pitfalls)
-        - ha_get_card_types() - List of all 41 available card types
+        - ha_get_card_documentation() - List all 41 available card types
         - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "tile", "grid")
 
         EXAMPLES:
@@ -610,8 +619,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             }
         )
 
-        Note: If dashboard exists, only the config is updated. To change metadata
-        (title, icon), use ha_config_update_dashboard_metadata().
+        Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
+        are also updated if explicitly provided alongside (or instead of) a config change.
         """
         try:
             # Handle "default" as alias for the default dashboard
@@ -924,6 +933,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             # If dashboard doesn't exist, create it
             dashboard_id = None
+            metadata_updated = False
+            hint = None
             if not dashboard_exists:
                 # Use provided title or generate from url_path
                 dashboard_title = title or url_path.replace("-", " ").title()
@@ -933,8 +944,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "type": "lovelace/dashboards/create",
                     "url_path": url_path,
                     "title": dashboard_title,
-                    "require_admin": require_admin,
-                    "show_in_sidebar": show_in_sidebar,
+                    "require_admin": require_admin if require_admin is not None else False,
+                    "show_in_sidebar": show_in_sidebar if show_in_sidebar is not None else True,
                 }
                 if icon:
                     create_data["icon"] = icon
@@ -967,10 +978,54 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         dashboard_id = dashboard.get("id")
                         break
 
+                # Update metadata for existing dashboard if any metadata params provided
+                metadata_update_fields: dict[str, Any] = {
+                    k: v
+                    for k, v in {
+                        "title": title,
+                        "icon": icon,
+                        "require_admin": require_admin,
+                        "show_in_sidebar": show_in_sidebar,
+                    }.items()
+                    if v is not None
+                }
+                if metadata_update_fields and dashboard_id is not None:
+                    meta_update: dict[str, Any] = {
+                        "type": "lovelace/dashboards/update",
+                        "dashboard_id": dashboard_id,
+                        **metadata_update_fields,
+                    }
+                    meta_result = await client.send_websocket_message(meta_update)
+                    if isinstance(meta_result, dict) and not meta_result.get(
+                        "success", True
+                    ):
+                        error_msg = meta_result.get("error", {})
+                        if isinstance(error_msg, dict):
+                            error_msg = error_msg.get("message", str(error_msg))
+                        return create_error_response(
+                            code=ErrorCode.SERVICE_CALL_FAILED,
+                            message=f"Failed to update dashboard metadata: {error_msg}",
+                            suggestions=[
+                                "Check that you have admin permissions",
+                                "Verify dashboard is in storage mode (not YAML mode)",
+                            ],
+                            context={"action": "update", "url_path": url_path},
+                        )
+                    metadata_updated = True
+                elif metadata_update_fields and dashboard_id is None:
+                    # Dashboard ID not found in storage list (e.g. default lovelace on
+                    # fresh installs). Metadata update via lovelace/dashboards/update
+                    # is not possible without a storage ID — config update still proceeds.
+                    metadata_updated = False
+                    hint = (
+                        "Metadata fields were provided but could not be applied: "
+                        "dashboard has no storage ID (likely the built-in default dashboard). "
+                        "Config changes were still saved."
+                    )
+
             # Set config if provided
             config_updated = False
             existing_config_size = 0
-            hint = None
 
             if config is not None:
                 parsed_config = parse_json_param(config, "config")
@@ -1062,6 +1117,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "dashboard_id": dashboard_id,
                 "dashboard_created": not dashboard_exists,
                 "config_updated": config_updated,
+                "metadata_updated": metadata_updated,
                 "message": f"Dashboard {url_path} {'created' if not dashboard_exists else 'updated'} successfully",
             }
 
@@ -1082,124 +1138,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "New dashboards require a hyphenated url_path",
                     "Check that you have admin permissions",
                     "Verify config format is valid Lovelace JSON",
-                ],
-            }
-
-    @mcp.tool(
-        annotations={
-            "destructiveHint": True,
-            "tags": ["dashboard"],
-            "title": "Update Dashboard Metadata",
-        }
-    )
-    @log_tool_usage
-    async def ha_config_update_dashboard_metadata(
-        dashboard_id: Annotated[
-            str, Field(description="Dashboard ID (typically same as url_path)")
-        ],
-        title: Annotated[str | None, Field(description="New dashboard title")] = None,
-        icon: Annotated[str | None, Field(description="New MDI icon name")] = None,
-        require_admin: Annotated[
-            bool | None, Field(description="Update admin requirement")
-        ] = None,
-        show_in_sidebar: Annotated[
-            bool | None, Field(description="Update sidebar visibility")
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Update dashboard metadata (title, icon, permissions) without changing content.
-
-        Updates dashboard properties without modifying the actual configuration
-        (views/cards). At least one field must be provided.
-
-        EXAMPLES:
-
-        Change dashboard title:
-        ha_config_update_dashboard_metadata(
-            dashboard_id="mobile-dashboard",
-            title="Mobile View v2"
-        )
-
-        Update multiple properties:
-        ha_config_update_dashboard_metadata(
-            dashboard_id="admin-panel",
-            title="Admin Dashboard",
-            icon="mdi:shield-account",
-            require_admin=True
-        )
-
-        Hide from sidebar:
-        ha_config_update_dashboard_metadata(
-            dashboard_id="hidden-dashboard",
-            show_in_sidebar=False
-        )
-        """
-        if all(x is None for x in [title, icon, require_admin, show_in_sidebar]):
-            return {
-                "success": False,
-                "action": "update_metadata",
-                "error": "At least one field must be provided to update",
-            }
-
-        try:
-            # Build update message
-            update_data: dict[str, Any] = {
-                "type": "lovelace/dashboards/update",
-                "dashboard_id": dashboard_id,
-            }
-            if title is not None:
-                update_data["title"] = title
-            if icon is not None:
-                update_data["icon"] = icon
-            if require_admin is not None:
-                update_data["require_admin"] = require_admin
-            if show_in_sidebar is not None:
-                update_data["show_in_sidebar"] = show_in_sidebar
-
-            result = await client.send_websocket_message(update_data)
-
-            # Check if update failed
-            if isinstance(result, dict) and not result.get("success", True):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                return {
-                    "success": False,
-                    "action": "update_metadata",
-                    "dashboard_id": dashboard_id,
-                    "error": str(error_msg),
-                    "suggestions": [
-                        "Verify dashboard ID exists using ha_config_get_dashboard(list_only=True)",
-                        "Check that you have admin permissions",
-                    ],
-                }
-
-            return {
-                "success": True,
-                "action": "update_metadata",
-                "dashboard_id": dashboard_id,
-                "updated_fields": {
-                    k: v
-                    for k, v in {
-                        "title": title,
-                        "icon": icon,
-                        "require_admin": require_admin,
-                        "show_in_sidebar": show_in_sidebar,
-                    }.items()
-                    if v is not None
-                },
-                "dashboard": result,
-            }
-        except Exception as e:
-            logger.error(f"Error updating dashboard metadata: {e}")
-            return {
-                "success": False,
-                "action": "update_metadata",
-                "dashboard_id": dashboard_id,
-                "error": str(e),
-                "suggestions": [
-                    "Verify dashboard ID exists using ha_config_get_dashboard(list_only=True)",
-                    "Check that you have admin permissions",
                 ],
             }
 
@@ -1366,81 +1304,47 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             "idempotentHint": True,
             "readOnlyHint": True,
             "tags": ["dashboard", "docs"],
-            "title": "Get Card Types",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_card_types() -> dict[str, Any]:
-        """
-        Get list of all available Home Assistant dashboard card types.
-
-        Returns all 41 card types that can be used in dashboard configurations.
-
-        EXAMPLES:
-        - Get card types: ha_get_card_types()
-
-        Use ha_get_card_documentation(card_type) to get detailed docs for a specific card.
-        """
-        try:
-            resources_dir = _get_resources_dir()
-            types_path = resources_dir / "card_types.json"
-            card_types_data = json.loads(types_path.read_text())
-            return {
-                "success": True,
-                "action": "get_card_types",
-                "card_types": card_types_data["card_types"],
-                "total_count": card_types_data["total_count"],
-                "documentation_base_url": card_types_data["documentation_base_url"],
-            }
-        except Exception as e:
-            logger.error(f"Error reading card types: {e}")
-            return {
-                "success": False,
-                "action": "get_card_types",
-                "error": str(e),
-                "suggestions": [
-                    "Ensure card_types.json exists in resources directory",
-                    f"Attempted path: {resources_dir / 'card_types.json' if 'resources_dir' in locals() else 'unknown'}",
-                ],
-            }
-
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "tags": ["dashboard", "docs"],
             "title": "Get Card Documentation",
         }
     )
     @log_tool_usage
     async def ha_get_card_documentation(
         card_type: Annotated[
-            str,
+            str | None,
             Field(
                 description="Card type name (e.g., 'light', 'thermostat', 'entity'). "
-                "Use ha_get_card_types() to see all available types."
+                "Omit to list all 41 available card types."
             ),
-        ],
+        ] = None,
     ) -> dict[str, Any]:
         """
-        Fetch detailed documentation for a specific dashboard card type.
+        List all card types or fetch documentation for a specific card type.
 
-        Returns the official Home Assistant documentation for the specified card type
-        in markdown format, fetched directly from the Home Assistant documentation repository.
+        When called without card_type: returns the list of all 41 available card types.
+        When called with card_type: fetches official HA documentation for that card.
 
         EXAMPLES:
+        - List all card types: ha_get_card_documentation()
         - Get light card docs: ha_get_card_documentation("light")
         - Get thermostat card docs: ha_get_card_documentation("thermostat")
         - Get entity card docs: ha_get_card_documentation("entity")
-
-        First use ha_get_card_types() to see all 41 available card types.
         """
         try:
-            # Validate card type exists
             resources_dir = _get_resources_dir()
             types_path = resources_dir / "card_types.json"
             card_types_data = json.loads(types_path.read_text())
 
+            # No card_type provided: return list of all types
+            if card_type is None:
+                return {
+                    "success": True,
+                    "action": "get_card_types",
+                    "card_types": card_types_data["card_types"],
+                    "total_count": card_types_data["total_count"],
+                    "documentation_base_url": card_types_data["documentation_base_url"],
+                }
+
+            # Validate card type exists
             if card_type not in card_types_data["card_types"]:
                 available = ", ".join(card_types_data["card_types"][:10])
                 return {
@@ -1450,11 +1354,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "error": f"Unknown card type '{card_type}'",
                     "suggestions": [
                         f"Available types include: {available}...",
-                        "Use ha_get_card_types() to see full list of 41 card types",
+                        "Use ha_get_card_documentation() to see full list of 41 card types",
                     ],
                 }
 
-            # Fetch documentation from GitHub
+            # Fetch documentation from GitHub (doc_url initialized here for exception handlers)
             doc_url = f"{CARD_DOCS_BASE_URL}/{card_type}.markdown"
 
             async with httpx.AsyncClient(timeout=10.0) as http_client:
@@ -1492,8 +1396,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # Resource tools have been moved to tools_resources.py for better organization.
     # Available tools:
     # - ha_config_list_dashboard_resources: List all resources
-    # - ha_config_set_inline_dashboard_resource: Create/update inline code resources
-    # - ha_config_set_dashboard_resource: Create/update URL-based resources
+    # - ha_config_set_dashboard_resource: Create/update resources (inline code or URL)
     # - ha_config_delete_dashboard_resource: Delete resources
     # =========================================================================
 
