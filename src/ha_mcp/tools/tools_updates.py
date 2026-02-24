@@ -180,8 +180,7 @@ async def _fetch_release_data(current_version: str, target_version: str) -> dict
             continue
         versions_checked.append(version)
         src = result.get("source_url", "")
-        for entry in result.get("entries", []):
-            all_entries.append({**entry, "version": version})
+        all_entries.extend({**entry, "version": version} for entry in result.get("entries", []))
         notes = result.get("release_notes", "")
         if notes:
             release_notes.append({"version": version, "content": notes, "source_url": src})
