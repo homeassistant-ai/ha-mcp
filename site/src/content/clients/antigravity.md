@@ -32,14 +32,14 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
       "env": {
         "HOMEASSISTANT_URL": "{{HOMEASSISTANT_URL}}",
         "HOMEASSISTANT_TOKEN": "{{HOMEASSISTANT_TOKEN}}",
-        "FASTMCP_SHOW_CLI_BANNER": "false"
+        "FASTMCP_SHOW_SERVER_BANNER": "false"
       }
     }
   }
 }
 ```
 
-> **Note:** `FASTMCP_SHOW_CLI_BANNER=false` disables the startup banner, which prevents "Unexpected server output" errors in Antigravity.
+> **Note:** `FASTMCP_SHOW_SERVER_BANNER=false` disables the startup banner, which prevents "Unexpected server output" errors in Antigravity.
 
 **Important:** Use absolute paths if specifying a local command. Restart the Agent session after saving.
 
@@ -59,7 +59,7 @@ Google Antigravity supports MCP servers via the built-in MCP Store and custom co
 
 ## Troubleshooting
 
-- **"Unexpected server output" error:** Add `"FASTMCP_SHOW_CLI_BANNER": "false"` to your env config (see example above)
+- **"Unexpected server output" error:** Add `"FASTMCP_SHOW_SERVER_BANNER": "false"` to your env config (see example above)
 - **Tools load but fail when called:** Try stdio mode instead of HTTP
 - **"EOF" errors:** Ensure command paths are absolute, not relative
 - **First run timeout:** Run `uvx ha-mcp@latest --version` in terminal first to cache the package

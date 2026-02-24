@@ -236,10 +236,10 @@ def _validate_standard_credentials(settings) -> None:
 
 
 def _get_show_banner() -> bool:
-    """Check if CLI banner should be shown (respects FASTMCP_SHOW_CLI_BANNER env var)."""
+    """Check if server banner should be shown (respects FASTMCP_SHOW_SERVER_BANNER env var)."""
     import fastmcp
 
-    return fastmcp.settings.show_cli_banner
+    return fastmcp.settings.show_server_banner
 
 
 def _setup_standard_mode() -> None:
@@ -563,7 +563,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
     Args:
-        transport: Transport type (streamable-http or sse).
+        transport: Transport type (http or sse).
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     port, path = _get_http_runtime(default_port)
@@ -584,7 +584,7 @@ def main_web() -> None:
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
     _setup_standard_mode()
-    _run_http_server("streamable-http", default_port=8086)
+    _run_http_server("http", default_port=8086)
 
 
 def main_sse() -> None:
@@ -665,13 +665,13 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
 
     logger.info("Server created with OAuthProxyClient")
 
-    tools = await mcp.get_tools()
+    tools = await mcp.list_tools()
     logger.info(
         f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
     await _run_with_shutdown(
-        mcp.run_async(**_http_run_kwargs("streamable-http", port, path))
+        mcp.run_async(**_http_run_kwargs("http", port, path))
     )
 
 

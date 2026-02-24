@@ -119,7 +119,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_update_dashboard_metadata`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_types`, `ha_get_card_documentation` |
+| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_documentation` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
@@ -195,11 +195,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Maintainers
 
 - **[@julienld](https://github.com/julienld)** — Project creator & core maintainer.
-- **[@sergeykad](https://github.com/sergeykad)** — Dashboard CRUD, search pagination, `__main__` security refactor, pre-commit hooks & CI lint, addon Docker fixes, `.gitattributes` enforcement, human-readable log timestamps, and removed the textdistance/numpy dependency.
-- **[@kingpanther13](https://github.com/kingpanther13)** — Dev channel documentation, bulk control validation, OAuth 2.1 docs, tool consolidation, error handling improvements, native solutions guidance, default dashboard editing fix, and search response optimization.
+- **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
+- **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
 
 ### Contributors
 
+- **[@bigeric08](https://github.com/bigeric08)** — Explicit `mcp` dependency for protocol version 2025-11-25 support.
 - **[@airlabno](https://github.com/airlabno)** — Support for `data` field in schedule time blocks.
 - **[@ryphez](https://github.com/ryphez)** — Codex Desktop UI MCP quick setup guide.
 - **[@Danm72](https://github.com/Danm72)** — Entity registry tools (`ha_set_entity`, `ha_get_entity`) for managing entity properties.

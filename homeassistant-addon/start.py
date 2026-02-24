@@ -132,6 +132,10 @@ def main() -> int:
     log_info("=" * 80)
     log_info("")
 
+    # Configure logging before server start (v3 removed log_level from run())
+    import logging
+    logging.basicConfig(level=logging.INFO)
+
     # Import and run MCP server directly
     try:
         log_info("Importing ha_mcp module...")
@@ -139,21 +143,31 @@ def main() -> int:
 
         log_info("Starting MCP server...")
         mcp.run(
-            transport="streamable-http",
+            transport="http",
             host="0.0.0.0",
             port=port,
             path=secret_path,
-            log_level="info",
             stateless_http=True,
             uvicorn_config={"log_config": _get_timestamped_uvicorn_log_config()},
         )
-    except Exception as e:
-        log_error(f"Failed to start MCP server: {e}")
+    except KeyboardInterrupt:
+        log_info("Interrupted, exiting")
+        return 0
+    except BaseException as e:
         import traceback
 
-        traceback.print_exc()
+        log_error(f"MCP server crashed: {e}")
+        traceback.print_exc(file=sys.stderr)
+        # Log the root cause if this exception was chained
+        cause = e.__cause__ or e.__context__
+        if cause:
+            log_error(f"Caused by: {cause}")
+            traceback.print_exception(type(cause), cause, cause.__traceback__, file=sys.stderr)
+        if isinstance(e, SystemExit):
+            return int(e.code) if isinstance(e.code, int) else 1
         return 1
 
+    log_info("MCP server stopped")
     return 0
 
 

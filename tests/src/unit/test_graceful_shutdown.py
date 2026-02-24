@@ -385,8 +385,8 @@ class TestMainEntryPoint:
 class TestHTTPEntryPoints:
     """Tests for HTTP entry points (main_web, main_sse)."""
 
-    def test_main_web_uses_streamable_http_transport(self):
-        """main_web should use streamable-http transport."""
+    def test_main_web_uses_http_transport(self):
+        """main_web should use http transport."""
         import ha_mcp.__main__ as main_module
 
         transport_used = None
@@ -407,7 +407,7 @@ class TestHTTPEntryPoints:
         }), patch.object(main_module, "_run_http_server", side_effect=mock_run_http), pytest.raises(SystemExit):
             main_module.main_web()
 
-        assert transport_used == "streamable-http"
+        assert transport_used == "http"
 
     def test_main_sse_uses_sse_transport(self):
         """main_sse should use sse transport."""

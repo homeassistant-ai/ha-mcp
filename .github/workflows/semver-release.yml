@@ -1,11 +1,11 @@
 name: SemVer Release
 
-# Weekly stable releases + manual trigger + hotfix branches
+# Biweekly stable releases + manual trigger + hotfix branches
 # Normal commits to master only create dev releases (via publish-dev.yml)
 on:
   schedule:
-    # Every Tuesday at 10:00 UTC
-    - cron: '0 10 * * 2'
+    # Every other Wednesday at 10:00 UTC (biweekly-gate skips odd weeks)
+    - cron: '0 10 * * 3'
   workflow_dispatch:
     inputs:
       force:
@@ -18,9 +18,35 @@ env:
   PYTHON_VERSION: "3.13"
 
 jobs:
+  # Skip on odd ISO weeks (biweekly cadence) unless manually triggered
+  biweekly-gate:
+    name: Biweekly schedule gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - name: Check if this is a release week
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "Manual or non-scheduled trigger, proceeding"
+            exit 0
+          fi
+          WEEK=$((10#$(date +%V)))
+          if [ $((WEEK % 2)) -eq 0 ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "Even week ($WEEK), proceeding with release"
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "Odd week ($WEEK), skipping release"
+          fi
+
   # Check for changes since last release (skip if no changes)
   check-changes:
     name: Check for releasable changes
+    needs: biweekly-gate
+    if: needs.biweekly-gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
