@@ -7,7 +7,7 @@ Provides backup creation and restoration capabilities with safety mechanisms.
 import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
@@ -16,7 +16,7 @@ from ..client.websocket_client import HomeAssistantWebSocketClient
 from .helpers import get_connected_ws_client, log_tool_usage
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,7 @@ async def create_backup(
         if ws_client:
             try:
                 await ws_client.disconnect()
-            except:
+            except Exception:
                 pass  # Ignore errors during cleanup
 
 
@@ -345,7 +345,7 @@ async def restore_backup(
         if ws_client:
             try:
                 await ws_client.disconnect()
-            except:
+            except Exception:
                 pass  # Ignore errors during cleanup
 
 

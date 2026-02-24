@@ -15,6 +15,7 @@ Tests are designed for Docker Home Assistant test environment with testcontainer
 """
 
 import ast
+import asyncio
 import json
 import logging
 import time

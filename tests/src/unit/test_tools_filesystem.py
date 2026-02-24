@@ -1,14 +1,15 @@
 """Unit tests for tools_filesystem module."""
 
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from ha_mcp.tools.tools_filesystem import (
-    is_filesystem_tools_enabled,
-    _check_mcp_tools_available,
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
+    _check_mcp_tools_available,
+    is_filesystem_tools_enabled,
 )
 
 

@@ -1,7 +1,8 @@
 """Unit tests for tools_traces module."""
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from ha_mcp.tools.tools_traces import (
     _format_trace_list,

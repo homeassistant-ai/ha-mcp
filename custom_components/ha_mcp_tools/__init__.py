@@ -16,7 +16,12 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
 from homeassistant.helpers import config_validation as cv
 
 from .const import ALLOWED_READ_DIRS, ALLOWED_WRITE_DIRS, DOMAIN
@@ -137,12 +142,7 @@ def _is_path_allowed_for_read(config_dir: Path, rel_path: str) -> bool:
         return True
 
     # Check for custom_components/**/*.py pattern
-    if fnmatch.fnmatch(normalized, "custom_components/*/*.py"):
-        return True
-    if fnmatch.fnmatch(normalized, "custom_components/**/*.py"):
-        return True
-
-    return False
+    return fnmatch.fnmatch(normalized, "custom_components/**/*.py")
 
 
 def _mask_secrets_content(content: str) -> str:
@@ -296,7 +296,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             content = await hass.async_add_executor_job(target_file.read_text)
 
             # Apply special handling for specific files
-            normalized = os.path.normpath(rel_path)
+            normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
 
             # Mask secrets.yaml
             if normalized == "secrets.yaml":

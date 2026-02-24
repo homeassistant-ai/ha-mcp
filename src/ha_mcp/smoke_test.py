@@ -74,8 +74,10 @@ def main() -> int:
     # Test 4: Tool discovery
     print("\n[4/4] Testing tool discovery...")
     try:
-        # Access the tools from the MCP instance
-        tool_count = len(mcp._tool_manager._tools)
+        import asyncio
+
+        tools = asyncio.run(mcp.list_tools())
+        tool_count = len(tools)
         print(f"  ✓ Discovered {tool_count} tools")
 
         if tool_count < 50:
@@ -83,7 +85,7 @@ def main() -> int:
             print("  ✗ Tool count too low (expected 50+)")
         else:
             # List a few tool names as examples
-            tool_names = list(mcp._tool_manager._tools.keys())[:5]
+            tool_names = [t.name for t in tools[:5]]
             print(f"  ✓ Sample tools: {', '.join(tool_names)}...")
     except Exception as e:
         errors.append(f"Failed to discover tools: {e}")

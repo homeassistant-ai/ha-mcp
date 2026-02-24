@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool, wait_for_automation
+from ...utilities.assertions import MCPAssertions, safe_call_tool, wait_for_automation
 
 logger = logging.getLogger(__name__)
 

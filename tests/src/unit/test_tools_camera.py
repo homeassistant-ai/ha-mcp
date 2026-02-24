@@ -1,7 +1,8 @@
 """Unit tests for camera tools module."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ha_mcp.tools.tools_camera import register_camera_tools
 

@@ -77,6 +77,7 @@ class TestBulkDeviceControlValidation:
         for detail in result["skipped_details"]:
             assert "not a dict" in detail["error"]
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_mixed_valid_and_invalid_operations(self, device_control_tools):
         """Mix of valid and invalid operations reports skipped ones.

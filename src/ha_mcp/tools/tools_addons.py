@@ -179,16 +179,15 @@ async def list_available_addons(
         addons = data.get("addons", [])
 
         # Format repository information
-        formatted_repos = []
-        for repo in repositories:
-            formatted_repos.append(
-                {
-                    "slug": repo.get("slug"),
-                    "name": repo.get("name"),
-                    "source": repo.get("source"),
-                    "maintainer": repo.get("maintainer"),
-                }
-            )
+        formatted_repos = [
+            {
+                "slug": repo.get("slug"),
+                "name": repo.get("name"),
+                "source": repo.get("source"),
+                "maintainer": repo.get("maintainer"),
+            }
+            for repo in repositories
+        ]
 
         # Filter and format add-ons
         formatted_addons = []

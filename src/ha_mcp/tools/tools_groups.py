@@ -218,7 +218,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             await client.call_service("group", "set", service_data)
 
             entity_id = f"group.{object_id}"
-            updated_fields = [k for k in service_data.keys() if k != "object_id"]
+            updated_fields = [k for k in service_data if k != "object_id"]
 
             # Determine if this was a create or update based on fields provided
             is_create = entities is not None and name is None and add_entities is None and remove_entities is None

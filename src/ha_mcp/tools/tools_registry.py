@@ -640,14 +640,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if (
                         integration_lower == "zigbee2mqtt"
                         and device_info["integration_type"] != "zigbee2mqtt"
-                    ):
-                        continue
-                    elif (
+                    ) or (
                         integration_lower == "zha"
                         and device_info["integration_type"] != "zha"
-                    ):
-                        continue
-                    elif (
+                    ) or (
                         integration_lower not in ["zigbee2mqtt", "zha"]
                         and integration_lower not in device_info.get("integration_sources", [])
                     ):

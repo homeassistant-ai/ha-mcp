@@ -22,7 +22,7 @@ class FuzzyEntitySearcher:
         self.entity_cache: dict[str, Any] = {}
 
     def search_entities(
-        self, entities: list[dict[str, Any]], query: str, limit: int = 10
+        self, entities: list[dict[str, Any]], query: str, limit: int = 10, offset: int = 0
     ) -> tuple[list[dict[str, Any]], int]:
         """
         Search entities with fuzzy matching and intelligent scoring.
@@ -31,9 +31,10 @@ class FuzzyEntitySearcher:
             entities: List of Home Assistant entity states
             query: Search query (can be partial, with typos)
             limit: Maximum number of results
+            offset: Number of results to skip for pagination
 
         Returns:
-            Tuple of (limited results list, total match count)
+            Tuple of (paginated results list, total match count)
         """
         if not query or not entities:
             return [], 0
@@ -70,7 +71,7 @@ class FuzzyEntitySearcher:
         # Sort by score descending
         matches.sort(key=lambda x: x["score"], reverse=True)
         total_matches = len(matches)
-        return matches[:limit], total_matches
+        return matches[offset:offset + limit], total_matches
 
     def _calculate_entity_score(
         self, entity_id: str, friendly_name: str, domain: str, query: str
@@ -105,10 +106,13 @@ class FuzzyEntitySearcher:
         entity_token = calculate_token_sort_ratio(query, entity_id.lower())
         friendly_token = calculate_token_sort_ratio(query, friendly_name.lower())
 
-        # Weight the scores
-        score += max(entity_id_ratio, entity_partial, entity_token) * 0.7
-        score += max(friendly_ratio, friendly_partial, friendly_token) * 0.8
-        score += domain_ratio * 0.6
+        # Weight the scores (single floor to preserve original accumulation behavior)
+        weighted = (
+            max(entity_id_ratio, entity_partial, entity_token) * 0.7
+            + max(friendly_ratio, friendly_partial, friendly_token) * 0.8
+            + domain_ratio * 0.6
+        )
+        score += int(weighted)
 
         # Room/area keyword boosting
         room_keywords = [
@@ -139,7 +143,7 @@ class FuzzyEntitySearcher:
             ):
                 score += 10
 
-        return int(score)
+        return score
 
     def _get_match_type(
         self, entity_id: str, friendly_name: str, domain: str, query: str

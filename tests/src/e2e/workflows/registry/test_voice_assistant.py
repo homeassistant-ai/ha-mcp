@@ -15,7 +15,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +76,12 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_get_entity_exposure with invalid assistant")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_get_entity_exposure",
             {"assistant": "invalid_assistant"},
         )
 
-        data = parse_mcp_result(result)
         assert not data.get("success"), "Invalid assistant should fail"
         assert "valid_assistants" in data, "Should suggest valid assistants"
 
@@ -235,7 +235,8 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_set_entity expose_to with invalid assistant")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {
                 "entity_id": "input_boolean.test",
@@ -243,7 +244,6 @@ class TestVoiceAssistantExposure:
             },
         )
 
-        data = parse_mcp_result(result)
         assert not data.get("success"), "Invalid assistant should fail"
 
         logger.info("Invalid assistant correctly rejected")

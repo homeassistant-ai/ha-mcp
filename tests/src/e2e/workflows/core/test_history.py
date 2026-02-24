@@ -6,7 +6,7 @@ state change history and long-term statistics.
 """
 
 import logging
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
 import pytest
 

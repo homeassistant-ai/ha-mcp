@@ -1,6 +1,7 @@
 """Test docker-compose.yml and related configuration."""
 
 import os
+
 import yaml
 
 

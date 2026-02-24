@@ -16,7 +16,12 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastmcp.server.auth.auth import AccessToken  # FastMCP version has claims field
+from fastmcp.server.auth.auth import (
+    AccessToken,  # FastMCP version has claims field
+    ClientRegistrationOptions,
+    OAuthProvider,
+    RevocationOptions,
+)
 from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
@@ -30,12 +35,6 @@ from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
-
-from fastmcp.server.auth.auth import (
-    ClientRegistrationOptions,
-    OAuthProvider,
-    RevocationOptions,
-)
 
 from .consent_form import create_consent_html, create_error_html
 

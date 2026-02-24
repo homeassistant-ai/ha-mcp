@@ -1,11 +1,14 @@
 """Unit tests for voice assistant tools module."""
 
-import pytest
+import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from fastmcp.exceptions import ToolError
+
 from ha_mcp.tools.tools_voice_assistant import (
-    register_voice_assistant_tools,
     KNOWN_ASSISTANTS,
+    register_voice_assistant_tools,
 )
 
 
@@ -92,12 +95,14 @@ class TestHaListExposedEntities:
     @pytest.mark.asyncio
     async def test_filter_by_invalid_assistant_rejected(self, list_tool):
         """Filter by invalid assistant should be rejected."""
-        result = await list_tool(assistant="invalid_assistant")
+        with pytest.raises(ToolError) as exc_info:
+            await list_tool(assistant="invalid_assistant")
 
-        assert result["success"] is False
-        assert "Invalid assistant" in result["error"]
-        assert "valid_assistants" in result
-        assert result["valid_assistants"] == KNOWN_ASSISTANTS
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Invalid assistant" in error_data["error"]
+        assert "valid_assistants" in error_data
+        assert error_data["valid_assistants"] == KNOWN_ASSISTANTS
 
     @pytest.mark.asyncio
     async def test_filter_by_entity_id(self, mock_mcp, mock_client):
@@ -187,10 +192,12 @@ class TestHaListExposedEntities:
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool()
+        with pytest.raises(ToolError) as exc_info:
+            await tool()
 
-        assert result["success"] is False
-        assert "Service unavailable" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Service unavailable" in error_data["error"]
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
@@ -201,10 +208,12 @@ class TestHaListExposedEntities:
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool()
+        with pytest.raises(ToolError) as exc_info:
+            await tool()
 
-        assert result["success"] is False
-        assert "Network error" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Network error" in error_data["error"]
 
 
 class TestHaGetEntityExposure:
@@ -354,11 +363,13 @@ class TestHaGetEntityExposure:
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool(entity_id="light.living_room")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.living_room")
 
-        assert result["success"] is False
-        assert "Access denied" in result["error"]
-        assert result["entity_id"] == "light.living_room"
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Access denied" in error_data["error"]
+        assert error_data["entity_id"] == "light.living_room"
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
@@ -369,11 +380,13 @@ class TestHaGetEntityExposure:
         register_voice_assistant_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_get_entity_exposure"]
 
-        result = await tool(entity_id="light.living_room")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.living_room")
 
-        assert result["success"] is False
-        assert "Timeout" in result["error"]
-        assert result["entity_id"] == "light.living_room"
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Timeout" in error_data["error"]
+        assert error_data["entity_id"] == "light.living_room"
 
 
 class TestKnownAssistants:

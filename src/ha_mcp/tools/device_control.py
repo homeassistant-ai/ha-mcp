@@ -10,10 +10,10 @@ import logging
 from typing import Any
 
 from ..client.rest_client import HomeAssistantClient
-from ..config import get_global_settings
-from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
-from ..utils.domain_handlers import get_domain_handler
 from ..client.websocket_listener import start_websocket_listener
+from ..config import get_global_settings
+from ..utils.domain_handlers import get_domain_handler
+from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
 
 logger = logging.getLogger(__name__)
 
@@ -196,11 +196,6 @@ class DeviceControlTools:
                             "timeout_seconds": timeout_seconds,
                         },
                     },
-                    "usage_tips": [
-                        f"Check operation status: get_device_operation_status('{operation_id}')",
-                        "Operation will auto-complete when device responds",
-                        f"Timeout in {timeout_seconds} seconds if no response",
-                    ],
                 }
 
             except Exception as e:

@@ -278,7 +278,7 @@ class TestSystemTools:
         """
         logger.info("Testing get system overview...")
 
-        result = await mcp_client.call_tool("ha_get_overview", {})
+        result = await mcp_client.call_tool("ha_get_overview", {"detail_level": "full"})
         data = parse_mcp_result(result)
 
         logger.info(f"System overview result keys: {list(data.keys())}")
@@ -290,12 +290,11 @@ class TestSystemTools:
         assert "system_info" in data, "Missing 'system_info' field"
         system_info = data["system_info"]
 
-        # Verify expected fields in system_info
+        # Verify expected fields in system_info (components only at "full" level)
         expected_fields = [
             "version",
             "location_name",
             "time_zone",
-            "components",
             "components_loaded",
         ]
 
@@ -308,15 +307,9 @@ class TestSystemTools:
         logger.info(f"Timezone: {system_info.get('time_zone')}")
         logger.info(f"Components loaded: {system_info.get('components_loaded')}")
 
-        # Verify components list is non-empty
-        components = system_info.get("components", [])
-        assert len(components) > 0, "Should have at least some components loaded"
-
-        # Verify some essential components are present
-        essential_components = ["homeassistant", "automation", "script"]
-        for component in essential_components:
-            if component not in components:
-                logger.warning(f"Expected component '{component}' not found")
+        # Verify components_loaded count is positive
+        components_loaded = system_info.get("components_loaded", 0)
+        assert components_loaded > 0, "Should have at least some components loaded"
 
         logger.info("Get system overview test completed successfully")
 

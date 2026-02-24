@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+  - repo: local
+    hooks:
+      - id: unit-tests
+        name: unit tests
+        entry: uv run pytest tests/src/unit/ -n auto -m "not slow" --tb=short -q
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/|pyproject\.toml)
