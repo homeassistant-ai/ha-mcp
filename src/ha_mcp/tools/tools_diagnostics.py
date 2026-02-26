@@ -33,6 +33,30 @@ from .util_helpers import coerce_int_param
 logger = logging.getLogger(__name__)
 
 
+def _parse_utc_datetime(dt_str: str | None) -> datetime | None:
+    """Parse an ISO datetime string into a timezone-aware UTC datetime.
+
+    Handles trailing 'Z', naive datetimes, and invalid values gracefully.
+
+    Args:
+        dt_str: ISO format datetime string, or None.
+
+    Returns:
+        Timezone-aware datetime in UTC, or None if parsing fails.
+    """
+    if not dt_str:
+        return None
+    try:
+        if dt_str.endswith("Z"):
+            dt_str = dt_str[:-1] + "+00:00"
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant diagnostic and health monitoring tools."""
 
@@ -91,12 +115,11 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if severity and severity.lower() not in ("error", "warning", "info"):
-                return {
-                    "success": False,
-                    "error": f"Invalid severity: {severity}",
-                    "valid_severities": ["error", "warning", "info"],
-                    "suggestion": "Use 'error', 'warning', or 'info'",
-                }
+                exception_to_structured_error(
+                    ValueError(f"Invalid severity: {severity}"),
+                    context={"valid_severities": ["error", "warning", "info"]},
+                    suggestions=["Use 'error', 'warning', or 'info'"],
+                )
 
             ws_client, error = await get_connected_ws_client(
                 client.base_url, client.token
@@ -182,8 +205,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -294,8 +319,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -386,88 +413,58 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             now = datetime.now(UTC)
             stale_threshold = now - timedelta(hours=stale_hours)
 
-            # 1. Unavailable / unknown entities
+            # Single pass over all states for unavailable, battery, stale, and updates
             unavailable_entities: list[dict[str, str]] = []
+            unavailable_by_domain: dict[str, int] = {}
+            battery_critical: list[dict[str, Any]] = []
+            battery_low: list[dict[str, Any]] = []
+            stale_sensors: list[dict[str, Any]] = []
+            pending_updates: list[dict[str, str]] = []
+
             for state in states:
                 entity_id = state.get("entity_id", "")
                 current_state = state.get("state", "")
+                attrs = state.get("attributes", {})
+                domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+                # 1. Unavailable / unknown entities
                 if current_state in ("unavailable", "unknown"):
                     unavailable_entities.append(
                         {
                             "entity_id": entity_id,
                             "state": current_state,
-                            "domain": entity_id.split(".")[0]
-                            if "." in entity_id
-                            else "",
+                            "domain": domain,
                         }
                     )
+                    unavailable_by_domain[domain] = (
+                        unavailable_by_domain.get(domain, 0) + 1
+                    )
+                    continue
 
-            # Group unavailable by domain
-            unavailable_by_domain: dict[str, int] = {}
-            for ent in unavailable_entities:
-                d = ent.get("domain", "other")
-                unavailable_by_domain[d] = unavailable_by_domain.get(d, 0) + 1
-
-            # 2. Battery levels
-            battery_critical: list[dict[str, Any]] = []
-            battery_low: list[dict[str, Any]] = []
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                attrs = state.get("attributes", {})
+                # 2. Battery levels
                 device_class = attrs.get("device_class", "")
-                current_state = state.get("state", "")
-
                 is_battery = device_class == "battery" or (
                     "battery" in entity_id and entity_id.startswith("sensor.")
                 )
-                if not is_battery or current_state in ("unavailable", "unknown", ""):
-                    continue
-
-                try:
-                    level = float(current_state)
-                except (ValueError, TypeError):
-                    continue
-
-                if level < crit_pct:
-                    battery_critical.append(
-                        {
+                if is_battery and current_state not in ("",):
+                    try:
+                        level = float(current_state)
+                        battery_entry = {
                             "entity_id": entity_id,
                             "level": level,
                             "friendly_name": attrs.get("friendly_name", entity_id),
                         }
-                    )
-                elif level < warn_pct:
-                    battery_low.append(
-                        {
-                            "entity_id": entity_id,
-                            "level": level,
-                            "friendly_name": attrs.get("friendly_name", entity_id),
-                        }
-                    )
+                        if level < crit_pct:
+                            battery_critical.append(battery_entry)
+                        elif level < warn_pct:
+                            battery_low.append(battery_entry)
+                    except (ValueError, TypeError):
+                        pass
 
-            # 3. Stale sensors
-            stale_sensors: list[dict[str, Any]] = []
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                if not entity_id.startswith("sensor."):
-                    continue
-
-                current_state = state.get("state", "")
-                if current_state in ("unavailable", "unknown"):
-                    continue
-
-                last_updated_str = state.get("last_updated")
-                if not last_updated_str:
-                    continue
-
-                try:
-                    if last_updated_str.endswith("Z"):
-                        last_updated_str = last_updated_str[:-1] + "+00:00"
-                    last_updated = datetime.fromisoformat(last_updated_str)
-                    if last_updated.tzinfo is None:
-                        last_updated = last_updated.replace(tzinfo=UTC)
-
-                    if last_updated < stale_threshold:
+                # 3. Stale sensors
+                if domain == "sensor":
+                    last_updated = _parse_utc_datetime(state.get("last_updated"))
+                    if last_updated and last_updated < stale_threshold:
                         hours_stale = (now - last_updated).total_seconds() / 3600
                         stale_sensors.append(
                             {
@@ -476,8 +473,19 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 "hours_stale": round(hours_stale, 1),
                             }
                         )
-                except (ValueError, TypeError):
-                    continue
+
+                # 6. Pending updates
+                if domain == "update" and current_state == "on":
+                    pending_updates.append(
+                        {
+                            "entity_id": entity_id,
+                            "title": attrs.get("title", entity_id),
+                            "installed_version": attrs.get(
+                                "installed_version", "unknown"
+                            ),
+                            "latest_version": attrs.get("latest_version", "unknown"),
+                        }
+                    )
 
             # 4. System log errors/warnings (via WebSocket)
             error_count = 0
@@ -507,38 +515,28 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             repair_count = len(
                                 repair_response.get("result", {}).get("issues", [])
                             )
-                    except Exception:
-                        pass
+                    except Exception as repair_err:
+                        logger.warning(f"Failed to fetch repair items: {repair_err}")
 
             except Exception as ws_exc:
-                logger.debug(f"WebSocket checks failed: {ws_exc}")
-                repair_count = 0
-
-            # 6. Pending updates
-            pending_updates: list[dict[str, str]] = []
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                if entity_id.startswith("update.") and state.get("state") == "on":
-                    attrs = state.get("attributes", {})
-                    pending_updates.append(
-                        {
-                            "entity_id": entity_id,
-                            "title": attrs.get("title", entity_id),
-                            "installed_version": attrs.get(
-                                "installed_version", "unknown"
-                            ),
-                            "latest_version": attrs.get("latest_version", "unknown"),
-                        }
-                    )
+                logger.warning(
+                    f"WebSocket checks failed, log and repair counts will be unavailable: {ws_exc}"
+                )
+                error_count = -1
+                warning_count = -1
+                repair_count = -1
 
             # Determine overall status
+            # -1 values indicate checks that couldn't be performed
+            ws_checks_failed = error_count < 0 or repair_count < 0
+
             issue_count = (
                 len(unavailable_entities)
                 + len(battery_critical)
                 + len(battery_low)
                 + len(stale_sensors)
-                + error_count
-                + repair_count
+                + max(error_count, 0)
+                + max(repair_count, 0)
                 + len(pending_updates)
             )
 
@@ -581,14 +579,23 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "system_log": {
                     "error_count": error_count,
                     "warning_count": warning_count,
+                    "unavailable": error_count < 0,
                 },
                 "repairs": {
                     "open_count": repair_count,
+                    "unavailable": repair_count < 0,
                 },
                 "pending_updates": {
                     "count": len(pending_updates),
                     "updates": pending_updates,
                 },
+                "warnings": (
+                    [
+                        "WebSocket checks failed — log errors and repair counts are unavailable"
+                    ]
+                    if ws_checks_failed
+                    else None
+                ),
                 "message": f"Health check complete: {overall_status} ({issue_count} issue(s))",
             }
 
@@ -608,8 +615,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -744,8 +753,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -880,45 +891,27 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Check for frozen sensors
                 if entity_id.startswith("sensor."):
-                    last_updated_str = state.get("last_updated")
-                    last_changed_str = state.get("last_changed")
-                    if last_updated_str and last_changed_str:
-                        try:
-                            if last_updated_str.endswith("Z"):
-                                last_updated_str = last_updated_str[:-1] + "+00:00"
-                            if last_changed_str.endswith("Z"):
-                                last_changed_str = last_changed_str[:-1] + "+00:00"
-
-                            last_updated = datetime.fromisoformat(last_updated_str)
-                            last_changed = datetime.fromisoformat(last_changed_str)
-
-                            if last_updated.tzinfo is None:
-                                last_updated = last_updated.replace(tzinfo=UTC)
-                            if last_changed.tzinfo is None:
-                                last_changed = last_changed.replace(tzinfo=UTC)
-
-                            # Frozen = last_updated equals last_changed AND
-                            # both are older than 24h
-                            if (
-                                abs((last_updated - last_changed).total_seconds()) < 1
-                                and last_updated < frozen_threshold
-                            ):
-                                hours_frozen = (
-                                    now - last_updated
-                                ).total_seconds() / 3600
-                                frozen_sensors.append(
-                                    {
-                                        "entity_id": entity_id,
-                                        "last_updated": last_updated.isoformat(),
-                                        "hours_frozen": round(hours_frozen, 1),
-                                        "state": current_state,
-                                        "friendly_name": attrs.get(
-                                            "friendly_name", entity_id
-                                        ),
-                                    }
-                                )
-                        except (ValueError, TypeError):
-                            pass
+                    last_updated = _parse_utc_datetime(state.get("last_updated"))
+                    last_changed = _parse_utc_datetime(state.get("last_changed"))
+                    if last_updated and last_changed:
+                        # Frozen = last_updated equals last_changed AND
+                        # both are older than 24h
+                        if (
+                            abs((last_updated - last_changed).total_seconds()) < 1
+                            and last_updated < frozen_threshold
+                        ):
+                            hours_frozen = (now - last_updated).total_seconds() / 3600
+                            frozen_sensors.append(
+                                {
+                                    "entity_id": entity_id,
+                                    "last_updated": last_updated.isoformat(),
+                                    "hours_frozen": round(hours_frozen, 1),
+                                    "state": current_state,
+                                    "friendly_name": attrs.get(
+                                        "friendly_name", entity_id
+                                    ),
+                                }
+                            )
 
             total = len(impossible_values) + len(out_of_range) + len(frozen_sensors)
 
@@ -1111,8 +1104,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                         "via_device_id": dev_data.get("via_device_id"),
                                     }
                                 )
-                        except Exception:
-                            pass
+                        except Exception as dev_err:
+                            logger.warning(
+                                f"Could not fetch device details for {device_id}: {dev_err}"
+                            )
 
                 # Process system log for related errors
                 log_result = result_map.get("system_log")
@@ -1167,8 +1162,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -1259,19 +1256,11 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     status = "never_triggered"
                     never_triggered_count += 1
                 else:
-                    try:
-                        lt_str = str(last_triggered)
-                        if lt_str.endswith("Z"):
-                            lt_str = lt_str[:-1] + "+00:00"
-                        lt = datetime.fromisoformat(lt_str)
-                        if lt.tzinfo is None:
-                            lt = lt.replace(tzinfo=UTC)
-                        if lt < stale_threshold:
-                            status = "stale"
-                            stale_count += 1
-                        else:
-                            healthy_count += 1
-                    except (ValueError, TypeError):
+                    lt = _parse_utc_datetime(str(last_triggered))
+                    if lt and lt < stale_threshold:
+                        status = "stale"
+                        stale_count += 1
+                    else:
                         healthy_count += 1
 
                 automation_info: dict[str, Any] = {
@@ -1333,10 +1322,14 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                             # Adjust healthy count
                                             if auto.get("status") == "healthy":
                                                 healthy_count -= 1
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                            except Exception as trace_err:
+                                logger.warning(
+                                    f"Could not fetch trace for {auto_entity_id}: {trace_err}"
+                                )
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
             return {
                 "success": True,
@@ -1374,8 +1367,10 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
 
     @mcp.tool(
         annotations={
@@ -1597,5 +1592,7 @@ def register_diagnostics_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if ws_client:
                 try:
                     await ws_client.disconnect()
-                except Exception:
-                    pass
+                except Exception as disconnect_err:
+                    logger.warning(
+                        f"Failed to disconnect WebSocket client: {disconnect_err}"
+                    )
