@@ -17,9 +17,16 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import get_connected_ws_client, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .util_helpers import (
     add_timezone_metadata,
     coerce_int_param,
@@ -209,11 +216,11 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # JSON array string
                     parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
                     if parsed_ids is None:
-                        return {
-                            "success": False,
-                            "error": "entity_ids is required",
-                            "suggestions": ["Provide at least one entity ID"],
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            "entity_ids is required",
+                            suggestions=["Provide at least one entity ID"],
+                        ))
                     entity_id_list = parsed_ids
                 elif "," in entity_ids:
                     # Comma-separated string
@@ -225,34 +232,36 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id_list = entity_ids
 
             if not entity_id_list:
-                return {
-                    "success": False,
-                    "error": "entity_ids is required",
-                    "suggestions": ["Provide at least one entity ID"],
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=["Provide at least one entity ID"],
+                ))
 
             # Parse time parameters
             try:
                 start_dt = parse_relative_time(start_time, default_hours=24)
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "start_time"},
+                    suggestions=[
                         "Use ISO format: '2025-01-25T00:00:00Z'",
                         "Use relative format: '24h', '7d', '2w', '1m'",
                     ],
-                }
+                ))
 
             if end_time:
                 try:
                     end_dt = parse_relative_time(end_time, default_hours=0)
                 except ValueError as e:
-                    return {
-                        "success": False,
-                        "error": str(e),
-                        "suggestions": ["Use ISO format: '2025-01-26T00:00:00Z'"],
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                        context={"parameter": "end_time"},
+                        suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
+                    ))
             else:
                 end_dt = datetime.now(UTC)
 
@@ -268,21 +277,22 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if effective_limit is None:
                     effective_limit = DEFAULT_HISTORY_LIMIT
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "suggestions": ["Provide limit as an integer (e.g., 100)"],
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "limit"},
+                    suggestions=["Provide limit as an integer (e.g., 100)"],
+                ))
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
                 client.base_url, client.token
             )
             if error or ws_client is None:
-                return error or {
-                    "success": False,
-                    "error": "Failed to establish WebSocket connection",
-                }
+                raise_tool_error(error or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                ))
 
             try:
                 # Build WebSocket command for history
@@ -302,19 +312,16 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if not response.get("success"):
                     error_msg = response.get("error", "Unknown error")
-                    return await add_timezone_metadata(
-                        client,
-                        {
-                            "success": False,
-                            "error": f"Failed to retrieve history: {error_msg}",
-                            "entity_ids": entity_id_list,
-                            "suggestions": [
-                                "Verify entity IDs exist using ha_search_entities()",
-                                "Check that entities are recorded (not excluded from recorder)",
-                                "Ensure time range is within recorder retention period (~10 days)",
-                            ],
-                        },
-                    )
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to retrieve history: {error_msg}",
+                        context={"entity_ids": entity_id_list},
+                        suggestions=[
+                            "Verify entity IDs exist using ha_search_entities()",
+                            "Check that entities are recorded (not excluded from recorder)",
+                            "Ensure time range is within recorder retention period (~10 days)",
+                        ],
+                    ))
 
                 # Process results
                 result_data = response.get("result", {})
@@ -382,18 +389,17 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if ws_client:
                     await ws_client.disconnect()
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to get history: {e}")
-            error_data = {
-                "success": False,
-                "error": f"Failed to retrieve history: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify entity IDs are correct",
                     "Ensure recorder component is enabled",
                 ],
-            }
-            return await add_timezone_metadata(client, error_data)
+            )
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Statistics"})
     @log_tool_usage
@@ -502,13 +508,13 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if entity_ids.startswith("["):
                     parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
                     if parsed_ids is None:
-                        return {
-                            "success": False,
-                            "error": "entity_ids is required",
-                            "suggestions": [
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            "entity_ids is required",
+                            suggestions=[
                                 "Provide at least one entity ID with state_class attribute"
                             ],
-                        }
+                        ))
                     entity_id_list = parsed_ids
                 elif "," in entity_ids:
                     entity_id_list = [e.strip() for e in entity_ids.split(",") if e.strip()]
@@ -518,48 +524,50 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id_list = entity_ids
 
             if not entity_id_list:
-                return {
-                    "success": False,
-                    "error": "entity_ids is required",
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=[
                         "Provide at least one entity ID with state_class attribute"
                     ],
-                }
+                ))
 
             # Parse time parameters (default 30 days for statistics)
             try:
                 start_dt = parse_relative_time(start_time, default_hours=30 * 24)
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "start_time"},
+                    suggestions=[
                         "Use ISO format: '2025-01-01T00:00:00Z'",
                         "Use relative format: '30d', '6m', '12m'",
                     ],
-                }
+                ))
 
             if end_time:
                 try:
                     end_dt = parse_relative_time(end_time, default_hours=0)
                 except ValueError as e:
-                    return {
-                        "success": False,
-                        "error": str(e),
-                        "suggestions": ["Use ISO format: '2025-01-31T23:59:59Z'"],
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                        context={"parameter": "end_time"},
+                        suggestions=["Use ISO format: '2025-01-31T23:59:59Z'"],
+                    ))
             else:
                 end_dt = datetime.now(UTC)
 
             # Validate period
             valid_periods = ["5minute", "hour", "day", "week", "month"]
             if period not in valid_periods:
-                return {
-                    "success": False,
-                    "error": f"Invalid period: {period}",
-                    "valid_periods": valid_periods,
-                    "suggestions": [f"Use one of: {', '.join(valid_periods)}"],
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid period: {period}",
+                    context={"period": period, "valid_periods": valid_periods},
+                    suggestions=[f"Use one of: {', '.join(valid_periods)}"],
+                ))
 
             # Parse statistic_types
             stat_types_list = None
@@ -584,22 +592,22 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     stat_types_list = []
                 invalid_types = [t for t in stat_types_list if t not in valid_types]
                 if invalid_types:
-                    return {
-                        "success": False,
-                        "error": f"Invalid statistic types: {invalid_types}",
-                        "valid_types": valid_types,
-                        "suggestions": [f"Use one or more of: {', '.join(valid_types)}"],
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid statistic types: {invalid_types}",
+                        context={"invalid_types": invalid_types, "valid_types": valid_types},
+                        suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
+                    ))
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
                 client.base_url, client.token
             )
             if error or ws_client is None:
-                return error or {
-                    "success": False,
-                    "error": "Failed to establish WebSocket connection",
-                }
+                raise_tool_error(error or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                ))
 
             try:
                 # Build WebSocket command for statistics
@@ -620,19 +628,16 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if not response.get("success"):
                     error_msg = response.get("error", "Unknown error")
-                    return await add_timezone_metadata(
-                        client,
-                        {
-                            "success": False,
-                            "error": f"Failed to retrieve statistics: {error_msg}",
-                            "entity_ids": entity_id_list,
-                            "suggestions": [
-                                "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                                "Use ha_search_entities() to check entity attributes",
-                                "Statistics are only available for entities that track numeric values",
-                            ],
-                        },
-                    )
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to retrieve statistics: {error_msg}",
+                        context={"entity_ids": entity_id_list},
+                        suggestions=[
+                            "Verify entities have state_class attribute (measurement, total, total_increasing)",
+                            "Use ha_search_entities() to check entity attributes",
+                            "Statistics are only available for entities that track numeric values",
+                        ],
+                    ))
 
                 # Process results
                 result_data = response.get("result", {})
@@ -707,15 +712,14 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if ws_client:
                     await ws_client.disconnect()
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to get statistics: {e}")
-            error_data = {
-                "success": False,
-                "error": f"Failed to retrieve statistics: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify entities have state_class attribute",
                     "Ensure recorder component is enabled with statistics",
                 ],
-            }
-            return await add_timezone_metadata(client, error_data)
+            )

@@ -1,6 +1,9 @@
 """Unit tests for bulk_device_control validation in device_control module."""
 
+import json
+
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.device_control import DeviceControlTools
 
@@ -16,10 +19,12 @@ class TestBulkDeviceControlValidation:
 
     @pytest.mark.asyncio
     async def test_empty_operations_returns_error(self, device_control_tools):
-        """Empty operations list returns error."""
-        result = await device_control_tools.bulk_device_control([])
-        assert result["success"] is False
-        assert "No operations provided" in result["error"]
+        """Empty operations list raises ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control([])
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "No operations provided" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_missing_entity_id_reports_error(self, device_control_tools):
@@ -32,7 +37,7 @@ class TestBulkDeviceControlValidation:
         assert result["total_operations"] == 1
         assert result["skipped_operations"] == 1
         assert len(result["skipped_details"]) == 1
-        assert "entity_id" in result["skipped_details"][0]["error"]
+        assert "entity_id" in result["skipped_details"][0]["error"]["message"]
         assert result["skipped_details"][0]["index"] == 0
 
     @pytest.mark.asyncio
@@ -46,7 +51,7 @@ class TestBulkDeviceControlValidation:
         assert result["total_operations"] == 1
         assert result["skipped_operations"] == 1
         assert len(result["skipped_details"]) == 1
-        assert "action" in result["skipped_details"][0]["error"]
+        assert "action" in result["skipped_details"][0]["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_missing_both_fields_reports_both(self, device_control_tools):
@@ -57,7 +62,7 @@ class TestBulkDeviceControlValidation:
         result = await device_control_tools.bulk_device_control(operations)
 
         assert result["skipped_operations"] == 1
-        error_msg = result["skipped_details"][0]["error"]
+        error_msg = result["skipped_details"][0]["error"]["message"]
         assert "entity_id" in error_msg
         assert "action" in error_msg
 
@@ -75,7 +80,7 @@ class TestBulkDeviceControlValidation:
         assert result["skipped_operations"] == 3
         assert len(result["skipped_details"]) == 3
         for detail in result["skipped_details"]:
-            assert "not a dict" in detail["error"]
+            assert "not a dict" in detail["error"]["message"]
 
     @pytest.mark.slow
     @pytest.mark.asyncio

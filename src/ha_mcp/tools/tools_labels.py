@@ -8,9 +8,11 @@ Home Assistant labels. To assign labels to entities, use ha_set_entity(labels=..
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +56,11 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if not result.get("success"):
-                return {
-                    "success": False,
-                    "error": f"Failed to get labels: {result.get('error', 'Unknown error')}",
-                    "label_id": label_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to get labels"),
+                    context={"label_id": label_id},
+                ))
 
             labels = result.get("result", [])
 
@@ -85,25 +87,20 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
             else:
                 available_ids = [lbl.get("label_id") for lbl in labels[:10]]
-                return {
-                    "success": False,
-                    "error": f"Label not found: {label_id}",
-                    "label_id": label_id,
-                    "available_label_ids": available_ids,
-                    "suggestion": "Use ha_config_get_label() without label_id to see all labels",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Label not found: {label_id}",
+                    context={"label_id": label_id, "available_label_ids": available_ids},
+                    suggestions=["Use ha_config_get_label() without label_id to see all labels"],
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error getting labels: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get labels: {str(e)}",
-                "label_id": label_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            }
+            exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["label"], "title": "Create or Update Label"})
     @log_tool_usage
@@ -189,24 +186,20 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully {action_past} label: {name}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to {action} label: {result.get('error', 'Unknown error')}",
-                    "name": name,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {action} label: {result.get('error', 'Unknown error')}",
+                    context={"name": name, "label_id": label_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error setting label: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to set label: {str(e)}",
-                "name": name,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify the label name is valid",
-                    "For updates, verify the label_id exists using ha_config_get_label()",
-                ],
-            }
+            exception_to_structured_error(e, context={"name": name, "label_id": label_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify the label name is valid",
+                "For updates, verify the label_id exists using ha_config_get_label()",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["label"], "title": "Remove Label"})
     @log_tool_usage
@@ -245,21 +238,17 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully deleted label: {label_id}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to delete label: {result.get('error', 'Unknown error')}",
-                    "label_id": label_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete label: {result.get('error', 'Unknown error')}",
+                    context={"label_id": label_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting label: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to delete label: {str(e)}",
-                "label_id": label_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify the label_id exists using ha_config_get_label()",
-                ],
-            }
+            exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify the label_id exists using ha_config_get_label()",
+            ])
 

@@ -4,9 +4,11 @@ Validates that ha_dashboard_find_card uses structured error responses and
 does NOT leak internal Python type names or tracebacks.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
 
@@ -48,8 +50,10 @@ class TestDashboardFindCardErrorHandling:
     @pytest.mark.asyncio
     async def test_error_does_not_leak_internals(self, find_card_tool):
         """Error response must NOT contain 'error_type' or 'traceback'."""
-        result = await find_card_tool(url_path="lovelace", entity_id="light.test")
+        with pytest.raises(ToolError) as exc_info:
+            await find_card_tool(url_path="lovelace", entity_id="light.test")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
         assert "code" in result["error"]
@@ -60,8 +64,10 @@ class TestDashboardFindCardErrorHandling:
     @pytest.mark.asyncio
     async def test_error_includes_suggestions(self, find_card_tool):
         """Error response must include dashboard-specific suggestions."""
-        result = await find_card_tool(url_path="lovelace", entity_id="light.test")
+        with pytest.raises(ToolError) as exc_info:
+            await find_card_tool(url_path="lovelace", entity_id="light.test")
 
+        result = json.loads(str(exc_info.value))
         suggestions = result["error"]["suggestions"]
         assert "Check HA connection" in suggestions
         assert (
@@ -92,7 +98,9 @@ class TestDashboardFindCardErrorHandling:
             side_effect=exception_cls(exception_msg)
         )
 
-        result = await find_card_tool(url_path="lovelace", entity_id="light.test")
+        with pytest.raises(ToolError) as exc_info:
+            await find_card_tool(url_path="lovelace", entity_id="light.test")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["error"]["code"] == expected_code

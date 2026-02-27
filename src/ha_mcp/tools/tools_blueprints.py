@@ -8,9 +8,11 @@ Home Assistant blueprints for automations and scripts.
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +100,11 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Validate domain
             valid_domains = ["automation", "script"]
             if domain not in valid_domains:
-                return {
-                    "success": False,
-                    "error": f"Invalid domain '{domain}'. Must be one of: {', '.join(valid_domains)}",
-                    "valid_domains": valid_domains,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid domain '{domain}'. Must be one of: {', '.join(valid_domains)}",
+                    context={"domain": domain, "valid_domains": valid_domains},
+                ))
 
             # Get list of blueprints
             list_response = await client.send_websocket_message(
@@ -110,11 +112,11 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not list_response.get("success"):
-                return {
-                    "success": False,
-                    "error": list_response.get("error", "Failed to query blueprints"),
-                    "domain": domain,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    list_response.get("error", "Failed to query blueprints"),
+                    context={"domain": domain},
+                ))
 
             blueprints_data = list_response.get("result", {})
 
@@ -125,17 +127,15 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Path provided - get specific blueprint details
             if path not in blueprints_data:
                 available_paths = list(blueprints_data.keys())[:10]
-                return {
-                    "success": False,
-                    "error": f"Blueprint not found: {path}",
-                    "path": path,
-                    "domain": domain,
-                    "available_blueprints": available_paths,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Blueprint not found: {path}",
+                    context={"path": path, "domain": domain, "available_blueprints": available_paths},
+                    suggestions=[
                         "Use ha_get_blueprint() without path to see all available blueprints",
                         "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
                     ],
-                }
+                ))
 
             # Get the blueprint details from the list response
             blueprint_data = blueprints_data[path]
@@ -170,19 +170,18 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return result
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error getting blueprint: {e}")
-            return {
-                "success": False,
-                "path": path,
-                "domain": domain,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"path": path, "domain": domain},
+                suggestions=[
                     "Verify the blueprint path is correct",
                     "Use ha_get_blueprint() without path to see available blueprints",
                     "Check Home Assistant connection",
                 ],
-            }
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["blueprint"], "title": "Import Blueprint"})
     @log_tool_usage
@@ -218,11 +217,11 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # Validate URL format
             if not url.startswith(("http://", "https://")):
-                return {
-                    "success": False,
-                    "error": "Invalid URL format. URL must start with http:// or https://",
-                    "url": url,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Invalid URL format. URL must start with http:// or https://",
+                    context={"url": url},
+                ))
 
             # Send WebSocket command to import blueprint
             response = await client.send_websocket_message(
@@ -242,12 +241,12 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if "already exists" in str(error_msg).lower():
                     suggestions.insert(0, "Blueprint already exists - use ha_get_blueprint() to see installed blueprints")
 
-                return {
-                    "success": False,
-                    "error": error_msg,
-                    "url": url,
-                    "suggestions": suggestions,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    error_msg,
+                    context={"url": url},
+                    suggestions=suggestions,
+                ))
 
             # Extract import result
             result_data = response.get("result", {})
@@ -264,16 +263,16 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints.",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error importing blueprint: {e}")
-            return {
-                "success": False,
-                "url": url,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"url": url},
+                suggestions=[
                     "Verify the URL is correct and accessible",
                     "Check if the URL points to a valid YAML blueprint file",
                     "Ensure Home Assistant has internet access",
                     "Try importing from a different source (GitHub, Community, direct URL)",
                 ],
-            }
+            )

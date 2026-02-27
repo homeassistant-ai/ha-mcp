@@ -9,6 +9,7 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
+from ..errors import ErrorCode, create_error_response
 from ..utils.fuzzy_search import calculate_partial_ratio, create_fuzzy_searcher
 
 logger = logging.getLogger(__name__)
@@ -135,17 +136,16 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
-            return {
-                "success": False,
-                "query": query,
-                "error": str(e),
-                "matches": [],
-                "suggestions": [
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                str(e),
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify entity exists with get_all_states",
                     "Try simpler search terms",
                 ],
-            }
+                context={"query": query, "matches": [], "error_source": "smart_entity_search"},
+            )
 
     async def get_entities_by_area(
         self, area_query: str, group_by_domain: bool = True
@@ -332,15 +332,16 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")
-            return {
-                "area_query": area_query,
-                "error": str(e),
-                "suggestions": [
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                str(e),
+                suggestions=[
                     "Check Home Assistant connection",
                     "Try common room names: salon, chambre, cuisine",
                     "Use smart_entity_search to find entities first",
                 ],
-            }
+                context={"area_query": area_query},
+            )
 
     async def get_system_overview(
         self,
@@ -566,18 +567,16 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_system_overview: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "total_entities": 0,
-                "entity_summary": {},
-                "controllable_devices": {},
-                "suggestions": [
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                str(e),
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify API token permissions",
                     "Try test_connection first",
                 ],
-            }
+                context={"total_entities": 0, "entity_summary": {}, "controllable_devices": {}},
+            )
 
     async def deep_search(
         self,
@@ -999,19 +998,16 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in deep_search: {e}")
-            return {
-                "success": False,
-                "query": query,
-                "error": str(e),
-                "automations": [],
-                "scripts": [],
-                "helpers": [],
-                "suggestions": [
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                str(e),
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify automation/script/helper entities exist",
                     "Try simpler search terms",
                 ],
-            }
+                context={"query": query, "automations": [], "scripts": [], "helpers": []},
+            )
 
     def _search_in_dict(
         self, data: dict[str, Any] | list[Any] | Any, query: str

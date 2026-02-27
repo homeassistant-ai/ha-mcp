@@ -11,9 +11,11 @@ import logging
 from datetime import datetime, timedelta
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +79,15 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                return {
-                    "success": False,
-                    "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
-                }
+                ))
 
             # Set default time range if not provided
             now = datetime.now()
@@ -124,8 +126,9 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Retrieved {len(limited_events)} event(s) from {entity_id}",
             }
 
+        except ToolError:
+            raise
         except Exception as error:
-            error_str = str(error)
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
             # Provide helpful error messages
@@ -135,16 +138,11 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Ensure calendar integration supports event retrieval",
             ]
 
+            error_str = str(error)
             if "404" in error_str or "not found" in error_str.lower():
                 suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
 
-            return {
-                "success": False,
-                "error": error_str,
-                "entity_id": entity_id,
-                "events": [],
-                "suggestions": suggestions,
-            }
+            exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["calendar"], "title": "Create or Update Calendar Event"})
     @log_tool_usage
@@ -205,15 +203,15 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                return {
-                    "success": False,
-                    "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
-                }
+                ))
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -245,8 +243,9 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Successfully created event '{summary}' in {entity_id}",
             }
 
+        except ToolError:
+            raise
         except Exception as error:
-            error_str = str(error)
             logger.error(f"Failed to create calendar event in {entity_id}: {error}")
 
             suggestions = [
@@ -256,22 +255,13 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Some calendar integrations may be read-only",
             ]
 
+            error_str = str(error)
             if "404" in error_str or "not found" in error_str.lower():
                 suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
             if "not supported" in error_str.lower():
                 suggestions.insert(0, "This calendar does not support event creation")
 
-            return {
-                "success": False,
-                "error": error_str,
-                "entity_id": entity_id,
-                "event": {
-                    "summary": summary,
-                    "start": start,
-                    "end": end,
-                },
-                "suggestions": suggestions,
-            }
+            exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["calendar"], "title": "Remove Calendar Event"})
     @log_tool_usage
@@ -330,15 +320,15 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                return {
-                    "success": False,
-                    "error": f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
-                }
+                ))
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -364,8 +354,9 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Successfully deleted event '{uid}' from {entity_id}",
             }
 
+        except ToolError:
+            raise
         except Exception as error:
-            error_str = str(error)
             logger.error(f"Failed to delete calendar event from {entity_id}: {error}")
 
             suggestions = [
@@ -375,6 +366,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Some calendar integrations may not support event deletion",
             ]
 
+            error_str = str(error)
             if "404" in error_str or "not found" in error_str.lower():
                 suggestions.insert(
                     0, f"Calendar entity '{entity_id}' or event '{uid}' not found"
@@ -382,10 +374,4 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "not supported" in error_str.lower():
                 suggestions.insert(0, "This calendar does not support event deletion")
 
-            return {
-                "success": False,
-                "error": error_str,
-                "entity_id": entity_id,
-                "uid": uid,
-                "suggestions": suggestions,
-            }
+            exception_to_structured_error(error, context={"entity_id": entity_id, "uid": uid}, suggestions=suggestions)
