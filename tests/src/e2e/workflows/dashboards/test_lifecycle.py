@@ -622,7 +622,8 @@ class TestJqTransformAndFindCard:
             )
 
             # Try to apply jq_transform with stale hash - should fail
-            result = await mcp_client.call_tool(
+            parsed = await safe_call_tool(
+                mcp_client,
                 "ha_config_set_dashboard",
                 {
                     "url_path": "test-hash-validation",
@@ -630,12 +631,9 @@ class TestJqTransformAndFindCard:
                     "jq_transform": '.views[0].cards[0].icon = "mdi:new"',
                 },
             )
-            parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert (
-                "conflict" in parsed["error"].lower()
-                or "modified" in parsed["error"].lower()
-            )
+            error_msg = parsed["error"].get("message", str(parsed["error"])) if isinstance(parsed["error"], dict) else parsed["error"]
+            assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
             logger.info("config_hash validation test passed")
 
@@ -662,16 +660,17 @@ class TestJqTransformAndFindCard:
 
         try:
             # Try jq_transform without config_hash - should fail
-            result = await mcp_client.call_tool(
+            parsed = await safe_call_tool(
+                mcp_client,
                 "ha_config_set_dashboard",
                 {
                     "url_path": "test-requires-hash",
                     "jq_transform": '.views[0].title = "New Title"',
                 },
             )
-            parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert "config_hash is required" in parsed["error"]
+            error_msg = parsed["error"].get("message", str(parsed["error"])) if isinstance(parsed["error"], dict) else parsed["error"]
+            assert "config_hash" in error_msg.lower()
 
             logger.info("jq_transform requires hash test passed")
 

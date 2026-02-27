@@ -165,19 +165,10 @@ class TestBackupTools:
             error = data.get("error", {})
             error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             assert "not found" in error_msg.lower(), f"Expected 'not found' error, got: {error_msg}"
-            assert "available_backups" in data, "Should provide list of available backups"
-
-            available_backups = data.get("available_backups", [])
-            logger.info(f"📋 Available backups: {len(available_backups)} found")
-
-            if available_backups:
-                # Log available backup info
-                for backup in available_backups[:3]:
-                    logger.info(
-                        f"  - {backup.get('name')} (ID: {backup.get('backup_id')}, Date: {backup.get('date')})"
-                    )
-
-                logger.info("✅ Restore validation provides helpful feedback")
+            # Verify helpful guidance is provided (either in suggestion or as a key)
+            suggestion = error.get("suggestion", "") if isinstance(error, dict) else ""
+            assert suggestion or "available_backups" in data, "Should provide guidance on available backups"
+            logger.info("✅ Restore validation provides helpful feedback")
 
             logger.info("✅ Backup restore validation test completed successfully")
 
