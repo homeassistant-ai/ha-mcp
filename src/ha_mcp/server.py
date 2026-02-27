@@ -10,6 +10,7 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
@@ -122,6 +123,44 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Register enhanced tools for first/second interaction success
         self.register_enhanced_tools()
+
+        # Register bundled skills as MCP resources
+        self._register_skills()
+
+    def _register_skills(self) -> None:
+        """Register bundled HA best-practice skills as MCP resources.
+
+        Uses FastMCP's SkillsDirectoryProvider to serve skill files via skill:// URIs.
+        Optionally exposes skills as tools (list_resources/read_resource) for clients
+        that don't support MCP resources natively.
+
+        Controlled by ENABLE_SKILLS and ENABLE_SKILLS_AS_TOOLS settings.
+        """
+        if not self.settings.enable_skills:
+            return
+
+        try:
+            from fastmcp.server.providers.skills import SkillsDirectoryProvider
+
+            skills_dir = Path(__file__).parent / "resources" / "skills"
+            if not skills_dir.exists():
+                logger.debug("Skills directory not found at %s, skipping", skills_dir)
+                return
+
+            self.mcp.add_provider(SkillsDirectoryProvider(roots=[skills_dir]))
+            logger.info("Registered bundled skills as MCP resources")
+
+            if self.settings.enable_skills_as_tools:
+                from fastmcp.server.transforms import ResourcesAsTools
+
+                self.mcp.add_transform(ResourcesAsTools(self.mcp))
+                logger.info("Skills also exposed as tools (ResourcesAsTools)")
+        except ImportError:
+            logger.warning(
+                "SkillsDirectoryProvider not available in fastmcp, skipping skills"
+            )
+        except Exception as e:
+            logger.error("Failed to register skills: %s", e)
 
     # Helper methods required by EnhancedToolsMixin
 

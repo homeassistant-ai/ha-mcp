@@ -88,6 +88,8 @@ def main() -> int:
     data_dir = Path("/data")
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
+    enable_skills = True  # default
+    enable_skills_as_tools = False  # default
 
     if config_file.exists():
         try:
@@ -95,6 +97,8 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
+            enable_skills = config.get("enable_skills", True)
+            enable_skills_as_tools = config.get("enable_skills_as_tools", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -106,6 +110,8 @@ def main() -> int:
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
     os.environ["BACKUP_HINT"] = backup_hint
+    os.environ["ENABLE_SKILLS"] = str(enable_skills).lower()
+    os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
 
     # Validate Supervisor token
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
