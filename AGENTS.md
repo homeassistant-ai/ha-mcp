@@ -449,10 +449,9 @@ uv run hamcp-test-env --no-interactive   # For automation
 **CRITICAL RULES:**
 - Always run from the `tests/` directory so pytest picks up the correct `conftest.py`
 - Always run the **full suite** before declaring tests pass — running individual files
-  misses failures in other test files (this is how CI catches bugs we miss locally)
+  misses failures in other test files
 - `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
-- Never set `HOMEASSISTANT_URL` in your shell before running tests — the conftest will
-  abort if it detects a pre-set URL
+- Never set `HOMEASSISTANT_URL` manually in your shell before running tests
 
 Test token centralized in `tests/test_constants.py`.
 

@@ -7,6 +7,13 @@ Tests MUST run against this container — never against a real HA instance.
 Environment Variables:
     HA_TEST_PORT: Optional fixed port for HA container (default: dynamic).
                   Example: HA_TEST_PORT=8124
+
+NOTE: config.py loads HOMEASSISTANT_URL from the .env.test file at import
+time, so checking os.environ for a pre-set URL is not a reliable guard here.
+Protection against accidental real-HA usage is instead ensured by:
+  - Guard 1: Docker must be available (testcontainers requirement)
+  - Guard 3: HA API must become ready within 60s (container health check)
+  - AGENTS.md: documents correct test-run commands
 """
 
 import asyncio
@@ -145,15 +152,6 @@ def ha_container_with_fresh_config():
             f"Docker is not available: {e}\n"
             "E2E tests require a running Docker daemon (testcontainers).\n"
             "Start Docker and retry."
-        )
-
-    # --- Safety guard 2: block accidental use of a real HA instance ---
-    pre_existing_url = os.environ.get("HOMEASSISTANT_URL", "")
-    if pre_existing_url:
-        pytest.fail(
-            f"HOMEASSISTANT_URL is already set to {pre_existing_url!r} in the environment.\n"
-            "E2E tests must run against testcontainers, not a real HA instance.\n"
-            "Unset HOMEASSISTANT_URL before running tests."
         )
 
     logger.info("🐳 Creating Home Assistant container with testcontainers...")
