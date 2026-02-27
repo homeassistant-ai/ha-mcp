@@ -431,19 +431,28 @@ cp .env.example .env       # Configure HA connection
 - Personal workflow helper (gitignored, not committed)
 
 ### Testing
-E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
+E2E tests are in `tests/src/e2e/` (not `tests/e2e/`). Tests use **testcontainers** to spin up
+an isolated Docker HA instance — Docker daemon must be running.
 
 ```bash
-# Run E2E tests (requires Docker daemon)
-uv run pytest tests/src/e2e/ -v --tb=short
+# Run FULL E2E suite (required before claiming all tests pass)
+cd tests && uv run pytest src/e2e/ -v --tb=short
 
-# Run specific test
-uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v
+# Run specific file (partial coverage only — never substitute for full suite)
+cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
 
 # Interactive test environment
 uv run hamcp-test-env                    # Interactive mode
 uv run hamcp-test-env --no-interactive   # For automation
 ```
+
+**CRITICAL RULES:**
+- Always run from the `tests/` directory so pytest picks up the correct `conftest.py`
+- Always run the **full suite** before declaring tests pass — running individual files
+  misses failures in other test files (this is how CI catches bugs we miss locally)
+- `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
+- Never set `HOMEASSISTANT_URL` in your shell before running tests — the conftest will
+  abort if it detects a pre-set URL
 
 Test token centralized in `tests/test_constants.py`.
 
