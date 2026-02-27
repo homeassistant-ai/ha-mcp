@@ -381,10 +381,9 @@ async def test_calendar_tools_overview(mcp_client):
     logger.info("Verifying calendar tools registration...")
 
     # Test get events tool registration (even if it fails due to invalid entity)
-    get_result = await mcp_client.call_tool(
-        "ha_config_get_calendar_events", {"entity_id": "calendar.test"}
+    get_data = await safe_call_tool(
+        mcp_client, "ha_config_get_calendar_events", {"entity_id": "calendar.test"}
     )
-    get_data = parse_mcp_result(get_result)
     assert (
         "events" in get_data or "error" in get_data
     ), "ha_config_get_calendar_events should return events or error"
@@ -392,7 +391,8 @@ async def test_calendar_tools_overview(mcp_client):
 
     # Test create event tool registration
     now = datetime.now()
-    create_result = await mcp_client.call_tool(
+    create_data = await safe_call_tool(
+        mcp_client,
         "ha_config_set_calendar_event",
         {
             "entity_id": "calendar.test",
@@ -401,18 +401,17 @@ async def test_calendar_tools_overview(mcp_client):
             "end": (now + timedelta(hours=1)).isoformat(),
         },
     )
-    create_data = parse_mcp_result(create_result)
     assert (
         "event" in create_data or "error" in create_data
     ), "ha_config_set_calendar_event should return event or error"
     logger.info("ha_config_set_calendar_event tool is registered and functional")
 
     # Test delete event tool registration
-    delete_result = await mcp_client.call_tool(
+    delete_data = await safe_call_tool(
+        mcp_client,
         "ha_config_remove_calendar_event",
         {"entity_id": "calendar.test", "uid": "test-uid"},
     )
-    delete_data = parse_mcp_result(delete_result)
     assert (
         "uid" in delete_data or "error" in delete_data
     ), "ha_config_remove_calendar_event should return uid or error"

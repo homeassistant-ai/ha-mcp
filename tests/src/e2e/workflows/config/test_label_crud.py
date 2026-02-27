@@ -429,15 +429,14 @@ class TestLabelAssignment:
 
 
         # Try to assign to non-existent entity
-        assign_result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {
                 "entity_id": "light.nonexistent_xyz_12345",
                 "labels": [label_id],
             },
         )
-
-        data = parse_mcp_result(assign_result)
         # Should fail for non-existent entity
         assert data.get("success") is False, (
             f"Should fail for non-existent entity: {data}"

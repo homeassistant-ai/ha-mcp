@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +41,19 @@ class TestBackupTools:
         try:
             # Create backup without name (auto-generated)
             logger.info("📦 Creating backup (auto-named)...")
-            result = await mcp_client.call_tool("ha_backup_create", {})
+            data = await safe_call_tool(mcp_client, "ha_backup_create", {})
 
-            data = parse_mcp_result(result)
             logger.info(f"📦 Backup creation result: {data}")
 
             # Check if backup password is configured
             if not data.get("success"):
-                error = data.get("error", "")
-                if "password" in error.lower():
+                error = data.get("error", {})
+                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                if "password" in error_msg.lower():
                     logger.warning("⚠️ Test environment doesn't have default backup password configured")
                     pytest.skip("Test environment missing default backup password")
                 else:
-                    raise AssertionError(f"Backup creation failed: {error}")
+                    raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
             assert "backup_job_id" in data, "No backup_job_id returned"
@@ -97,21 +97,21 @@ class TestBackupTools:
             custom_name = f"E2E_Test_Backup_{int(time.time())}"
             logger.info(f"📦 Creating backup: {custom_name}...")
 
-            result = await mcp_client.call_tool(
-                "ha_backup_create", {"name": custom_name}
+            data = await safe_call_tool(
+                mcp_client, "ha_backup_create", {"name": custom_name}
             )
 
-            data = parse_mcp_result(result)
             logger.info(f"📦 Backup creation result: {data}")
 
             # Check if backup password is configured
             if not data.get("success"):
-                error = data.get("error", "")
-                if "password" in error.lower():
+                error = data.get("error", {})
+                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                if "password" in error_msg.lower():
                     logger.warning("⚠️ Test environment doesn't have default backup password configured")
                     pytest.skip("Test environment missing default backup password")
                 else:
-                    raise AssertionError(f"Backup creation failed: {error}")
+                    raise AssertionError(f"Backup creation failed: {error_msg}")
 
             # Verify backup was created successfully
             assert "backup_job_id" in data, "No backup_job_id returned"
@@ -152,17 +152,19 @@ class TestBackupTools:
         try:
             # Test 1: Try to restore non-existent backup
             logger.info("🔍 Testing restore with non-existent backup ID...")
-            result = await mcp_client.call_tool(
+            data = await safe_call_tool(
+                mcp_client,
                 "ha_backup_restore",
                 {"backup_id": "nonexistent_backup_id_12345"},
             )
 
-            data = parse_mcp_result(result)
             logger.info(f"📊 Restore validation result: {data}")
 
             # Should fail with helpful error
             assert data.get("success") is False, "Expected restore to fail for non-existent backup"
-            assert "not found" in data.get("error", "").lower(), f"Expected 'not found' error, got: {data.get('error')}"
+            error = data.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            assert "not found" in error_msg.lower(), f"Expected 'not found' error, got: {error_msg}"
             assert "available_backups" in data, "Should provide list of available backups"
 
             available_backups = data.get("available_backups", [])
@@ -196,9 +198,8 @@ class TestBackupTools:
         try:
             # Create a backup (which internally retrieves config/password)
             logger.info("📦 Creating backup to test config retrieval...")
-            result = await mcp_client.call_tool("ha_backup_create", {})
+            data = await safe_call_tool(mcp_client, "ha_backup_create", {})
 
-            data = parse_mcp_result(result)
             logger.info(f"📦 Backup result: {data}")
 
             # If backup succeeded, config was retrieved successfully
@@ -208,14 +209,15 @@ class TestBackupTools:
                 assert "password" in data["note"].lower(), "Should mention password in note"
             else:
                 # Check if error is about missing password
-                error = data.get("error", "")
-                if "password" in error.lower():
+                error = data.get("error", {})
+                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                if "password" in error_msg.lower():
                     logger.warning(
                         "⚠️ Test environment doesn't have default backup password configured"
                     )
                     pytest.skip("Test environment missing default backup password")
                 else:
-                    raise AssertionError(f"Unexpected backup creation error: {error}")
+                    raise AssertionError(f"Unexpected backup creation error: {error_msg}")
 
             logger.info("✅ Password retrieval test completed successfully")
 
