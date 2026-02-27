@@ -11,8 +11,6 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success
-
 logger = logging.getLogger(__name__)
 
 
