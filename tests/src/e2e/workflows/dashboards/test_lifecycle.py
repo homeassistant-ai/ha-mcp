@@ -344,7 +344,7 @@ class TestDashboardErrorHandling:
         logger.info("Get nonexistent dashboard test completed successfully")
 
     async def test_delete_nonexistent_dashboard(self, mcp_client):
-        """Test deleting non-existent dashboard."""
+        """Test deleting non-existent dashboard returns RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent dashboard test")
 
         result = await mcp_client.call_tool(
@@ -352,9 +352,8 @@ class TestDashboardErrorHandling:
             {"dashboard_id": "nonexistent-dashboard-67890"},
         )
         data = parse_mcp_result(result)
-        # Home Assistant handles delete as idempotent - deleting nonexistent item succeeds
-        # This is expected behavior and consistent with other HA operations
-        assert data["success"] is True
+        assert data["success"] is False
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
         logger.info("Delete nonexistent dashboard test completed successfully")
 

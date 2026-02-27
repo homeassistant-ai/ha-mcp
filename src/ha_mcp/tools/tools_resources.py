@@ -14,8 +14,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
+from .helpers import exception_to_structured_error, log_tool_usage
 
 logger = logging.getLogger(__name__)
 
@@ -498,7 +498,6 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         annotations={
             "destructiveHint": True,
-            "idempotentHint": True,
             "tags": ["dashboard", "resources"],
             "title": "Delete Dashboard Resource",
         }
@@ -516,8 +515,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Delete a dashboard resource.
 
         Removes a resource from Home Assistant. The resource will no longer
-        be loaded on dashboards. This operation is idempotent - deleting
-        a non-existent resource will succeed.
+        be loaded on dashboards.
 
         WARNING: Deleting a resource used by custom cards in your dashboards
         will cause those cards to fail to load.
@@ -544,21 +542,25 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 else:
                     error_str = str(error_msg)
 
-                # If "not found", treat as success (idempotent)
                 if "not found" in error_str.lower() or "unable to find" in error_str.lower():
-                    return {
-                        "success": True,
-                        "action": "delete",
-                        "resource_id": resource_id,
-                        "message": "Resource already deleted or does not exist",
-                    }
+                    return create_resource_not_found_error(
+                        "Dashboard resource",
+                        resource_id,
+                        details=(
+                            f"Resource '{resource_id}' not found. "
+                            "Use ha_config_list_dashboard_resources() to see available resources."
+                        ),
+                    )
 
-                return {
-                    "success": False,
-                    "action": "delete",
-                    "resource_id": resource_id,
-                    "error": error_str,
-                }
+                return create_error_response(
+                    code=ErrorCode.SERVICE_CALL_FAILED,
+                    message=f"Failed to delete dashboard resource: {error_str}",
+                    context={"action": "delete", "resource_id": resource_id},
+                    suggestions=[
+                        "Verify resource ID using ha_config_list_dashboard_resources()",
+                        "Check that you have admin permissions",
+                    ],
+                )
 
             logger.info(f"Dashboard resource deleted: id={resource_id}")
 
@@ -569,25 +571,13 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": "Resource deleted successfully",
             }
         except Exception as e:
-            error_str = str(e)
-            logger.error(f"Error deleting dashboard resource: {error_str}")
-
-            # If "not found", treat as success (idempotent)
-            if "not found" in error_str.lower() or "unable to find" in error_str.lower():
-                return {
-                    "success": True,
-                    "action": "delete",
-                    "resource_id": resource_id,
-                    "message": "Resource already deleted or does not exist",
-                }
-
-            return {
-                "success": False,
-                "action": "delete",
-                "resource_id": resource_id,
-                "error": error_str,
-                "suggestions": [
+            logger.error(f"Error deleting dashboard resource: {e}")
+            return exception_to_structured_error(
+                e,
+                context={"action": "delete", "resource_id": resource_id},
+                raise_error=False,
+                suggestions=[
                     "Verify resource ID using ha_config_list_dashboard_resources()",
                     "Check that you have admin permissions",
                 ],
-            }
+            )

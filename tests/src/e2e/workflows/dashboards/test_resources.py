@@ -259,16 +259,17 @@ class TestDashboardResourceValidation:
         logger.info("Invalid resource type test completed successfully")
 
     async def test_delete_nonexistent_resource(self, mcp_client):
-        """Test that deleting nonexistent resource is idempotent (succeeds)."""
+        """Test that deleting nonexistent resource returns RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent resource test")
         mcp = MCPAssertions(mcp_client)
 
-        # Deleting a resource that doesn't exist should succeed (idempotent)
-        delete_data = await mcp.call_tool_success(
+        # Deleting a resource that doesn't exist should return RESOURCE_NOT_FOUND
+        delete_data = await mcp.call_tool_failure(
             "ha_config_delete_dashboard_resource",
             {"resource_id": "nonexistent-resource-id-12345"},
+            expected_error="not found",
         )
-        assert delete_data["success"] is True
+        assert delete_data["success"] is False
 
         logger.info("Delete nonexistent resource test completed successfully")
 

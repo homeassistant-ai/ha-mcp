@@ -411,8 +411,8 @@ class TestHaConfigDeleteDashboardResource:
         assert result["resource_id"] == "abc123"
 
     @pytest.mark.asyncio
-    async def test_delete_idempotent_not_found(self, delete_tool, mock_client):
-        """Test that deleting non-existent resource is idempotent."""
+    async def test_delete_not_found_returns_error(self, delete_tool, mock_client):
+        """Test that deleting non-existent resource returns RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.return_value = {
             "success": False,
             "error": {"message": "Resource not found"},
@@ -420,8 +420,8 @@ class TestHaConfigDeleteDashboardResource:
 
         result = await delete_tool(resource_id="nonexistent")
 
-        assert result["success"] is True  # Idempotent
-        assert "already deleted" in result["message"].lower()
+        assert result["success"] is False
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 class TestToolRegistration:
