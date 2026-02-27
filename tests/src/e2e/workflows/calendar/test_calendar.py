@@ -342,7 +342,7 @@ class TestCalendarEventLifecycle:
             logger.info("Unexpectedly succeeded (event may have existed)")
         else:
             logger.info(f"Delete failed as expected: {data.get('error', 'Unknown')}")
-            assert "suggestions" in data, "Should provide helpful suggestions"
+            assert data.get("error", {}).get("suggestions"), "Should provide helpful suggestions"
 
         logger.info("ha_config_remove_calendar_event test completed")
 
