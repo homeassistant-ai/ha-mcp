@@ -143,7 +143,7 @@ def _process_services(
         ]
     else:
         raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            ErrorCode.INTERNAL_UNEXPECTED,
             "Unexpected service data format",
             suggestions=[
                 "Retry the request — this may be a transient issue",

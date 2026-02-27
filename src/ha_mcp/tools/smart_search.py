@@ -9,8 +9,8 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
 from ..utils.fuzzy_search import calculate_partial_ratio, create_fuzzy_searcher
+from .helpers import exception_to_structured_error
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +136,8 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
-            return create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                str(e),
+            exception_to_structured_error(
+                e,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify entity exists with get_all_states",
@@ -332,9 +331,8 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")
-            return create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                str(e),
+            exception_to_structured_error(
+                e,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try common room names: salon, chambre, cuisine",
@@ -567,9 +565,8 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_system_overview: {e}")
-            return create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                str(e),
+            exception_to_structured_error(
+                e,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify API token permissions",
@@ -998,9 +995,8 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in deep_search: {e}")
-            return create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                str(e),
+            exception_to_structured_error(
+                e,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify automation/script/helper entities exist",

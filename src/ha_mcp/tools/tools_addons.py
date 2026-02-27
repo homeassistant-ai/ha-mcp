@@ -115,6 +115,7 @@ async def list_addons(
     except ToolError:
         raise
     except Exception as e:
+        logger.error(f"Error listing addons: {e}")
         exception_to_structured_error(
             e,
             context={"tool": "list_addons"},
@@ -242,6 +243,7 @@ async def list_available_addons(
     except ToolError:
         raise
     except Exception as e:
+        logger.error(f"Error listing available addons: {e}")
         exception_to_structured_error(
             e,
             context={"tool": "list_available_addons"},

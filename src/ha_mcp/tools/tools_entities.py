@@ -223,7 +223,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     response: dict[str, Any] = {
                         "success": False,
                         "error": {
-                            "code": "SERVICE_CALL_FAILED",
+                            "code": ErrorCode.SERVICE_CALL_FAILED.value,
                             "message": f"Exposure failed: {error_msg}",
                             "suggestion": "Check Home Assistant connection and entity availability",
                         },
@@ -256,7 +256,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return {
                     "success": False,
                     "error": {
-                        "code": "ENTITY_NOT_FOUND",
+                        "code": ErrorCode.ENTITY_NOT_FOUND.value,
                         "message": f"Entity '{entity_id}' not found in registry after applying exposure changes",
                         "suggestion": "Use ha_search_entities() to verify the entity exists",
                     },

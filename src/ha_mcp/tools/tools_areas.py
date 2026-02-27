@@ -57,6 +57,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error listing areas: {e}")
             exception_to_structured_error(e, context={"operation": "list_areas"}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify WebSocket connection is active",
@@ -199,6 +200,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error {operation} area {name!r}: {e}")
             exception_to_structured_error(e, context={"operation": operation, "name": name, "area_id": area_id}, suggestions=[
                 "Check Home Assistant connection",
                 "For create: Verify the name is unique",
@@ -246,6 +248,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error removing area {area_id!r}: {e}")
             exception_to_structured_error(e, context={"area_id": area_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify the area_id exists using ha_config_list_areas()",
@@ -287,6 +290,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error listing floors: {e}")
             exception_to_structured_error(e, context={"operation": "list_floors"}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify WebSocket connection is active",
@@ -418,6 +422,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error {operation} floor {name!r}: {e}")
             exception_to_structured_error(e, context={"operation": operation, "name": name, "floor_id": floor_id}, suggestions=[
                 "Check Home Assistant connection",
                 "For create: Verify the name is unique",
@@ -464,6 +469,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error removing floor {floor_id!r}: {e}")
             exception_to_structured_error(e, context={"floor_id": floor_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify the floor_id exists using ha_config_list_floors()",

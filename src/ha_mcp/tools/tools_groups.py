@@ -76,6 +76,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
         except Exception as e:
+            logger.error(f"Error listing groups: {e}")
             exception_to_structured_error(e, context={"operation": "list_groups"}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify REST API is accessible",
@@ -235,6 +236,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error setting group {object_id!r}: {e}")
             exception_to_structured_error(e, context={"object_id": object_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify all entity IDs in the entities list exist",
@@ -293,6 +295,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error removing group {object_id!r}: {e}")
             exception_to_structured_error(e, context={"object_id": object_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify the group exists using ha_config_list_groups()",

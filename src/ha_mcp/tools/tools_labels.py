@@ -97,6 +97,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error getting labels: {e}")
             exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify WebSocket connection is active",
@@ -195,6 +196,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error setting label {name!r}: {e}")
             exception_to_structured_error(e, context={"name": name, "label_id": label_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify the label name is valid",
@@ -247,6 +249,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            logger.error(f"Error removing label {label_id!r}: {e}")
             exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify the label_id exists using ha_config_get_label()",
