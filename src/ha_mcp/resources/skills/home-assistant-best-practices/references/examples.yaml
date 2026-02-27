@@ -1,0 +1,221 @@
+# =============================================================================
+# Home Assistant Best Practices - Compound Examples
+# =============================================================================
+# Each example demonstrates MULTIPLE best practices working together.
+# For individual patterns, see the corresponding reference file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EXAMPLE 1: Motion-Activated Light (restart mode)
+# -----------------------------------------------------------------------------
+# Demonstrates: restart mode, state trigger, native time condition, wait_for_trigger
+# Best practice: Use restart mode so re-triggering resets the timeout
+
+automation:
+  - id: motion_light_hallway
+    alias: "Hallway Motion Light"
+    description: "Turn on hallway light when motion detected, auto-off after 3 minutes"
+    mode: restart  # Re-trigger resets the timer
+
+    trigger:
+      - trigger: state
+        entity_id: binary_sensor.hallway_motion
+        to: "on"
+
+    condition:
+      # Native time condition - no template needed
+      - condition: time
+        after: "06:00:00"
+        before: "23:00:00"
+
+    action:
+      - action: light.turn_on
+        target:
+          entity_id: light.hallway
+        data:
+          brightness_pct: 80
+          transition: 1
+
+      # wait_for_trigger - event-driven, waits for the change
+      - wait_for_trigger:
+          - trigger: state
+            entity_id: binary_sensor.hallway_motion
+            to: "off"
+            for:
+              minutes: 3
+        timeout:
+          minutes: 10
+        continue_on_timeout: true
+
+      - action: light.turn_off
+        target:
+          entity_id: light.hallway
+        data:
+          transition: 3
+
+
+# -----------------------------------------------------------------------------
+# EXAMPLE 2: Multi-Button Remote with trigger_id
+# -----------------------------------------------------------------------------
+# Demonstrates: ZHA event trigger, device_ieee (persistent), trigger_id, choose
+# Best practice: Use device_ieee instead of device_id for ZHA
+
+  - id: bedroom_remote_control
+    alias: "Bedroom Remote Control"
+    description: "Handle single, double, and hold presses on ZHA button"
+    mode: single
+
+    trigger:
+      - trigger: event
+        event_type: zha_event
+        event_data:
+          device_ieee: "00:15:8d:00:07:26:f2:8a"  # Replace with your device
+          command: "single"
+        id: single_press
+
+      - trigger: event
+        event_type: zha_event
+        event_data:
+          device_ieee: "00:15:8d:00:07:26:f2:8a"
+          command: "double"
+        id: double_press
+
+      - trigger: event
+        event_type: zha_event
+        event_data:
+          device_ieee: "00:15:8d:00:07:26:f2:8a"
+          command: "hold"
+        id: hold
+
+    action:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: single_press
+            sequence:
+              - action: light.toggle
+                target:
+                  entity_id: light.bedroom
+
+          - conditions:
+              - condition: trigger
+                id: double_press
+            sequence:
+              - action: light.turn_on
+                target:
+                  area_id: bedroom
+                data:
+                  brightness_pct: 100
+
+          - conditions:
+              - condition: trigger
+                id: hold
+            sequence:
+              - action: light.turn_off
+                target:
+                  area_id: bedroom
+
+
+# -----------------------------------------------------------------------------
+# EXAMPLE 3: Door Lock Notification with Queued Mode
+# -----------------------------------------------------------------------------
+# Demonstrates: queued mode, state condition with attribute, not condition, template message
+# Best practice: Use queued mode when order matters
+
+  - id: door_unlock_notification
+    alias: "Door Unlock Notification"
+    description: "Notify when door is unlocked, show who unlocked it"
+    mode: queued  # Process each unlock event in order
+    max: 10
+
+    trigger:
+      - trigger: state
+        entity_id: lock.front_door
+        to: "unlocked"
+
+    condition:
+      # Native not + state condition with attribute check - no template
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: lock.front_door
+            attribute: changed_by
+            state: "auto_unlock"
+
+    action:
+      - action: notify.mobile_app_phone
+        data:
+          title: "Front Door Unlocked"
+          message: "Unlocked by {{ state_attr('lock.front_door', 'changed_by') }}"
+          data:
+            tag: "door-unlock"
+
+
+# -----------------------------------------------------------------------------
+# EXAMPLE 4: Parallel Mode for Per-Entity Actions
+# -----------------------------------------------------------------------------
+# Demonstrates: parallel mode, multi-entity trigger, trigger variable in template target
+# Best practice: Use parallel mode when actions are independent per-entity
+
+  - id: window_open_climate_off
+    alias: "Turn Off Climate When Window Opens"
+    description: "Turn off climate in room when window is opened"
+    mode: parallel  # Handle multiple windows independently
+    max: 10
+
+    trigger:
+      - trigger: state
+        entity_id:
+          - binary_sensor.bedroom_window
+          - binary_sensor.living_room_window
+          - binary_sensor.kitchen_window
+        to: "on"
+
+    action:
+      # Use trigger variable to determine which room
+      - action: climate.turn_off
+        target:
+          entity_id: >
+            {% set room = trigger.entity_id.split('.')[1].replace('_window', '') %}
+            climate.{{ room }}
+
+
+# -----------------------------------------------------------------------------
+# EXAMPLE 5: Doorbell with if/then and Native Time Condition
+# -----------------------------------------------------------------------------
+# Demonstrates: if/then action, native time condition, quiet hours logic
+# Best practice: Use if/then for simple binary, choose for multiple branches
+
+  - id: doorbell_announcement
+    alias: "Doorbell Announcement"
+    description: "Announce doorbell with different messages based on time"
+    mode: single
+
+    trigger:
+      - trigger: state
+        entity_id: binary_sensor.doorbell
+        to: "on"
+
+    action:
+      - if:
+          - condition: time
+            after: "22:00:00"
+            before: "08:00:00"
+        then:
+          # Quiet hours - just notification
+          - action: notify.mobile_app_phone
+            data:
+              title: "Doorbell"
+              message: "Someone is at the door"
+        else:
+          # Normal hours - announce and notification
+          - action: tts.speak
+            target:
+              entity_id: tts.google_say
+            data:
+              media_player_entity_id: media_player.living_room_speaker
+              message: "Someone is at the front door"
+          - action: notify.mobile_app_phone
+            data:
+              title: "Doorbell"
+              message: "Someone is at the door"

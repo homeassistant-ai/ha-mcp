@@ -248,6 +248,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
+
     def _register_skills(self) -> None:
         """Register bundled HA best-practice skills as MCP resources.
 
