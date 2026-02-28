@@ -574,21 +574,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_str = str(e)
-            logger.error(f"Error deleting dashboard resource: {error_str}")
-
-            # If "not found", treat as success (idempotent)
-            if "not found" in error_str.lower() or "unable to find" in error_str.lower():
-                return {
-                    "success": True,
-                    "action": "delete",
-                    "resource_id": resource_id,
-                    "message": "Resource already deleted or does not exist",
-                }
-
-            exception_to_structured_error(
+            logger.error(f"Error deleting dashboard resource: {e}")
+            return exception_to_structured_error(
                 e,
                 context={"action": "delete", "resource_id": resource_id},
+                raise_error=False,
                 suggestions=[
                     "Verify resource ID using ha_config_list_dashboard_resources()",
                     "Check that you have admin permissions",

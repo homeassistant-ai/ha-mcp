@@ -1246,25 +1246,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            error_str = str(e)
-            logger.error(f"Error deleting dashboard: {error_str}")
-
-            # If the error is "not found" / "doesn't exist", treat as success (idempotent)
-            if (
-                "unable to find" in error_str.lower()
-                or "not found" in error_str.lower()
-            ):
-                return {
-                    "success": True,
-                    "action": "delete",
-                    "dashboard_id": dashboard_id,
-                    "message": "Dashboard already deleted or does not exist",
-                }
-
-            # For other errors, raise
-            exception_to_structured_error(
+            logger.error(f"Error deleting dashboard: {e}")
+            return exception_to_structured_error(
                 e,
                 context={"action": "delete", "dashboard_id": dashboard_id},
+                raise_error=False,
                 suggestions=[
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
