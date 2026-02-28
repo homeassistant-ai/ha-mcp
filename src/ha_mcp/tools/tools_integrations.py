@@ -45,6 +45,18 @@ def _integration_error(
     return create_error_response(code, message, details=details, context=context)
 
 
+def _raise_integration_error(
+    code: ErrorCode,
+    message: str,
+    *,
+    details: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> None:
+    raise_tool_error(
+        _integration_error(code, message, details=details, context=context)
+    )
+
+
 def _diff_options(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
     diffs: list[dict[str, Any]] = []
     keys = sorted(set(before.keys()) | set(after.keys()))
@@ -57,6 +69,8 @@ def _diff_options(before: dict[str, Any], after: dict[str, Any]) -> list[dict[st
 
 
 def _entry_type(entry: dict[str, Any]) -> str:
+    # VT does not currently expose a stable discriminator for the central entry,
+    # so this remains title-based until a better field is available.
     title = str(entry.get("title", "")).strip().lower()
     if title == "central configuration":
         return "central"
@@ -486,7 +500,6 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         annotations={
             "idempotentHint": True,
-            "readOnlyHint": True,
             "tags": ["integration"],
             "title": "Get Integration Options",
         }
@@ -547,9 +560,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             result["validation_hints"] = validation_hints
             return result
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get integration options: {e}")
-            return _integration_error(
+            _raise_integration_error(
                 ErrorCode.CONFIG_NOT_FOUND,
                 "Failed to retrieve integration options.",
                 details=str(e),
@@ -609,7 +624,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             options_patch_obj, parse_error = _parse_options_patch(options_patch)
             if parse_error:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.VALIDATION_INVALID_JSON,
                     "options_patch must be valid JSON.",
                     details=parse_error,
@@ -617,7 +632,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if not isinstance(options_patch_obj, dict) or not options_patch_obj:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "options_patch must be a non-empty object.",
                     context={"entry_id": entry_id},
@@ -627,7 +642,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             domain = entry.get("domain")
             title = entry.get("title")
             if domain != "versatile_thermostat":
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.CONFIG_INVALID,
                     "Only versatile_thermostat is supported in phase-1.",
                     context={"entry_id": entry_id, "domain": domain},
@@ -641,7 +656,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if key_errors:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
                     "Patch validation failed.",
                     details=str(key_errors),
@@ -649,13 +664,13 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if not normalized_patch:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "No valid patch keys remained after validation.",
                     context={"entry_id": entry_id},
                 )
             if not target_step:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
                     "Patch keys must belong to a single options-flow step in phase-1.",
                     context={"entry_id": entry_id},
@@ -693,7 +708,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return base_response
 
             if not confirm_bool:
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.VALIDATION_MISSING_PARAMETER,
                     "confirm=true is required for non-dry-run apply.",
                     context={"entry_id": entry_id},
@@ -713,13 +728,13 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     msg = str(e).lower()
                     if "404" in msg or "not found" in msg:
-                        return _integration_error(
+                        _raise_integration_error(
                             ErrorCode.RESOURCE_NOT_FOUND,
                             "Backup service is unavailable in this Home Assistant environment.",
                             details=str(e),
                             context={"entry_id": entry_id},
                         )
-                    return _integration_error(
+                    _raise_integration_error(
                         ErrorCode.SERVICE_CALL_FAILED,
                         "Backup attempt failed before applying options.",
                         details=str(e),
@@ -735,7 +750,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 before_options=before_options,
             )
             if apply_error:
-                return apply_error
+                raise_tool_error(apply_error)
 
             # Read back persisted options
             updated_entry = await client.get_config_entry(entry_id)
@@ -804,7 +819,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         response_unverified["backup_info"] = backup_info
                     return response_unverified
 
-                return _integration_error(
+                _raise_integration_error(
                     ErrorCode.RESOURCE_LOCKED,
                     "Options write could not be verified from persisted config-entry options.",
                     details=str(mismatched),
@@ -836,9 +851,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if backup_info:
                 response["backup_info"] = backup_info
             return response
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to set integration options: {e}")
-            return _integration_error(
+            _raise_integration_error(
                 ErrorCode.INTERNAL_ERROR,
                 "Failed to set integration options.",
                 details=str(e),
