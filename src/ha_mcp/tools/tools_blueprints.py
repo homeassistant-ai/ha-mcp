@@ -248,18 +248,64 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     suggestions=suggestions,
                 ))
 
-            # Extract import result
+            # Extract import result (blueprint/import only downloads and validates)
             result_data = response.get("result", {})
+            suggested_filename = result_data.get("suggested_filename")
+            raw_data = result_data.get("raw_data")
+
+            if not suggested_filename or not raw_data:
+                raise_tool_error(create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Blueprint import succeeded but response is missing required data.",
+                    context={"url": url},
+                    suggestions=["This indicates an unexpected response from Home Assistant - please report this issue."],
+                ))
+
+            blueprint_metadata = result_data.get("blueprint", {}).get("metadata", {})
+            domain = blueprint_metadata.get("domain", "automation")
+
+            # Save the blueprint (blueprint/save actually writes it to disk)
+            save_response = await client.send_websocket_message(
+                {
+                    "type": "blueprint/save",
+                    "domain": domain,
+                    "path": suggested_filename,
+                    "yaml": raw_data,
+                    "source_url": url,
+                }
+            )
+
+            if not save_response.get("success"):
+                save_error = save_response.get("error", "Failed to save blueprint")
+
+                suggestions = [
+                    "Verify the URL points to a valid blueprint YAML file",
+                    "Check Home Assistant logs for details",
+                ]
+
+                if "already_exists" in str(save_error).lower():
+                    suggestions.insert(0, "Blueprint already exists - use ha_get_blueprint() to see installed blueprints")
+
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    save_error,
+                    context={"url": url, "path": suggested_filename, "domain": domain},
+                    suggestions=suggestions,
+                ))
+
+            save_result = save_response.get("result", {})
+            path = f"{suggested_filename}.yaml" if not suggested_filename.endswith(".yaml") else suggested_filename
 
             return {
                 "success": True,
                 "url": url,
                 "imported_blueprint": {
-                    "path": result_data.get("suggested_filename") or result_data.get("path"),
-                    "domain": result_data.get("blueprint", {}).get("domain", "automation"),
-                    "name": result_data.get("blueprint", {}).get("name"),
-                    "description": result_data.get("blueprint", {}).get("description"),
+                    "path": path,
+                    "domain": domain,
+                    "name": blueprint_metadata.get("name"),
+                    "description": blueprint_metadata.get("description"),
                 },
+                "overrides_existing": save_result.get("overrides_existing", False),
                 "message": "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints.",
             }
 
