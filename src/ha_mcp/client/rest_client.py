@@ -646,6 +646,46 @@ class HomeAssistantClient:
             "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
         )
 
+    async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
+        """
+        Start a config entry options flow.
+
+        Args:
+            entry_id: Config entry ID (handler for options flow)
+
+        Returns:
+            Flow data with flow_id, step_id, data_schema
+
+        Raises:
+            HomeAssistantAPIError: If flow start fails
+        """
+        payload = {"handler": entry_id}
+        logger.debug(f"Starting options flow for entry_id: {entry_id}")
+        return await self._request(
+            "POST", "/config/config_entries/options/flow", json=payload
+        )
+
+    async def submit_options_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Submit data for an options flow step.
+
+        Args:
+            flow_id: Flow ID from start_options_flow or previous step
+            user_input: Form/menu payload for current step
+
+        Returns:
+            Flow result: type = "create_entry" | "form" | "menu" | "abort"
+
+        Raises:
+            HomeAssistantAPIError: If flow submission fails
+        """
+        logger.debug(f"Submitting options flow step for flow_id: {flow_id}")
+        return await self._request(
+            "POST", f"/config/config_entries/options/flow/{flow_id}", json=user_input
+        )
+
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
         Get config entry details.
