@@ -18,6 +18,26 @@ from .util_helpers import coerce_bool_param
 logger = logging.getLogger(__name__)
 
 
+def _format_options_flow_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the stable public subset of an options-flow response."""
+    formatted = {
+        "type": result.get("type"),
+        "step_id": result.get("step_id"),
+        "flow_id": result.get("flow_id"),
+    }
+    if "data_schema" in result:
+        formatted["data_schema"] = result.get("data_schema", [])
+    if "menu_options" in result:
+        formatted["menu_options"] = result.get("menu_options", [])
+    if "errors" in result:
+        formatted["errors"] = result.get("errors", {})
+    if "description_placeholders" in result:
+        formatted["description_placeholders"] = result.get(
+            "description_placeholders", {}
+        )
+    return formatted
+
+
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
@@ -214,6 +234,71 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify Home Assistant connection is working",
                     "Check that the API is accessible",
                     "Ensure your token has sufficient permissions",
+                ],
+            )
+
+    @mcp.tool(
+        annotations={
+            "idempotentHint": True,
+            "tags": ["integration"],
+            "title": "Get Integration Options",
+        }
+    )
+    @log_tool_usage
+    async def ha_get_integration_options(
+        entry_id: Annotated[
+            str,
+            Field(
+                description="Config entry ID for which to retrieve persisted options and options-flow metadata."
+            ),
+        ],
+        include_options_flow: Annotated[
+            bool | str,
+            Field(
+                description="When true, also start the integration's options flow and return the initial flow metadata.",
+                default=True,
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
+        """
+        Get persisted integration options and the initial options-flow shape.
+
+        This is a generic inspection tool for integrations that expose settings
+        through Home Assistant's Options Flow.
+        """
+        try:
+            include_flow = coerce_bool_param(
+                include_options_flow, "include_options_flow", default=True
+            )
+
+            entry = await client.get_config_entry(entry_id)
+            result: dict[str, Any] = {
+                "success": True,
+                "entry_id": entry_id,
+                "domain": entry.get("domain"),
+                "title": entry.get("title"),
+                "state": entry.get("state"),
+                "supports_options": entry.get("supports_options", False),
+                "options": entry.get("options", {}),
+            }
+
+            if not include_flow:
+                return result
+
+            flow = await client.start_options_flow(entry_id)
+            result["options_flow"] = _format_options_flow_result(flow)
+            return result
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get integration options: {e}")
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id},
+                suggestions=[
+                    "Use ha_get_integration() to confirm the config entry exists",
+                    "Check whether this integration exposes an options flow in Home Assistant",
                 ],
             )
 
