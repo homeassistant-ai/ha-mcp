@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -248,12 +248,11 @@ class TestBulkControl:
         """Test bulk_control with empty operations list."""
         logger.info("Testing ha_bulk_control with empty operations list")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_bulk_control",
             {"operations": []},
         )
-
-        data = parse_mcp_result(result)
 
         # Should return error or indicate no operations
         if data.get("success"):

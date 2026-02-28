@@ -16,7 +16,10 @@ production-level functionality and compatibility.
 import logging
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import MCPAssertions, parse_mcp_result
+from tests.src.e2e.utilities.assertions import (
+    MCPAssertions,
+    safe_call_tool,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -518,13 +521,15 @@ class TestInlineDashboardResource:
         """Test that empty content returns error."""
         logger.info("Starting inline empty content error test")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_dashboard_resource",
             {"content": ""},
         )
-        data = parse_mcp_result(result)
         assert data["success"] is False
-        assert "empty" in data.get("error", "").lower()
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
 

@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import MCPAssertions
+from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -207,36 +207,42 @@ class TestDashboardLifecycle:
 
         # "lovelace" should NOT be rejected by the hyphen validation
         # (it may fail for other reasons on fresh HA, but not the hyphen check)
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_dashboard",
             {"url_path": "lovelace", "title": "Default Dashboard"},
         )
-        data = parse_mcp_result(result)
         # The key assertion: error must NOT be about hyphens
         if not data.get("success", False):
-            assert "hyphen" not in data.get("error", "").lower(), (
-                f"'lovelace' should not be rejected by hyphen validation, got: {data['error']}"
+            error = data.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            assert "hyphen" not in error_msg.lower(), (
+                f"'lovelace' should not be rejected by hyphen validation, got: {error_msg}"
             )
 
         # "default" alias should also not be rejected by hyphen validation
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_dashboard",
             {"url_path": "default", "title": "Default Dashboard"},
         )
-        data = parse_mcp_result(result)
         if not data.get("success", False):
-            assert "hyphen" not in data.get("error", "").lower(), (
-                f"'default' should not be rejected by hyphen validation, got: {data['error']}"
+            error = data.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            assert "hyphen" not in error_msg.lower(), (
+                f"'default' should not be rejected by hyphen validation, got: {error_msg}"
             )
 
         # "nodash" (non-existent, no hyphen) SHOULD still be rejected
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_dashboard",
             {"url_path": "nodash", "title": "Invalid Dashboard"},
         )
-        data = parse_mcp_result(result)
         assert data["success"] is False
-        assert "hyphen" in data.get("error", "").lower()
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "hyphen" in error_msg.lower()
 
         logger.info("Default dashboard hyphen validation test completed successfully")
 
@@ -334,10 +340,11 @@ class TestDashboardErrorHandling:
         """Test getting config for non-existent dashboard."""
         logger.info("Starting get nonexistent dashboard test")
 
-        result = await mcp_client.call_tool(
-            "ha_config_get_dashboard", {"url_path": "nonexistent-dashboard-12345"}
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_get_dashboard",
+            {"url_path": "nonexistent-dashboard-12345"},
         )
-        data = parse_mcp_result(result)
         # May succeed but return empty/error config, or fail - either is acceptable
         assert "success" in data or "error" in data
 
@@ -615,7 +622,8 @@ class TestJqTransformAndFindCard:
             )
 
             # Try to apply jq_transform with stale hash - should fail
-            result = await mcp_client.call_tool(
+            parsed = await safe_call_tool(
+                mcp_client,
                 "ha_config_set_dashboard",
                 {
                     "url_path": "test-hash-validation",
@@ -623,12 +631,9 @@ class TestJqTransformAndFindCard:
                     "jq_transform": '.views[0].cards[0].icon = "mdi:new"',
                 },
             )
-            parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert (
-                "conflict" in parsed["error"].lower()
-                or "modified" in parsed["error"].lower()
-            )
+            error_msg = parsed["error"].get("message", str(parsed["error"])) if isinstance(parsed["error"], dict) else parsed["error"]
+            assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
             logger.info("config_hash validation test passed")
 
@@ -655,16 +660,17 @@ class TestJqTransformAndFindCard:
 
         try:
             # Try jq_transform without config_hash - should fail
-            result = await mcp_client.call_tool(
+            parsed = await safe_call_tool(
+                mcp_client,
                 "ha_config_set_dashboard",
                 {
                     "url_path": "test-requires-hash",
                     "jq_transform": '.views[0].title = "New Title"',
                 },
             )
-            parsed = parse_mcp_result(result)
             assert parsed["success"] is False
-            assert "config_hash is required" in parsed["error"]
+            error_msg = parsed["error"].get("message", str(parsed["error"])) if isinstance(parsed["error"], dict) else parsed["error"]
+            assert "config_hash" in error_msg.lower()
 
             logger.info("jq_transform requires hash test passed")
 

@@ -12,9 +12,11 @@ This module provides tools for managing Home Assistant todo lists including:
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -116,11 +118,12 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Get items mode - entity_id provided
             # Validate entity_id format
             if not entity_id.startswith("todo."):
-                return {
-                    "success": False,
-                    "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestions": ["Use ha_get_todo() without entity_id to find valid todo list entity IDs"],
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                    context={"entity_id": entity_id},
+                    suggestions=["Use ha_get_todo() without entity_id to find valid todo list entity IDs"],
+                ))
 
             # Use WebSocket to get todo items
             message: dict[str, Any] = {
@@ -146,39 +149,35 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(items)} item(s) in {entity_id}",
                 }
             else:
-                error = result.get("error", "Unknown error")
-                return {
-                    "success": False,
-                    "error": f"Failed to get todo items: {error}",
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to get todo items"),
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Verify the entity_id exists using ha_get_todo()",
                         "Check Home Assistant WebSocket connection",
                     ],
-                }
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error in ha_get_todo: {e}")
+            context: dict[str, Any] = {}
             if entity_id:
-                return {
-                    "success": False,
-                    "error": f"Failed to get todo items: {str(e)}",
-                    "entity_id": entity_id,
-                    "suggestions": [
-                        "Check Home Assistant connection",
-                        "Verify entity_id is correct",
-                        "Use ha_get_todo() to find valid todo lists",
-                    ],
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list todo lists: {str(e)}",
-                    "suggestions": [
-                        "Check Home Assistant connection",
-                        "Verify todo integration is enabled",
-                    ],
-                }
+                context["entity_id"] = entity_id
+            suggestions = (
+                [
+                    "Check Home Assistant connection",
+                    "Verify entity_id is correct",
+                    "Use ha_get_todo() to find valid todo lists",
+                ]
+                if entity_id
+                else [
+                    "Check Home Assistant connection",
+                    "Verify todo integration is enabled",
+                ]
+            )
+            exception_to_structured_error(e, context=context or None, suggestions=suggestions)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Add Todo Item"})
     @log_tool_usage
@@ -240,15 +239,16 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         NOTE: Not all todo integrations support all features (description, due dates).
         The Shopping List integration only supports summary.
         """
-        try:
-            # Validate entity_id format
-            if not entity_id.startswith("todo."):
-                return {
-                    "success": False,
-                    "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
-                }
+        # Validate entity_id format
+        if not entity_id.startswith("todo."):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                context={"entity_id": entity_id},
+                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
+            ))
 
+        try:
             # Build service data
             service_data: dict[str, Any] = {
                 "entity_id": entity_id,
@@ -277,19 +277,18 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Successfully added '{summary}' to {entity_id}",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error adding todo item: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to add todo item: {str(e)}",
-                "entity_id": entity_id,
-                "item": summary,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "item": summary},
+                suggestions=[
                     "Verify the entity_id exists using ha_get_todo()",
                     "Check if the todo list supports adding items",
                     "Some todo lists may not support description or due dates",
                 ],
-            }
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Update Todo Item"})
     @log_tool_usage
@@ -372,23 +371,25 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         NOTE: At least one update field (rename, status, description, due_date, due_datetime) must be provided.
         """
+        # Validate entity_id format
+        if not entity_id.startswith("todo."):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                context={"entity_id": entity_id},
+                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
+            ))
+
+        # Validate at least one update field is provided
+        if not any([rename, status, description, due_date, due_datetime]):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
+                context={"entity_id": entity_id, "item": item},
+                suggestions=["Specify what to update, e.g., status='completed' to mark item done"],
+            ))
+
         try:
-            # Validate entity_id format
-            if not entity_id.startswith("todo."):
-                return {
-                    "success": False,
-                    "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
-                }
-
-            # Validate at least one update field is provided
-            if not any([rename, status, description, due_date, due_datetime]):
-                return {
-                    "success": False,
-                    "error": "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
-                    "suggestions": ["Specify what to update, e.g., status='completed' to mark item done"],
-                }
-
             # Build service data
             service_data: dict[str, Any] = {
                 "entity_id": entity_id,
@@ -438,19 +439,18 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Successfully updated '{item}' in {entity_id}: {update_msg}",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error updating todo item: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to update todo item: {str(e)}",
-                "entity_id": entity_id,
-                "item": item,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "item": item},
+                suggestions=[
                     "Verify the item exists using ha_get_todo()",
                     "Check if you're using the correct item name or UID",
                     "Some todo lists may not support all update operations",
                 ],
-            }
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["todo"], "title": "Remove Todo Item"})
     @log_tool_usage
@@ -489,15 +489,16 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         WARNING: This permanently removes the item. To mark as completed instead,
         use ha_update_todo_item() with status="completed".
         """
-        try:
-            # Validate entity_id format
-            if not entity_id.startswith("todo."):
-                return {
-                    "success": False,
-                    "error": f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    "suggestions": ["Use ha_get_todo() to find valid todo list entity IDs"],
-                }
+        # Validate entity_id format
+        if not entity_id.startswith("todo."):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                context={"entity_id": entity_id},
+                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
+            ))
 
+        try:
             # Build service data
             service_data: dict[str, Any] = {
                 "entity_id": entity_id,
@@ -515,16 +516,15 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Successfully removed '{item}' from {entity_id}",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error removing todo item: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to remove todo item: {str(e)}",
-                "entity_id": entity_id,
-                "item": item,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "item": item},
+                suggestions=[
                     "Verify the item exists using ha_get_todo()",
                     "Check if you're using the correct item name or UID",
                     "Make sure the item hasn't already been removed",
                 ],
-            }
+            )

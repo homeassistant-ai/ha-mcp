@@ -9,11 +9,18 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import HomeAssistantWebSocketClient
-from .helpers import get_connected_ws_client, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+    raise_tool_error,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -94,12 +101,18 @@ async def create_backup(
         # Connect to WebSocket
         ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error:
-            return error
+            raise_tool_error(error or create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Failed to connect to Home Assistant WebSocket for backup",
+            ))
 
         # Get backup password
         password, error = await _get_backup_password(ws_client)
         if error:
-            return error
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                error.get("error", "Failed to retrieve backup password"),
+            ))
 
         # Generate backup name if not provided
         if not name:
@@ -120,11 +133,10 @@ async def create_backup(
         result = await ws_client.send_command("backup/generate", **backup_params)
 
         if not result.get("success"):
-            return {
-                "success": False,
-                "error": "Backup creation failed",
-                "details": result,
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                result.get("error", "Backup creation failed"),
+            ))
 
         backup_job_id = result.get("result", {}).get("backup_job_id")
         logger.info(f"Backup job started: {backup_job_id}, waiting for completion...")
@@ -185,30 +197,30 @@ async def create_backup(
 
                 # Check if backup failed
                 elif event_state == "failed":
-                    return {
-                        "success": False,
-                        "error": "Backup creation failed",
-                        "backup_job_id": backup_job_id,
-                        "last_event": last_event,
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Backup creation failed",
+                        context={"backup_job_id": backup_job_id},
+                    ))
 
         # Timeout waiting for backup
         logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
-        return {
-            "success": False,
-            "error": f"Backup creation timed out after {max_wait_seconds} seconds",
-            "backup_job_id": backup_job_id,
-            "name": name,
-            "suggestion": "Backup may still be in progress. Check Home Assistant backup status.",
-        }
+        raise_tool_error(create_error_response(
+            ErrorCode.TIMEOUT_OPERATION,
+            f"Backup creation timed out after {max_wait_seconds} seconds",
+            context={"backup_job_id": backup_job_id, "name": name},
+            suggestions=["Backup may still be in progress. Check Home Assistant backup status."],
+        ))
 
+    except ToolError:
+        raise
     except Exception as e:
         logger.error(f"Error creating backup: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to create backup: {str(e)}",
-            "suggestion": "Check Home Assistant connection and backup configuration",
-        }
+        exception_to_structured_error(
+            e,
+            context={"tool": "create_backup"},
+            suggestions=["Check Home Assistant connection and backup configuration"],
+        )
     finally:
         # Always disconnect WebSocket
         if ws_client:
@@ -240,35 +252,28 @@ async def restore_backup(
         # Connect to WebSocket
         ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error:
-            return error
+            raise_tool_error(error or create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Failed to connect to Home Assistant WebSocket for restore",
+            ))
 
         # Verify backup exists
         backup_info = await ws_client.send_command("backup/info")
         if not backup_info.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to retrieve backup information",
-                "details": backup_info,
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                backup_info.get("error", "Failed to retrieve backup information"),
+            ))
 
         backups = backup_info.get("result", {}).get("backups", [])
         backup_exists = any(b.get("backup_id") == backup_id for b in backups)
 
         if not backup_exists:
-            available_backups = [
-                {
-                    "backup_id": b.get("backup_id"),
-                    "name": b.get("name"),
-                    "date": b.get("date"),
-                }
-                for b in backups[:5]
-            ]
-            return {
-                "success": False,
-                "error": f"Backup '{backup_id}' not found",
-                "available_backups": available_backups,
-                "suggestion": "Use one of the available backup IDs listed above",
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Backup '{backup_id}' not found",
+                suggestions=["Use ha_backup_list() to see available backups"],
+            ))
 
         # Create safety backup BEFORE restoring
         logger.info("Creating safety backup before restore...")
@@ -293,12 +298,11 @@ async def restore_backup(
             )
 
             if not safety_backup.get("success"):
-                return {
-                    "success": False,
-                    "error": "Failed to create safety backup before restore",
-                    "details": safety_backup,
-                    "suggestion": "Cannot proceed with restore without safety backup",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    safety_backup.get("error", "Failed to create safety backup before restore"),
+                    suggestions=["Cannot proceed with restore without safety backup"],
+                ))
 
             safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
             logger.info(f"Safety backup created: {safety_backup_id}")
@@ -326,20 +330,21 @@ async def restore_backup(
                 "note": "A safety backup was created before restore. You can restore from it if needed.",
             }
         else:
-            return {
-                "success": False,
-                "error": "Restore operation failed",
-                "details": result,
-                "safety_backup_id": safety_backup_id,
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                result.get("error", "Restore operation failed"),
+                context={"backup_id": backup_id},
+            ))
 
+    except ToolError:
+        raise
     except Exception as e:
         logger.error(f"Error restoring backup: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to restore backup: {str(e)}",
-            "suggestion": "Check Home Assistant connection and backup availability",
-        }
+        exception_to_structured_error(
+            e,
+            context={"tool": "restore_backup", "backup_id": backup_id},
+            suggestions=["Check Home Assistant connection and backup availability"],
+        )
     finally:
         # Always disconnect WebSocket
         if ws_client:

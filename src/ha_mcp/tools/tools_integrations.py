@@ -8,9 +8,11 @@ integrations (config entries) via the REST and WebSocket APIs.
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
@@ -96,12 +98,14 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     error_msg = str(e)
                     if "404" in error_msg or "not found" in error_msg.lower():
-                        return {
-                            "success": False,
-                            "error": f"Config entry not found: {entry_id}",
-                            "entry_id": entry_id,
-                            "suggestion": "Use ha_get_integration() without entry_id to see all config entries",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Config entry not found: {entry_id}",
+                            context={"entry_id": entry_id},
+                            suggestions=[
+                                "Use ha_get_integration() without entry_id to see all config entries",
+                            ],
+                        ))
                     raise
 
             # List mode - get all config entries
@@ -111,11 +115,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not isinstance(response, list):
-                return {
-                    "success": False,
-                    "error": "Unexpected response format from Home Assistant",
-                    "response_type": type(response).__name__,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from Home Assistant",
+                    context={"response_type": type(response).__name__},
+                ))
 
             entries = response
 
@@ -200,17 +204,18 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result_data["domain_filter"] = domain.strip().lower()
             return result_data
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get integrations: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get integrations: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Verify Home Assistant connection is working",
                     "Check that the API is accessible",
                     "Ensure your token has sufficient permissions",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -245,11 +250,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_msg = result.get("error", {})
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
-                return {
-                    "success": False,
-                    "error": f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
-                    "entry_id": entry_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
+                    context={"entry_id": entry_id},
+                ))
 
             # Get updated entry info
             require_restart = result.get("result", {}).get("require_restart", False)
@@ -267,6 +272,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "note": note,
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to set integration enabled: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})
@@ -293,12 +300,14 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
 
             if not confirm_bool:
-                return {
-                    "success": False,
-                    "error": "Deletion not confirmed. Set confirm=True to proceed.",
-                    "entry_id": entry_id,
-                    "warning": "This will permanently delete the config entry. This cannot be undone.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Deletion not confirmed. Set confirm=True to proceed.",
+                    context={
+                        "entry_id": entry_id,
+                        "warning": "This will permanently delete the config entry. This cannot be undone.",
+                    },
+                ))
 
             message = {
                 "type": "config_entries/delete",
@@ -311,11 +320,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_msg = result.get("error", {})
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
-                return {
-                    "success": False,
-                    "error": f"Failed to delete config entry: {error_msg}",
-                    "entry_id": entry_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete config entry: {error_msg}",
+                    context={"entry_id": entry_id},
+                ))
 
             # Get result info
             require_restart = result.get("result", {}).get("require_restart", False)
@@ -332,6 +341,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to delete config entry: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})

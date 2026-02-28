@@ -8,6 +8,7 @@ to discover custom integrations, Lovelace cards, themes, and more.
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
@@ -119,6 +120,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -238,6 +241,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "repositories": installed,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -418,6 +423,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "results": limited_matches,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -535,6 +542,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,  # Full response for advanced use
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -655,6 +664,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -792,6 +803,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,

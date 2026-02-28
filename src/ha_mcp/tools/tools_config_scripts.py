@@ -8,9 +8,11 @@ Home Assistant script configurations.
 import logging
 from typing import Annotated, Any, cast
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
     parse_json_param,
@@ -80,19 +82,18 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "script_id": script_id,
                 "config": config_result,
             }
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error getting script: {e}")
-            return {
-                "success": False,
-                "action": "get",
-                "script_id": script_id,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"script_id": script_id},
+                suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check Home Assistant connection",
                     "Use ha_get_domain_docs('script') for configuration help",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -235,19 +236,19 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_config = parse_json_param(config, "config")
             except ValueError as e:
-                return {
-                    "success": False,
-                    "error": f"Invalid config parameter: {e}",
-                    "provided_config_type": type(config).__name__,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    f"Invalid config parameter: {e}",
+                    context={"script_id": script_id, "provided_config_type": type(config).__name__},
+                ))
 
             # Ensure config is a dict
             if parsed_config is None or not isinstance(parsed_config, dict):
-                return {
-                    "success": False,
-                    "error": "Config parameter must be a JSON object",
-                    "provided_type": type(parsed_config).__name__,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Config parameter must be a JSON object",
+                    context={"script_id": script_id, "provided_type": type(parsed_config).__name__},
+                ))
 
             config_dict = cast(dict[str, Any], parsed_config)
 
@@ -257,11 +258,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Strip empty sequence array that would override blueprint
                 config_dict = _strip_empty_script_fields(config_dict)
             elif "sequence" not in config_dict:
-                return {
-                    "success": False,
-                    "error": "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
-                    "required_fields": ["sequence OR use_blueprint"],
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
+                    context={"script_id": script_id, "required_fields": ["sequence OR use_blueprint"]},
+                ))
 
             result = await client.upsert_script_config(config_dict, script_id)
 
@@ -281,13 +282,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 **result,
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error upserting script: {e}")
-            return {
-                "success": False,
-                "script_id": script_id,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"script_id": script_id},
+                suggestions=[
                     "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
                     "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
                     "Validate sequence actions syntax for regular scripts",
@@ -295,7 +296,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Use ha_search_entities(domain_filter='script') to find scripts",
                     "Use ha_get_domain_docs('script') for configuration help",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -349,16 +350,15 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {"success": True, "action": "delete", **result}
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting script: {e}")
-            return {
-                "success": False,
-                "action": "delete",
-                "script_id": script_id,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"script_id": script_id},
+                suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check if script is being used by automations",
                     "Use ha_get_domain_docs('script') for configuration help",
                 ],
-            }
+            )

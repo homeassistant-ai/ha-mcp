@@ -12,10 +12,11 @@ import base64
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -165,17 +166,18 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "css": len(categorized["css"]),
                 },
             }
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error listing dashboard resources: {e}")
-            return {
-                "success": False,
-                "action": "list",
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"tool": "ha_config_list_dashboard_resources"},
+                suggestions=[
                     "Ensure Home Assistant is running and accessible",
                     "Check that you have admin permissions",
                 ],
-            }
+            )
 
     # =========================================================================
     # Set Dashboard Resource (upsert - supports both inline code and external URLs)
@@ -288,66 +290,66 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 code=ErrorCode.VALIDATION_INVALID_PARAMETER,
                 message="Provide either 'content' (inline code) or 'url' (external), not both",
                 suggestions=[
                     "Use content= for inline JavaScript/CSS code",
                     "Use url= for /local/, /hacsfiles/, or https:// resources",
                 ],
-            )
+            ))
 
         if content is None and url is None:
-            return {
-                "success": False,
-                "error": "Either 'content' (inline code) or 'url' (external) is required",
-                "suggestions": [
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message="Either 'content' (inline code) or 'url' (external) is required",
+                suggestions=[
                     "Use content= for inline JavaScript/CSS code",
                     "Use url= for /local/, /hacsfiles/, or https:// resources",
                 ],
-            }
+            ))
 
         # ---- Inline content mode ----
         if content is not None:
             if not content.strip():
-                return {
-                    "success": False,
-                    "error": "Content cannot be empty",
-                }
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Content cannot be empty",
+                ))
 
             if resource_type == "js":
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
                     message="Inline content does not support resource_type='js'",
                     suggestions=[
                         "Use resource_type='module' for ES6 JavaScript (recommended)",
                         "Use url= mode with resource_type='js' for legacy files",
                     ],
-                )
+                ))
 
             content_bytes = content.encode("utf-8")
             content_size = len(content_bytes)
 
             if content_size > MAX_CONTENT_SIZE:
-                return {
-                    "success": False,
-                    "error": f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                    "size": content_size,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
+                    context={"size": content_size},
+                    suggestions=[
                         "Minify the code to reduce size",
                         "Split into multiple smaller modules",
                         "Use url= with a /local/ path for larger files",
                     ],
-                }
+                ))
 
             encoded, _, encoded_size = _encode_content(content)
 
             if encoded_size > MAX_ENCODED_LENGTH:
-                return {
-                    "success": False,
-                    "error": f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
-                    "size": content_size,
-                }
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
+                    context={"size": content_size},
+                ))
 
             resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
 
@@ -376,11 +378,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     error_msg = result.get("error", {})
                     if isinstance(error_msg, dict):
                         error_msg = error_msg.get("message", str(error_msg))
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         code=ErrorCode.SERVICE_CALL_FAILED,
                         message=str(error_msg),
                         context={"action": action},
-                    )
+                    ))
 
                 resource_info = result.get("result") if isinstance(result, dict) else result
                 new_resource_id = resource_id
@@ -400,17 +402,18 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "size": content_size,
                     "note": "Clear browser cache or hard refresh to load changes",
                 }
+            except ToolError:
+                raise
             except Exception as e:
                 logger.error(f"Error setting inline dashboard resource: {e}")
-                return {
-                    "success": False,
-                    "action": "update" if resource_id else "create",
-                    "error": str(e),
-                    "suggestions": [
+                exception_to_structured_error(
+                    e,
+                    context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create"},
+                    suggestions=[
                         "Ensure Home Assistant is running and accessible",
                         "Check that you have admin permissions",
                     ],
-                }
+                )
 
         # ---- External URL mode ----
         try:
@@ -441,23 +444,21 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 error_str = str(error_msg).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
-                    return {
-                        "success": False,
-                        "action": action,
-                        "url": url,
-                        "error": "Resource with this URL already exists",
-                        "suggestions": [
+                    raise_tool_error(create_error_response(
+                        code=ErrorCode.SERVICE_CALL_FAILED,
+                        message="Resource with this URL already exists",
+                        context={"action": action, "url": url},
+                        suggestions=[
                             "Use ha_config_list_dashboard_resources() to find existing resource",
                             "Provide resource_id to update the existing resource",
                         ],
-                    }
+                    ))
 
-                return {
-                    "success": False,
-                    "action": action,
-                    "url": url,
-                    "error": str(error_msg),
-                }
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.SERVICE_CALL_FAILED,
+                    message=str(error_msg),
+                    context={"action": action, "url": url},
+                ))
 
             resource_info = result.get("result") if isinstance(result, dict) else result
             new_resource_id = resource_id
@@ -477,19 +478,19 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "url": url,
                 "note": "Clear browser cache or hard refresh to load changes",
             }
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error setting dashboard resource: {e}")
-            return {
-                "success": False,
-                "action": "update" if resource_id else "create",
-                "url": url,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create", "url": url},
+                suggestions=[
                     "Ensure Home Assistant is running and accessible",
                     "Check that you have admin permissions",
                     "Verify the URL is correctly formatted",
                 ],
-            }
+            )
 
     # =========================================================================
     # Delete Dashboard Resource
@@ -552,7 +553,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ),
                     )
 
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     code=ErrorCode.SERVICE_CALL_FAILED,
                     message=f"Failed to delete dashboard resource: {error_str}",
                     context={"action": "delete", "resource_id": resource_id},
@@ -560,7 +561,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "Verify resource ID using ha_config_list_dashboard_resources()",
                         "Check that you have admin permissions",
                     ],
-                )
+                ))
 
             logger.info(f"Dashboard resource deleted: id={resource_id}")
 
@@ -570,6 +571,8 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "resource_id": resource_id,
                 "message": "Resource deleted successfully",
             }
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting dashboard resource: {e}")
             return exception_to_structured_error(

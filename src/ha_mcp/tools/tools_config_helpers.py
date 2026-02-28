@@ -14,7 +14,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage, raise_tool_error
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
     parse_string_list_param,
@@ -107,24 +107,25 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(items)} {helper_type} helper(s)",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list helpers: {result.get('error', 'Unknown error')}",
-                    "helper_type": helper_type,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list helpers: {result.get('error', 'Unknown error')}",
+                    context={"helper_type": helper_type},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error listing helpers: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list {helper_type} helpers: {str(e)}",
-                "helper_type": helper_type,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"helper_type": helper_type},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                     "Use ha_search_entities(domain_filter='input_*') as alternative",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -410,10 +411,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if action == "create":
                 if not name:
-                    return {
-                        "success": False,
-                        "error": "name is required for create action",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "name is required for create action",
+                        context={"helper_type": helper_type},
+                    ))
 
                 # Build create message based on helper type
                 message: dict[str, Any] = {
@@ -428,15 +430,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Type-specific parameters
                 if helper_type == "input_select":
                     if not options:
-                        return {
-                            "success": False,
-                            "error": "options list is required for input_select",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options list is required for input_select",
+                            context={"helper_type": helper_type},
+                        ))
                     if not isinstance(options, list) or len(options) == 0:
-                        return {
-                            "success": False,
-                            "error": "options must be a non-empty list for input_select",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options must be a non-empty list for input_select",
+                            context={"helper_type": helper_type},
+                        ))
                     message["options"] = options
                     if initial and initial in options:
                         message["initial"] = initial
@@ -448,12 +452,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         and max_value is not None
                         and min_value > max_value
                     ):
-                        return {
-                            "success": False,
-                            "error": f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
-                            "min_value": min_value,
-                            "max_value": max_value,
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
+                            context={"min_value": min_value, "max_value": max_value},
+                        ))
 
                     if min_value is not None:
                         message["min"] = min_value
@@ -504,10 +507,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Validate that at least one is True
                     if not message["has_date"] and not message["has_time"]:
-                        return {
-                            "success": False,
-                            "error": "At least one of has_date or has_time must be True for input_datetime",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "At least one of has_date or has_time must be True for input_datetime",
+                            context={"helper_type": helper_type},
+                        ))
 
                     if initial:
                         message["initial"] = initial
@@ -638,19 +642,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "message": f"Successfully created {helper_type}: {name}",
                     }
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to create helper: {result.get('error', 'Unknown error')}",
-                        "helper_type": helper_type,
-                        "name": name,
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to create helper: {result.get('error', 'Unknown error')}",
+                        context={"helper_type": helper_type, "name": name},
+                    ))
 
             elif action == "update":
                 if not helper_id:
-                    return {
-                        "success": False,
-                        "error": "helper_id is required for update action",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "helper_id is required for update action",
+                        context={"helper_type": helper_type},
+                    ))
 
                 # For updates, we primarily use entity registry update
                 entity_id = (
@@ -697,32 +701,30 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             response["warning"] = f"Update applied but verification failed: {e}"
                     return response
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to update helper: {result.get('error', 'Unknown error')}",
-                        "entity_id": entity_id,
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to update helper: {result.get('error', 'Unknown error')}",
+                        context={"helper_type": helper_type, "entity_id": entity_id},
+                    ))
 
             # This should never be reached since action is either "create" or "update"
-            return {
-                "success": False,
-                "error": f"Unexpected action: {action}",
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Unexpected action: {action}",
+            ))
 
         except ToolError:
             raise
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Helper management failed: {str(e)}",
-                "action": action,
-                "helper_type": helper_type,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"action": action, "helper_type": helper_type},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify helper_id exists for update operations",
                     "Ensure required parameters are provided for the helper type",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -902,13 +904,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     pass
 
                 # Final fallback failed
-                return {
-                    "success": False,
-                    "error": f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
-                    "helper_id": helper_id,
-                    "entity_id": entity_id,
-                    "suggestion": "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
+                    suggestions=[
+                        "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
+                    ],
+                    context={"helper_id": helper_id, "entity_id": entity_id},
+                ))
 
             # Delete helper using unique_id (correct API from docs)
             delete_message: dict[str, Any] = {
@@ -947,24 +950,24 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
 
-                return {
-                    "success": False,
-                    "error": f"Failed to delete helper: {error_msg}",
-                    "helper_id": helper_id,
-                    "entity_id": entity_id,
-                    "unique_id": unique_id,
-                    "suggestion": "Make sure the helper exists and is not being used by automations or scripts",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete helper: {error_msg}",
+                    suggestions=[
+                        "Make sure the helper exists and is not being used by automations or scripts",
+                    ],
+                    context={"helper_id": helper_id, "entity_id": entity_id, "unique_id": unique_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Helper deletion failed: {str(e)}",
-                "helper_type": helper_type,
-                "helper_id": helper_id,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"helper_type": helper_type, "helper_id": helper_id},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify helper_id exists using ha_search_entities()",
                     "Ensure helper is not being used by automations or scripts",
                 ],
-            }
+            )
