@@ -248,40 +248,58 @@ async def test_import_and_save_blueprint(mcp_client):
     # Use the official HA low battery notification blueprint (stable, well-known)
     blueprint_url = "https://community.home-assistant.io/t/low-battery-level-detection-notification-for-all-battery-sensors/258664"
 
+    blueprint_path = None
+    domain = None
+
     async with MCPAssertions(mcp_client) as mcp:
-        # Step 1: Import blueprint
-        logger.info(f"Importing blueprint from: {blueprint_url}")
-        result = await mcp.call_tool_success(
-            "ha_import_blueprint",
-            {"url": blueprint_url},
-        )
+        try:
+            # Step 1: Import blueprint
+            logger.info(f"Importing blueprint from: {blueprint_url}")
+            result = await mcp.call_tool_success(
+                "ha_import_blueprint",
+                {"url": blueprint_url},
+            )
 
-        # Verify response structure
-        assert "imported_blueprint" in result, "Response should contain 'imported_blueprint'"
-        imported = result["imported_blueprint"]
-        assert "path" in imported, "Imported blueprint should have 'path'"
-        assert "domain" in imported, "Imported blueprint should have 'domain'"
-        blueprint_path = imported["path"]
-        domain = imported["domain"]
-        logger.info(f"Blueprint imported: {blueprint_path} (domain: {domain})")
+            # Verify response structure
+            assert "imported_blueprint" in result, "Response should contain 'imported_blueprint'"
+            imported = result["imported_blueprint"]
+            assert "path" in imported, "Imported blueprint should have 'path'"
+            assert "domain" in imported, "Imported blueprint should have 'domain'"
+            blueprint_path = imported["path"]
+            domain = imported["domain"]
+            logger.info(f"Blueprint imported: {blueprint_path} (domain: {domain})")
 
-        # Step 2: Verify blueprint appears in list
-        list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": domain},
-        )
+            # Step 2: Verify blueprint appears in list
+            list_result = await mcp.call_tool_success(
+                "ha_get_blueprint",
+                {"domain": domain},
+            )
 
-        blueprints = list_result.get("blueprints", [])
-        blueprint_paths = [bp["path"] for bp in blueprints]
-        assert blueprint_path in blueprint_paths, (
-            f"Imported blueprint '{blueprint_path}' should appear in blueprint list. "
-            f"Available: {blueprint_paths}"
-        )
-        logger.info("Blueprint verified in list")
+            blueprints = list_result.get("blueprints", [])
+            blueprint_paths = [bp["path"] for bp in blueprints]
+            assert blueprint_path in blueprint_paths, (
+                f"Imported blueprint '{blueprint_path}' should appear in blueprint list. "
+                f"Available: {blueprint_paths}"
+            )
+            logger.info("Blueprint verified in list")
 
-        # Step 3: Clean up - delete the imported blueprint
-        # Use websocket directly since there's no ha_delete_blueprint tool
-        logger.info(f"Cleaning up: deleting blueprint {blueprint_path}")
+        finally:
+            # Step 3: Clean up - delete the imported blueprint
+            if blueprint_path and domain:
+                logger.info(f"Cleaning up: deleting blueprint {blueprint_path}")
+                try:
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_call_service",
+                        {
+                            "domain": "blueprint",
+                            "service": "delete",
+                            "service_data": {"domain": domain, "path": blueprint_path},
+                        },
+                    )
+                    logger.info("Blueprint cleanup succeeded")
+                except Exception as cleanup_err:
+                    logger.warning(f"Blueprint cleanup failed (non-fatal): {cleanup_err}")
 
     logger.info("Blueprint import+save workflow test completed successfully")
 

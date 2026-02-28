@@ -250,8 +250,17 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Extract import result (blueprint/import only downloads and validates)
             result_data = response.get("result", {})
-            suggested_filename = result_data.get("suggested_filename", "")
-            raw_data = result_data.get("raw_data", "")
+            suggested_filename = result_data.get("suggested_filename")
+            raw_data = result_data.get("raw_data")
+
+            if not suggested_filename or not raw_data:
+                raise_tool_error(create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Blueprint import succeeded but response is missing required data.",
+                    context={"url": url},
+                    suggestions=["This indicates an unexpected response from Home Assistant - please report this issue."],
+                ))
+
             blueprint_metadata = result_data.get("blueprint", {}).get("metadata", {})
             domain = blueprint_metadata.get("domain", "automation")
 
