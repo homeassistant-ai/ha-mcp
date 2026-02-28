@@ -573,7 +573,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         annotations={
-            "destructiveHint": True,
+            "idempotentHint": True,
             "tags": ["integration"],
             "title": "Set Integration Options",
         }
