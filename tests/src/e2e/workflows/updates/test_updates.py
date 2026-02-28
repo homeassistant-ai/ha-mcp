@@ -13,7 +13,7 @@ import logging
 import pytest
 
 # Import test utilities
-from ...utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -421,6 +421,106 @@ class TestUpdateToolsEdgeCases:
             logger.info("Categorization test passed")
 
 
+@pytest.mark.updates
+class TestCheckUpdateNotes:
+    """Test suite for ha_check_update_notes tool."""
+
+    async def test_check_update_notes_response_structure(self, mcp_client):
+        """
+        Test: ha_check_update_notes returns expected response structure.
+
+        The Docker test environment may not have a Core update entity.
+        When present, validates the full response structure; when absent,
+        validates the structured error response.
+        """
+        logger.info("Testing ha_check_update_notes response structure...")
+
+        result = await safe_call_tool(mcp_client, "ha_check_update_notes", {})
+
+        # Docker env may not have Core update entity - that's expected
+        if result.get("success") is False:
+            error = result.get("error", {})
+            assert error.get("code") == "ENTITY_NOT_FOUND", (
+                f"Expected ENTITY_NOT_FOUND error, got: {error}"
+            )
+            logger.info("No Core update entity in test env (expected)")
+            return
+
+        assert result.get("success") is True, f"Expected success=True: {result}"
+
+        # If no update available, we get a message instead of release data
+        if "message" in result:
+            assert "current_version" in result
+            logger.info(
+                f"No update available. Current version: {result['current_version']}"
+            )
+            return
+
+        # When an update is available, verify full structure
+        assert "current_version" in result, f"Missing current_version: {result}"
+        assert "target_version" in result, f"Missing target_version: {result}"
+        assert "installed_integrations" in result
+        assert "release_notes" in result
+        assert "breaking_changes" in result
+
+        # Verify types
+        assert isinstance(result["installed_integrations"], list)
+        assert isinstance(result["release_notes"], list)
+        assert isinstance(result["breaking_changes"], dict)
+
+        # Verify breaking_changes sub-structure
+        bc = result["breaking_changes"]
+        assert "entries" in bc and "count" in bc and "versions_checked" in bc
+        assert isinstance(bc["entries"], list)
+        assert isinstance(bc["count"], int)
+
+        logger.info(
+            f"Update notes: {result['current_version']} -> {result['target_version']}, "
+            f"{bc['count']} breaking changes, "
+            f"{len(result['release_notes'])} release notes, "
+            f"{len(result['installed_integrations'])} integrations"
+        )
+
+    async def test_check_update_notes_with_explicit_version(self, mcp_client):
+        """
+        Test: ha_check_update_notes with explicit version parameter.
+
+        Passes a specific target version to validate the version parameter works.
+        The Docker env may not have a Core update entity, which is expected.
+        """
+        logger.info("Testing ha_check_update_notes with explicit version...")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            # First get current version from overview
+            overview = await mcp.call_tool_success("ha_get_overview", {})
+            system_info = overview.get("system_info", {})
+            current_version = system_info.get("version", "")
+
+            if not current_version:
+                logger.info("Could not determine current version, skipping")
+                return
+
+        # Use safe_call_tool since Docker env may lack Core update entity
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_check_update_notes",
+            {"version": current_version},
+        )
+
+        if result.get("success") is False:
+            error = result.get("error", {})
+            assert error.get("code") == "ENTITY_NOT_FOUND", (
+                f"Expected ENTITY_NOT_FOUND error, got: {error}"
+            )
+            logger.info("No Core update entity in test env (expected)")
+            return
+
+        assert result.get("success") is True
+        logger.info(
+            f"Explicit version test passed (version={current_version})"
+        )
+
+
 async def test_update_tools_discovery(mcp_client):
     """
     Test: Verify update tools are discoverable and registered.
@@ -446,6 +546,7 @@ async def test_update_tools_discovery(mcp_client):
     expected_tools = [
         "ha_get_updates",  # Handles both list and get-by-entity_id modes
         "ha_get_overview",  # System info and version
+        "ha_check_update_notes",  # Pre-update impact review
     ]
 
     for tool_name in expected_tools:
