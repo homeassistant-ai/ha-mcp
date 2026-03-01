@@ -664,16 +664,52 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Person, zone, and tag store config in separate config stores
                 # (not just the entity registry). Route updates accordingly.
-                # The entity registry only holds UI metadata (name, icon, area,
-                # labels). Domain-specific data like device_trackers (person),
-                # coordinates (zone), and descriptions (tag) live in their own
-                # config stores accessed via {type}/update websocket commands.
+                # Person and zone have entity registry entries with unique_id
+                # used as the config store identifier. Tags use their own tag
+                # registry and don't have entity registry entries.
                 config_store_types = {"person", "zone", "tag"}
 
                 updated_data: dict[str, Any] = {}
 
-                if helper_type in config_store_types:
-                    # Step 1: Get unique_id from entity registry
+                if helper_type == "tag":
+                    # Tags use their own registry — no entity registry entries.
+                    # The helper_id IS the tag_id (strip "tag." prefix if present).
+                    tag_update_id = (
+                        helper_id.removeprefix("tag.")
+                        if helper_id.startswith("tag.")
+                        else helper_id
+                    )
+                    update_msg: dict[str, Any] = {
+                        "type": "tag/update",
+                        "tag_id": tag_update_id,
+                    }
+                    if name is not None:
+                        update_msg["name"] = name
+                    if description is not None:
+                        update_msg["description"] = description
+
+                    result = await client.send_websocket_message(update_msg)
+                    if not result.get("success"):
+                        raise_tool_error(create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Failed to update tag config: {result.get('error', 'Unknown error')}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+                    updated_data = result.get("result", {})
+
+                    # Tags don't have entity registry entries, so return directly
+                    # without wait_for_entity_registered (they're not entities).
+                    return {
+                        "success": True,
+                        "action": "update",
+                        "helper_type": helper_type,
+                        "entity_id": entity_id,
+                        "updated_data": updated_data,
+                        "message": f"Successfully updated {helper_type}: {entity_id}",
+                    }
+
+                elif helper_type in config_store_types:
+                    # Person and zone: look up unique_id from entity registry
                     registry_msg: dict[str, Any] = {
                         "type": "config/entity_registry/get",
                         "entity_id": entity_id,
@@ -740,7 +776,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ))
 
                         # Merge: use new values if provided, else keep current
-                        update_msg: dict[str, Any] = {
+                        update_msg = {
                             "type": "person/update",
                             "person_id": unique_id,
                             "name": name if name is not None else current_config.get("name"),
@@ -790,42 +826,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ))
                         updated_data = result.get("result", {})
 
-                    elif helper_type == "tag":
-                        # Note: tag name belongs in entity registry, not tag storage
-                        # (consistent with create path — see tag create section above)
-                        update_msg = {
-                            "type": "tag/update",
-                            "tag_id": unique_id,
-                        }
-                        if description is not None:
-                            update_msg["description"] = description
-
-                        result = await client.send_websocket_message(update_msg)
-                        if not result.get("success"):
-                            raise_tool_error(create_error_response(
-                                ErrorCode.SERVICE_CALL_FAILED,
-                                f"Failed to update tag config: {result.get('error', 'Unknown error')}",
-                                context={"helper_type": helper_type, "entity_id": entity_id},
-                            ))
-                        updated_data = result.get("result", {})
-
-                    # Also update entity registry for name (tags only), icon, area, and labels.
-                    # Tag names live in the entity registry, not tag storage.
-                    registry_update_fields: dict[str, Any] = {}
-                    if helper_type == "tag" and name is not None:
-                        registry_update_fields["name"] = name
-                    if icon:
-                        registry_update_fields["icon"] = icon
-                    if area_id:
-                        registry_update_fields["area_id"] = area_id
-                    if labels:
-                        registry_update_fields["labels"] = labels
-                    if registry_update_fields:
+                    # Also update entity registry for icon, area, and labels
+                    if icon or area_id or labels:
                         registry_update: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
-                            **registry_update_fields,
                         }
+                        if icon:
+                            registry_update["icon"] = icon
+                        if area_id:
+                            registry_update["area_id"] = area_id
+                        if labels:
+                            registry_update["labels"] = labels
                         await client.send_websocket_message(registry_update)
 
                 else:

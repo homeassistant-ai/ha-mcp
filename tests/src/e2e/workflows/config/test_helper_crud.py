@@ -1403,12 +1403,12 @@ class TestTagCRUD:
         logger.info("Tag cleanup complete")
 
     async def test_tag_update_preserves_description(self, mcp_client, cleanup_tracker):
-        """Regression test: tag update must route description to tag/update and name to entity registry.
+        """Regression test: tag update must route to tag/update (not entity registry).
 
         Before this fix, updating a tag via ha_config_set_helper only called
         config/entity_registry/update, which silently dropped the description field.
-        Additionally, the original PR incorrectly sent name to tag/update rather than
-        the entity registry — this test verifies both are handled correctly.
+        Tags don't have entity registry entries, so both name and description
+        are sent to tag/update directly.
         """
         logger.info("Testing tag update preserves description (regression test for config-store routing)")
 
@@ -1430,7 +1430,7 @@ class TestTagCRUD:
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 
-        # UPDATE description via tag/update and name via entity registry
+        # UPDATE description and name via tag/update
         # helper_id triggers update mode (no "action" parameter needed)
         update_result = await mcp_client.call_tool(
             "ha_config_set_helper",
