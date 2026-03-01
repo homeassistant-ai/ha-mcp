@@ -10,6 +10,7 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -149,10 +150,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
 
-        Reads the description field from each SKILL.md's YAML frontmatter
-        and includes it as-is in the server instructions. The description
-        is authored for LLM consumption and should not be parsed or
-        restructured by code.
+        Parses each SKILL.md to extract trigger conditions and symptoms,
+        then generates instructions telling the LLM to read the skill
+        resource before performing matching actions.
 
         Returns None when skills are disabled, leaving instructions unchanged
         from the default (None).
@@ -176,7 +176,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             if not skill_dir.is_dir() or not main_file.exists():
                 continue
 
-            block = self._build_skill_block(skill_dir.name, main_file)
+            block = self._parse_skill_instructions(skill_dir.name, main_file)
             if block:
                 skill_blocks.append(block)
 
@@ -208,14 +208,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return header + "\n".join(skill_blocks)
 
-    def _build_skill_block(
+    def _parse_skill_instructions(
         self, skill_name: str, main_file: Path
     ) -> str | None:
-        """Build an instruction block for a single skill.
+        """Parse a SKILL.md and return an instruction block for this skill.
 
-        Reads the description field from YAML frontmatter and includes it
-        verbatim. The description is designed for LLM consumption and
-        contains its own trigger conditions and symptom indicators.
+        Extracts the description field from YAML frontmatter, then pulls out
+        the TRIGGER THIS SKILL WHEN and SYMPTOMS THAT TRIGGER THIS SKILL
+        sections as bullet lists.
         """
         try:
             content = main_file.read_text(encoding="utf-8")
@@ -246,7 +246,46 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         uri = f"skill://{skill_name}/SKILL.md"
 
-        return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
+        # Extract trigger and symptom sections from the description
+        triggers = self._extract_section(description, "TRIGGER THIS SKILL WHEN:")
+        symptoms = self._extract_section(description, "SYMPTOMS THAT TRIGGER THIS SKILL:")
+
+        if not triggers and not symptoms:
+            return None
+
+        lines = [f"\n### Skill: {skill_name} ({uri})"]
+        if triggers:
+            lines.append("Read this skill BEFORE:")
+            lines.extend(f"  - {t}" for t in triggers)
+        if symptoms:
+            lines.append("Also read if you notice:")
+            lines.extend(f"  - {s}" for s in symptoms)
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_section(description: str, header: str) -> list[str]:
+        """Extract bullet items following a section header in a description string.
+
+        The YAML folded scalar turns the original bullet list into a single line
+        like: 'TRIGGER THIS SKILL WHEN: - item one - item two\\nNEXT SECTION:'
+        This method handles both the folded (space-separated) and unfolded
+        (newline-separated) formats.
+        """
+        idx = description.find(header)
+        if idx == -1:
+            return []
+
+        # Text after the header, up to the next known section or end
+        after = description[idx + len(header):]
+        # Stop at the next section header (ALLCAPS WORD followed by colon)
+        next_section = re.search(r"\n[A-Z][A-Z ]+:", after)
+        if next_section:
+            after = after[:next_section.start()]
+
+        # Split on ' - ' (folded format) or '\n- ' (unfolded format)
+        items = re.split(r"(?:^|\s)- ", after.strip())
+        return [item.strip() for item in items if item.strip()]
 
 
     def _register_skills(self) -> None:
