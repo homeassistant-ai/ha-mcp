@@ -724,11 +724,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             else person_result
                         )
 
-                        current_config = None
-                        for person_entry in person_list:
-                            if isinstance(person_entry, dict) and person_entry.get("id") == unique_id:
-                                current_config = person_entry
-                                break
+                        current_config = next(
+                            (
+                                p for p in person_list
+                                if isinstance(p, dict) and p.get("id") == unique_id
+                            ),
+                            None,
+                        )
 
                         if not current_config:
                             raise_tool_error(create_error_response(
@@ -741,7 +743,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         update_msg: dict[str, Any] = {
                             "type": "person/update",
                             "person_id": unique_id,
-                            "name": name if name else current_config.get("name"),
+                            "name": name if name is not None else current_config.get("name"),
                             "user_id": user_id
                             if user_id is not None
                             else current_config.get("user_id"),
@@ -768,7 +770,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "type": "zone/update",
                             "zone_id": unique_id,
                         }
-                        if name:
+                        if name is not None:
                             update_msg["name"] = name
                         if latitude is not None:
                             update_msg["latitude"] = latitude
@@ -810,7 +812,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Also update entity registry for name (tags only), icon, area, and labels.
                     # Tag names live in the entity registry, not tag storage.
                     registry_update_fields: dict[str, Any] = {}
-                    if helper_type == "tag" and name:
+                    if helper_type == "tag" and name is not None:
                         registry_update_fields["name"] = name
                     if icon:
                         registry_update_fields["icon"] = icon
