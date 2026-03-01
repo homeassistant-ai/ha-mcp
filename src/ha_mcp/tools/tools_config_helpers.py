@@ -667,7 +667,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Person and zone have entity registry entries with unique_id
                 # used as the config store identifier. Tags use their own tag
                 # registry and don't have entity registry entries.
-                config_store_types = {"person", "zone", "tag"}
+                config_store_types = {"person", "zone"}
 
                 updated_data: dict[str, Any] = {}
 
@@ -847,7 +847,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "entity_id": entity_id,
                     }
 
-                    if name:
+                    if name is not None:
                         update_msg["name"] = name
                     if icon:
                         update_msg["icon"] = icon
