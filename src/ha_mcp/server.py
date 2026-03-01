@@ -184,10 +184,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
 
         header = (
-            "IMPORTANT: This server provides best-practice skills that MUST be "
-            "consulted before performing matching actions. Read ONLY the SKILL.md "
-            "for the matching skill — it will direct you to specific reference "
-            "files if needed. Do NOT load all reference files upfront.\n\n"
+            "IMPORTANT: This server provides best-practice skills that MUST "
+            "be consulted before performing matching actions. "
+            "Read ONLY the SKILL.md for the matching skill "
+            "\u2014 it contains a Reference Files table that maps tasks to "
+            "specific reference files. You MUST read the referenced files "
+            "that match your current task before proceeding. "
+            "Do NOT load all reference files upfront "
+            "\u2014 only the ones the table directs you to.\n\n"
             f"How to access: {access_method}\n"
         )
 
