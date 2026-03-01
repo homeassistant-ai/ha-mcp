@@ -1176,12 +1176,13 @@ class TestZoneCRUD:
         assert state_reached, f"Zone {entity_id} not registered within timeout"
 
         # UPDATE with new coordinates
+        # name is required by the tool schema; helper_id triggers update mode
         update_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "zone",
                 "helper_id": entity_id,
-                "action": "update",
+                "name": "E2E Zone Update Test",
                 "latitude": 51.5074,
                 "longitude": -0.1278,
                 "radius": 500,
@@ -1312,12 +1313,12 @@ class TestPersonCRUD:
 
         # UPDATE with a name change — this exercises the full fetch-merge-update path
         # even without real device_trackers available in the test environment
+        # helper_id triggers update mode (no "action" parameter needed)
         update_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "person",
                 "helper_id": entity_id,
-                "action": "update",
                 "name": "E2E Person Update Test Renamed",
             },
         )
@@ -1430,12 +1431,12 @@ class TestTagCRUD:
         logger.info(f"Created tag: {tag_id}")
 
         # UPDATE description via tag/update and name via entity registry
+        # helper_id triggers update mode (no "action" parameter needed)
         update_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "tag",
                 "helper_id": tag_id,
-                "action": "update",
                 "name": "E2E Tag Update Test Renamed",
                 "description": "Updated description",
             },
