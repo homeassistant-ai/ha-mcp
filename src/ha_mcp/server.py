@@ -10,9 +10,11 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from fastmcp import FastMCP
 from mcp.types import Icon
 
@@ -72,8 +74,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
+        # Build server instructions from bundled skills (if enabled)
+        instructions = self._build_skills_instructions()
+
         # Create FastMCP server with Home Assistant icons for client UI display
-        self.mcp = FastMCP(name=server_name, version=server_version, icons=SERVER_ICONS)
+        self.mcp = FastMCP(
+            name=server_name,
+            version=server_version,
+            icons=SERVER_ICONS,
+            instructions=instructions,
+        )
 
         # Register all tools and expert prompts
         self._initialize_server()
@@ -127,6 +137,138 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
+    def _get_skills_dir(self) -> Path | None:
+        """Return the bundled skills directory if it exists."""
+        skills_dir = Path(__file__).parent / "resources" / "skills"
+        return skills_dir if skills_dir.exists() else None
+
+    def _build_skills_instructions(self) -> str | None:
+        """Build server instructions from bundled skill frontmatter.
+
+        Parses each SKILL.md to extract trigger conditions and symptoms,
+        then generates instructions telling the LLM to read the skill
+        resource before performing matching actions.
+
+        Returns None when skills are disabled, leaving instructions unchanged
+        from the default (None).
+        """
+        if not self.settings.enable_skills:
+            return None
+
+        skills_dir = self._get_skills_dir()
+        if not skills_dir:
+            return None
+
+        skill_blocks: list[str] = []
+        for skill_dir in sorted(skills_dir.iterdir()):
+            main_file = skill_dir / "SKILL.md"
+            if not skill_dir.is_dir() or not main_file.exists():
+                continue
+
+            block = self._parse_skill_instructions(skill_dir.name, main_file)
+            if block:
+                skill_blocks.append(block)
+
+        if not skill_blocks:
+            return None
+
+        # Build the access method instruction based on config
+        if self.settings.enable_skills_as_tools:
+            access_method = (
+                "Use the read_resource tool with the skill's URI to load it."
+            )
+        else:
+            access_method = (
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI)."
+            )
+
+        header = (
+            "IMPORTANT: This server provides best-practice skills that MUST be "
+            "consulted before performing matching actions. Read ONLY the SKILL.md "
+            "for the matching skill — it will direct you to specific reference "
+            "files if needed. Do NOT load all reference files upfront.\n\n"
+            f"How to access: {access_method}\n"
+        )
+
+        return header + "\n".join(skill_blocks)
+
+    def _parse_skill_instructions(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Parse a SKILL.md and return an instruction block for this skill.
+
+        Extracts the description field from YAML frontmatter, then pulls out
+        the TRIGGER THIS SKILL WHEN and SYMPTOMS THAT TRIGGER THIS SKILL
+        sections as bullet lists.
+        """
+        try:
+            content = main_file.read_text(encoding="utf-8")
+        except OSError:
+            logger.debug("Could not read %s", main_file)
+            return None
+
+        # Extract YAML frontmatter between --- markers
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return None
+
+        try:
+            frontmatter = yaml.safe_load(parts[1])
+        except yaml.YAMLError:
+            logger.debug("Could not parse frontmatter in %s", main_file)
+            return None
+
+        if not isinstance(frontmatter, dict):
+            return None
+
+        description = frontmatter.get("description", "")
+        if not description:
+            return None
+
+        uri = f"skill://{skill_name}/SKILL.md"
+
+        # Extract trigger and symptom sections from the description
+        triggers = self._extract_section(description, "TRIGGER THIS SKILL WHEN:")
+        symptoms = self._extract_section(description, "SYMPTOMS THAT TRIGGER THIS SKILL:")
+
+        if not triggers and not symptoms:
+            return None
+
+        lines = [f"\n### Skill: {skill_name} ({uri})"]
+        if triggers:
+            lines.append("Read this skill BEFORE:")
+            lines.extend(f"  - {t}" for t in triggers)
+        if symptoms:
+            lines.append("Also read if you notice:")
+            lines.extend(f"  - {s}" for s in symptoms)
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_section(description: str, header: str) -> list[str]:
+        """Extract bullet items following a section header in a description string.
+
+        The YAML folded scalar turns the original bullet list into a single line
+        like: 'TRIGGER THIS SKILL WHEN: - item one - item two\\nNEXT SECTION:'
+        This method handles both the folded (space-separated) and unfolded
+        (newline-separated) formats.
+        """
+        idx = description.find(header)
+        if idx == -1:
+            return []
+
+        # Text after the header, up to the next known section or end
+        after = description[idx + len(header):]
+        # Stop at the next section header (ALLCAPS WORD followed by colon)
+        next_section = re.search(r"\n[A-Z][A-Z ]+:", after)
+        if next_section:
+            after = after[:next_section.start()]
+
+        # Split on ' - ' (folded format) or '\n- ' (unfolded format)
+        items = re.split(r"(?:^|\s)- ", after.strip())
+        return [item.strip() for item in items if item.strip()]
+
     def _register_skills(self) -> None:
         """Register bundled HA best-practice skills as MCP resources.
 
@@ -142,9 +284,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         try:
             from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-            skills_dir = Path(__file__).parent / "resources" / "skills"
-            if not skills_dir.exists():
-                logger.debug("Skills directory not found at %s, skipping", skills_dir)
+            skills_dir = self._get_skills_dir()
+            if not skills_dir:
+                logger.debug("Skills directory not found, skipping")
                 return
 
             self.mcp.add_provider(SkillsDirectoryProvider(roots=[skills_dir]))
