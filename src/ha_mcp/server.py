@@ -293,7 +293,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 logger.debug("Skills directory not found, skipping")
                 return
 
-            self.mcp.add_provider(SkillsDirectoryProvider(roots=[skills_dir]))
+            self.mcp.add_provider(SkillsDirectoryProvider(
+                roots=[skills_dir], supporting_files="resources"
+            ))
             logger.info("Registered bundled skills as MCP resources")
 
             if self.settings.enable_skills_as_tools:
