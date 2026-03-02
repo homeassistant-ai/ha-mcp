@@ -7,7 +7,6 @@ This module provides tools for Home Assistant system administration including:
 - System health monitoring
 """
 
-import asyncio
 import logging
 from typing import Any
 
@@ -334,47 +333,23 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Failed to connect to Home Assistant WebSocket",
                 ))
 
-            # Generate message ID for tracking the response and event
-            message_id = ws_client.get_next_message_id()
-            full_message = {
-                "id": message_id,
-                "type": "system_health/info"
-            }
-
-            # Create futures for both result and event responses
-            result_future = ws_client.register_pending_response(message_id)
-            event_future = ws_client.register_event_response(message_id)
-
+            # system_health/info returns a result + follow-up event
             try:
-                await ws_client.send_json_message(full_message)
-            except Exception as e:
-                ws_client.cancel_pending_response(message_id)
-                ws_client.cancel_event_response(message_id)
-                raise e
-
-            try:
-                # Wait for the initial result response (should be success with null result)
-                result_response = await asyncio.wait_for(result_future, timeout=10.0)
-
-                if not result_response.get("success"):
-                    ws_client.cancel_event_response(message_id)
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result_response.get("error", "Failed to retrieve system health"),
-                    ))
-
-                # Wait for the event response containing the actual health data
-                event_response = await asyncio.wait_for(event_future, timeout=10.0)
-
-                # Extract health info from event
-                health_info = event_response.get("event", {})
-
-            except asyncio.TimeoutError:
-                ws_client.cancel_event_response(message_id)
+                _, event_response = await ws_client.send_command_with_event(
+                    "system_health/info", wait_timeout=10.0
+                )
+            except TimeoutError:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Timeout waiting for system health data",
                 ))
+            except Exception as e:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(e),
+                ))
+
+            health_info = event_response.get("event", {})
 
             return {
                 "success": True,

@@ -456,6 +456,71 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise
 
+    async def send_command_with_event(
+        self,
+        command_type: str,
+        wait_timeout: float = 10.0,
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Send a command that returns a result followed by an event response.
+
+        Some HA WebSocket commands (e.g. system_health/info, render_template)
+        reply with an immediate result message and then deliver the actual data
+        in a subsequent event message sharing the same message ID.
+
+        Args:
+            command_type: Type of command to send.
+            wait_timeout: Seconds to wait for each response phase.
+            **kwargs: Additional fields merged into the outgoing message.
+
+        Returns:
+            A (result_response, event_response) tuple.
+        """
+        if not self._state.is_ready:
+            raise Exception("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message = {"id": message_id, "type": command_type, **kwargs}
+
+        result_future = self.register_pending_response(message_id)
+        event_future = self.register_event_response(message_id)
+
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self.cancel_pending_response(message_id)
+            self.cancel_event_response(message_id)
+            raise
+
+        try:
+            result_response = await asyncio.wait_for(
+                result_future, timeout=wait_timeout
+            )
+        except TimeoutError:
+            self.cancel_pending_response(message_id)
+            self.cancel_event_response(message_id)
+            raise
+
+        if not result_response.get("success"):
+            self.cancel_event_response(message_id)
+            error = result_response.get("error", {})
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
+            raise Exception(f"Command failed: {error_msg}")
+
+        try:
+            event_response = await asyncio.wait_for(
+                event_future, timeout=wait_timeout
+            )
+        except TimeoutError:
+            self.cancel_event_response(message_id)
+            raise
+
+        return result_response, event_response
+
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
 
