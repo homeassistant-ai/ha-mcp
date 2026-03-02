@@ -11,9 +11,11 @@ from typing import Annotated, Any, cast
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
-from .best_practice_checker import check_script_config as _check_best_practices
+from .best_practice_checker import (
+    check_script_config as _check_best_practices,
+    get_skill_prefix as _get_skill_prefix,
+)
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
@@ -268,16 +270,8 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ))
 
             # Pre-check for best-practice issues.
-            # When skills are enabled, point to skill:// URIs; when disabled,
-            # fall back to the upstream GitHub URLs.
-            _settings = get_global_settings()
-            _skill_prefix = (
-                "skill://home-assistant-best-practices/references"
-                if _settings.enable_skills
-                else "https://github.com/homeassistant-ai/skills/blob/main/skills/home-assistant-best-practices/references"
-            )
             bp_warnings = _check_best_practices(
-                config_dict, skill_prefix=_skill_prefix
+                config_dict, skill_prefix=_get_skill_prefix()
             )
 
             result = await client.upsert_script_config(config_dict, script_id)

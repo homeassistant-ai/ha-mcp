@@ -18,7 +18,25 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_DEFAULT_SKILL_PREFIX = "skill://home-assistant-best-practices/references"
+_SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"
+_GITHUB_URL_PREFIX = (
+    "https://github.com/homeassistant-ai/skills/blob/main"
+    "/skills/home-assistant-best-practices/references"
+)
+_DEFAULT_SKILL_PREFIX = _SKILL_URI_PREFIX
+
+
+def get_skill_prefix() -> str:
+    """Return the appropriate skill prefix based on global settings.
+
+    When skills are enabled (ENABLE_SKILLS=true), returns skill:// URIs.
+    Otherwise falls back to GitHub URLs for the reference files.
+    """
+    from ..config import get_global_settings
+
+    if get_global_settings().enable_skills:
+        return _SKILL_URI_PREFIX
+    return _GITHUB_URL_PREFIX
 
 # ---------------------------------------------------------------------------
 # Regex patterns for template anti-patterns
