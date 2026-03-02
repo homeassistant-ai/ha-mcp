@@ -6,8 +6,6 @@ blueprint skipping, skill_prefix modes, false-positive rejection, and
 recursive config structure traversal.
 """
 
-from typing import ClassVar
-
 from ha_mcp.tools.best_practice_checker import (
     check_automation_config,
     check_script_config,
@@ -429,28 +427,29 @@ class TestModeMotionPattern:
 # ---------------------------------------------------------------------------
 
 
+_SKILL_PREFIX_TEST_CONFIG = {
+    "condition": [{
+        "condition": "template",
+        "value_template": "{{ is_state('light.x', 'on') }}",
+    }],
+    "action": [],
+}
+
+
 class TestSkillPrefixModes:
     """Verify warning output varies based on skill_prefix setting."""
 
-    _CONFIG: ClassVar[dict] = {
-        "condition": [{
-            "condition": "template",
-            "value_template": "{{ is_state('light.x', 'on') }}",
-        }],
-        "action": [],
-    }
-
     def test_default_skill_prefix(self):
-        warnings = check_automation_config(self._CONFIG)
+        warnings = check_automation_config(_SKILL_PREFIX_TEST_CONFIG)
         assert any("skill://" in w for w in warnings)
 
     def test_custom_skill_prefix(self):
-        warnings = check_automation_config(self._CONFIG, skill_prefix=GITHUB_PREFIX)
+        warnings = check_automation_config(_SKILL_PREFIX_TEST_CONFIG, skill_prefix=GITHUB_PREFIX)
         assert any("github.com" in w for w in warnings)
         assert not any("skill://" in w for w in warnings)
 
     def test_no_skill_prefix(self):
-        warnings = check_automation_config(self._CONFIG, skill_prefix=None)
+        warnings = check_automation_config(_SKILL_PREFIX_TEST_CONFIG, skill_prefix=None)
         assert warnings  # Warnings still fire
         assert not any("skill://" in w for w in warnings)
         assert not any("See " in w for w in warnings)
