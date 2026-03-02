@@ -16,6 +16,7 @@ from ..errors import (
     create_resource_not_found_error,
     create_validation_error,
 )
+from .best_practice_checker import check_automation_config as _check_best_practices
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
@@ -416,6 +417,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - Use ha_eval_template() to test Jinja2 templates before using in automations
         - Use ha_search_entities(domain_filter='automation') to find existing automations
         """
+        bp_warnings: list[str] = []
         try:
             # Parse JSON config if provided as string
             try:
@@ -468,6 +470,10 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "To create a genuinely new automation, remove the 'id' field from the config.",
                 ))
 
+            # Pre-check for best-practice issues (used for both success
+            # warnings and error enrichment if the API call fails)
+            bp_warnings = _check_best_practices(config_dict)
+
             result = await client.upsert_automation_config(config_dict, identifier)
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
@@ -493,6 +499,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 except Exception as e:
                     result["warning"] = f"Automation created but verification failed: {e}"
 
+            if bp_warnings:
+                result["best_practice_warnings"] = bp_warnings
+
             return {
                 "success": True,
                 **result,
@@ -502,16 +511,22 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             raise
         except Exception as e:
             logger.error(f"Error upserting automation: {e}")
+            suggestions = [
+                "Check automation configuration format",
+                "Ensure required fields: alias, trigger, action",
+                "Use entity_id format: automation.morning_routine or unique_id",
+                "Use ha_search_entities(domain_filter='automation') to find automations",
+                "Use ha_get_domain_docs('automation') for comprehensive configuration help",
+            ]
+            if bp_warnings:
+                suggestions.append(
+                    "Config had best-practice issues that may be related: "
+                    + "; ".join(bp_warnings)
+                )
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier},
-                suggestions=[
-                    "Check automation configuration format",
-                    "Ensure required fields: alias, trigger, action",
-                    "Use entity_id format: automation.morning_routine or unique_id",
-                    "Use ha_search_entities(domain_filter='automation') to find automations",
-                    "Use ha_get_domain_docs('automation') for comprehensive configuration help",
-                ],
+                suggestions=suggestions,
             )
 
     @mcp.tool(

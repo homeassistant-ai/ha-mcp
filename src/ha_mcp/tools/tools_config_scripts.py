@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .best_practice_checker import check_script_config as _check_best_practices
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
@@ -231,6 +232,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.
         """
+        bp_warnings: list[str] = []
         try:
             # Parse JSON config if provided as string
             try:
@@ -264,6 +266,9 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     context={"script_id": script_id, "required_fields": ["sequence OR use_blueprint"]},
                 ))
 
+            # Pre-check for best-practice issues
+            bp_warnings = _check_best_practices(config_dict)
+
             result = await client.upsert_script_config(config_dict, script_id)
 
             # Wait for script to be queryable
@@ -277,6 +282,9 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     result["warning"] = f"Script created but verification failed: {e}"
 
+            if bp_warnings:
+                result["best_practice_warnings"] = bp_warnings
+
             return {
                 "success": True,
                 **result,
@@ -285,17 +293,23 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
+            suggestions = [
+                "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
+                "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
+                "Validate sequence actions syntax for regular scripts",
+                "Check entity_ids exist if using service calls",
+                "Use ha_search_entities(domain_filter='script') to find scripts",
+                "Use ha_get_domain_docs('script') for configuration help",
+            ]
+            if bp_warnings:
+                suggestions.append(
+                    "Config had best-practice issues that may be related: "
+                    + "; ".join(bp_warnings)
+                )
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
-                suggestions=[
-                    "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
-                    "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
-                    "Validate sequence actions syntax for regular scripts",
-                    "Check entity_ids exist if using service calls",
-                    "Use ha_search_entities(domain_filter='script') to find scripts",
-                    "Use ha_get_domain_docs('script') for configuration help",
-                ],
+                suggestions=suggestions,
             )
 
     @mcp.tool(
