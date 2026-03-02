@@ -18,6 +18,8 @@ from ..errors import (
 )
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
+)
+from .best_practice_checker import (
     get_skill_prefix as _get_skill_prefix,
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
