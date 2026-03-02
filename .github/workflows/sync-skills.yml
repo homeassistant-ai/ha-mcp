@@ -1,6 +1,9 @@
 name: Sync bundled skills
 
 on:
+  schedule:
+    # Check daily — only creates a PR if the skills repo has new commits
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -50,6 +53,6 @@ jobs:
               --title "chore: sync bundled skills from homeassistant-ai/skills" \
               --body "Automated sync of bundled skill files from [homeassistant-ai/skills](https://github.com/homeassistant-ai/skills).
 
-          Triggered manually via the \`sync-skills\` workflow." \
+          Automated sync — the skills submodule has new commits." \
               --label chore
           fi
