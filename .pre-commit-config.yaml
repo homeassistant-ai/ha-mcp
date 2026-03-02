@@ -6,7 +6,7 @@ repos:
         args: [--fix]
   - repo: https://github.com/astral-sh/uv-pre-commit
     # renovate: datasource=github-releases depName=astral-sh/uv-pre-commit
-    rev: v0.1.24
+    rev: 0.10.7
     hooks:
       - id: uv-lock
   - repo: local
