@@ -6,7 +6,7 @@ blueprint skipping, skill_prefix modes, false-positive rejection, and
 recursive config structure traversal.
 """
 
-import pytest
+from typing import ClassVar
 
 from ha_mcp.tools.best_practice_checker import (
     check_automation_config,
@@ -105,11 +105,11 @@ class TestConditionAntiPatterns:
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "float/int comparison", "numeric_state")
 
-    def test_numeric_comparison_int_cast(self):
+    def test_numeric_comparison_int_pipe(self):
         config = {
             "condition": [{
                 "condition": "template",
-                "value_template": "{{ int(states('sensor.count')) >= 10 }}",
+                "value_template": "{{ states('sensor.count') | int >= 10 }}",
             }],
             "action": [],
         }
@@ -432,7 +432,7 @@ class TestModeMotionPattern:
 class TestSkillPrefixModes:
     """Verify warning output varies based on skill_prefix setting."""
 
-    _CONFIG = {
+    _CONFIG: ClassVar[dict] = {
         "condition": [{
             "condition": "template",
             "value_template": "{{ is_state('light.x', 'on') }}",
