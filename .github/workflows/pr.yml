@@ -14,6 +14,19 @@ env:
   HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.1.3"
 
 jobs:
+  lockfile:
+    name: Check uv.lock
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
+    timeout-minutes: 2
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Verify uv.lock is in sync with pyproject.toml
+      run: uv lock --check
+
   lint:
     name: Ruff Lint
     runs-on: ubuntu-latest
