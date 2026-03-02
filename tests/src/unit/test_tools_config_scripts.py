@@ -5,10 +5,12 @@ These tests verify the input validation and error handling of the script tools,
 especially for blueprint-based scripts (issue #466).
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 
 class TestScriptToolsValidation:
@@ -60,14 +62,16 @@ class TestScriptToolsValidation:
         self, register_tools, mock_client
     ):
         """Test that config without sequence or use_blueprint is rejected."""
-        result = await register_tools["ha_config_set_script"](
-            script_id="test_script",
-            config={"alias": "Test Script"},  # Missing both sequence and use_blueprint
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await register_tools["ha_config_set_script"](
+                script_id="test_script",
+                config={"alias": "Test Script"},  # Missing both sequence and use_blueprint
+            )
 
-        assert result["success"] is False
-        assert "sequence" in result["error"] and "use_blueprint" in result["error"]
-        assert "required_fields" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error_msg = error_data["error"]["message"]
+        assert "sequence" in error_msg and "use_blueprint" in error_msg
 
     async def test_set_script_with_sequence_success(self, register_tools, mock_client):
         """Test that regular script with sequence is accepted."""
@@ -153,24 +157,28 @@ class TestScriptToolsValidation:
 
     async def test_set_script_invalid_json_config(self, register_tools, mock_client):
         """Test that invalid JSON config is rejected."""
-        result = await register_tools["ha_config_set_script"](
-            script_id="test_script",
-            config='{"invalid": json}',  # Invalid JSON string
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await register_tools["ha_config_set_script"](
+                script_id="test_script",
+                config='{"invalid": json}',  # Invalid JSON string
+            )
 
-        assert result["success"] is False
-        assert "Invalid config parameter" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Invalid config parameter" in error_data["error"]["message"]
 
     async def test_set_script_config_not_dict(self, register_tools, mock_client):
         """Test that non-dict config is rejected."""
-        result = await register_tools["ha_config_set_script"](
-            script_id="test_script",
-            config="not a dict",
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await register_tools["ha_config_set_script"](
+                script_id="test_script",
+                config="not a dict",
+            )
 
-        assert result["success"] is False
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
         # The error message comes from parse_json_param which tries to parse as JSON first
-        assert "Invalid" in result["error"]
+        assert "Invalid" in error_data["error"]["message"]
 
 
 class TestStripEmptyScriptFields:

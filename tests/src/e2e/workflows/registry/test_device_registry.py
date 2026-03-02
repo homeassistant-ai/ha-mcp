@@ -216,7 +216,9 @@ class TestDeviceGet:
         )
 
         assert not get_data.get("success"), "Getting non-existent device should fail"
-        assert "not found" in get_data.get("error", "").lower(), (
+        error = get_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not found" in error_msg.lower(), (
             f"Error should indicate device not found: {get_data}"
         )
         logger.info("Non-existent device correctly rejected")
@@ -374,7 +376,9 @@ class TestDeviceUpdate:
         )
 
         assert not update_data.get("success"), "Update with no changes should fail"
-        assert "no updates" in update_data.get("error", "").lower(), (
+        error = update_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "no updates" in error_msg.lower(), (
             f"Error should mention no updates: {update_data}"
         )
         logger.info("No-changes update correctly rejected")
@@ -415,7 +419,9 @@ class TestDeviceRemove:
         )
 
         assert not remove_data.get("success"), "Removing non-existent device should fail"
-        assert "not found" in remove_data.get("error", "").lower(), (
+        error = remove_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not found" in error_msg.lower(), (
             f"Error should indicate device not found: {remove_data}"
         )
         logger.info("Non-existent device removal correctly rejected")

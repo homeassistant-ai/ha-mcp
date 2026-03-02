@@ -17,6 +17,7 @@ import logging
 import os
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
@@ -188,6 +189,8 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -314,6 +317,8 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -458,6 +463,8 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,
@@ -587,6 +594,8 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
+        except ToolError:
+            raise
         except Exception as e:
             error_response = exception_to_structured_error(
                 e,

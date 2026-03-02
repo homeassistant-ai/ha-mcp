@@ -10,7 +10,15 @@ This module provides tools for Home Assistant system administration including:
 import logging
 from typing import Any
 
-from .helpers import get_connected_ws_client, log_tool_usage
+from fastmcp.exceptions import ToolError
+
+from ..errors import ErrorCode, create_error_response
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
@@ -70,15 +78,13 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
         except Exception as e:
-            logger.error(f"Failed to check configuration: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to check configuration: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Ensure Home Assistant is running and accessible",
                     "Check your connection settings",
                 ],
-            }
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Restart Home Assistant"})
     @log_tool_usage
@@ -117,19 +123,19 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         confirm_bool = coerce_bool_param(confirm, "confirm", default=False) or False
 
         if not confirm_bool:
-            return {
-                "success": False,
-                "error": "Restart not confirmed",
-                "message": (
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Restart not confirmed",
+                details=(
                     "You must set confirm=True to restart Home Assistant. "
                     "This is a safety measure to prevent accidental restarts."
                 ),
-                "suggestions": [
+                suggestions=[
                     "Run ha_check_config() first to validate configuration",
                     "Call ha_restart(confirm=True) to proceed with restart",
                     "Consider using ha_reload_core() for config-only changes",
                 ],
-            }
+            ))
 
         restart_initiated = False
         try:
@@ -137,15 +143,15 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             config_result = await client.check_config()
             if config_result.get("result") != "valid":
                 errors = config_result.get("errors") or []
-                return {
-                    "success": False,
-                    "error": "Configuration is invalid - restart aborted",
-                    "config_errors": errors,
-                    "message": (
+                raise_tool_error(create_error_response(
+                    ErrorCode.CONFIG_INVALID,
+                    "Configuration is invalid - restart aborted",
+                    details=(
                         "Home Assistant configuration has errors. "
                         "Fix the errors before restarting."
                     ),
-                }
+                    context={"config_errors": errors},
+                ))
 
             # Call the restart service - mark as initiated before the call
             # as the connection may be closed before we get a response
@@ -164,6 +170,8 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             error_msg = str(e)
             # Connection errors after restart initiated are expected
@@ -181,11 +189,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "warning": "Wait 1-5 minutes for Home Assistant to restart.",
                 }
 
-            logger.error(f"Failed to restart Home Assistant: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to restart Home Assistant: {str(e)}",
-            }
+            exception_to_structured_error(e)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Reload Core Components"})
     @log_tool_usage
@@ -241,12 +245,12 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         target = target.lower().strip()
 
         if target not in RELOAD_TARGETS:
-            return {
-                "success": False,
-                "error": f"Invalid reload target: {target}",
-                "valid_targets": list(RELOAD_TARGETS.keys()),
-                "suggestion": f"Use one of: {', '.join(RELOAD_TARGETS.keys())}",
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid reload target: {target}",
+                context={"target": target, "valid_targets": list(RELOAD_TARGETS.keys())},
+                suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
+            ))
 
         try:
             if target == "all":
@@ -280,10 +284,11 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 service_info = RELOAD_TARGETS[target]
                 if service_info is None:
                     # This shouldn't happen as we check for "all" above
-                    return {
-                        "success": False,
-                        "error": f"Invalid target configuration for: {target}",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Invalid target configuration for: {target}",
+                        context={"target": target},
+                    ))
                 domain, service = service_info
                 await client.call_service(domain, service, {})
 
@@ -294,16 +299,17 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "service": f"{domain}.{service}",
                 }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to reload {target}: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to reload {target}: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"target": target},
+                suggestions=[
                     f"Ensure the {target} integration is loaded",
                     "Check Home Assistant logs for details",
                 ],
-            }
+            )
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Health"})
     @log_tool_usage
@@ -322,20 +328,19 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 client.base_url, client.token
             )
             if error or ws_client is None:
-                return error or {
-                    "success": False,
-                    "error": "Failed to establish WebSocket connection",
-                }
+                raise_tool_error(error or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                ))
 
             # Request system health info via WebSocket
             health_response = await ws_client.send_command("system_health/info")
 
             if not health_response.get("success"):
-                return {
-                    "success": False,
-                    "error": "Failed to retrieve system health",
-                    "details": health_response,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    health_response.get("error", "Failed to retrieve system health"),
+                ))
 
             health_info = health_response.get("result") or {}
 
@@ -346,16 +351,16 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Retrieved health info for {len(health_info) if isinstance(health_info, dict) else 0} components",
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to get system health: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get system health: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "System health may not be available in all HA installations",
                     "Try ha_get_overview() for basic system information",
                 ],
-            }
+            )
         finally:
             if ws_client:
                 try:

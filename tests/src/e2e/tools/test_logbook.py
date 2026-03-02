@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success, parse_mcp_result
+from ..utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -219,11 +219,12 @@ async def test_logbook_entity_filter(mcp_client):
     logger.info("Testing logbook entity filter")
 
     # Query for sun.sun which should always exist
-    result = await mcp_client.call_tool(
+    # Use safe_call_tool to handle ToolError (e.g. no entries found) as a dict
+    raw_data = await safe_call_tool(
+        mcp_client,
         "ha_get_logbook",
         {"hours_back": 24, "entity_id": "sun.sun", "limit": 50},
     )
-    raw_data = parse_mcp_result(result)
     data = get_logbook_data(raw_data)
 
     # Verify entity filter is recorded in response (should always be present)
@@ -291,7 +292,9 @@ async def test_logbook_empty_result(mcp_client):
     """Test logbook with non-existent entity returns appropriate error."""
     logger.info("Testing logbook with non-existent entity")
 
-    result = await mcp_client.call_tool(
+    # Use safe_call_tool to handle ToolError (e.g. no entries found) as a dict
+    raw_data = await safe_call_tool(
+        mcp_client,
         "ha_get_logbook",
         {
             "hours_back": 1,
@@ -301,7 +304,6 @@ async def test_logbook_empty_result(mcp_client):
     )
 
     # Parse result - may be success with no entries or error
-    raw_data = parse_mcp_result(result)
     data = get_logbook_data(raw_data)
 
     # Either success with empty entries or explicit error is acceptable

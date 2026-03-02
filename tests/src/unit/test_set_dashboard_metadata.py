@@ -1,8 +1,10 @@
 """Unit tests for ha_config_set_dashboard metadata-update path."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
 
@@ -105,17 +107,19 @@ class TestSetDashboardMetadataUpdate:
 
     @pytest.mark.asyncio
     async def test_metadata_update_fails_returns_error(self, set_tool, mock_client):
-        """When the metadata update WS call fails, the tool returns an error."""
+        """When the metadata update WS call fails, the tool raises ToolError."""
         mock_client.send_websocket_message.side_effect = [
             self._make_dashboard_list("my-dashboard"),
             {"success": False, "error": {"message": "Permission denied"}},
         ]
 
-        result = await set_tool(url_path="my-dashboard", title="Unauthorized")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="my-dashboard", title="Unauthorized")
 
-        assert result["success"] is False
-        assert "metadata" in result["error"]["message"].lower()
-        assert "Permission denied" in result["error"]["message"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "metadata" in error_data["error"]["message"].lower()
+        assert "Permission denied" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_metadata_update_skipped_when_dashboard_id_none(

@@ -169,8 +169,8 @@ class TestBlueprintManagement:
                 expected_error="not found",
             )
 
-            # Verify error response includes suggestions
-            assert "suggestions" in result, "Error response should include suggestions"
+            # Verify error response includes suggestions (nested under "error")
+            assert "suggestions" in result.get("error", {}), "Error response should include suggestions"
             logger.info("ha_get_blueprint properly handles non-existent blueprint")
 
     async def test_get_blueprint_invalid_domain(self, mcp_client):
@@ -227,8 +227,8 @@ class TestBlueprintManagement:
                 {"url": "https://example.com/nonexistent/blueprint.yaml"},
             )
 
-            # Should fail with appropriate error
-            assert "suggestions" in result, "Error response should include suggestions"
+            # Should fail with appropriate error (suggestions nested under "error")
+            assert "suggestions" in result.get("error", {}), "Error response should include suggestions"
             logger.info("ha_import_blueprint properly handles non-existent URL")
 
 
