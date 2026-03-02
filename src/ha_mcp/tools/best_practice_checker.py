@@ -3,6 +3,11 @@
 Stateless payload inspection — returns warnings pointing to skill reference
 files. Zero overhead on clean calls (returns empty list).
 
+When skills are enabled (ENABLE_SKILLS=true), warnings include skill:// URIs
+so the LLM can read the relevant reference file. When skills are disabled,
+callers should pass a fallback prefix (e.g. GitHub URLs) or None to omit
+references entirely.
+
 Anti-patterns sourced from:
   https://github.com/homeassistant-ai/skills
   skill://home-assistant-best-practices
@@ -13,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_SKILL = "skill://home-assistant-best-practices/references"
+_DEFAULT_SKILL_PREFIX = "skill://home-assistant-best-practices/references"
 
 # ---------------------------------------------------------------------------
 # Regex patterns for template anti-patterns
@@ -48,36 +53,70 @@ _RE_MOTION = re.compile(r"binary_sensor\.\w*motion", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 
 
-def check_automation_config(config: dict[str, Any]) -> list[str]:
-    """Return best-practice warnings for an automation config."""
+def check_automation_config(
+    config: dict[str, Any],
+    *,
+    skill_prefix: str | None = _DEFAULT_SKILL_PREFIX,
+) -> list[str]:
+    """Return best-practice warnings for an automation config.
+
+    Args:
+        config: The automation configuration dict.
+        skill_prefix: Base URI for skill references (e.g.
+            "skill://home-assistant-best-practices/references").
+            Pass None when skills are disabled — warnings still fire
+            but without the "See skill://..." suffix.
+    """
     if "use_blueprint" in config:
         return []
 
     warnings: list[str] = []
 
     # Condition templates
-    _check_condition_templates(config.get("condition", []), warnings)
+    _check_condition_templates(config.get("condition", []), warnings, skill_prefix)
 
     # Action tree (wait_template + nested conditions)
-    _check_action_tree(config.get("action", []), warnings)
+    _check_action_tree(config.get("action", []), warnings, skill_prefix)
 
     # Trigger templates + device_id
-    _check_triggers(config.get("trigger", []), warnings)
+    _check_triggers(config.get("trigger", []), warnings, skill_prefix)
 
     # Mode vs motion pattern
-    _check_mode_motion(config, warnings)
+    _check_mode_motion(config, warnings, skill_prefix)
 
     return _dedupe(warnings)
 
 
-def check_script_config(config: dict[str, Any]) -> list[str]:
-    """Return best-practice warnings for a script config."""
+def check_script_config(
+    config: dict[str, Any],
+    *,
+    skill_prefix: str | None = _DEFAULT_SKILL_PREFIX,
+) -> list[str]:
+    """Return best-practice warnings for a script config.
+
+    Args:
+        config: The script configuration dict.
+        skill_prefix: Base URI for skill references.
+            Pass None when skills are disabled.
+    """
     if "use_blueprint" in config:
         return []
 
     warnings: list[str] = []
-    _check_action_tree(config.get("sequence", []), warnings)
+    _check_action_tree(config.get("sequence", []), warnings, skill_prefix)
     return _dedupe(warnings)
+
+
+# ---------------------------------------------------------------------------
+# Skill reference helper
+# ---------------------------------------------------------------------------
+
+
+def _ref(skill_prefix: str | None, path: str) -> str:
+    """Return a ' See <URI>' suffix when skills are enabled, empty otherwise."""
+    if skill_prefix:
+        return f" See {skill_prefix}/{path}"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -85,68 +124,72 @@ def check_script_config(config: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _check_condition_templates(conditions: Any, warnings: list[str]) -> None:
+def _check_condition_templates(
+    conditions: Any, warnings: list[str], skill_prefix: str | None
+) -> None:
     """Check condition tree for template anti-patterns."""
     for cond in _as_list(conditions):
         if isinstance(cond, str) and "{{" in cond:
             # Shorthand template condition
-            _check_template_string(cond, warnings)
+            _check_template_string(cond, warnings, skill_prefix)
         elif isinstance(cond, dict):
             if cond.get("condition") == "template":
                 vt = cond.get("value_template", "")
                 if isinstance(vt, str):
-                    _check_template_string(vt, warnings)
+                    _check_template_string(vt, warnings, skill_prefix)
             # Recurse into compound conditions (and/or/not)
             nested = cond.get("conditions")
             if nested:
-                _check_condition_templates(nested, warnings)
+                _check_condition_templates(nested, warnings, skill_prefix)
 
 
-def _check_template_string(template: str, warnings: list[str]) -> None:
+def _check_template_string(
+    template: str, warnings: list[str], skill_prefix: str | None
+) -> None:
     """Check a single template string for known anti-patterns."""
     if _RE_NUMERIC_CMP.search(template):
         warnings.append(
             "Condition uses template with float/int comparison — use native "
-            f"`numeric_state` condition instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`numeric_state` condition instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_SUN.search(template):
         warnings.append(
             "Condition uses template referencing `sun.sun` — use native "
-            f"`sun` condition instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`sun` condition instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     elif _RE_IS_STATE.search(template):
         # Only flag if not already flagged as sun pattern
         warnings.append(
             "Condition uses template with `is_state()` — use native "
-            f"`state` condition instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`state` condition instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_NOW_TIME.search(template):
         warnings.append(
             "Condition uses template with `now().hour/minute` — use native "
-            f"`time` condition instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`time` condition instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_WEEKDAY.search(template):
         warnings.append(
             "Condition uses template for day-of-week check — use native "
-            f"`time` condition with `weekday:` list instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`time` condition with `weekday:` list instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_STATE_IN.search(template):
         warnings.append(
             "Condition uses template with `states(...) in [...]` — use native "
-            f"`state` condition with `state:` list instead. "
-            f"See {_SKILL}/automation-patterns.md#native-conditions"
+            "`state` condition with `state:` list instead."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_DIRECT_STATE.search(template):
         warnings.append(
             "Template uses `states.domain.entity.state` direct access which "
             "errors if entity doesn't exist — use `states('entity_id')` "
-            f"function instead. "
-            f"See {_SKILL}/template-guidelines.md#common-patterns"
+            "function instead."
+            + _ref(skill_prefix, "template-guidelines.md#common-patterns")
         )
 
 
@@ -155,7 +198,9 @@ def _check_template_string(template: str, warnings: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _check_action_tree(actions: Any, warnings: list[str]) -> None:
+def _check_action_tree(
+    actions: Any, warnings: list[str], skill_prefix: str | None
+) -> None:
     """Walk action tree checking for wait_template and nested conditions."""
     for action in _as_list(actions):
         if not isinstance(action, dict):
@@ -166,8 +211,8 @@ def _check_action_tree(actions: Any, warnings: list[str]) -> None:
                 "Action uses `wait_template` — consider `wait_for_trigger` "
                 "with a state trigger (note: different semantics — "
                 "`wait_for_trigger` waits for a *change*, `wait_template` "
-                "passes immediately if already true). "
-                f"See {_SKILL}/automation-patterns.md#wait-actions"
+                "passes immediately if already true)."
+                + _ref(skill_prefix, "automation-patterns.md#wait-actions")
             )
 
         # Nested conditions in choose/if/repeat
@@ -175,23 +220,31 @@ def _check_action_tree(actions: Any, warnings: list[str]) -> None:
             for option in _as_list(action["choose"]):
                 if isinstance(option, dict):
                     _check_condition_templates(
-                        option.get("conditions", []), warnings
+                        option.get("conditions", []), warnings, skill_prefix
                     )
-                    _check_action_tree(option.get("sequence", []), warnings)
+                    _check_action_tree(
+                        option.get("sequence", []), warnings, skill_prefix
+                    )
 
         if "if" in action:
-            _check_condition_templates(action["if"], warnings)
+            _check_condition_templates(action["if"], warnings, skill_prefix)
 
         for key in ("then", "else", "default"):
             nested = action.get(key)
             if isinstance(nested, list):
-                _check_action_tree(nested, warnings)
+                _check_action_tree(nested, warnings, skill_prefix)
 
         if "repeat" in action and isinstance(action["repeat"], dict):
             repeat = action["repeat"]
-            _check_condition_templates(repeat.get("while", []), warnings)
-            _check_condition_templates(repeat.get("until", []), warnings)
-            _check_action_tree(repeat.get("sequence", []), warnings)
+            _check_condition_templates(
+                repeat.get("while", []), warnings, skill_prefix
+            )
+            _check_condition_templates(
+                repeat.get("until", []), warnings, skill_prefix
+            )
+            _check_action_tree(
+                repeat.get("sequence", []), warnings, skill_prefix
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +252,9 @@ def _check_action_tree(actions: Any, warnings: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _check_triggers(triggers: Any, warnings: list[str]) -> None:
+def _check_triggers(
+    triggers: Any, warnings: list[str], skill_prefix: str | None
+) -> None:
     """Check triggers for device_id and template anti-patterns."""
     for trigger in _as_list(triggers):
         if not isinstance(trigger, dict):
@@ -212,8 +267,8 @@ def _check_triggers(triggers: Any, warnings: list[str]) -> None:
             warnings.append(
                 "Trigger uses `device` platform with `device_id` — prefer "
                 "`state` or `event` trigger with `entity_id` when possible "
-                "(device_id breaks on re-add). "
-                f"See {_SKILL}/device-control.md#entity-id-vs-device-id"
+                "(device_id breaks on re-add)."
+                + _ref(skill_prefix, "device-control.md#entity-id-vs-device-id")
             )
 
         # Template trigger with detectable native alternative
@@ -223,14 +278,20 @@ def _check_triggers(triggers: Any, warnings: list[str]) -> None:
                 if _RE_NUMERIC_CMP.search(vt):
                     warnings.append(
                         "Trigger uses template with float/int comparison — "
-                        "use native `numeric_state` trigger instead. "
-                        f"See {_SKILL}/automation-patterns.md#trigger-types"
+                        "use native `numeric_state` trigger instead."
+                        + _ref(
+                            skill_prefix,
+                            "automation-patterns.md#trigger-types",
+                        )
                     )
                 if _RE_IS_STATE.search(vt):
                     warnings.append(
                         "Trigger uses template with `is_state()` — use "
-                        "native `state` trigger instead. "
-                        f"See {_SKILL}/automation-patterns.md#trigger-types"
+                        "native `state` trigger instead."
+                        + _ref(
+                            skill_prefix,
+                            "automation-patterns.md#trigger-types",
+                        )
                     )
 
 
@@ -239,7 +300,9 @@ def _check_triggers(triggers: Any, warnings: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _check_mode_motion(config: dict[str, Any], warnings: list[str]) -> None:
+def _check_mode_motion(
+    config: dict[str, Any], warnings: list[str], skill_prefix: str | None
+) -> None:
     """Detect mode:single (default) with motion triggers and delay/wait."""
     mode = config.get("mode", "single")
     if mode != "single":
@@ -261,8 +324,8 @@ def _check_mode_motion(config: dict[str, Any], warnings: list[str]) -> None:
         warnings.append(
             "Automation uses motion trigger with delay/wait but "
             "`mode: single` (default) — consider `mode: restart` so "
-            "re-triggers reset the timer. "
-            f"See {_SKILL}/automation-patterns.md#automation-modes"
+            "re-triggers reset the timer."
+            + _ref(skill_prefix, "automation-patterns.md#automation-modes")
         )
 
 
