@@ -123,13 +123,13 @@ jobs:
           python-version: '3.13'
 
       - name: Download Windows binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ha-mcp-windows
           path: mcpb-bundle
 
       - name: Download macOS binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ha-mcp-macos-arm64
           path: mcpb-bundle
