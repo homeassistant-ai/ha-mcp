@@ -32,7 +32,7 @@ class WebSocketConnectionState:
         self._message_id = 0
         self._pending_requests: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._auth_messages: dict[str, dict[str, Any]] = {}
-        self._render_template_events: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._event_responses: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._event_handlers: dict[
             str, set[Callable[[dict[str, Any]], Awaitable[None]]]
         ] = defaultdict(set)
@@ -63,25 +63,25 @@ class WebSocketConnectionState:
         if future and not future.done():
             future.cancel()
 
-    def register_render_template_event(
+    def register_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]]:
-        """Create and register a future for a render_template follow-up event."""
+        """Create and register a future for a follow-up event."""
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
-        self._render_template_events[message_id] = future
+        self._event_responses[message_id] = future
         return future
 
-    def resolve_render_template_event(
+    def resolve_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]] | None:
-        """Resolve a stored render_template event future."""
-        return self._render_template_events.pop(message_id, None)
+        """Resolve a stored event future."""
+        return self._event_responses.pop(message_id, None)
 
-    def cancel_render_template_event(self, message_id: int) -> None:
-        """Cancel a stored render_template event future."""
-        future = self._render_template_events.pop(message_id, None)
+    def cancel_event_response(self, message_id: int) -> None:
+        """Cancel a stored event future."""
+        future = self._event_responses.pop(message_id, None)
         if future and not future.done():
             future.cancel()
 
@@ -104,10 +104,10 @@ class WebSocketConnectionState:
                 future.cancel()
         self._pending_requests.clear()
 
-        for future in self._render_template_events.values():
+        for future in self._event_responses.values():
             if not future.done():
                 future.cancel()
-        self._render_template_events.clear()
+        self._event_responses.clear()
 
         self._auth_messages.clear()
 
@@ -324,7 +324,7 @@ class HomeAssistantWebSocketClient:
         # Handle events
         if message_type == "event":
             if message_id is not None:
-                render_future = self._state.resolve_render_template_event(message_id)
+                render_future = self._state.resolve_event_response(message_id)
                 if render_future:
                     if not render_future.cancelled():
                         render_future.set_result(data)
@@ -383,15 +383,15 @@ class HomeAssistantWebSocketClient:
         """Cancel and drop a pending response future."""
         self._state.cancel_pending_request(message_id)
 
-    def register_render_template_event(
+    def register_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]]:
-        """Register a future for a render_template follow-up event."""
-        return self._state.register_render_template_event(message_id)
+        """Register a future for a follow-up event."""
+        return self._state.register_event_response(message_id)
 
-    def cancel_render_template_event(self, message_id: int) -> None:
-        """Cancel and drop a stored render_template event future."""
-        self._state.cancel_render_template_event(message_id)
+    def cancel_event_response(self, message_id: int) -> None:
+        """Cancel and drop a stored event future."""
+        self._state.cancel_event_response(message_id)
 
     async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
         """Send command and wait for response.

@@ -755,14 +755,14 @@ class HomeAssistantClient:
 
         # Create futures for both result and event responses
         result_future = ws_client.register_pending_response(message_id)
-        event_future = ws_client.register_render_template_event(message_id)
+        event_future = ws_client.register_event_response(message_id)
 
         # Use WebSocket client's send helper to transmit the message
         try:
             await ws_client.send_json_message(full_message)
         except Exception as e:
             ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
+            ws_client.cancel_event_response(message_id)
             raise e
 
         try:
@@ -773,7 +773,7 @@ class HomeAssistantClient:
             logger.debug(f"WebSocket render_template result: {result_response}")
 
             if not result_response.get("success"):
-                ws_client.cancel_render_template_event(message_id)
+                ws_client.cancel_event_response(message_id)
                 error = result_response.get("error", "Unknown error")
                 return {
                     "success": False,
@@ -807,7 +807,7 @@ class HomeAssistantClient:
                     }
 
             except TimeoutError:
-                ws_client.cancel_render_template_event(message_id)
+                ws_client.cancel_event_response(message_id)
                 return {
                     "success": False,
                     "error": "Event timeout - template result not received",
@@ -816,7 +816,7 @@ class HomeAssistantClient:
 
         except TimeoutError:
             ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
+            ws_client.cancel_event_response(message_id)
             return {
                 "success": False,
                 "error": "Command timeout",
@@ -824,7 +824,7 @@ class HomeAssistantClient:
             }
         except Exception as e:
             ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
+            ws_client.cancel_event_response(message_id)
             return {
                 "success": False,
                 "error": str(e),
