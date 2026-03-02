@@ -11,12 +11,12 @@ from typing import Annotated, Any, cast
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..config import get_global_settings
 from ..errors import (
     create_config_error,
     create_resource_not_found_error,
     create_validation_error,
 )
-from ..config import get_global_settings
 from .best_practice_checker import check_automation_config as _check_best_practices
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
