@@ -1,9 +1,6 @@
 name: Sync bundled skills
 
 on:
-  schedule:
-    # Run weekly on Mondays at 08:00 UTC
-    - cron: '0 8 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -18,31 +15,14 @@ jobs:
     steps:
       - name: Checkout ha-mcp
         uses: actions/checkout@v6
+        with:
+          submodules: true
 
-      - name: Fetch latest skills
-        run: |
-          SKILLS_DIR="src/ha_mcp/resources/skills/home-assistant-best-practices"
-          REPO="homeassistant-ai/skills"
-          BRANCH="main"
-          SRC_PREFIX="skills/home-assistant-best-practices"
+      - name: Update skills submodule
+        run: git submodule update --remote vendor/skills
 
-          # Fetch all skill files from the skills repo
-          FILES=(
-            "SKILL.md"
-            "references/automation-patterns.md"
-            "references/device-control.md"
-            "references/examples.yaml"
-            "references/helper-selection.md"
-            "references/safe-refactoring.md"
-            "references/template-guidelines.md"
-          )
-
-          for file in "${FILES[@]}"; do
-            mkdir -p "$SKILLS_DIR/$(dirname "$file")"
-            curl -sL \
-              "https://raw.githubusercontent.com/${REPO}/${BRANCH}/${SRC_PREFIX}/${file}" \
-              -o "$SKILLS_DIR/$file"
-          done
+      - name: Sync to package resources
+        run: bash scripts/sync-skills.sh
 
       - name: Check for changes
         id: changes
@@ -61,7 +41,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b chore/sync-skills
-          git add src/ha_mcp/resources/skills/
+          git add src/ha_mcp/resources/skills/ vendor/skills
           git commit -m "chore: sync bundled skills from homeassistant-ai/skills"
           git push -f origin chore/sync-skills
           # Create PR if one doesn't already exist
@@ -70,6 +50,6 @@ jobs:
               --title "chore: sync bundled skills from homeassistant-ai/skills" \
               --body "Automated sync of bundled skill files from [homeassistant-ai/skills](https://github.com/homeassistant-ai/skills).
 
-          This PR was created automatically by the \`sync-skills\` workflow." \
+          Triggered manually via the \`sync-skills\` workflow." \
               --label chore
           fi

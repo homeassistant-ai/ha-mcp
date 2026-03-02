@@ -1,0 +1,3 @@
+[submodule "vendor/skills"]
+	path = vendor/skills
+	url = https://github.com/homeassistant-ai/skills.git
