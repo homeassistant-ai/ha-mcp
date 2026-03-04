@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.13.*"
 
 [[package]]
@@ -420,7 +420,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "6.7.1"
+version = "6.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
