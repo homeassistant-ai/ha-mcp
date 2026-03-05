@@ -684,8 +684,10 @@ class HomeAssistantClient:
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
 
-        Uses the global WebSocket singleton to avoid race conditions from
-        parallel tool calls creating multiple simultaneous connections.
+        Uses a per-client WebSocket connection keyed to the client's own
+        credentials (base_url + token). This ensures OAuth mode uses the
+        real HA credentials from the token claims, not the global sentinel
+        settings.
         """
         from .websocket_client import get_websocket_client
 
@@ -694,8 +696,10 @@ class HomeAssistantClient:
 
         for attempt in range(max_retries):
             try:
-                # Use singleton WebSocket client (shared, reused connection)
-                ws_client = await get_websocket_client()
+                # Use per-client WebSocket keyed to this client's credentials
+                ws_client = await get_websocket_client(
+                    url=self.base_url, token=self.token
+                )
 
                 # Special handling for render_template which returns an event with the actual result
                 if message.get("type") == "render_template":

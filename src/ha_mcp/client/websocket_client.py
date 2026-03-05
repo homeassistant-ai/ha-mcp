@@ -600,8 +600,19 @@ class WebSocketManager:
             self._lock_loop = current_loop
             logger.debug("Created new WebSocketManager lock for current event loop")
 
-    async def get_client(self) -> HomeAssistantWebSocketClient:
-        """Get WebSocket client, creating connection if needed."""
+    async def get_client(
+        self,
+        url: str | None = None,
+        token: str | None = None,
+    ) -> HomeAssistantWebSocketClient:
+        """Get WebSocket client, creating connection if needed.
+
+        Args:
+            url: Optional HA URL. If provided with token, uses these
+                 credentials instead of global settings. This is required
+                 for OAuth mode where each request has its own credentials.
+            token: Optional HA token. Must be provided with url.
+        """
         current_loop = asyncio.get_event_loop()
 
         self._ensure_lock()
@@ -619,14 +630,26 @@ class WebSocketManager:
 
             self._current_loop = current_loop
 
-            if self._client and self._client.is_connected:
-                return self._client
+            # Determine credentials to use
+            if url and token:
+                ws_url = url
+                ws_token = token
+            else:
+                settings = get_global_settings()
+                ws_url = settings.homeassistant_url
+                ws_token = settings.homeassistant_token
 
-            settings = get_global_settings()
+            # If existing client is connected with different credentials, disconnect
+            if self._client and self._client.is_connected:
+                if self._client.base_url == ws_url.rstrip("/") and self._client.token == ws_token:
+                    return self._client
+                # Credentials changed (different OAuth user), reconnect
+                logger.info("WebSocket credentials changed, reconnecting")
+                await self._client.disconnect()
+                self._client = None
+
             factory = self._client_factory or HomeAssistantWebSocketClient
-            self._client = factory(
-                settings.homeassistant_url, settings.homeassistant_token
-            )
+            self._client = factory(ws_url, ws_token)
 
             connected = await self._client.connect()
             if not connected:
@@ -651,6 +674,14 @@ class WebSocketManager:
 websocket_manager = WebSocketManager()
 
 
-async def get_websocket_client() -> HomeAssistantWebSocketClient:
-    """Get the global WebSocket client instance."""
-    return await websocket_manager.get_client()
+async def get_websocket_client(
+    url: str | None = None,
+    token: str | None = None,
+) -> HomeAssistantWebSocketClient:
+    """Get the global WebSocket client instance.
+
+    Args:
+        url: Optional HA URL for per-client credentials (OAuth mode).
+        token: Optional HA token for per-client credentials (OAuth mode).
+    """
+    return await websocket_manager.get_client(url=url, token=token)
