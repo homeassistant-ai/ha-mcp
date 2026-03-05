@@ -1,6 +1,10 @@
 name: Regenerate uv.lock
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - feat/python-3.14-support
+    paths:
+      - '.github/workflows/regen-lockfile.yml'
 
 jobs:
   regen:
