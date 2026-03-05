@@ -554,10 +554,15 @@ class HomeAssistantWebSocketClient:
 
 
 class WebSocketManager:
-    """Singleton manager for Home Assistant WebSocket connections."""
+    """Singleton manager for Home Assistant WebSocket connections.
+
+    Maintains a pool of WebSocket connections keyed by (url, token) so that
+    multiple OAuth users can have concurrent connections without interfering
+    with each other.
+    """
 
     _instance = None
-    _client = None
+    _clients: dict[str, HomeAssistantWebSocketClient]
     _current_loop: asyncio.AbstractEventLoop | None = None
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
@@ -566,6 +571,7 @@ class WebSocketManager:
     def __new__(cls) -> "WebSocketManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._clients = {}
             cls._instance._lock = None
             cls._instance._lock_loop = None
             cls._instance._client_factory = HomeAssistantWebSocketClient
@@ -600,12 +606,23 @@ class WebSocketManager:
             self._lock_loop = current_loop
             logger.debug("Created new WebSocketManager lock for current event loop")
 
+    @staticmethod
+    def _client_key(url: str, token: str) -> str:
+        """Create a cache key from credentials."""
+        import hashlib
+
+        return hashlib.sha256(f"{url.rstrip('/')}:{token}".encode()).hexdigest()
+
     async def get_client(
         self,
         url: str | None = None,
         token: str | None = None,
     ) -> HomeAssistantWebSocketClient:
         """Get WebSocket client, creating connection if needed.
+
+        Maintains a pool of connections keyed by credentials. In OAuth mode,
+        each user gets their own connection. In non-OAuth mode, the global
+        settings are used as the key.
 
         Args:
             url: Optional HA URL. If provided with token, uses these
@@ -621,12 +638,13 @@ class WebSocketManager:
             raise Exception("Lock not initialized")
         async with self._lock:
             if self._current_loop is not None and self._current_loop != current_loop:
-                if self._client:
+                # Event loop changed — disconnect all clients
+                for client in self._clients.values():
                     try:
-                        await self._client.disconnect()
+                        await client.disconnect()
                     except Exception:
                         pass
-                    self._client = None
+                self._clients.clear()
 
             self._current_loop = current_loop
 
@@ -639,35 +657,38 @@ class WebSocketManager:
                 ws_url = settings.homeassistant_url
                 ws_token = settings.homeassistant_token
 
-            # If existing client is connected with different credentials, disconnect
-            if self._client and self._client.is_connected:
-                if self._client.base_url == ws_url.rstrip("/") and self._client.token == ws_token:
-                    return self._client
-                # Credentials changed (different OAuth user), reconnect
-                logger.info("WebSocket credentials changed, reconnecting")
-                await self._client.disconnect()
-                self._client = None
+            key = self._client_key(ws_url, ws_token)
+
+            # Return existing connected client for these credentials
+            existing = self._clients.get(key)
+            if existing and existing.is_connected:
+                return existing
+
+            # Remove stale client if present
+            if existing:
+                self._clients.pop(key, None)
 
             factory = self._client_factory or HomeAssistantWebSocketClient
-            self._client = factory(ws_url, ws_token)
+            client = factory(ws_url, ws_token)
 
-            connected = await self._client.connect()
+            connected = await client.connect()
             if not connected:
                 raise Exception("Failed to connect to Home Assistant WebSocket")
 
-            return self._client
+            self._clients[key] = client
+            return client
 
     async def disconnect(self) -> None:
-        """Disconnect WebSocket client."""
+        """Disconnect all WebSocket clients."""
         self._ensure_lock()
 
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            if self._client:
-                await self._client.disconnect()
-                self._client = None
-                self._current_loop = None
+            for client in self._clients.values():
+                await client.disconnect()
+            self._clients.clear()
+            self._current_loop = None
 
 
 # Global WebSocket manager instance

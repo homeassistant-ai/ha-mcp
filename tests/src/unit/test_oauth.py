@@ -925,3 +925,83 @@ class TestOAuthProxyClient:
 
             mock_client_instance.close.assert_called_once()
             assert len(proxy._oauth_clients) == 0
+
+    @pytest.mark.asyncio
+    async def test_oauth_websocket_uses_per_client_credentials(self, mock_auth_provider, mock_access_token):
+        """Test that send_websocket_message passes OAuth credentials to WebSocket client."""
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), \
+             patch("ha_mcp.client.websocket_client.get_websocket_client", new_callable=AsyncMock) as mock_get_ws:
+            mock_ws = AsyncMock()
+            mock_ws.send_command.return_value = {"type": "result", "success": True, "result": {}}
+            mock_get_ws.return_value = mock_ws
+
+            await proxy.send_websocket_message({"type": "get_states"})
+
+            # WebSocket client must be created with the OAuth user's credentials
+            mock_get_ws.assert_awaited_once_with(
+                url="http://homeassistant.local:8123",
+                token="test_ha_token_xyz",
+            )
+
+
+class TestWebSocketManagerPool:
+    """Tests for WebSocketManager connection pooling."""
+
+    @pytest.fixture(autouse=True)
+    def reset_manager(self):
+        """Reset the WebSocketManager singleton between tests."""
+        from ha_mcp.client.websocket_client import WebSocketManager
+
+        WebSocketManager._instance = None
+        yield
+        WebSocketManager._instance = None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_oauth_users_get_separate_connections(self):
+        """Test that different OAuth users get separate WebSocket connections."""
+        from ha_mcp.client.websocket_client import WebSocketManager
+
+        mock_client_a = MagicMock()
+        mock_client_a.is_connected = True
+        mock_client_a.connect = AsyncMock(return_value=True)
+        mock_client_a.base_url = "http://ha.local:8123"
+        mock_client_a.token = "token_user_a"
+
+        mock_client_b = MagicMock()
+        mock_client_b.is_connected = True
+        mock_client_b.connect = AsyncMock(return_value=True)
+        mock_client_b.base_url = "http://ha.local:8123"
+        mock_client_b.token = "token_user_b"
+
+        call_count = 0
+
+        def factory(url, token):
+            nonlocal call_count
+            call_count += 1
+            if token == "token_user_a":
+                return mock_client_a
+            return mock_client_b
+
+        manager = WebSocketManager()
+        manager.configure(client_factory=factory)
+
+        # User A connects
+        client_a = await manager.get_client(url="http://ha.local:8123", token="token_user_a")
+        assert client_a is mock_client_a
+
+        # User B connects — should NOT disconnect user A
+        client_b = await manager.get_client(url="http://ha.local:8123", token="token_user_b")
+        assert client_b is mock_client_b
+        assert mock_client_a.disconnect.call_count == 0
+
+        # Both connections created
+        assert call_count == 2
+
+        # User A again — should reuse existing connection
+        client_a2 = await manager.get_client(url="http://ha.local:8123", token="token_user_a")
+        assert client_a2 is mock_client_a
+        assert call_count == 2  # No new connection
