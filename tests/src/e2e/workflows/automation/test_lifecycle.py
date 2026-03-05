@@ -1121,7 +1121,9 @@ async def test_automation_creation_returns_verified_entity(
         "ha_get_state",
         {"entity_id": entity_id},
     )
-    assert state_result.get("entity_id") == entity_id or state_result.get("success"), (
+    # ha_get_state nests entity data under 'data' key
+    state_data = state_result.get("data", state_result)
+    assert state_data.get("entity_id") == entity_id, (
         f"Returned entity_id {entity_id} is not queryable: {state_result}"
     )
     logger.info(f"Entity {entity_id} is queryable - verified, not predicted")

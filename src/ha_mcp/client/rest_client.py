@@ -505,8 +505,6 @@ class HomeAssistantClient:
             entity_not_verified = False
             if operation == "created":
                 try:
-                    import asyncio
-
                     # Poll with retries — slower hardware may need more time
                     for attempt in range(3):
                         await asyncio.sleep(1 * (attempt + 1))
