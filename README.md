@@ -147,6 +147,17 @@ This server gives your AI agent tools to control Home Assistant. For better conf
 
 An MCP server can create automations, helpers, and dashboards, but it has no opinion on *how* to structure them. Without domain knowledge, agents tend to over-rely on templates, pick the wrong helper type, or produce automations that are hard to maintain. The skills fill that gap: native constructs over Jinja2 workarounds, correct helper selection, safe refactoring workflows, and proper use of automation modes.
 
+### Bundled Skills (built-in)
+
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
+| `ENABLE_SKILLS_AS_TOOLS` | `false` | Also expose skills via `list_resources`/`read_resource` tools for clients that don't support MCP resources natively. |
+
+Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
+
 ---
 
 ## 🧪 Dev Channel
