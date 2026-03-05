@@ -3,6 +3,63 @@
 <!-- version list -->
 
 
+## v6.7.2 (2026-03-04)
+
+### Changed
+
+- Update contributors - simplify maintainer descriptions, add bigeric08
+  ([`400ac23`](https://github.com/homeassistant-ai/ha-mcp/commit/400ac23e28b86a0686ad6f6a25d42adf3060e4be))
+- Trim AGENTS.md to stay under 40k char limit
+  ([#638](https://github.com/homeassistant-ai/ha-mcp/pull/638))
+
+### Fixed
+
+- Eliminate race condition in addon version updates
+  ([#602](https://github.com/homeassistant-ai/ha-mcp/pull/602))
+- Route person/zone/tag updates to config store APIs
+  ([#622](https://github.com/homeassistant-ai/ha-mcp/pull/622))
+- Standardize error handling patterns across all tool modules (#521)
+  ([#678](https://github.com/homeassistant-ai/ha-mcp/pull/678))
+- Return RESOURCE_NOT_FOUND instead of false success on dashboard deletion
+  ([#680](https://github.com/homeassistant-ai/ha-mcp/pull/680))
+- Upgrade to FastMCP v3.0.0
+  ([#657](https://github.com/homeassistant-ai/ha-mcp/pull/657))
+
+### Refactoring
+
+- Consolidate redundant dashboard tools (3 tools removed)
+  ([#660](https://github.com/homeassistant-ai/ha-mcp/pull/660))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- Fix UAT framework bugs
+  ([#665](https://github.com/homeassistant-ai/ha-mcp/pull/665))
+
+### Chores
+
+- **deps**: Bump rollup from 4.53.3 to 4.59.0 in /site
+  ([#681](https://github.com/homeassistant-ai/ha-mcp/pull/681))
+- **deps**: Bump devalue from 5.6.2 to 5.6.3 in /site
+  ([#655](https://github.com/homeassistant-ai/ha-mcp/pull/655))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.5
+  ([#673](https://github.com/homeassistant-ai/ha-mcp/pull/673))
+
+### Continuous Integration
+
+- Add uv.lock sync validation to CI and pre-commit
+  ([#663](https://github.com/homeassistant-ai/ha-mcp/pull/663))
+- **deps**: Bump renovatebot/github-action from 46.1.1 to 46.1.2
+  ([#666](https://github.com/homeassistant-ai/ha-mcp/pull/666))
+- Change stable release cadence from weekly to biweekly Wednesday
+  ([#664](https://github.com/homeassistant-ai/ha-mcp/pull/664))
+</details>
+
+
 ## v6.7.1 (2026-02-20)
 
 ### Fixed
