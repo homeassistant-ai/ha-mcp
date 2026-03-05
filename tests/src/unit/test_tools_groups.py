@@ -5,10 +5,12 @@ These tests verify the input validation and error handling of the group tools
 without requiring a live Home Assistant instance.
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 
 class TestGroupToolsValidation:
@@ -55,14 +57,15 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        # Call the set_group function
-        result = await registered_tools["ha_config_set_group"](
-            object_id="group.invalid",
-            entities=["light.test"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="group.invalid",
+                entities=["light.test"],
+            )
 
-        assert result["success"] is False
-        assert "Invalid object_id" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Invalid object_id" in error_data["error"]["message"]
 
     async def test_set_group_empty_entities_list(self, mock_client):
         """Test that empty entities list is rejected."""
@@ -81,13 +84,15 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            entities=[],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                entities=[],
+            )
 
-        assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "empty" in error_data["error"]["message"].lower()
 
     async def test_set_group_empty_add_entities_list(self, mock_client):
         """Test that empty add_entities list is rejected."""
@@ -106,13 +111,15 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            add_entities=[],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                add_entities=[],
+            )
 
-        assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "empty" in error_data["error"]["message"].lower()
 
     async def test_set_group_mutually_exclusive_operations(self, mock_client):
         """Test that mutually exclusive entity operations are rejected."""
@@ -132,34 +139,37 @@ class TestGroupToolsValidation:
         register_group_tools(mock_mcp, mock_client)
 
         # Test entities + add_entities
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            entities=["light.test"],
-            add_entities=["light.another"],
-        )
-
-        assert result["success"] is False
-        assert "Only one of" in result["error"]
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                entities=["light.test"],
+                add_entities=["light.another"],
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Only one of" in error_data["error"]["message"]
 
         # Test entities + remove_entities
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            entities=["light.test"],
-            remove_entities=["light.old"],
-        )
-
-        assert result["success"] is False
-        assert "Only one of" in result["error"]
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                entities=["light.test"],
+                remove_entities=["light.old"],
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Only one of" in error_data["error"]["message"]
 
         # Test add_entities + remove_entities
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            add_entities=["light.new"],
-            remove_entities=["light.old"],
-        )
-
-        assert result["success"] is False
-        assert "Only one of" in result["error"]
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                add_entities=["light.new"],
+                remove_entities=["light.old"],
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Only one of" in error_data["error"]["message"]
 
     async def test_remove_group_invalid_object_id(self, mock_client):
         """Test that remove_group rejects invalid object_id."""
@@ -178,12 +188,14 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_remove_group"](
-            object_id="group.invalid",
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_remove_group"](
+                object_id="group.invalid",
+            )
 
-        assert result["success"] is False
-        assert "Invalid object_id" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "Invalid object_id" in error_data["error"]["message"]
 
     async def test_list_groups_success(self, mock_client):
         """Test successful group listing."""
@@ -353,11 +365,11 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_list_groups"]()
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_list_groups"]()
 
-        assert result["success"] is False
-        assert "Failed to list groups" in result["error"]
-        assert "suggestions" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
 
     async def test_set_group_error_handling(self, mock_client):
         """Test error handling in set_group."""
@@ -379,14 +391,14 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_set_group"](
-            object_id="test_group",
-            entities=["light.lamp1"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_set_group"](
+                object_id="test_group",
+                entities=["light.lamp1"],
+            )
 
-        assert result["success"] is False
-        assert "Failed to set group" in result["error"]
-        assert "suggestions" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
 
     async def test_remove_group_error_handling(self, mock_client):
         """Test error handling in remove_group."""
@@ -408,10 +420,10 @@ class TestGroupToolsValidation:
 
         register_group_tools(mock_mcp, mock_client)
 
-        result = await registered_tools["ha_config_remove_group"](
-            object_id="test_group",
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await registered_tools["ha_config_remove_group"](
+                object_id="test_group",
+            )
 
-        assert result["success"] is False
-        assert "Failed to remove group" in result["error"]
-        assert "suggestions" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False

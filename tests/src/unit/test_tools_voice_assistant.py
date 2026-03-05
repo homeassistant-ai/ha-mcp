@@ -100,7 +100,7 @@ class TestHaListExposedEntities:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
-        assert "Invalid assistant" in error_data["error"]
+        assert "Invalid assistant" in error_data["error"]["message"]
         assert "valid_assistants" in error_data
         assert error_data["valid_assistants"] == KNOWN_ASSISTANTS
 
@@ -197,7 +197,7 @@ class TestHaListExposedEntities:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
-        assert "Service unavailable" in error_data["error"]
+        assert "Service unavailable" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_mcp, mock_client):
@@ -213,7 +213,7 @@ class TestHaListExposedEntities:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
-        assert "Network error" in error_data["error"]
+        assert "Network error" in error_data["error"]["details"]
 
 
 class TestHaGetEntityExposure:
@@ -368,7 +368,7 @@ class TestHaGetEntityExposure:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
-        assert "Access denied" in error_data["error"]
+        assert "Access denied" in error_data["error"]["message"]
         assert error_data["entity_id"] == "light.living_room"
 
     @pytest.mark.asyncio
@@ -385,7 +385,7 @@ class TestHaGetEntityExposure:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
-        assert "Timeout" in error_data["error"]
+        assert "Timeout" in error_data["error"]["details"]
         assert error_data["entity_id"] == "light.living_room"
 
 

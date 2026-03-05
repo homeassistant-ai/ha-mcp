@@ -8,9 +8,11 @@ Home Assistant zones (location-based areas for presence automation).
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +58,11 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if not result.get("success"):
-                return {
-                    "success": False,
-                    "error": f"Failed to get zones: {result.get('error', 'Unknown error')}",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to get zones"),
+                    context={"zone_id": zone_id},
+                ))
 
             zones = result.get("result", [])
 
@@ -77,13 +80,12 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if zone is None:
                 available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
-                return {
-                    "success": False,
-                    "error": f"Zone not found: {zone_id}",
-                    "zone_id": zone_id,
-                    "available_zone_ids": available_ids,
-                    "suggestion": "Use ha_get_zone() without zone_id to see all available zones",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Zone not found: {zone_id}",
+                    context={"zone_id": zone_id, "available_zone_ids": available_ids},
+                    suggestions=["Use ha_get_zone() without zone_id to see all available zones"],
+                ))
 
             return {
                 "success": True,
@@ -91,17 +93,14 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "zone": zone,
             }
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error getting zones: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get zones: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                    "Use ha_search_entities(domain_filter='zone') as alternative",
-                ],
-            }
+            exception_to_structured_error(e, context={"zone_id": zone_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+                "Use ha_search_entities(domain_filter='zone') as alternative",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Create Zone"})
     @log_tool_usage
@@ -156,20 +155,26 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # Validate coordinates
             if not (-90 <= latitude <= 90):
-                return {
-                    "success": False,
-                    "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                    context={"latitude": latitude},
+                    suggestions=["Latitude must be between -90 and 90"],
+                ))
             if not (-180 <= longitude <= 180):
-                return {
-                    "success": False,
-                    "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                    context={"longitude": longitude},
+                    suggestions=["Longitude must be between -180 and 180"],
+                ))
             if radius <= 0:
-                return {
-                    "success": False,
-                    "error": f"Invalid radius: {radius}. Must be greater than 0.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid radius: {radius}. Must be greater than 0.",
+                    context={"radius": radius},
+                    suggestions=["Radius must be a positive number"],
+                ))
 
             # Build create message
             message: dict[str, Any] = {
@@ -195,24 +200,20 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully created zone: {name}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to create zone: {result.get('error', 'Unknown error')}",
-                    "name": name,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to create zone: {result.get('error', 'Unknown error')}",
+                    context={"name": name},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error creating zone: {e}")
-            return {
-                "success": False,
-                "error": f"Zone creation failed: {str(e)}",
-                "name": name,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify coordinates are valid",
-                    "Ensure zone name is unique",
-                ],
-            }
+            exception_to_structured_error(e, context={"name": name}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify coordinates are valid",
+                "Ensure zone name is unique",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Update Zone"})
     @log_tool_usage
@@ -272,28 +273,35 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             fields_to_update = {k: v for k, v in update_fields.items() if v is not None}
 
             if not fields_to_update:
-                return {
-                    "success": False,
-                    "error": "No fields to update. Provide at least one field to change.",
-                    "zone_id": zone_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No fields to update. Provide at least one field to change.",
+                    context={"zone_id": zone_id},
+                    suggestions=["Provide at least one field such as name, latitude, longitude, radius, icon, or passive"],
+                ))
 
             # Validate coordinates if provided
             if latitude is not None and not (-90 <= latitude <= 90):
-                return {
-                    "success": False,
-                    "error": f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                    context={"latitude": latitude},
+                    suggestions=["Latitude must be between -90 and 90"],
+                ))
             if longitude is not None and not (-180 <= longitude <= 180):
-                return {
-                    "success": False,
-                    "error": f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                    context={"longitude": longitude},
+                    suggestions=["Longitude must be between -180 and 180"],
+                ))
             if radius is not None and radius <= 0:
-                return {
-                    "success": False,
-                    "error": f"Invalid radius: {radius}. Must be greater than 0.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid radius: {radius}. Must be greater than 0.",
+                    context={"radius": radius},
+                    suggestions=["Radius must be a positive number"],
+                ))
 
             # Build update message
             message: dict[str, Any] = {
@@ -314,24 +322,20 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully updated zone: {zone_id}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to update zone: {result.get('error', 'Unknown error')}",
-                    "zone_id": zone_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to update zone: {result.get('error', 'Unknown error')}",
+                    context={"zone_id": zone_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error updating zone: {e}")
-            return {
-                "success": False,
-                "error": f"Zone update failed: {str(e)}",
-                "zone_id": zone_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify zone_id exists using ha_get_zone()",
-                    "Ensure values are valid",
-                ],
-            }
+            exception_to_structured_error(e, context={"zone_id": zone_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify zone_id exists using ha_get_zone()",
+                "Ensure values are valid",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["zone"], "title": "Delete Zone"})
     @log_tool_usage
@@ -367,21 +371,17 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Successfully deleted zone: {zone_id}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to delete zone: {result.get('error', 'Unknown error')}",
-                    "zone_id": zone_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete zone: {result.get('error', 'Unknown error')}",
+                    context={"zone_id": zone_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting zone: {e}")
-            return {
-                "success": False,
-                "error": f"Zone deletion failed: {str(e)}",
-                "zone_id": zone_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify zone_id exists using ha_get_zone()",
-                    "Ensure zone is not the 'home' zone (YAML-defined)",
-                ],
-            }
+            exception_to_structured_error(e, context={"zone_id": zone_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify zone_id exists using ha_get_zone()",
+                "Ensure zone is not the 'home' zone (YAML-defined)",
+            ])

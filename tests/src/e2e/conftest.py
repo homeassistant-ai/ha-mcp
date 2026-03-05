@@ -1,13 +1,19 @@
 """
-Simple Testcontainers integration for E2E testing.
+Testcontainers integration for E2E testing.
 
-This provides testcontainers integration but falls back to the existing
-Docker environment if testcontainers has issues.
+Spins up an isolated Home Assistant Docker container for each test session.
+Tests MUST run against this container — never against a real HA instance.
 
 Environment Variables:
-    HA_TEST_PORT: Optional fixed port for Home Assistant container (default: dynamic)
-                  Set this to bind to a specific host port instead of random assignment.
-                  Example: HA_TEST_PORT=8123
+    HA_TEST_PORT: Optional fixed port for HA container (default: dynamic).
+                  Example: HA_TEST_PORT=8124
+
+NOTE: config.py loads HOMEASSISTANT_URL from the .env.test file at import
+time, so checking os.environ for a pre-set URL is not a reliable guard here.
+Protection against accidental real-HA usage is instead ensured by:
+  - Guard 1: Docker must be available (testcontainers requirement)
+  - Guard 3: HA API must become ready within 60s (container health check)
+  - AGENTS.md: documents correct test-run commands
 """
 
 import asyncio
@@ -137,6 +143,17 @@ async def test_settings():
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config():
     """Create Home Assistant container with fresh config using testcontainers."""
+    # --- Safety guard 1: ensure Docker is available before doing anything else ---
+    try:
+        import docker as docker_sdk
+        docker_sdk.from_env().ping()
+    except Exception as e:
+        pytest.fail(
+            f"Docker is not available: {e}\n"
+            "E2E tests require a running Docker daemon (testcontainers).\n"
+            "Start Docker and retry."
+        )
+
     logger.info("🐳 Creating Home Assistant container with testcontainers...")
 
     # Create temporary directory for this test session
@@ -258,7 +275,10 @@ def ha_container_with_fresh_config():
                 time.sleep(1)
 
         if not api_ready:
-            logger.warning("⚠️ API not fully ready, but continuing with tests")
+            pytest.fail(
+                f"Home Assistant API at {base_url} did not become ready within 60 seconds.\n"
+                "The container may have failed to start. Check Docker logs for details."
+            )
 
         # Additional stabilization period to allow components to fully load
         logger.info(

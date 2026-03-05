@@ -10,9 +10,11 @@ import re
 from typing import Annotated, Any
 
 import httpx
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
@@ -106,11 +108,11 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """Internal helper to get details for a specific update entity."""
         # Validate entity_id format
         if not entity_id.startswith("update."):
-            return {
-                "success": False,
-                "entity_id": entity_id,
-                "error": "Invalid entity_id format. Must start with 'update.'",
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Invalid entity_id format. Must start with 'update.'",
+                context={"entity_id": entity_id},
+            ))
 
         # Get entity state to check if it exists and get attributes
         entity_state = await client.get_entity_state(entity_id)
@@ -241,24 +243,22 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Get mode: return details for specific update
                 return await _get_update_details(entity_id)
 
+        except ToolError:
+            raise
         except Exception as e:
             error_msg = str(e)
             if entity_id and ("404" in error_msg or "not found" in error_msg.lower()):
-                return {
-                    "success": False,
-                    "entity_id": entity_id,
-                    "error": f"Update entity not found: {entity_id}",
-                    "suggestion": "Use ha_get_updates() without entity_id to see all available updates",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Update entity not found: {entity_id}",
+                    context={"entity_id": entity_id},
+                    suggestions=["Use ha_get_updates() without entity_id to see all available updates"],
+                ))
             logger.error(f"Failed to get updates: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get updates: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify API access permissions",
-                ],
-            }
+            exception_to_structured_error(e, suggestions=[
+                "Check Home Assistant connection",
+                "Verify API access permissions",
+            ])
 
 def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
     """
