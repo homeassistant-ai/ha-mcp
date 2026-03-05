@@ -449,9 +449,9 @@ class HomeAssistantWebSocketClient:
                 )
                 return {"success": True, **response}
 
-        except TimeoutError:
+        except TimeoutError as e:
             self.cancel_pending_response(message_id)
-            raise Exception("Command timeout")
+            raise Exception("Command timeout") from e
         except Exception:
             self.cancel_pending_response(message_id)
             raise

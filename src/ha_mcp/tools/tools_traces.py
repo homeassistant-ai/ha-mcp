@@ -8,10 +8,17 @@ to help debug automation and script issues.
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..client.websocket_client import HomeAssistantWebSocketClient
-from .helpers import get_connected_ws_client, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+    raise_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +104,12 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             elif automation_id.startswith("script."):
                 domain = "script"
             else:
-                return {
-                    "success": False,
-                    "error": f"Invalid entity_id format: {automation_id}",
-                    "hint": "Entity ID must start with 'automation.' or 'script.'",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid entity_id format: {automation_id}",
+                    details="Entity ID must start with 'automation.' or 'script.'",
+                    context={"automation_id": automation_id},
+                ))
 
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
@@ -111,10 +119,11 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 client.base_url, client.token
             )
             if error or ws_client is None:
-                return error or {
-                    "success": False,
-                    "error": "Failed to connect to WebSocket",
-                }
+                raise_tool_error(error or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                    context={"automation_id": automation_id},
+                ))
 
             try:
                 # Home Assistant stores traces by unique_id, not entity_id.
@@ -133,12 +142,14 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
                     if not result.get("success"):
-                        return {
-                            "success": False,
-                            "automation_id": automation_id,
-                            "run_id": run_id,
-                            "error": result.get("error", "Failed to retrieve trace"),
-                        }
+                        ctx = {"automation_id": automation_id}
+                        if run_id:
+                            ctx["run_id"] = run_id
+                        raise_tool_error(create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            result.get("error", "Failed to retrieve trace"),
+                            context=ctx,
+                        ))
 
                     trace_data = result.get("result", {})
                     return _format_detailed_trace(automation_id, run_id, trace_data)
@@ -151,11 +162,11 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
                     if not result.get("success"):
-                        return {
-                            "success": False,
-                            "automation_id": automation_id,
-                            "error": result.get("error", "Failed to list traces"),
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            result.get("error", "Failed to list traces"),
+                            context={"automation_id": automation_id},
+                        ))
 
                     traces_data = result.get("result", [])
 
@@ -173,18 +184,19 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             finally:
                 await ws_client.disconnect()
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting traces for {automation_id}: {e}")
-            return {
-                "success": False,
-                "automation_id": automation_id,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"automation_id": automation_id},
+                suggestions=[
                     "Verify the automation/script entity_id exists",
                     "Check if traces are available (automation must have run recently)",
                     "Ensure Home Assistant connection is working",
                 ],
-            }
+            )
 
 
 async def _resolve_trace_item_id(
@@ -412,34 +424,34 @@ def _format_detailed_trace(
     }
 
     raw_trace = trace.get("trace", {})
-    
+
     # Initialize lists
     triggers = []
     conditions = []
     actions = []
-    
+
     # Home Assistant trace data is stored as a flat dict with path keys
     # e.g. "trigger/0": [...], "action/0": [...], "action/0/1": [...]
     for path, steps in raw_trace.items():
         if not isinstance(steps, list):
             continue
-            
+
         for step in steps:
             # Create a copy to avoid modifying original
             step_info = step.copy()
             step_info["path"] = path
-            
+
             if path == "trigger" or path.startswith("trigger/"):
                 triggers.append(step_info)
             elif path == "condition" or path.startswith("condition/"):
                 conditions.append(step_info)
             elif path == "action" or path.startswith("action/"):
                 actions.append(step_info)
-    
+
     # Sort by timestamp (if available) or path to maintain execution order
     def sort_key(item):
         return (item.get("timestamp", ""), item.get("path", ""))
-        
+
     triggers.sort(key=sort_key)
     conditions.sort(key=sort_key)
     actions.sort(key=sort_key)
@@ -451,7 +463,7 @@ def _format_detailed_trace(
         # Sometimes variables are in 'variables' key, sometimes 'changed_variables'
         if not trigger_vars:
             trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
-            
+
         result["trigger"] = {
             "platform": trigger_vars.get("platform"),
             "description": trigger_vars.get("description"),
@@ -463,7 +475,7 @@ def _format_detailed_trace(
             result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
-    
+
     # If no trigger info found in traces, try to get it from the top-level trigger field if present
     # (some HA versions might populate this)
     if "trigger" not in result and "trigger" in trace:
@@ -511,7 +523,7 @@ def _format_detailed_trace(
                 useful_vars = {k: v for k, v in variables.items() if v is not None}
                 if useful_vars:
                     action_info["variables"] = useful_vars
-            
+
             # Add child execution info (for nested scripts/automations)
             if "child_id" in action:
                 action_info["child_id"] = action["child_id"]

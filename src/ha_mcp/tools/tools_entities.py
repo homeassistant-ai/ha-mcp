@@ -9,10 +9,11 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
 
@@ -72,11 +73,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if parsed_labels is not None and label_operation in ("add", "remove"):
             current_labels, error_msg = await _get_entity_labels(entity_id)
             if current_labels is None:
-                return {
-                    "success": False,
-                    "error": f"Failed to get current labels for {entity_id}: {error_msg}",
-                    "entity_id": entity_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get current labels for {entity_id}: {error_msg}",
+                    context={"entity_id": entity_id},
+                ))
 
             if label_operation == "add":
                 # Add new labels without duplicates
@@ -145,13 +146,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             updates_made.append(f"expose_to={parsed_expose_to}")
 
         if not updates_made:
-            return {
-                "success": False,
-                "error": "No updates specified",
-                "suggestions": [
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "No updates specified",
+                suggestions=[
                     "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, labels, or expose_to"
                 ],
-            }
+            ))
 
         # Send entity registry update (covers all fields except expose_to)
         has_registry_updates = len(message) > 2  # more than just type + entity_id
@@ -169,16 +170,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if isinstance(error, dict)
                     else str(error)
                 )
-                return {
-                    "success": False,
-                    "error": f"Failed to update entity: {error_msg}",
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to update entity: {error_msg}",
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Verify the entity_id exists using ha_search_entities()",
                         "Check that area_id exists if specified",
                         "Some entities may not support all update options",
                     ],
-                }
+                ))
 
             entity_entry = result.get("result", {}).get("entity_entry", {})
 
@@ -221,7 +222,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     failed = dict.fromkeys(assistants, should_expose)
                     response: dict[str, Any] = {
                         "success": False,
-                        "error": f"Exposure failed: {error_msg}",
+                        "error": {
+                            "code": ErrorCode.SERVICE_CALL_FAILED.value,
+                            "message": f"Exposure failed: {error_msg}",
+                            "suggestion": "Check Home Assistant connection and entity availability",
+                        },
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
@@ -247,9 +252,14 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if get_result.get("success"):
                 entity_entry = get_result.get("result", {})
             else:
+                # Return plain dict so caller can inspect exposure_succeeded
                 return {
                     "success": False,
-                    "error": f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                    "error": {
+                        "code": ErrorCode.ENTITY_NOT_FOUND.value,
+                        "message": f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                        "suggestion": "Use ha_search_entities() to verify the entity exists",
+                    },
                     "entity_id": entity_id,
                     "suggestions": [
                         "Verify the entity_id exists using ha_search_entities()",
@@ -400,22 +410,22 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 is_bulk = False
             elif isinstance(entity_id, list):
                 if not entity_id:
-                    return {
-                        "success": False,
-                        "error": "entity_id list cannot be empty",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "entity_id list cannot be empty",
+                    ))
                 if not all(isinstance(e, str) for e in entity_id):
-                    return {
-                        "success": False,
-                        "error": "All entity_id values must be strings",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "All entity_id values must be strings",
+                    ))
                 entity_ids = entity_id
                 is_bulk = len(entity_ids) > 1
             else:
-                return {
-                    "success": False,
-                    "error": f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
+                ))
 
             # Validate: bulk operations only support labels and expose_to
             single_entity_params = {
@@ -429,15 +439,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             non_null_single_params = [k for k, v in single_entity_params.items() if v is not None]
 
             if is_bulk and non_null_single_params:
-                return {
-                    "success": False,
-                    "error": f"Bulk operations (multiple entity_ids) only support labels and expose_to. "
-                             f"Single-entity parameters provided: {non_null_single_params}",
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Bulk operations (multiple entity_ids) only support labels and expose_to. "
+                    f"Single-entity parameters provided: {non_null_single_params}",
+                    suggestions=[
                         "Use a single entity_id for area_id, name, icon, enabled, hidden, or aliases",
                         "Or remove single-entity parameters to use bulk labels/expose_to",
                     ],
-                }
+                ))
 
             # Parse list parameters if provided as strings
             parsed_aliases = None
@@ -445,20 +455,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed_aliases = parse_string_list_param(aliases, "aliases")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid aliases parameter: {e}",
-                    )
+                    ))
 
             parsed_labels = None
             if labels is not None:
                 try:
                     parsed_labels = parse_string_list_param(labels, "labels")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid labels parameter: {e}",
-                    )
+                    ))
 
             # Parse and validate expose_to parameter
             parsed_expose_to: dict[str, bool] | None = None
@@ -466,17 +476,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     parsed = parse_json_param(expose_to, "expose_to")
                 except ValueError as e:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         str(e),
-                    )
+                    ))
 
                 if not isinstance(parsed, dict):
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "expose_to must be a dict mapping assistant IDs to booleans, "
                         'e.g. {"conversation": true, "cloud.alexa": false}',
-                    )
+                    ))
                 parsed_expose_to = parsed
 
                 # Validate assistant names
@@ -484,26 +494,26 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     a for a in parsed_expose_to if a not in KNOWN_ASSISTANTS
                 ]
                 if invalid_assistants:
-                    return create_error_response(
+                    raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid assistant(s) in expose_to: {invalid_assistants}. "
                         f"Valid: {KNOWN_ASSISTANTS}",
-                    )
+                    ))
 
                 # Coerce values to bool
                 for asst, val in parsed_expose_to.items():
                     try:
                         coerced = coerce_bool_param(val, f"expose_to[{asst}]")
                     except ValueError as e:
-                        return create_error_response(
+                        raise_tool_error(create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             str(e),
-                        )
+                        ))
                     if coerced is None:
-                        return create_error_response(
+                        raise_tool_error(create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             f"expose_to[{asst}] must be a boolean value",
-                        )
+                        ))
                     parsed_expose_to[asst] = coerced
 
             # Single entity case - use existing logic
@@ -579,10 +589,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
             eid_context = entity_id if isinstance(entity_id, str) else entity_ids
-            return exception_to_structured_error(e, context={"entity_id": eid_context})
+            exception_to_structured_error(e, context={"entity_id": eid_context})
 
     @mcp.tool(
         annotations={
@@ -648,17 +660,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "message": "No entities requested",
                     }
                 if not all(isinstance(e, str) for e in entity_id):
-                    return {
-                        "success": False,
-                        "error": "All entity_id values must be strings",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "All entity_id values must be strings",
+                    ))
                 entity_ids = entity_id
                 is_bulk = True
             else:
-                return {
-                    "success": False,
-                    "error": f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
+                ))
 
             async def _fetch_entity(eid: str) -> dict[str, Any]:
                 """Fetch a single entity from the registry."""
@@ -715,15 +727,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         },
                     }
                 else:
-                    return {
-                        "success": False,
-                        "entity_id": eid,
-                        "error": f"Entity not found: {result.get('error', 'Unknown error')}",
-                        "suggestions": [
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Entity not found: {result.get('error', 'Unknown error')}",
+                        context={"entity_id": eid},
+                        suggestions=[
                             "Use ha_search_entities() to find valid entity IDs",
                             "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
                         ],
-                    }
+                    ))
 
             # Bulk case - fetch all entities
             logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
@@ -766,8 +778,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting entity: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e, context={"entity_id": entity_id if isinstance(entity_id, str) else entity_ids}
             )

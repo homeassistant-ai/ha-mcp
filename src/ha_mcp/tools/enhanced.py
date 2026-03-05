@@ -48,7 +48,6 @@ class EnhancedToolsMixin:
     def register_enhanced_tools(self) -> None:
         """Enhanced tools are now consolidated in tools_registry.py to eliminate duplication."""
         # This mixin now focuses on domain information and documentation helpers
-        pass
 
     def get_domain_info(self, domain: str) -> dict[str, Any]:
         """Get domain-specific information for enhanced documentation."""

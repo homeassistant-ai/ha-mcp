@@ -11,8 +11,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+from fastmcp.exceptions import ToolError
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
@@ -81,11 +83,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if hours_back_int is None:
                 hours_back_int = 1
         except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "suggestions": ["Provide hours_back as an integer (e.g., 24)"],
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                suggestions=["Provide hours_back as an integer (e.g., 24)"],
+            ))
 
         try:
             effective_limit = coerce_int_param(
@@ -98,11 +100,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if effective_limit is None:
                 effective_limit = DEFAULT_LOGBOOK_LIMIT
         except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "suggestions": ["Provide limit as an integer (e.g., 50)"],
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                suggestions=["Provide limit as an integer (e.g., 50)"],
+            ))
 
         try:
             offset_int = coerce_int_param(
@@ -114,11 +116,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if offset_int is None:
                 offset_int = 0
         except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "suggestions": ["Provide offset as an integer (e.g., 0)"],
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                suggestions=["Provide offset as an integer (e.g., 0)"],
+            ))
 
         # Calculate start time
         if end_time:
@@ -135,18 +137,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not response:
-                no_entries_data = {
-                    "success": False,
-                    "error": "No logbook entries found",
-                    "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
-                    "entity_filter": entity_id,
-                    "total_entries": 0,
-                    "returned_entries": 0,
-                    "limit": effective_limit,
-                    "offset": offset_int,
-                    "has_more": False,
-                }
-                return await add_timezone_metadata(client, no_entries_data)
+                raise_tool_error(create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "No logbook entries found",
+                    context={
+                        "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
+                        "entity_filter": entity_id,
+                        "total_entries": 0,
+                        "returned_entries": 0,
+                        "limit": effective_limit,
+                        "offset": offset_int,
+                        "has_more": False,
+                    },
+                ))
 
             # Get total count before pagination
             total_entries = len(response) if isinstance(response, list) else 1
@@ -197,9 +200,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, logbook_data)
 
+        except ToolError:
+            raise
         except Exception as e:
             error_str = str(e)
-            suggestions = []
+            suggestions = [
+                "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
+                "Add a specific 'entity_id' filter to narrow down results",
+            ]
 
             # Detect 500 errors (server crash from heavy query)
             if "500" in error_str:
@@ -212,13 +220,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Use ha_bug_report tool to check Home Assistant logs for crash details",
                 ]
 
-            error_data = {
-                "success": False,
-                "error": f"Failed to retrieve logbook: {error_str}",
-                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
-                "suggestions": suggestions if suggestions else None,
-            }
-            return await add_timezone_metadata(client, error_data)
+            exception_to_structured_error(
+                e,
+                context={
+                    "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
+                },
+                suggestions=suggestions,
+            )
 
     @mcp.tool(
         annotations={
@@ -408,20 +416,21 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
             else:
                 error_info = result.get("error", "Unknown error occurred")
-                return {
-                    "success": False,
-                    "template": template,
-                    "error": error_info,
-                    "request_id": request_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(error_info) if not isinstance(error_info, str) else error_info,
+                    context={"template": template, "request_id": request_id},
+                    suggestions=[
                         "Check template syntax - ensure proper Jinja2 formatting",
                         "Verify entity_ids exist using ha_get_state()",
                         "Use default values: {{ states('sensor.temp') | float(0) }}",
                         "Check for typos in function names and entity references",
                         "Test simpler templates first to isolate issues",
                     ],
-                }
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             error_str = str(e)
             suggestions = [
@@ -444,12 +453,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Use ha_bug_report tool to check Home Assistant logs for details",
                 ] + suggestions
 
-            return {
-                "success": False,
-                "template": template,
-                "error": f"Template evaluation failed: {error_str}",
-                "suggestions": suggestions,
-            }
+            exception_to_structured_error(
+                e,
+                context={"template": template},
+                suggestions=suggestions,
+            )
 
     @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Domain Docs"})
     async def ha_get_domain_docs(domain: str) -> dict[str, Any]:
@@ -484,36 +492,36 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 elif response.status_code == 404:
                     # Domain documentation not found
-                    return {
-                        "error": f"No official documentation found for domain '{domain}'",
-                        "domain": domain,
-                        "status": "not_found",
-                        "suggestion": "Check if the domain name is correct. Common domains include: light, climate, switch, lock, sensor, automation, media_player, cover, fan, binary_sensor, camera, alarm_control_panel, etc.",
-                        "github_url": github_url,
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"No official documentation found for domain '{domain}'",
+                        context={"domain": domain, "github_url": github_url},
+                        suggestions=[
+                            "Check if the domain name is correct. Common domains include: light, climate, switch, lock, sensor, automation, media_player, cover, fan, binary_sensor, camera, alarm_control_panel, etc.",
+                        ],
+                    ))
 
                 else:
                     # Other HTTP errors
-                    return {
-                        "error": f"Failed to fetch documentation for '{domain}' (HTTP {response.status_code})",
-                        "domain": domain,
-                        "status": "fetch_error",
-                        "github_url": github_url,
-                        "suggestion": "Try again later or check the domain name",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to fetch documentation for '{domain}' (HTTP {response.status_code})",
+                        context={"domain": domain, "github_url": github_url},
+                        suggestions=["Try again later or check the domain name"],
+                    ))
 
+        except ToolError:
+            raise
         except httpx.TimeoutException:
-            return {
-                "error": f"Timeout while fetching documentation for '{domain}'",
-                "domain": domain,
-                "status": "timeout",
-                "suggestion": "Try again later - GitHub may be temporarily unavailable",
-            }
+            exception_to_structured_error(
+                httpx.TimeoutException(f"Timeout while fetching documentation for '{domain}'"),
+                context={"domain": domain},
+                suggestions=["Try again later - GitHub may be temporarily unavailable"],
+            )
 
         except Exception as e:
-            return {
-                "error": f"Unexpected error fetching documentation for '{domain}': {str(e)}",
-                "domain": domain,
-                "status": "error",
-                "suggestion": "Check your internet connection and try again",
-            }
+            exception_to_structured_error(
+                e,
+                context={"domain": domain},
+                suggestions=["Check your internet connection and try again"],
+            )

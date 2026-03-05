@@ -8,10 +8,11 @@ Home Assistant areas and floors - essential organizational features for smart ho
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import parse_string_list_param
 
 logger = logging.getLogger(__name__)
@@ -48,21 +49,19 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(areas)} area(s)",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list areas: {result.get('error', 'Unknown error')}",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to list areas"),
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error listing areas: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list areas: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            }
+            exception_to_structured_error(e, context={"operation": "list_areas"}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["area"], "title": "Create or Update Area"})
     @log_tool_usage
@@ -121,10 +120,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid aliases parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update operation
             if area_id:
@@ -150,10 +149,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 # CREATE operation - name is required
                 if not name:
-                    return {
-                        "success": False,
-                        "error": "name is required when creating a new area",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        "name is required when creating a new area",
+                        context={"operation": "create_area"},
+                        suggestions=["Provide a name for the new area"],
+                    ))
 
                 message: dict[str, Any] = {
                     "type": "config/area_registry/create",
@@ -185,29 +186,27 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                error_response = {
-                    "success": False,
-                    "error": f"Failed to {operation} area: {error_msg}",
-                }
+                ctx: dict[str, Any] = {"operation": operation}
                 if name:
-                    error_response["name"] = name
-                return error_response
+                    ctx["name"] = name
+                if area_id:
+                    ctx["area_id"] = area_id
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {operation} area: {error_msg}",
+                    context=ctx,
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error in ha_config_set_area: {e}")
-            error_response = {
-                "success": False,
-                "error": f"Failed to set area: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "For create: Verify the name is unique",
-                    "For update: Verify the area_id exists using ha_config_list_areas()",
-                    "If assigning to a floor, verify floor_id exists",
-                ],
-            }
-            if name:
-                error_response["name"] = name
-            return error_response
+            logger.error(f"Error {operation} area {name!r}: {e}")
+            exception_to_structured_error(e, context={"operation": operation, "name": name, "area_id": area_id}, suggestions=[
+                "Check Home Assistant connection",
+                "For create: Verify the name is unique",
+                "For update: Verify the area_id exists using ha_config_list_areas()",
+                "If assigning to a floor, verify floor_id exists",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["area"], "title": "Remove Area"})
     @log_tool_usage
@@ -240,23 +239,20 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                return {
-                    "success": False,
-                    "error": f"Failed to delete area: {error_msg}",
-                    "area_id": area_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete area: {error_msg}",
+                    context={"area_id": area_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting area: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to delete area: {str(e)}",
-                "area_id": area_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify the area_id exists using ha_config_list_areas()",
-                ],
-            }
+            logger.error(f"Error removing area {area_id!r}: {e}")
+            exception_to_structured_error(e, context={"area_id": area_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify the area_id exists using ha_config_list_areas()",
+            ])
 
     # ============================================================
     # FLOOR TOOLS
@@ -286,21 +282,19 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(floors)} floor(s)",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list floors: {result.get('error', 'Unknown error')}",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to list floors"),
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error listing floors: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list floors: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            }
+            exception_to_structured_error(e, context={"operation": "list_floors"}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["floor"], "title": "Create or Update Floor"})
     @log_tool_usage
@@ -352,10 +346,10 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid aliases parameter: {e}",
-                )
+                ))
 
             # Determine if this is a create or update operation
             if floor_id:
@@ -379,10 +373,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 # CREATE operation - name is required
                 if not name:
-                    return {
-                        "success": False,
-                        "error": "name is required when creating a new floor",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        "name is required when creating a new floor",
+                        context={"operation": "create_floor"},
+                        suggestions=["Provide a name for the new floor"],
+                    ))
 
                 message: dict[str, Any] = {
                     "type": "config/floor_registry/create",
@@ -412,28 +408,26 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                error_response = {
-                    "success": False,
-                    "error": f"Failed to {operation} floor: {error_msg}",
-                }
+                ctx: dict[str, Any] = {"operation": operation}
                 if name:
-                    error_response["name"] = name
-                return error_response
+                    ctx["name"] = name
+                if floor_id:
+                    ctx["floor_id"] = floor_id
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {operation} floor: {error_msg}",
+                    context=ctx,
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error in ha_config_set_floor: {e}")
-            error_response = {
-                "success": False,
-                "error": f"Failed to set floor: {str(e)}",
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "For create: Verify the name is unique",
-                    "For update: Verify the floor_id exists using ha_config_list_floors()",
-                ],
-            }
-            if name:
-                error_response["name"] = name
-            return error_response
+            logger.error(f"Error {operation} floor {name!r}: {e}")
+            exception_to_structured_error(e, context={"operation": operation, "name": name, "floor_id": floor_id}, suggestions=[
+                "Check Home Assistant connection",
+                "For create: Verify the name is unique",
+                "For update: Verify the floor_id exists using ha_config_list_floors()",
+            ])
 
     @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["floor"], "title": "Remove Floor"})
     @log_tool_usage
@@ -466,20 +460,17 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 error = result.get("error", {})
                 error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                return {
-                    "success": False,
-                    "error": f"Failed to delete floor: {error_msg}",
-                    "floor_id": floor_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete floor: {error_msg}",
+                    context={"floor_id": floor_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting floor: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to delete floor: {str(e)}",
-                "floor_id": floor_id,
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify the floor_id exists using ha_config_list_floors()",
-                ],
-            }
+            logger.error(f"Error removing floor {floor_id!r}: {e}")
+            exception_to_structured_error(e, context={"floor_id": floor_id}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify the floor_id exists using ha_config_list_floors()",
+            ])

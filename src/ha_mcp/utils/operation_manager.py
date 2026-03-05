@@ -190,14 +190,15 @@ class OperationManager:
         Returns:
             List of pending operations for the entity
         """
-        pending_ops = []
-        for operation in self.operations.values():
+        pending_ops = [
+            operation
+            for operation in self.operations.values()
             if (
                 operation.entity_id == entity_id
                 and operation.status == OperationStatus.PENDING
                 and not operation.is_expired
-            ):
-                pending_ops.append(operation)
+            )
+        ]
 
         return pending_ops
 
@@ -343,9 +344,7 @@ class OperationManager:
         for op_id, operation in self.operations.items():
             age_seconds = (current_time * 1000 - operation.start_time) / 1000
 
-            if operation.status == OperationStatus.COMPLETED and age_seconds > 300:
-                to_remove.append(op_id)
-            elif (
+            if (operation.status == OperationStatus.COMPLETED and age_seconds > 300) or (
                 operation.status in [OperationStatus.FAILED, OperationStatus.CANCELLED]
                 and age_seconds > 60
             ):

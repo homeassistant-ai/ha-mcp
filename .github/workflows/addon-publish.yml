@@ -1,13 +1,20 @@
 name: Home Assistant Add-on Publish
 
 on:
-  # Trigger after SemVer Release completes
-  workflow_run:
-    workflows: ["SemVer Release"]
-    types: [completed]
-    branches: [ main, master ]
+  # Called from semver-release.yml after version bump
+  workflow_call:
+    inputs:
+      version:
+        description: 'Add-on version to publish'
+        required: true
+        type: string
   # Also support manual dispatch
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (leave empty to use config.yaml)'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -17,8 +24,6 @@ jobs:
   build-addon:
     name: Build Add-on Image (${{ matrix.arch }})
     runs-on: ubuntu-latest
-    # Only run if SemVer Release workflow succeeded
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       packages: write
@@ -46,10 +51,14 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract version from config.yaml
+    - name: Resolve version
       id: version
       run: |
-        VERSION=$(grep '^version:' homeassistant-addon/config.yaml | sed 's/version: "\(.*\)"/\1/')
+        if [ -n "${{ inputs.version }}" ]; then
+          VERSION="${{ inputs.version }}"
+        else
+          VERSION=$(grep '^version:' homeassistant-addon/config.yaml | sed 's/version: "\(.*\)"/\1/')
+        fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Add-on version: $VERSION"
 

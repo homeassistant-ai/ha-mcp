@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,7 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
     async def entity_exists():
         nonlocal attempt
         attempt += 1
-        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
         # Check if 'data' key exists (not 'success' key)
         success = 'data' in data and data['data'] is not None
 
@@ -386,7 +385,8 @@ class TestInputSelectCRUD:
         """Test that input_select requires options."""
         logger.info("Testing input_select without options (should fail)")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "input_select",
@@ -394,8 +394,6 @@ class TestInputSelectCRUD:
                 # Missing required options
             },
         )
-
-        data = parse_mcp_result(result)
         assert data.get("success") is False, (
             f"Should fail without options: {data}"
         )
@@ -692,15 +690,14 @@ async def test_helper_delete_nonexistent(mcp_client):
     """Test deleting a non-existent helper."""
     logger.info("Testing delete of non-existent helper")
 
-    result = await mcp_client.call_tool(
+    data = await safe_call_tool(
+        mcp_client,
         "ha_config_remove_helper",
         {
             "helper_type": "input_boolean",
             "helper_id": "nonexistent_helper_xyz_12345",
         },
     )
-
-    data = parse_mcp_result(result)
 
     # Should either fail or indicate already deleted
     if data.get("success"):
@@ -938,8 +935,7 @@ class TestScheduleCRUD:
 
         # Wait for entity to be registered (schedule is either on or off depending on current time)
         async def check_schedule_exists():
-            result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-            data = parse_mcp_result(result)
+            data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
             if 'data' in data and data['data'] is not None:
                 state = data.get("data", {}).get("state")
@@ -1137,7 +1133,8 @@ class TestZoneCRUD:
         """Test that zone requires latitude and longitude (validated by HA)."""
         logger.info("Testing zone without coordinates (HA should reject)")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_helper",
             {
                 "helper_type": "zone",
@@ -1145,10 +1142,84 @@ class TestZoneCRUD:
                 # Missing required latitude/longitude - HA will validate
             },
         )
-
-        data = parse_mcp_result(result)
         assert data.get("success") is False, f"Should fail without coordinates: {data}"
         logger.info("HA properly validates required zone coordinates")
+
+    async def test_zone_update_preserves_coordinates(self, mcp_client, cleanup_tracker):
+        """Regression test: zone update must route to zone/update (not just entity registry).
+
+        Before this fix, updating a zone via ha_config_set_helper only called
+        config/entity_registry/update, which silently dropped latitude, longitude,
+        radius, and passive — resetting them to HA defaults.
+        """
+        logger.info("Testing zone update preserves coordinates (regression test for config-store routing)")
+
+        # CREATE zone with initial coordinates
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "zone",
+                "name": "E2E Zone Update Test",
+                "latitude": 40.7128,
+                "longitude": -74.0060,
+                "radius": 200,
+                "passive": False,
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create zone for update test")
+        entity_id = get_entity_id_from_response(create_data, "zone")
+        assert entity_id, f"Missing entity_id: {create_data}"
+        cleanup_tracker.track("zone", entity_id)
+        logger.info(f"Created zone: {entity_id}")
+
+        state_reached = await wait_for_entity_state(mcp_client, entity_id, "0", timeout=10)
+        assert state_reached, f"Zone {entity_id} not registered within timeout"
+
+        # UPDATE with new coordinates
+        # name is required by the tool schema; helper_id triggers update mode
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "zone",
+                "helper_id": entity_id,
+                "name": "E2E Zone Update Test",
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "radius": 500,
+            },
+        )
+        update_data = assert_mcp_success(update_result, "Update zone coordinates")
+        logger.info(f"Zone updated: {update_data.get('message')}")
+
+        # VERIFY coordinates were persisted via entity state attributes
+        state_result = await mcp_client.call_tool(
+            "ha_get_state",
+            {"entity_id": entity_id},
+        )
+        state_data = parse_mcp_result(state_result)
+        assert "data" in state_data and state_data["data"] is not None, (
+            f"Zone entity not queryable after update: {state_data}"
+        )
+        attrs = state_data["data"].get("attributes", {})
+        logger.info(f"Zone attributes after update: {attrs}")
+
+        assert abs(attrs.get("latitude", 0) - 51.5074) < 0.001, (
+            f"latitude not updated — got {attrs.get('latitude')}, expected ~51.5074. "
+            "This indicates zone update is routing to entity registry only (regression)."
+        )
+        assert abs(attrs.get("longitude", 0) - (-0.1278)) < 0.001, (
+            f"longitude not updated — got {attrs.get('longitude')}, expected ~-0.1278"
+        )
+        assert attrs.get("radius") == 500, (
+            f"radius not updated — got {attrs.get('radius')}, expected 500"
+        )
+        logger.info("Zone coordinates verified after update ✓")
+
+        # CLEANUP
+        await mcp_client.call_tool(
+            "ha_config_remove_helper",
+            {"helper_type": "zone", "helper_id": entity_id},
+        )
 
 
 @pytest.mark.asyncio
@@ -1213,6 +1284,65 @@ class TestPersonCRUD:
         )
         logger.info("Person cleanup complete")
 
+    async def test_person_update_preserves_config(self, mcp_client, cleanup_tracker):
+        """Regression test: person update must route to person/update (not just entity registry).
+
+        Before this fix, updating a person via ha_config_set_helper only called
+        config/entity_registry/update, which silently dropped device_trackers,
+        user_id, and picture. The person/update API is full-replace, so the old code
+        effectively cleared all domain-specific fields on every update.
+        """
+        logger.info("Testing person update preserves config (regression test for config-store routing)")
+
+        # CREATE person
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "person",
+                "name": "E2E Person Update Test",
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create person for update test")
+        entity_id = get_entity_id_from_response(create_data, "person")
+        assert entity_id, f"Missing entity_id: {create_data}"
+        cleanup_tracker.track("person", entity_id)
+        logger.info(f"Created person: {entity_id}")
+
+        state_reached = await wait_for_entity_state(mcp_client, entity_id, "unknown", timeout=10)
+        assert state_reached, f"Person {entity_id} not registered within timeout"
+
+        # UPDATE with a name change — this exercises the full fetch-merge-update path
+        # even without real device_trackers available in the test environment
+        # helper_id triggers update mode (no "action" parameter needed)
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "person",
+                "helper_id": entity_id,
+                "name": "E2E Person Update Test Renamed",
+            },
+        )
+        update_data = assert_mcp_success(update_result, "Update person name")
+        logger.info(f"Person updated: {update_data.get('message')}")
+
+        # VERIFY the update succeeded and returned person config (not entity registry entry)
+        updated = update_data.get("updated_data", {})
+        assert updated, f"No updated_data in response: {update_data}"
+        # person/update response includes the person config with 'name' and 'id'
+        assert updated.get("name") == "E2E Person Update Test Renamed", (
+            f"Name not updated in config store response — got: {updated.get('name')}. "
+            "This may indicate routing to entity registry only (regression)."
+        )
+        logger.info(f"Person config after update: name={updated.get('name')}, "
+                    f"device_trackers={updated.get('device_trackers', [])}")
+
+        # CLEANUP
+        await mcp_client.call_tool(
+            "ha_config_remove_helper",
+            {"helper_type": "person", "helper_id": entity_id},
+        )
+        logger.info("Person update test cleanup complete")
+
 
 @pytest.mark.asyncio
 @pytest.mark.config
@@ -1271,3 +1401,71 @@ class TestTagCRUD:
             {"helper_type": "tag", "helper_id": tag_id},
         )
         logger.info("Tag cleanup complete")
+
+    async def test_tag_update_preserves_description(self, mcp_client, cleanup_tracker):
+        """Regression test: tag update must route to tag/update (not entity registry).
+
+        Before this fix, updating a tag via ha_config_set_helper only called
+        config/entity_registry/update, which silently dropped the description field.
+        Tags don't have entity registry entries, so both name and description
+        are sent to tag/update directly.
+        """
+        logger.info("Testing tag update preserves description (regression test for config-store routing)")
+
+        test_tag_id = "e2e-tag-update-test-001"
+
+        # CREATE tag with initial description
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "tag",
+                "name": "E2E Tag Update Test",
+                "tag_id": test_tag_id,
+                "description": "Initial description",
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create tag for update test")
+        tag_id = create_data.get("helper_data", {}).get("id") or test_tag_id
+        cleanup_tracker.track("tag", tag_id)
+        logger.info(f"Created tag: {tag_id}")
+
+        # UPDATE description and name via tag/update
+        # helper_id triggers update mode (no "action" parameter needed)
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "tag",
+                "helper_id": tag_id,
+                "name": "E2E Tag Update Test Renamed",
+                "description": "Updated description",
+            },
+        )
+        update_data = assert_mcp_success(update_result, "Update tag description and name")
+        logger.info(f"Tag updated: {update_data.get('message')}")
+
+        # VERIFY description was persisted by reading back via list
+        list_result = await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "tag"},
+        )
+        list_data = assert_mcp_success(list_result, "List tags after update")
+
+        updated_tag = None
+        for tag in list_data.get("helpers", []):
+            if tag.get("id") == tag_id:
+                updated_tag = tag
+                break
+
+        assert updated_tag is not None, f"Tag {tag_id} not found in list after update"
+        assert updated_tag.get("description") == "Updated description", (
+            f"description not updated — got: {updated_tag.get('description')}. "
+            "This indicates tag update is not routing to tag/update (regression)."
+        )
+        logger.info(f"Tag description verified after update: {updated_tag.get('description')} ✓")
+
+        # CLEANUP
+        await mcp_client.call_tool(
+            "ha_config_remove_helper",
+            {"helper_type": "tag", "helper_id": tag_id},
+        )
+        logger.info("Tag update test cleanup complete")

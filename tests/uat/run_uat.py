@@ -2,8 +2,8 @@
 """
 BAT Runner - Bot acceptance testing for ha-mcp.
 
-Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini) against a
-Home Assistant test instance. The calling agent generates scenarios dynamically
+Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini, OpenAI-compatible)
+against a Home Assistant test instance. The calling agent generates scenarios dynamically
 and evaluates results - this script is a dumb executor.
 
 Full results are written to a temp file. Stdout gets a concise summary with
@@ -39,9 +39,9 @@ sys.path.insert(0, str(TESTS_DIR))
 from test_constants import TEST_TOKEN  # noqa: E402
 
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2025.12.4"
+HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
 
 
@@ -85,7 +85,11 @@ def wait_for_ha(url: str, token: str, timeout: int = 120) -> None:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            r = requests.get(f"{url}/api/config", headers={"Authorization": f"Bearer {token}"}, timeout=5)
+            r = requests.get(
+                f"{url}/api/config",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
             if r.status_code == 200:
                 version = r.json().get("version", "unknown")
                 log(f"HA ready (version {version})")
@@ -150,7 +154,7 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
-def write_claude_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Path:
+def write_stdio_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Path:
     """Write a temporary Claude MCP config JSON file."""
     cmd = mcp_server_command(branch)
     config = {
@@ -165,13 +169,16 @@ def write_claude_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> P
             }
         }
     }
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="claude_mcp_", delete=False)
-    json.dump(config, f)
-    f.close()
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="claude_mcp_", delete=False
+    ) as f:
+        json.dump(config, f)
     return Path(f.name)
 
 
-def write_gemini_mcp_config(ha_url: str, ha_token: str, branch: str | None, workdir: Path) -> None:
+def write_gemini_mcp_config(
+    ha_url: str, ha_token: str, branch: str | None, workdir: Path
+) -> None:
     """Write .gemini/settings.json in the given workdir."""
     cmd = mcp_server_command(branch)
     gemini_dir = workdir / ".gemini"
@@ -196,11 +203,16 @@ def write_gemini_mcp_config(ha_url: str, ha_token: str, branch: str | None, work
 # ---------------------------------------------------------------------------
 def check_agent_available(name: str) -> bool:
     """Check if an agent CLI is installed."""
+    if name == "openai":
+        return True  # Local script, always available
     return shutil.which(name) is not None
 
 
 async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict:
     """Run a CLI command and capture output."""
+    # Strip CLAUDECODE env var to allow nested Claude CLI sessions
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -208,8 +220,11 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd else None,
+            env=env,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
         duration_ms = int((time.time() - start) * 1000)
         stdout_text = stdout_bytes.decode("utf-8", errors="replace")
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
@@ -225,6 +240,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         output_text = stdout_text
         num_turns = None
         tool_stats = None
+        session_id = None
+        cost_usd = None
         if raw_json and isinstance(raw_json, dict):
             # Claude JSON format
             if "result" in raw_json:
@@ -234,6 +251,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
                 output_text = raw_json.get("response", stdout_text)
             num_turns = raw_json.get("num_turns")
             tool_stats = raw_json.get("tool_stats")
+            session_id = raw_json.get("session_id")
+            cost_usd = raw_json.get("total_cost_usd") or raw_json.get("cost_usd")
             # Gemini stats
             if "stats" in raw_json and isinstance(raw_json["stats"], dict):
                 tool_stats = raw_json["stats"].get("tools")
@@ -249,6 +268,10 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["num_turns"] = num_turns
         if tool_stats is not None:
             result["tool_stats"] = tool_stats
+        if session_id is not None:
+            result["session_id"] = session_id
+        if cost_usd is not None:
+            result["cost_usd"] = cost_usd
         if raw_json is not None:
             result["raw_json"] = raw_json
         return result
@@ -269,28 +292,66 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         }
 
 
-def build_claude_cmd(prompt: str, mcp_config_path: Path) -> list[str]:
+def build_claude_cmd(
+    prompt: str, mcp_config_path: Path, model: str = "sonnet"
+) -> list[str]:
     return [
         "claude",
-        "-p", prompt,
-        "--mcp-config", str(mcp_config_path),
+        "-p",
+        prompt,
+        "--mcp-config",
+        str(mcp_config_path),
         "--strict-mcp-config",
-        "--allowedTools", "mcp__home-assistant",
-        "--output-format", "json",
-        "--no-session-persistence",
-        "--permission-mode", "bypassPermissions",
-        "--model", "sonnet",
+        "--allowedTools",
+        "mcp__home-assistant",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        model,
     ]
 
 
 def build_gemini_cmd(prompt: str) -> list[str]:
     return [
         "gemini",
-        "-p", prompt,
-        "--approval-mode", "yolo",
-        "--allowed-mcp-server-names", "homeassistant",
-        "-o", "json",
+        "-p",
+        prompt,
+        "--approval-mode",
+        "yolo",
+        "--allowed-mcp-server-names",
+        "homeassistant",
+        "-o",
+        "json",
     ]
+
+
+def build_openai_cmd(
+    prompt: str,
+    mcp_config_path: Path,
+    base_url: str,
+    model: str | None = None,
+    api_key: str = "no-key",
+    max_tools: int | None = None,
+) -> list[str]:
+    cmd = [
+        sys.executable,
+        str(SCRIPT_DIR / "openai_agent.py"),
+        "--prompt",
+        prompt,
+        "--mcp-config",
+        str(mcp_config_path),
+        "--base-url",
+        base_url,
+        "--api-key",
+        api_key,
+    ]
+    if model:
+        cmd.extend(["--model", model])
+    if max_tools is not None:
+        cmd.extend(["--max-tools", str(max_tools)])
+    return cmd
 
 
 async def run_agent_scenario(
@@ -300,16 +361,20 @@ async def run_agent_scenario(
     ha_token: str,
     branch: str | None,
     timeout: int,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str = "no-key",
+    max_tools: int | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
 
     # Prepare MCP config
-    claude_config_path: Path | None = None
+    stdio_config_path: Path | None = None
     gemini_workdir: Path | None = None
 
-    if agent_name == "claude":
-        claude_config_path = write_claude_mcp_config(ha_url, ha_token, branch)
+    if agent_name in ("claude", "openai"):
+        stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch)
     elif agent_name == "gemini":
         gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
         write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir)
@@ -324,12 +389,26 @@ async def run_agent_scenario(
             log(f"  [{agent_name}] Running {phase_key}...")
 
             if agent_name == "claude":
-                assert claude_config_path is not None
-                cmd = build_claude_cmd(prompt, claude_config_path)
+                assert stdio_config_path is not None
+                cmd = build_claude_cmd(
+                    prompt, stdio_config_path, model=model or "sonnet"
+                )
                 result = await run_cli(cmd, timeout)
             elif agent_name == "gemini":
                 cmd = build_gemini_cmd(prompt)
                 result = await run_cli(cmd, timeout, cwd=gemini_workdir)
+            elif agent_name == "openai":
+                assert stdio_config_path is not None
+                assert base_url is not None  # validated in run()
+                cmd = build_openai_cmd(
+                    prompt,
+                    stdio_config_path,
+                    base_url=base_url,
+                    model=model,
+                    api_key=api_key,
+                    max_tools=max_tools,
+                )
+                result = await run_cli(cmd, timeout)
             else:
                 result = {
                     "completed": False,
@@ -340,11 +419,13 @@ async def run_agent_scenario(
                 }
 
             results[phase_key] = result
-            log(f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)")
+            log(
+                f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)"
+            )
     finally:
         # Cleanup temp files
-        if claude_config_path and claude_config_path.exists():
-            claude_config_path.unlink()
+        if stdio_config_path and stdio_config_path.exists():
+            stdio_config_path.unlink()
         if gemini_workdir and gemini_workdir.exists():
             shutil.rmtree(gemini_workdir, ignore_errors=True)
 
@@ -370,6 +451,10 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
     # Always include stats (for comparison between branches)
     if phase_result.get("num_turns") is not None:
         summary["num_turns"] = phase_result["num_turns"]
+    if phase_result.get("session_id") is not None:
+        summary["session_id"] = phase_result["session_id"]
+    if phase_result.get("cost_usd") is not None:
+        summary["cost_usd"] = phase_result["cost_usd"]
     if phase_result.get("tool_stats") is not None:
         summary["tool_stats"] = phase_result["tool_stats"]
     return summary
@@ -382,18 +467,23 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
     total_tool_calls = 0
     total_tool_success = 0
     total_tool_fail = 0
+    has_turn_data = False
+    has_tool_stats = False
 
     for phase_key in ("setup", "test", "teardown"):
         if phase_key not in agent_data:
             continue
         phase = agent_data[phase_key]
         total_duration += phase.get("duration_ms", 0)
-        total_turns += phase.get("num_turns", 0)
+        if "num_turns" in phase:
+            has_turn_data = True
+            total_turns += phase["num_turns"]
 
         # Extract tool call counts from tool_stats
         tool_stats = phase.get("tool_stats")
         if tool_stats:
-            # Gemini format: {totalCalls, totalSuccess, totalFail, ...}
+            has_tool_stats = True
+            # Gemini and OpenAI format: {totalCalls, totalSuccess, totalFail, ...}
             if "totalCalls" in tool_stats:
                 total_tool_calls += tool_stats.get("totalCalls", 0)
                 total_tool_success += tool_stats.get("totalSuccess", 0)
@@ -402,10 +492,12 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
 
     return {
         "total_duration_ms": total_duration,
-        "total_turns": total_turns if total_turns > 0 else None,
-        "total_tool_calls": total_tool_calls if total_tool_calls > 0 else None,
-        "total_tool_success": total_tool_success if total_tool_success > 0 else None,
-        "total_tool_fail": total_tool_fail if total_tool_fail > 0 else None,
+        "total_turns": total_turns if has_turn_data else None,
+        # Use has_tool_stats to distinguish "no data" (None) from "0 calls" (0).
+        # A local model that answers without calling tools should show 0, not null.
+        "total_tool_calls": total_tool_calls if has_tool_stats else None,
+        "total_tool_success": total_tool_success if has_tool_stats else None,
+        "total_tool_fail": total_tool_fail if has_tool_stats else None,
     }
 
 
@@ -446,7 +538,7 @@ async def run(args: argparse.Namespace) -> dict:
     """Execute the BAT scenario and return results."""
     # Read scenario
     if args.scenario_file:
-        scenario = json.loads(Path(args.scenario_file).read_text())
+        scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
     else:
         scenario = json.loads(sys.stdin.read())
 
@@ -465,6 +557,12 @@ async def run(args: argparse.Namespace) -> dict:
     active_agents = [name for name, avail in agents.items() if avail]
     if not active_agents:
         raise ValueError("No agents available")
+
+    if "openai" in active_agents and not getattr(args, "base_url", None):
+        raise ValueError(
+            "--base-url is required when using the openai agent. "
+            "Example: --base-url http://localhost:1234/v1"
+        )
 
     # Start HA (container or external)
     ha_url = args.ha_url
@@ -487,7 +585,16 @@ async def run(args: argparse.Namespace) -> dict:
         agent_results = {}
         for name in active_agents:
             agent_results[name] = await run_agent_scenario(
-                name, scenario, ha_url, ha_token, args.branch, args.timeout
+                name,
+                scenario,
+                ha_url,
+                ha_token,
+                args.branch,
+                args.timeout,
+                model=getattr(args, "model", None),
+                base_url=getattr(args, "base_url", None),
+                api_key=getattr(args, "api_key", "no-key"),
+                max_tools=getattr(args, "max_tools", None),
             )
 
         # Add unavailable agents
@@ -546,6 +653,25 @@ Examples:
         default=DEFAULT_TIMEOUT,
         help=f"Timeout per phase in seconds (default: {DEFAULT_TIMEOUT})",
     )
+    parser.add_argument(
+        "--model",
+        help="Model to use (e.g., haiku/sonnet/opus for Claude, or model name for openai agent)",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="OpenAI-compatible API base URL (for --agents openai)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default="no-key",
+        help="API key for OpenAI-compatible endpoint (default: no-key)",
+    )
+    parser.add_argument(
+        "--max-tools",
+        type=int,
+        default=None,
+        help="Limit MCP tools passed to the openai agent (useful for small context windows)",
+    )
     args = parser.parse_args()
 
     try:
@@ -555,11 +681,10 @@ Examples:
         sys.exit(1)
 
     # Write full results to temp file
-    results_file = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="bat_results_", delete=False
-    )
-    json.dump(full_results, results_file, indent=2)
-    results_file.close()
+    ) as results_file:
+        json.dump(full_results, results_file, indent=2)
 
     # Output concise summary + file path to stdout
     summary = make_summary(full_results)

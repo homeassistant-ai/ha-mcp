@@ -16,6 +16,7 @@ production-level functionality and compatibility.
 Tests are designed for Docker Home Assistant test environment at localhost:8124.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -26,6 +27,7 @@ import pytest
 # Import test utilities
 from ...utilities.assertions import (
     MCPAssertions,
+    safe_call_tool,
 )
 
 # Set up logging
@@ -772,7 +774,7 @@ class TestScriptOrchestration:
 
             # VERIFY: All scripts created with correct modes
 
-            for script_id, script_entity, expected_mode in created_scripts:
+            for script_id, _script_entity, expected_mode in created_scripts:
                 get_data = await mcp.call_tool_success(
                     "ha_config_get_script",
                     { "script_id": script_id}
@@ -799,7 +801,7 @@ class TestScriptOrchestration:
 
             # EXECUTE: Test each mode with timeout protection
             execution_tasks = []
-            for script_id, script_entity, mode in created_scripts:
+            for _script_id, script_entity, mode in created_scripts:
                 logger.info(f"🚀 Testing execution of {mode} mode script...")
 
                 # Execute the script
@@ -1216,11 +1218,11 @@ async def test_blueprint_script_lifecycle(
 
         # This should reach HA (proving our validation passed) even if HA rejects it
         # If our validation failed, we'd get a different error code
-        create_result = await mcp_client.call_tool(
+        create_parsed = await safe_call_tool(
+            mcp_client,
             "ha_config_set_script",
             {"script_id": "test_blueprint_script_e2e", "config": script_config},
         )
-        create_parsed = enhanced_parse_mcp_result(create_result)
 
         # Check if it was our validation or HA's validation that failed
         if not create_parsed.get("success"):
@@ -1247,7 +1249,7 @@ async def test_blueprint_script_lifecycle(
         logger.info(f"✅ Created blueprint script: {script_id}")
 
         # Step 4: Wait for script to be registered, then verify no sequence field
-        time.sleep(wait_for_script_registration())
+        await asyncio.sleep(wait_for_script_registration())
         get_result = await mcp.call_tool_success(
             "ha_config_get_script",
             {"script_id": script_id},
@@ -1289,11 +1291,11 @@ async def test_blueprint_script_with_empty_sequence(
 
         # The key test: This should pass our validation (not fail with "missing sequence")
         # It will fail HA validation due to missing blueprint inputs, but that's expected
-        create_result = await mcp_client.call_tool(
+        create_parsed = await safe_call_tool(
+            mcp_client,
             "ha_config_set_script",
             {"script_id": "test_blueprint_empty_seq_e2e", "config": script_config},
         )
-        create_parsed = enhanced_parse_mcp_result(create_result)
 
         # If our validation works, it should reach HA (which will reject due to missing inputs)
         if not create_parsed.get("success"):

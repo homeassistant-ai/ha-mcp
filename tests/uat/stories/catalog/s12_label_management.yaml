@@ -1,0 +1,46 @@
+id: s12
+title: "Create and assign labels to entities"
+category: organization
+weight: 3
+description: >
+  User wants to tag entities with labels for better organization.
+  Tests label CRUD and entity label assignment. Labels are a newer HA
+  feature that helps with filtering and organization. Issue #475 and #468
+  highlighted label management bugs and improvements.
+
+tags:
+  - organization
+  - labels
+  - entities
+  - tagging
+
+setup: []
+
+prompt: >
+  I want to organize my entities with labels. Please:
+  1. Create a label called "Critical" with color red and description
+     "Critical infrastructure entities"
+  2. Create a label called "Battery" with color yellow and description
+     "Battery-powered devices"
+  3. Show me all available labels after creating them
+  4. Tell me which light entities might be good candidates for the
+     "Critical" label based on their names
+
+teardown: []
+
+verify:
+  questions:
+    - "Does a label called 'Critical' exist with red color?"
+    - "Does a label called 'Battery' exist with yellow color?"
+    - "How many labels are currently configured?"
+
+expected:
+  tools_should_use:
+    - ha_config_set_label
+    - ha_config_get_label
+    - ha_search_entities
+  description: >
+    Agent should create two labels with the specified properties, then
+    list labels to verify, and search for light entities to suggest
+    candidates for labeling. Should use ha_config_set_label for creation
+    and ha_config_get_label to verify.

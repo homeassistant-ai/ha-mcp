@@ -1,0 +1,44 @@
+id: s06
+title: "Create multi-action goodnight routine"
+category: script
+weight: 4
+description: >
+  User wants a "goodnight" script that performs multiple actions across
+  different domains. Tests the agent's ability to discover entities across
+  domains and compose a multi-step script sequence. Scripts with multiple
+  actions are a core HA management use case.
+
+tags:
+  - script
+  - create
+  - multi-action
+  - sequence
+
+setup: []
+  # Uses existing demo entities
+
+prompt: >
+  Create a script called "Goodnight Routine" that does the following in order:
+  1. Turns off all lights in the house
+  2. Sets any climate/thermostat entity to 18 degrees
+  3. Waits 2 seconds between each step
+  First check what lights and climate entities I have, then build the script.
+  Show me the full sequence you created.
+
+teardown: []
+
+verify:
+  questions:
+    - "Does a script with alias 'Goodnight Routine' exist? Show its entity_id."
+    - "Does it contain actions to turn off lights?"
+    - "Does it contain an action to set climate/thermostat to 18 degrees?"
+    - "Does it include delay steps between actions?"
+
+expected:
+  tools_should_use:
+    - ha_search_entities
+    - ha_config_set_script
+  description: >
+    Agent should search for lights and climate entities, then create a script
+    with a sequence of service calls separated by delays. Should use
+    light.turn_off (possibly with all entities) and climate.set_temperature.

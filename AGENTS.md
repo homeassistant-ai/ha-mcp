@@ -49,26 +49,7 @@ git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
 git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
 ```
 
-**Working in a worktree:**
-```bash
-# Navigate to your worktree
-cd worktree/issue-42
-
-# Work normally - you have full access to .claude/agents/
-git status
-git commit -m "feat: implement feature"
-git push
-
-# When done, return to main repo and clean up
-cd /home/julien/github/ha-mcp
-git worktree remove worktree/issue-42
-```
-
-**Cleaning up stale worktrees:**
-```bash
-# If worktree directories were deleted but git still tracks them
-git worktree prune
-```
+**Cleanup:** `git worktree remove worktree/<name>` or `git worktree prune` for stale references.
 
 ### Agent Workflows
 
@@ -294,23 +275,6 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-**Example PR comment:**
-```markdown
-## Implementation Summary
-
-**Choices Made:**
-- Used context-aware recursion to preserve `conditions` in choose blocks while normalizing at root level
-- Added both unit tests (fast feedback) and E2E tests (real API validation)
-- Fixed unrelated `test_script_traces` failure by adding polling logic
-
-**Problems Encountered:**
-- Initial implementation incorrectly passed `in_choose_or_if` flag recursively, causing conditions inside sequence blocks to not be normalized
-- Gemini suggested logbook verification in E2E test, but manual trigger bypasses conditions - simplified to structural validation instead
-
-**Suggested Improvements:**
-- Consider adding integration test with actual state changes to verify choose block execution (currently only validates structure)
-```
-
 ### Implementing Improvements in Separate PRs
 
 **When you identify improvements with long-term benefit, implement them in separate PRs:**
@@ -348,22 +312,6 @@ git checkout -b improve/description-depends-on-main-pr
 3. Create separate PR(s) for improvements
 4. Mention improvement PRs in main PR final comment
 5. Return control to user with status of all PRs
-
-**Example final comment mentioning improvements:**
-```markdown
-## Implementation Summary
-
-**Main PR (#123):**
-- ✅ All checks passing, ready for merge
-- Feature X implemented with tests
-
-**Improvement PRs created:**
-- PR #124: Update CLAUDE.md with better CI failure debugging commands
-- PR #125: Refactor common validation logic into shared utility
-
-**Choices Made:** [...]
-**Problems Encountered:** [...]
-```
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -437,42 +385,21 @@ Balance improvement against regression risk. Consider:
 | **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
 | **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
 
-**Examples:**
+### Test Coverage Requirements
 
-```python
-# GOOD: Adding test for new behavior without refactoring
-def test_new_automation_trigger():
-    # Test the specific feature you added
-    pass
+**When tests ARE required:**
+- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
+- Tools that previously had NO tests — add E2E tests even if not part of current PR
+- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
+- Bug fixes without regression tests
 
-# GOOD: Improving tool description clarity
-"""
-Create a helper entity in Home Assistant.
+**When tests may NOT be required:**
+- Refactoring with existing comprehensive test coverage
+- Documentation-only changes (`*.md` files)
+- Minor parameter additions to well-tested tools
+- Internal utilities already covered by E2E tests
 
-OLD: "Make helper with config"
-NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified configuration.
-     Use ha_get_domain_docs('input_boolean') for schema details."
-"""
-
-# BAD: Large refactor while implementing a feature
-# Instead: Open issue #XYZ "Refactor helper creation logic" and stay focused on your feature
-
-# GOOD: Low-risk quality improvement
-# Renaming a confusing variable while fixing a bug in that function
-
-# BAD: High-risk refactor
-# Extracting shared logic into new abstractions while fixing a bug
-# Instead: Fix the bug, then open an issue to track the refactor opportunity
-```
-
-**When to open an issue instead:**
-
-- Refactoring would touch many files
-- Unclear how to improve without breaking changes
-- Improvement requires design decisions
-- Would significantly expand PR scope
-
-**Remember**: Small, continuous improvements beat large, risky refactors. Better tests, clearer docs, and obvious code wins compound over time.
+**When to open an issue instead:** Refactoring would touch many files, requires design decisions, or would significantly expand PR scope.
 
 ## CI/CD Workflows
 
@@ -482,7 +409,7 @@ NEW: "Create a helper entity (input_boolean, counter, etc.) with the specified c
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Weekly Tue 10:00 UTC | Stable release |
+| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release |
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
@@ -504,19 +431,26 @@ cp .env.example .env       # Configure HA connection
 - Personal workflow helper (gitignored, not committed)
 
 ### Testing
-E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
+E2E tests are in `tests/src/e2e/` (not `tests/e2e/`). Tests use **testcontainers** to spin up
+an isolated Docker HA instance — Docker daemon must be running.
 
 ```bash
-# Run E2E tests (requires Docker daemon)
-uv run pytest tests/src/e2e/ -v --tb=short
+# Run FULL E2E suite (required before claiming all tests pass)
+cd tests && uv run pytest src/e2e/ -v --tb=short
 
-# Run specific test
-uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v
+# Run specific file (partial coverage only — never substitute for full suite)
+cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
 
 # Interactive test environment
 uv run hamcp-test-env                    # Interactive mode
 uv run hamcp-test-env --no-interactive   # For automation
 ```
+
+**CRITICAL RULES:**
+- Always run from the `tests/` directory so pytest picks up the correct `conftest.py`
+- Always run the **full suite** before declaring tests pass
+- `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
+- Never set `HOMEASSISTANT_URL` manually in your shell before running tests
 
 Test token centralized in `tests/test_constants.py`.
 
@@ -598,28 +532,89 @@ def register_<domain>_tools(mcp, client, **kwargs):
 ```
 
 ### Safety Annotations
-| Annotation | Use For |
-|------------|---------|
-| `readOnlyHint: True` | No side effects |
-| `idempotentHint: True` | Safe to retry |
-| `destructiveHint: True` | Deletes data |
+| Annotation | Default | Use For |
+|------------|---------|--------|
+| `readOnlyHint: True` | `False` | Tool does not modify its environment |
+| `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
+| `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
 
 ### Error Handling
-Use structured errors from `errors.py`:
+
+**Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
+
+**All tool-level failures must raise `ToolError`** (sets `isError=true` per MCP spec). Batch item failures within result arrays are the only exception — those return structured dicts without raising.
+
+**Pattern A — Exception blocks** (most common): call `exception_to_structured_error` without `return` — it raises `ToolError` by default:
 ```python
-from ..errors import create_error_response, ErrorCode
-return create_error_response(
-    code=ErrorCode.ENTITY_NOT_FOUND,
-    message="Entity not found",
-    suggestions=["Use ha_search_entities() to find valid IDs"]
-)
+from .helpers import exception_to_structured_error, raise_tool_error
+from fastmcp.exceptions import ToolError
+
+try:
+    # ... tool logic ...
+except ToolError:
+    raise  # must re-raise; prevents ToolError being swallowed by outer except
+except Exception as e:
+    exception_to_structured_error(
+        e,
+        context={"entity_id": entity_id},
+        suggestions=["Verify entity exists", "Check HA connection"],
+    )
 ```
+
+The `except ToolError: raise` guard is required whenever `raise_tool_error()` or validation errors are called inside the same `try` block — without it, `except Exception` catches the `ToolError` and re-maps it to `INTERNAL_ERROR`.
+
+**Pattern B — Input validation errors**:
+```python
+from ..errors import ErrorCode, create_error_response, create_validation_error
+
+if not entity_id.startswith("light."):
+    raise_tool_error(create_error_response(
+        ErrorCode.VALIDATION_INVALID_PARAMETER,
+        f"entity_id must start with 'light.', got: {entity_id}",
+        suggestions=["Use ha_search_entities(domain_filter='light') to find valid IDs"],
+        context={"entity_id": entity_id},
+    ))
+```
+
+**Pattern C — WebSocket / service call failures**:
+```python
+if not result.get("success"):
+    raise_tool_error(create_error_response(
+        ErrorCode.SERVICE_CALL_FAILED,
+        result.get("error", "Operation failed"),
+        context={"entity_id": entity_id},
+    ))
+```
+
+**Pattern D — Batch item failures** (items inside a results list — do NOT raise):
+```python
+results.append(create_error_response(
+    ErrorCode.SERVICE_CALL_FAILED,
+    str(e),
+    context={"entity_id": eid},
+))
+```
+
+**Special case** — when the error dict needs post-processing before raising (e.g., timezone metadata injection), use `raise_error=False` then `raise_tool_error()`:
+```python
+except Exception as e:
+    error_response = exception_to_structured_error(
+        e, context={"entity_id": entity_id}, raise_error=False
+    )
+    error_with_tz = await add_timezone_metadata(client, error_response)
+    raise_tool_error(error_with_tz)
+```
+
+Available `errors.py` helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
+
+`exception_to_structured_error` already classifies 404s, auth errors, timeouts, etc. based on exception type. Pass `context={"entity_id": ...}` so it produces `ENTITY_NOT_FOUND` for 404 errors automatically — no manual string matching needed.
 
 ### Return Values
 ```python
 {"success": True, "data": result}                    # Success
 {"success": True, "partial": True, "warning": "..."}  # Degraded
-{"success": False, "error": {...}}                    # Failure
+raise ToolError(json.dumps({...}))                   # Tool-level failure (isError=true)
+{"success": False, "error": {...}}                   # Batch item failure only (in results list)
 ```
 
 ### Tool Consolidation
@@ -634,22 +629,13 @@ A change is **BREAKING** only if it removes functionality that users depend on w
 - Removing a feature that has no replacement in any other tool
 - Making something impossible that was previously possible
 
-**NOT Breaking Changes (these are improvements):**
-- Tool consolidation (combining multiple tools into one) — **encouraged**
-- Tool refactoring (restructuring how tools work internally)
-- Parameter changes (as long as same outcome achievable via other means)
-- Return value restructuring (as long as data still accessible)
-- Tool renaming with functionality preserved
-
-**Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only mark as breaking when functionality is genuinely lost forever, not when it's restructured or consolidated.
+Tool consolidation, refactoring, parameter/return changes, and renaming are **NOT breaking** as long as the same outcome is achievable.
 
 ## Tool Waiting Behavior
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
 
-**Current State (#365)**: Tests use polling helpers to wait for completion after tool calls.
-
-**Future State (#381)**: Tools will have optional `wait` parameter (default `True`) to handle waiting internally:
+**Implementation (#381)**: Tools have an optional `wait` parameter (default `True`) that controls whether they poll for completion:
 
 ```python
 # Config operations wait by default
@@ -662,12 +648,15 @@ await _verify_all_created(entity_ids)  # Batch verification
 ```
 
 **Tool Categories**:
-- **Config ops** (automations, helpers, scripts): MUST wait by default
-- **Service calls** (lights, switches): SHOULD wait for state change
-- **Async ops** (automation triggers, external integrations): Return immediately, users poll
-- **Query ops** (get_state, search): Return immediately
+- **Config ops** (automations, helpers, scripts): Wait by default (poll until entity queryable/removed)
+- **Service calls** (lights, switches): Wait for state change on state-changing services (turn_on, turn_off, toggle, etc.)
+- **Async ops** (automation triggers, external integrations): Return immediately (not state-changing)
+- **Query ops** (get_state, search): Return immediately (no `wait` parameter)
 
-See issue #381 for implementation plan.
+**Shared utilities** in `src/ha_mcp/tools/util_helpers.py`:
+- `wait_for_entity_registered(client, entity_id)` — polls until entity accessible via state API
+- `wait_for_entity_removed(client, entity_id)` — polls until entity no longer accessible
+- `wait_for_state_change(client, entity_id, expected_state)` — polls until state changes
 
 ## Context Engineering & Progressive Disclosure
 
@@ -684,20 +673,7 @@ Context engineering treats LLM context as a finite resource with diminishing ret
 - Rely on documentation tools rather than embedding extensive docs in every tool description
 - Trust that model knowledge + on-demand docs = sufficient context
 
-**Example - pass-through approach:**
-```python
-# Let HA validate and return its own error messages
-message = {"type": f"{helper_type}/create", "name": name}
-for param, value in [("latitude", latitude), ("longitude", longitude)]:
-    if value is not None:
-        message[param] = value
-result = await client.send_websocket_message(message)
-```
-
-**When tool-side logic adds value:**
-- Format normalization for UX convenience (e.g., `"09:00"` → `"09:00:00"`)
-- Parsing JSON strings from MCP clients that stringify arrays
-- Combining multiple HA API calls into one logical operation
+**When tool-side logic adds value:** format normalization, parsing JSON strings from MCP clients, combining multiple HA API calls into one logical operation. Otherwise, let HA validate and return its own error messages (pass-through).
 
 ### Progressive Disclosure
 
@@ -735,26 +711,11 @@ This reveals:
 - What gaps exist (target these with `ha_get_domain_docs()` hints)
 - Confidence levels across model tiers (haiku vs sonnet vs opus)
 
-**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against actual source code or documentation:
+**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against HA Core source:
 ```bash
-# Check HA Core for actual API schema
 gh api /repos/home-assistant/core/contents/homeassistant/components/{domain}/__init__.py \
   --jq '.content' | base64 -d | grep -A 20 "CREATE_FIELDS\|vol.Schema"
 ```
-
-**Example findings from helper analysis:**
-| Model | counter | schedule | zone | tag |
-|-------|---------|----------|------|-----|
-| Haiku | ~60% confident | ~30% uncertain | ~50% | ~20% |
-| Sonnet | ~80% accurate | ~75% knows format | ~85% | ~50% |
-
-This informs whether to embed docs (low model knowledge) or just hint at `ha_get_domain_docs()` (sufficient model knowledge).
-
-### References
-- [Anthropic: Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
-- [Context Engineering Guide](https://www.promptingguide.ai/guides/context-engineering-guide)
-- [Nielsen Norman Group: Progressive Disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
-- [Progressive Context Enrichment for LLMs](https://www.inferable.ai/blog/posts/llm-progressive-context-encrichment)
 
 ## Home Assistant Add-on
 
@@ -791,6 +752,25 @@ await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 
 **HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
 
+**E2E tests: poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
+```python
+from ..utilities.wait_helpers import wait_for_tool_result
+
+# BAD: entity may not be registered yet
+create_result = await mcp_client.call_tool("ha_config_set_automation", {"config": config})
+result = await mcp_client.call_tool("ha_deep_search", {"query": "my_sensor"})  # may return empty
+
+# GOOD: poll until the entity appears in results
+data = await wait_for_tool_result(
+    mcp_client,
+    tool_name="ha_deep_search",
+    arguments={"query": "my_sensor", "search_types": ["automation"], "limit": 10},
+    predicate=lambda d: len(d.get("automations", [])) > 0,
+    description="deep search finds new automation",
+)
+```
+Other available helpers: `wait_for_entity_state()`, `wait_for_entity_attribute()`, `wait_for_condition()`. See `wait_helpers.py` for the full set.
+
 ## Release Process
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
@@ -813,19 +793,9 @@ feat: Add dark mode                             # User-facing
 | Channel | When Updated |
 |---------|--------------|
 | Dev (`.devN`) | Every master commit |
-| Stable | Weekly (Tuesday 10:00 UTC) |
+| Stable | Biweekly (Wednesday 10:00 UTC) |
 
 Manual release: Actions > SemVer Release > Run workflow.
-
-## Custom Agents
-
-Located in `.claude/agents/`:
-
-| Agent | Purpose |
-|-------|---------|
-| `issue-analysis` | Deep issue analysis: codebase exploration, implementation planning, complexity assessment |
-| `issue-to-pr-resolver` | End-to-end: issue → branch → implement → PR → CI green |
-| `my-pr-checker` | Review YOUR OWN PRs: comments, CI status, resolve threads, monitor until ready |
 
 ## Skills
 
@@ -833,13 +803,14 @@ Located in `.claude/skills/`:
 
 | Skill | Command | Purpose | When to Use |
 |-------|---------|---------|-------------|
-| `bat` | `/bat [scenario]` | Bot Acceptance Testing - validates MCP tools work correctly from real AI agent CLIs (Claude/Gemini) | PR validation, regression detection, end-to-end integration verification |
+| `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing - validates MCP tools with dynamically generated scenarios | PR validation, quick regression checks, one-off integration verification |
+| `bat-story-eval` | `/bat-story-eval --baseline v6.6.1 [--agents gemini]` | Diff-based story evaluation: triage, pre-built + custom stories, two-version comparison | Version comparison, regression detection, hypothesis-driven testing |
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
 | `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
-### BAT (Bot Acceptance Testing)
+### BAT Ad-Hoc Testing
 
-**Usage:** `/bat [scenario-description]`
+**Usage:** `/bat-adhoc [scenario-description]`
 
 Quick summary:
 - Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
@@ -847,7 +818,21 @@ Quick summary:
 - Use for PR validation, regression detection, and end-to-end integration verification
 - Progressive disclosure: only read `results_file` when you need to dig deeper
 
-For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat --help` or read `.claude/skills/bat/SKILL.md`.
+For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat-adhoc --help` or read `.claude/skills/bat-adhoc/SKILL.md`.
+
+### BAT Story Evaluation
+
+**Usage:** `/bat-story-eval --baseline v6.6.1 [--agents gemini] [--stories s01,s02]`
+
+Quick summary:
+- Compares MCP tool behavior between target (local code) and baseline (released version)
+- Diff-based triage: analyzes `git diff` to select relevant pre-built stories
+- Generates custom stories (~50-50 with pre-built) to test code paths the diff affects but pre-built stories don't cover
+- Black-box verification via `ha_query.py`, white-box analysis via session files
+- Scores each story: pass/partial/fail with regression detection
+- Report includes full custom story details (rationale, setup, prompts, verification)
+
+For complete workflow and evaluation criteria, invoke `/bat-story-eval --help` or read `.claude/skills/bat-story-eval/SKILL.md`.
 
 ### Contributor PR Review
 

@@ -117,9 +117,10 @@ class ToolsRegistry:
                     discovered.append(module_name)
 
         # Add explicit modules (only if enabled or no filter)
-        for module_name in EXPLICIT_MODULES.keys():
-            if enabled_set is None or module_name in enabled_set:
-                discovered.append(module_name)
+        discovered.extend(
+            module_name for module_name in EXPLICIT_MODULES
+            if enabled_set is None or module_name in enabled_set
+        )
 
         if enabled_set is not None:
             logger.info(

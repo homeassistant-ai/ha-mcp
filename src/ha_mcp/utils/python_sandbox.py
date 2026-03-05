@@ -12,7 +12,6 @@ from typing import Any
 class PythonSandboxError(Exception):
     """Raised when expression validation fails."""
 
-    pass
 
 
 # Whitelist of safe AST node types
@@ -244,7 +243,7 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
     try:
         exec(expr, safe_globals, safe_locals)
     except Exception as e:
-        raise PythonSandboxError(f"Execution error: {type(e).__name__}: {e}")
+        raise PythonSandboxError(f"Execution error: {type(e).__name__}: {e}") from e
 
     return config
 

@@ -1,15 +1,16 @@
 """Unit tests for OAuth 2.1 authentication."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from ha_mcp.auth.provider import (
-    HomeAssistantOAuthProvider,
-    HomeAssistantCredentials,
-    ACCESS_TOKEN_EXPIRY_SECONDS,
-)
+import pytest
+
 from ha_mcp.auth.consent_form import create_consent_html, create_error_html
+from ha_mcp.auth.provider import (
+    ACCESS_TOKEN_EXPIRY_SECONDS,
+    HomeAssistantCredentials,
+    HomeAssistantOAuthProvider,
+)
 
 
 class TestHomeAssistantCredentials:
@@ -182,8 +183,8 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_authorize_redirects_to_consent(self, provider):
         """Test authorize redirects to consent form."""
-        from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import AuthorizationParams
+        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
 
         # Register client first
@@ -215,8 +216,8 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_authorize_unregistered_client_fails(self, provider):
         """Test authorizing unregistered client raises error."""
-        from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import AuthorizationParams, AuthorizeError
+        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
 
         client_info = OAuthClientInformationFull(
@@ -304,8 +305,8 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_exchange_authorization_code(self, provider):
         """Test exchanging auth code for tokens with encrypted credentials."""
-        from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import AuthorizationCode
+        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
 
         # Register client
@@ -390,8 +391,8 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_refresh_token_exchange(self, provider):
         """Test refresh token exchange."""
-        from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import RefreshToken
+        from mcp.shared.auth import OAuthClientInformationFull
 
         client_info = OAuthClientInformationFull(
             client_id="test-client",
@@ -703,8 +704,8 @@ class TestEndToEndOAuthFlow:
     @pytest.mark.asyncio
     async def test_complete_oauth_flow(self, provider):
         """Test complete OAuth flow from registration to token usage."""
-        from mcp.shared.auth import OAuthClientInformationFull
         from mcp.server.auth.provider import AuthorizationParams
+        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
 
         # Step 1: Client registration
@@ -840,23 +841,21 @@ class TestOAuthProxyClient:
         proxy = OAuthProxyClient(mock_auth_provider)
 
         # Mock get_access_token to return our mock token
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token):
-            # Access an attribute (this should create a client)
-            with patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
-                mock_client_instance = MagicMock()
-                mock_ha_client.return_value = mock_client_instance
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
+            mock_client_instance = MagicMock()
+            mock_ha_client.return_value = mock_client_instance
 
-                # Access a method - this triggers __getattr__ which creates the client
-                _ = proxy.get_state
+            # Access a method - this triggers __getattr__ which creates the client
+            _ = proxy.get_state
 
-                # Verify HomeAssistantClient was created with correct params
-                mock_ha_client.assert_called_once_with(
-                    base_url="http://homeassistant.local:8123",
-                    token="test_ha_token_xyz",
-                )
+            # Verify HomeAssistantClient was created with correct params
+            mock_ha_client.assert_called_once_with(
+                base_url="http://homeassistant.local:8123",
+                token="test_ha_token_xyz",
+            )
 
-                # Verify the client instance was stored
-                assert len(proxy._oauth_clients) == 1
+            # Verify the client instance was stored
+            assert len(proxy._oauth_clients) == 1
 
     def test_oauth_proxy_client_reuses_clients(self, mock_auth_provider, mock_access_token):
         """Test that OAuthProxyClient reuses client instances for same credentials."""
@@ -864,17 +863,16 @@ class TestOAuthProxyClient:
 
         proxy = OAuthProxyClient(mock_auth_provider)
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token):
-            with patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
-                mock_client_instance = MagicMock()
-                mock_ha_client.return_value = mock_client_instance
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
+            mock_client_instance = MagicMock()
+            mock_ha_client.return_value = mock_client_instance
 
-                # Access attribute twice
-                _ = proxy.get_state
-                _ = proxy.call_service
+            # Access attribute twice
+            _ = proxy.get_state
+            _ = proxy.call_service
 
-                # Client should only be created once
-                assert mock_ha_client.call_count == 1
+            # Client should only be created once
+            assert mock_ha_client.call_count == 1
 
     def test_oauth_proxy_client_no_token_raises_error(self, mock_auth_provider):
         """Test that OAuthProxyClient raises error when no token in context."""
@@ -883,14 +881,14 @@ class TestOAuthProxyClient:
         proxy = OAuthProxyClient(mock_auth_provider)
 
         # Mock get_access_token to return None
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=None):
-            with pytest.raises(RuntimeError, match="No OAuth token"):
-                _ = proxy.get_state
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=None), pytest.raises(RuntimeError, match="No OAuth token"):
+            _ = proxy.get_state
 
     def test_oauth_proxy_client_missing_claims_raises_error(self, mock_auth_provider):
         """Test that OAuthProxyClient raises error when token has no claims."""
-        from ha_mcp.__main__ import OAuthProxyClient
         from fastmcp.server.auth.auth import AccessToken
+
+        from ha_mcp.__main__ import OAuthProxyClient
 
         # Token without claims
         token_no_claims = AccessToken(
@@ -903,6 +901,27 @@ class TestOAuthProxyClient:
 
         proxy = OAuthProxyClient(mock_auth_provider)
 
-        with patch("fastmcp.server.dependencies.get_access_token", return_value=token_no_claims):
-            with pytest.raises(RuntimeError, match="No Home Assistant credentials"):
-                _ = proxy.get_state
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=token_no_claims), pytest.raises(RuntimeError, match="No Home Assistant credentials"):
+            _ = proxy.get_state
+
+    @pytest.mark.asyncio
+    async def test_oauth_proxy_client_close_all_clients(self, mock_auth_provider, mock_access_token):
+        """Test that close() closes all cached OAuth clients."""
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient(mock_auth_provider)
+
+        with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.close = AsyncMock()
+            mock_ha_client.return_value = mock_client_instance
+
+            # Create a cached client
+            _ = proxy.get_state
+            assert len(proxy._oauth_clients) == 1
+
+            # Close should close all clients and clear the cache
+            await proxy.close()
+
+            mock_client_instance.close.assert_called_once()
+            assert len(proxy._oauth_clients) == 0

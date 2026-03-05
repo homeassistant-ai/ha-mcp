@@ -9,10 +9,17 @@ Note: These tools only work with Home Assistant OS or Supervised installations.
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..client.rest_client import HomeAssistantClient
-from .helpers import get_connected_ws_client, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+    log_tool_usage,
+    raise_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +43,7 @@ async def list_addons(
         # Connect to WebSocket
         ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error or ws_client is None:
-            return error or {
-                "success": False,
-                "error": "Failed to establish WebSocket connection",
-            }
+            raise_tool_error(error or create_error_response(ErrorCode.CONNECTION_FAILED, "Failed to connect to WebSocket"))
 
         # Call Supervisor API to get installed add-ons
         result = await ws_client.send_command(
@@ -52,17 +56,17 @@ async def list_addons(
             # Check if this is a non-Supervisor installation
             error_msg = str(result.get("error", ""))
             if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                return {
-                    "success": False,
-                    "error": "Supervisor API not available",
-                    "suggestion": "This feature requires Home Assistant OS or Supervised installation",
-                    "details": result,
-                }
-            return {
-                "success": False,
-                "error": "Failed to retrieve add-ons list",
-                "details": result,
-            }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Supervisor API not available",
+                    context={"endpoint": "/addons"},
+                    suggestions=["This feature requires Home Assistant OS or Supervised installation"],
+                ))
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                result.get("error", "Failed to retrieve add-ons list"),
+                context={"endpoint": "/addons"},
+            ))
 
         # Response structure: result.addons (not result.data.addons)
         data = result.get("result", {})
@@ -108,13 +112,15 @@ async def list_addons(
             },
         }
 
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Error listing add-ons: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to list add-ons: {str(e)}",
-            "suggestion": "Check Home Assistant connection and Supervisor availability",
-        }
+        logger.error(f"Error listing addons: {e}")
+        exception_to_structured_error(
+            e,
+            context={"tool": "list_addons"},
+            suggestions=["Check Home Assistant connection and Supervisor availability"],
+        )
     finally:
         if ws_client:
             try:
@@ -145,10 +151,7 @@ async def list_available_addons(
         # Connect to WebSocket
         ws_client, error = await get_connected_ws_client(client.base_url, client.token)
         if error or ws_client is None:
-            return error or {
-                "success": False,
-                "error": "Failed to establish WebSocket connection",
-            }
+            raise_tool_error(error or create_error_response(ErrorCode.CONNECTION_FAILED, "Failed to connect to WebSocket"))
 
         # Call Supervisor API to get store information
         result = await ws_client.send_command(
@@ -161,17 +164,17 @@ async def list_available_addons(
             # Check if this is a non-Supervisor installation
             error_msg = str(result.get("error", ""))
             if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                return {
-                    "success": False,
-                    "error": "Supervisor API not available",
-                    "suggestion": "This feature requires Home Assistant OS or Supervised installation",
-                    "details": result,
-                }
-            return {
-                "success": False,
-                "error": "Failed to retrieve add-on store",
-                "details": result,
-            }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Supervisor API not available",
+                    context={"endpoint": "/store"},
+                    suggestions=["This feature requires Home Assistant OS or Supervised installation"],
+                ))
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                result.get("error", "Failed to retrieve add-on store"),
+                context={"endpoint": "/store"},
+            ))
 
         # Response structure: result.addons/repositories (not result.data.*)
         data = result.get("result", {})
@@ -179,16 +182,15 @@ async def list_available_addons(
         addons = data.get("addons", [])
 
         # Format repository information
-        formatted_repos = []
-        for repo in repositories:
-            formatted_repos.append(
-                {
-                    "slug": repo.get("slug"),
-                    "name": repo.get("name"),
-                    "source": repo.get("source"),
-                    "maintainer": repo.get("maintainer"),
-                }
-            )
+        formatted_repos = [
+            {
+                "slug": repo.get("slug"),
+                "name": repo.get("name"),
+                "source": repo.get("source"),
+                "maintainer": repo.get("maintainer"),
+            }
+            for repo in repositories
+        ]
 
         # Filter and format add-ons
         formatted_addons = []
@@ -238,13 +240,15 @@ async def list_available_addons(
             },
         }
 
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Error listing available add-ons: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to list available add-ons: {str(e)}",
-            "suggestion": "Check Home Assistant connection and Supervisor availability",
-        }
+        logger.error(f"Error listing available addons: {e}")
+        exception_to_structured_error(
+            e,
+            context={"tool": "list_available_addons"},
+            suggestions=["Check Home Assistant connection and Supervisor availability"],
+        )
     finally:
         if ws_client:
             try:
@@ -336,8 +340,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> Non
         elif effective_source == "installed":
             return await list_addons(client, include_stats)
         else:
-            return {
-                "success": False,
-                "error": f"Invalid source: {source}. Must be 'installed' or 'available'.",
-                "valid_sources": ["installed", "available"],
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid source: {source}. Must be 'installed' or 'available'.",
+                context={"source": source, "valid_sources": ["installed", "available"]},
+            ))

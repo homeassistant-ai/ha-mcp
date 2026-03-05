@@ -13,9 +13,11 @@ Known assistant identifiers:
 import logging
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +81,15 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         try:
             # Validate assistant filter if provided
             if assistant and assistant not in KNOWN_ASSISTANTS:
-                return {
-                    "success": False,
-                    "error": f"Invalid assistant: {assistant}",
-                    "valid_assistants": KNOWN_ASSISTANTS,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid assistant: {assistant}",
+                    context={"assistant": assistant, "valid_assistants": KNOWN_ASSISTANTS},
+                    suggestions=[
+                        f"Valid assistants are: {', '.join(KNOWN_ASSISTANTS)}",
+                        "Check the assistant parameter spelling",
+                    ],
+                ))
 
             message: dict[str, Any] = {"type": "homeassistant/expose_entity/list"}
 
@@ -96,11 +102,11 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                     if isinstance(error, dict)
                     else str(error)
                 )
-                return {
-                    "success": False,
-                    "error": f"Failed to get exposure settings: {error_msg}",
-                    "entity_id": entity_id,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get exposure settings: {error_msg}",
+                    context={"entity_id": entity_id},
+                ))
 
             exposed_entities = result.get("result", {}).get("exposed_entities", {})
 
@@ -166,10 +172,8 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
                 "filters_applied": filters_applied,
             }
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting entity exposure: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to get entity exposure: {str(e)}",
-                "entity_id": entity_id,
-            }
+            exception_to_structured_error(e, context={"entity_id": entity_id})

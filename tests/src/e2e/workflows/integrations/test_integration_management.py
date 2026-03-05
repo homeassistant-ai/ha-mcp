@@ -7,8 +7,8 @@ import logging
 import pytest
 
 from tests.src.e2e.utilities.assertions import (
-    assert_mcp_failure,
     assert_mcp_success,
+    safe_call_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,29 +99,31 @@ class TestIntegrationManagement:
 
     async def test_delete_config_entry_requires_confirm(self, mcp_client):
         """Test deletion safety check."""
-        result = await mcp_client.call_tool(
-            "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": False}
+        data = await safe_call_tool(
+            mcp_client, "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": False}
         )
-        data = assert_mcp_failure(result, "Delete without confirm")
-        assert "not confirmed" in data.get("error", "").lower()
+        assert not data.get("success"), "Delete without confirm should fail"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower()
 
     async def test_delete_config_entry_string_confirm(self, mcp_client):
         """Test that confirm parameter accepts string booleans."""
         # Test with string "false" - should fail
-        result = await mcp_client.call_tool(
-            "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": "false"}
+        data = await safe_call_tool(
+            mcp_client, "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": "false"}
         )
-        data = assert_mcp_failure(result, "Delete with string false")
-        assert "not confirmed" in data.get("error", "").lower()
+        assert not data.get("success"), "Delete with string false should fail"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower()
 
     async def test_set_integration_enabled_nonexistent(self, mcp_client):
         """Test error handling for non-existent integration."""
-        from tests.src.e2e.utilities.assertions import parse_mcp_result
-
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_set_integration_enabled",
             {"entry_id": "nonexistent_entry_id", "enabled": True},
         )
         # Should fail - either through validation or API error
-        data = parse_mcp_result(result)
         assert not data.get("success", False)

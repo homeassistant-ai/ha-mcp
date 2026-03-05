@@ -1,3 +1,6 @@
+# Normalize all text files to LF in the repository
+* text=auto eol=lf
+
 # Treat haconfig directory as binary (no merging)
 tests/initial_test_state/** binary merge=ours
 

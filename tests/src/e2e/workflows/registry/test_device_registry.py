@@ -19,7 +19,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -209,14 +209,16 @@ class TestDeviceGet:
         """
         logger.info("Testing get non-existent device")
 
-        get_result = await mcp_client.call_tool(
+        get_data = await safe_call_tool(
+            mcp_client,
             "ha_get_device",
             {"device_id": "definitely_not_a_real_device_id_12345"},
         )
-        get_data = parse_mcp_result(get_result)
 
         assert not get_data.get("success"), "Getting non-existent device should fail"
-        assert "not found" in get_data.get("error", "").lower(), (
+        error = get_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not found" in error_msg.lower(), (
             f"Error should indicate device not found: {get_data}"
         )
         logger.info("Non-existent device correctly rejected")
@@ -367,14 +369,16 @@ class TestDeviceUpdate:
         device_id = list_data["devices"][0]["device_id"]
 
         # Update with no parameters
-        update_result = await mcp_client.call_tool(
+        update_data = await safe_call_tool(
+            mcp_client,
             "ha_update_device",
             {"device_id": device_id},
         )
-        update_data = parse_mcp_result(update_result)
 
         assert not update_data.get("success"), "Update with no changes should fail"
-        assert "no updates" in update_data.get("error", "").lower(), (
+        error = update_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "no updates" in error_msg.lower(), (
             f"Error should mention no updates: {update_data}"
         )
         logger.info("No-changes update correctly rejected")
@@ -385,14 +389,14 @@ class TestDeviceUpdate:
         """
         logger.info("Testing update non-existent device")
 
-        update_result = await mcp_client.call_tool(
+        update_data = await safe_call_tool(
+            mcp_client,
             "ha_update_device",
             {
                 "device_id": "definitely_not_a_real_device_id_12345",
                 "name": "Test Name",
             },
         )
-        update_data = parse_mcp_result(update_result)
 
         assert not update_data.get("success"), "Updating non-existent device should fail"
         logger.info(f"Non-existent device update correctly rejected: {update_data.get('error')}")
@@ -408,14 +412,16 @@ class TestDeviceRemove:
         """
         logger.info("Testing remove non-existent device")
 
-        remove_result = await mcp_client.call_tool(
+        remove_data = await safe_call_tool(
+            mcp_client,
             "ha_remove_device",
             {"device_id": "definitely_not_a_real_device_id_12345"},
         )
-        remove_data = parse_mcp_result(remove_result)
 
         assert not remove_data.get("success"), "Removing non-existent device should fail"
-        assert "not found" in remove_data.get("error", "").lower(), (
+        error = remove_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not found" in error_msg.lower(), (
             f"Error should indicate device not found: {remove_data}"
         )
         logger.info("Non-existent device removal correctly rejected")

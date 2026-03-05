@@ -12,9 +12,11 @@ import logging
 import os
 from typing import Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
     logger.info("MCP tools installer enabled via feature flag")
 
     # Import HACS helpers - we depend on HACS functionality
-    from .tools_hacs import _check_hacs_available, CATEGORY_MAP
+    from .tools_hacs import CATEGORY_MAP, _check_hacs_available
 
     @mcp.tool(
         annotations={
@@ -98,19 +100,15 @@ def register_mcp_component_tools(mcp, client, **kwargs):
             # Check if HACS is available
             is_available, error_msg = await _check_hacs_available(client)
             if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "HACS_NOT_AVAILABLE",
-                        "suggestions": [
-                            "Install HACS from https://hacs.xyz/",
-                            "Ensure Home Assistant has been restarted after HACS installation",
-                            "Check Home Assistant logs for HACS errors",
-                        ],
-                    },
-                )
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    error_msg or "HACS is not available",
+                    suggestions=[
+                        "Install HACS from https://hacs.xyz/",
+                        "Ensure Home Assistant has been restarted after HACS installation",
+                        "Check Home Assistant logs for HACS errors",
+                    ],
+                ))
 
             from ..client.websocket_client import get_websocket_client
 
@@ -122,32 +120,24 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                 hacs_info = info_response.get("result", {})
                 disabled_reason = hacs_info.get("disabled_reason")
                 if disabled_reason:
-                    return await add_timezone_metadata(
-                        client,
-                        {
-                            "success": False,
-                            "error": f"HACS is disabled: {disabled_reason}",
-                            "error_code": "HACS_DISABLED",
-                            "disabled_reason": disabled_reason,
-                            "suggestions": [
-                                "HACS requires a valid GitHub token to manage repositories",
-                                "Configure a GitHub Personal Access Token in HACS settings",
-                                "Ensure HACS has completed initial setup",
-                            ],
-                        },
-                    )
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"HACS is disabled: {disabled_reason}",
+                        context={"disabled_reason": disabled_reason},
+                        suggestions=[
+                            "HACS requires a valid GitHub token to manage repositories",
+                            "Configure a GitHub Personal Access Token in HACS settings",
+                            "Ensure HACS has completed initial setup",
+                        ],
+                    ))
 
             # Check if already installed by looking in the repository list
             list_response = await ws_client.send_command("hacs/repositories/list")
             if not list_response.get("success"):
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": "Failed to get HACS repository list",
-                        "error_code": "HACS_LIST_FAILED",
-                    },
-                )
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to get HACS repository list",
+                ))
 
             repos = list_response.get("result", [])
             existing_repo = None
@@ -182,18 +172,14 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                 )
 
                 if not add_response.get("success"):
-                    return await add_timezone_metadata(
-                        client,
-                        {
-                            "success": False,
-                            "error": f"Failed to add repository to HACS: {add_response}",
-                            "error_code": "HACS_ADD_FAILED",
-                            "suggestions": [
-                                f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
-                                "Check HACS logs for errors",
-                            ],
-                        },
-                    )
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to add repository to HACS: {add_response}",
+                        suggestions=[
+                            f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
+                            "Check HACS logs for errors",
+                        ],
+                    ))
 
                 # Get the new repo info
                 existing_repo = add_response.get("result", {})
@@ -224,19 +210,15 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                         await asyncio.sleep(poll_interval)
 
             if not repo_id:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": "Could not find repository ID after adding (timed out after 10 attempts)",
-                        "error_code": "HACS_REPO_ID_NOT_FOUND",
-                        "suggestions": [
-                            "HACS may be processing the request - try again in a few seconds",
-                            "Check HACS logs for errors",
-                            f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
-                        ],
-                    },
-                )
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Could not find repository ID after adding (timed out after 10 attempts)",
+                    suggestions=[
+                        "HACS may be processing the request - try again in a few seconds",
+                        "Check HACS logs for errors",
+                        f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
+                    ],
+                ))
 
             logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
             download_response = await ws_client.send_command(
@@ -245,18 +227,14 @@ def register_mcp_component_tools(mcp, client, **kwargs):
             )
 
             if not download_response.get("success"):
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": f"Failed to download repository: {download_response}",
-                        "error_code": "HACS_DOWNLOAD_FAILED",
-                        "suggestions": [
-                            "Check HACS logs for errors",
-                            "Verify GitHub is accessible",
-                        ],
-                    },
-                )
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to download repository: {download_response}",
+                    suggestions=[
+                        "Check HACS logs for errors",
+                        "Verify GitHub is accessible",
+                    ],
+                ))
 
             result = {
                 "success": True,
@@ -276,8 +254,12 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                     result["message"] += ". Home Assistant is restarting."
                     result["note"] = "Wait 1-5 minutes for Home Assistant to restart."
                 except Exception as restart_error:
-                    # Connection errors during restart are expected
-                    if "connection" in str(restart_error).lower():
+                    # Connection/proxy errors during restart are expected
+                    # (HA closes connections, proxies may return 504)
+                    if any(
+                        pattern in str(restart_error).lower()
+                        for pattern in ("connect", "closed", "504")
+                    ):
                         result["restarted"] = True
                         result["message"] += ". Home Assistant is restarting."
                         result["note"] = (
@@ -291,15 +273,15 @@ def register_mcp_component_tools(mcp, client, **kwargs):
 
             return await add_timezone_metadata(client, result)
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_install_mcp_tools", "restart": restart},
-            )
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+                suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check Home Assistant logs for errors",
                     "Ensure GitHub is accessible",
-                ]
-            return await add_timezone_metadata(client, error_response)
+                ],
+            )

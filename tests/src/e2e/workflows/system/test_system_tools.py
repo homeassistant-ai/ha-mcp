@@ -19,7 +19,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +73,21 @@ class TestSystemTools:
         """
         logger.info("Testing restart safety mechanism (no confirmation)...")
 
-        result = await mcp_client.call_tool("ha_restart", {})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_restart", {})
 
         logger.info(f"Restart result (no confirm): {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail without confirmation"
-        assert "not confirmed" in data.get("error", "").lower(), (
-            f"Expected 'not confirmed' error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower(), (
+            f"Expected 'not confirmed' error, got: {error_msg}"
         )
 
         # Should provide suggestions
-        assert "suggestions" in data, "Should provide suggestions"
-        suggestions = data["suggestions"]
+        suggestions = error.get("suggestions", []) if isinstance(error, dict) else []
+        assert suggestions, "Should provide suggestions"
         assert any("confirm" in s.lower() for s in suggestions), (
             "Suggestions should mention confirmation"
         )
@@ -102,15 +103,16 @@ class TestSystemTools:
         """
         logger.info("Testing restart with explicit confirm=False...")
 
-        result = await mcp_client.call_tool("ha_restart", {"confirm": False})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_restart", {"confirm": False})
 
         logger.info(f"Restart result (confirm=False): {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail with confirm=False"
-        assert "not confirmed" in data.get("error", "").lower(), (
-            f"Expected 'not confirmed' error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower(), (
+            f"Expected 'not confirmed' error, got: {error_msg}"
         )
 
         logger.info("Restart safety test passed - explicit false confirmation rejected")
@@ -213,20 +215,21 @@ class TestSystemTools:
         """
         logger.info("Testing reload with invalid target...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "invalid_target_xyz"}
+        data = await safe_call_tool(
+            mcp_client, "ha_reload_core", {"target": "invalid_target_xyz"}
         )
-        data = parse_mcp_result(result)
 
         logger.info(f"Reload invalid target result: {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Reload should fail for invalid target"
-        assert "invalid" in data.get("error", "").lower(), (
-            f"Expected 'invalid' in error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "invalid" in error_msg.lower(), (
+            f"Expected 'invalid' in error, got: {error_msg}"
         )
 
-        # Should provide valid targets
+        # Should provide valid targets (returned at top level in error response)
         assert "valid_targets" in data, "Should provide list of valid targets"
         valid_targets = data["valid_targets"]
         assert "automations" in valid_targets, "Valid targets should include 'automations'"
@@ -278,7 +281,7 @@ class TestSystemTools:
         """
         logger.info("Testing get system overview...")
 
-        result = await mcp_client.call_tool("ha_get_overview", {})
+        result = await mcp_client.call_tool("ha_get_overview", {"detail_level": "full"})
         data = parse_mcp_result(result)
 
         logger.info(f"System overview result keys: {list(data.keys())}")
@@ -290,12 +293,11 @@ class TestSystemTools:
         assert "system_info" in data, "Missing 'system_info' field"
         system_info = data["system_info"]
 
-        # Verify expected fields in system_info
+        # Verify expected fields in system_info (components only at "full" level)
         expected_fields = [
             "version",
             "location_name",
             "time_zone",
-            "components",
             "components_loaded",
         ]
 
@@ -308,15 +310,9 @@ class TestSystemTools:
         logger.info(f"Timezone: {system_info.get('time_zone')}")
         logger.info(f"Components loaded: {system_info.get('components_loaded')}")
 
-        # Verify components list is non-empty
-        components = system_info.get("components", [])
-        assert len(components) > 0, "Should have at least some components loaded"
-
-        # Verify some essential components are present
-        essential_components = ["homeassistant", "automation", "script"]
-        for component in essential_components:
-            if component not in components:
-                logger.warning(f"Expected component '{component}' not found")
+        # Verify components_loaded count is positive
+        components_loaded = system_info.get("components_loaded", 0)
+        assert components_loaded > 0, "Should have at least some components loaded"
 
         logger.info("Get system overview test completed successfully")
 

@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 
 
-
 def get_tools_dir() -> Path:
     """Get the path to the tools directory."""
     return Path(__file__).parent.parent.parent.parent / "src" / "ha_mcp" / "tools"

@@ -16,7 +16,10 @@ production-level functionality and compatibility.
 import logging
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import MCPAssertions, parse_mcp_result
+from tests.src.e2e.utilities.assertions import (
+    MCPAssertions,
+    safe_call_tool,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -259,16 +262,17 @@ class TestDashboardResourceValidation:
         logger.info("Invalid resource type test completed successfully")
 
     async def test_delete_nonexistent_resource(self, mcp_client):
-        """Test that deleting nonexistent resource is idempotent (succeeds)."""
+        """Test that deleting nonexistent resource returns RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent resource test")
         mcp = MCPAssertions(mcp_client)
 
-        # Deleting a resource that doesn't exist should succeed (idempotent)
-        delete_data = await mcp.call_tool_success(
+        # Deleting a resource that doesn't exist should return RESOURCE_NOT_FOUND
+        delete_data = await mcp.call_tool_failure(
             "ha_config_delete_dashboard_resource",
             {"resource_id": "nonexistent-resource-id-12345"},
+            expected_error="not found",
         )
-        assert delete_data["success"] is True
+        assert delete_data["success"] is False
 
         logger.info("Delete nonexistent resource test completed successfully")
 
@@ -449,7 +453,7 @@ class TestInlineDashboardResource:
         # Create inline resource
         content = "class TestCard extends HTMLElement { connectedCallback() { this.innerHTML = 'Test'; } } customElements.define('test-card', TestCard);"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content, "resource_type": "module"},
         )
 
@@ -496,7 +500,7 @@ class TestInlineDashboardResource:
 
         content = ".my-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; }"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content, "resource_type": "css"},
         )
 
@@ -517,13 +521,15 @@ class TestInlineDashboardResource:
         """Test that empty content returns error."""
         logger.info("Starting inline empty content error test")
 
-        result = await mcp_client.call_tool(
-            "ha_config_set_inline_dashboard_resource",
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard_resource",
             {"content": ""},
         )
-        data = parse_mcp_result(result)
         assert data["success"] is False
-        assert "empty" in data.get("error", "").lower()
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
 
@@ -535,7 +541,7 @@ class TestInlineDashboardResource:
         # Create initial resource
         content_v1 = "const VERSION = 1;"
         create_data = await mcp.call_tool_success(
-            "ha_config_set_inline_dashboard_resource",
+            "ha_config_set_dashboard_resource",
             {"content": content_v1, "resource_type": "module"},
         )
         resource_id = create_data.get("resource_id")
@@ -547,7 +553,7 @@ class TestInlineDashboardResource:
             # Update with new content
             content_v2 = "const VERSION = 2; // Updated"
             update_data = await mcp.call_tool_success(
-                "ha_config_set_inline_dashboard_resource",
+                "ha_config_set_dashboard_resource",
                 {
                     "content": content_v2,
                     "resource_type": "module",

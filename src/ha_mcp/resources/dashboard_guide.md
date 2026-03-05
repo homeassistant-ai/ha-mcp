@@ -53,9 +53,10 @@ Complete guide for designing Home Assistant dashboards: structure, built-in card
 
 ### Critical Validation Rules
 
-**url_path MUST contain hyphen (-)**
-- Valid: "my-dashboard"
+**New dashboard url_path must contain hyphen (-)**
+- Valid: "my-dashboard", "mobile-view"
 - Invalid: "mydashboard" → REJECTED
+- Exception: "lovelace" and "default" target the built-in default dashboard
 
 **Dashboard ID vs url_path:**
 - `dashboard_id`: Internal identifier (returned on create, used for update/delete)
@@ -508,7 +509,7 @@ card_config = {
 
 | Issue | Solution |
 |-------|----------|
-| url_path rejected | Add hyphen: "my-dashboard" not "mydashboard" |
+| url_path rejected | New dashboards need hyphen: "my-dashboard" not "mydashboard". Use "lovelace" or "default" for the default dashboard. |
 | Entity not found | Use full ID: "light.living_room" not "living_room" |
 | Features not working | Match feature type to entity domain |
 | Custom card not loading | Check resource type is "module", verify URL |

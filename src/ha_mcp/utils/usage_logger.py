@@ -13,7 +13,6 @@ from pathlib import Path
 from queue import Queue
 from typing import Any
 
-
 # Default ring buffer size - keeps last N entries in memory
 DEFAULT_RING_BUFFER_SIZE = 200
 
@@ -112,7 +111,7 @@ class UsageLogger:
         ring_buffer_size: int = DEFAULT_RING_BUFFER_SIZE,
     ):
         self._enabled = True
-        
+
         if log_file_path:
             self.log_file_path = Path(log_file_path)
         else:

@@ -10,11 +10,11 @@ The structured error format enables AI agents to:
 - Understand the context and details of failures
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     """
     Standard error codes for Home Assistant MCP operations.
 
@@ -257,20 +257,22 @@ def create_connection_error(
     message: str,
     details: str | None = None,
     timeout: bool = False,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a connection error response."""
     code = ErrorCode.CONNECTION_TIMEOUT if timeout else ErrorCode.CONNECTION_FAILED
-    return create_error_response(code, message, details)
+    return create_error_response(code, message, details, context=context)
 
 
 def create_auth_error(
     message: str,
     details: str | None = None,
     expired: bool = False,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an authentication error response."""
     code = ErrorCode.AUTH_EXPIRED if expired else ErrorCode.AUTH_INVALID_TOKEN
-    return create_error_response(code, message, details)
+    return create_error_response(code, message, details, context=context)
 
 
 def create_entity_not_found_error(
@@ -350,13 +352,19 @@ def create_timeout_error(
     operation: str,
     timeout_seconds: float,
     details: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a timeout error response."""
+    final_context: dict[str, Any] = {}
+    if context:
+        final_context.update(context)
+    final_context["operation"] = operation
+    final_context["timeout_seconds"] = timeout_seconds
     return create_error_response(
         ErrorCode.TIMEOUT_OPERATION,
         f"Operation '{operation}' timed out after {timeout_seconds}s",
         details=details,
-        context={"operation": operation, "timeout_seconds": timeout_seconds},
+        context=final_context,
     )
 
 

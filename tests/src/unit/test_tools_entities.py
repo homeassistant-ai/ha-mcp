@@ -1,9 +1,10 @@
 """Unit tests for entity management tools module."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_entities import register_entity_tools
 
@@ -138,11 +139,13 @@ class TestHaSetEntityLabels:
 
     @pytest.mark.asyncio
     async def test_set_labels_invalid_returns_error(self, set_entity_tool):
-        """Invalid labels parameter should return an error."""
-        result = await set_entity_tool(entity_id="light.test", labels="not_json{")
+        """Invalid labels parameter should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.test", labels="not_json{")
 
-        assert result["success"] is False
-        error = result.get("error", {})
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
         assert "labels" in error_msg.lower() or "invalid" in error_msg.lower()
 
@@ -289,14 +292,16 @@ class TestHaSetEntityExposeTo:
 
     @pytest.mark.asyncio
     async def test_expose_to_invalid_assistant_rejected(self, set_entity_tool):
-        """Invalid assistant name in expose_to should return error."""
-        result = await set_entity_tool(
-            entity_id="light.test",
-            expose_to={"invalid_assistant": True},
-        )
+        """Invalid assistant name in expose_to should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id="light.test",
+                expose_to={"invalid_assistant": True},
+            )
 
-        assert result["success"] is False
-        error = result.get("error", {})
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
         assert "invalid_assistant" in error_msg.lower() or "invalid" in error_msg.lower()
 
@@ -334,13 +339,15 @@ class TestHaSetEntityExposeTo:
 
     @pytest.mark.asyncio
     async def test_expose_to_invalid_json_string(self, set_entity_tool):
-        """Invalid JSON string for expose_to should return error."""
-        result = await set_entity_tool(
-            entity_id="light.test",
-            expose_to="not valid json{",
-        )
+        """Invalid JSON string for expose_to should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id="light.test",
+                expose_to="not valid json{",
+            )
 
-        assert result["success"] is False
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
 
     @pytest.mark.asyncio
     async def test_expose_to_none_not_triggered(self, mock_mcp, mock_client):
@@ -453,16 +460,18 @@ class TestHaSetEntityCombined:
 
     @pytest.mark.asyncio
     async def test_no_updates_returns_error(self, mock_mcp, mock_client):
-        """Calling ha_set_entity with no parameters should return error."""
+        """Calling ha_set_entity with no parameters should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.test")
 
-        assert result["success"] is False
-        assert "No updates specified" in result["error"]
-        assert "suggestions" in result
-        assert isinstance(result["suggestions"], list)
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "No updates specified" in error_msg
 
     @pytest.mark.asyncio
     async def test_expose_failure_after_registry_success_returns_partial(
@@ -580,7 +589,7 @@ class TestHaSetEntityCombined:
         )
 
         assert result["success"] is False
-        assert "not found" in result["error"]
+        assert "not found" in result["error"]["message"]
         assert "exposure_succeeded" in result
 
     @pytest.mark.asyncio
@@ -652,20 +661,22 @@ class TestHaSetEntityCombined:
 
     @pytest.mark.asyncio
     async def test_expose_to_list_returns_error(self, mock_mcp, mock_client):
-        """Passing a list instead of dict for expose_to should return error."""
+        """Passing a list instead of dict for expose_to should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            expose_to=["conversation"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                expose_to=["conversation"],
+            )
 
-        assert result["success"] is False
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
 
     @pytest.mark.asyncio
     async def test_registry_failure_with_labels(self, mock_mcp, mock_client):
-        """Registry update failure when labels are included should return error."""
+        """Registry update failure when labels are included should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": False,
@@ -675,13 +686,17 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.nonexistent",
-            labels=["outdoor"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.nonexistent",
+                labels=["outdoor"],
+            )
 
-        assert result["success"] is False
-        assert "suggestions" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
+        assert isinstance(error, dict)
+        assert "suggestions" in error or "suggestion" in error
 
 
 class TestHaSetEntityLabelOperations:
@@ -944,19 +959,22 @@ class TestHaSetEntityBulkOperations:
 
     @pytest.mark.asyncio
     async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):
-        """Bulk operation should reject single-entity parameters."""
+        """Bulk operation should reject single-entity parameters with ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            name="Test Name",  # Single-entity param
-            labels=["outdoor"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id=["light.a", "light.b"],
+                name="Test Name",  # Single-entity param
+                labels=["outdoor"],
+            )
 
-        assert result["success"] is False
-        assert "Single-entity parameters" in result["error"]
-        assert "name" in result["error"]
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "Single-entity parameters" in error_msg or "name" in error_msg
 
     @pytest.mark.asyncio
     async def test_bulk_partial_failure(self, mock_mcp, mock_client):
@@ -997,17 +1015,21 @@ class TestHaSetEntityBulkOperations:
 
     @pytest.mark.asyncio
     async def test_bulk_empty_list_returns_error(self, mock_mcp, mock_client):
-        """Bulk operation with empty entity_id list should return error."""
+        """Bulk operation with empty entity_id list should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id=[],
-            labels=["outdoor"],
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id=[],
+                labels=["outdoor"],
+            )
 
-        assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        error = error_data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "empty" in error_msg.lower()
 
     @pytest.mark.asyncio
     async def test_bulk_label_add_operation(self, mock_mcp, mock_client):

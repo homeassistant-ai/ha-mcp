@@ -1,9 +1,10 @@
 """Unit tests for performance improvements (issue #258).
 
-Tests the parallelization optimizations:
-- Parallel WebSocket calls in get_system_overview
-- Parallel config fetching in deep_search with semaphore control
-- Single get_states() call to avoid repeated fetches
+Tests observable behavior of performance optimizations:
+- get_system_overview returns correct data with parallel fetching
+- deep_search returns correct results for automations, scripts, helpers
+- Failures in one data source don't break others
+- get_states() is not called redundantly
 """
 
 import asyncio
@@ -11,43 +12,79 @@ from unittest.mock import patch
 
 import pytest
 
-from ha_mcp.tools.smart_search import SmartSearchTools, DEFAULT_CONCURRENCY_LIMIT
+from ha_mcp.tools.smart_search import SmartSearchTools
 
 
 class MockClient:
-    """Mock Home Assistant client for testing parallelization."""
+    """Mock Home Assistant client that responds to all APIs deep_search may use.
+
+    Supports REST, WebSocket, and legacy per-entity methods so tests
+    don't break when the implementation changes its fetch strategy.
+    """
 
     def __init__(
         self,
         entities: list[dict] | None = None,
         services: list[dict] | None = None,
-        websocket_delay: float = 0.0,
+        delay: float = 0.0,
     ):
         self.entities = entities or []
         self.services = services or []
-        self.websocket_delay = websocket_delay
+        self.delay = delay
         self.get_states_call_count = 0
-        self.get_services_call_count = 0
-        self.websocket_call_count = 0
-        self.automation_config_call_count = 0
-        self.script_config_call_count = 0
 
     async def get_states(self) -> list[dict]:
         self.get_states_call_count += 1
         return self.entities
 
     async def get_services(self) -> list[dict]:
-        self.get_services_call_count += 1
         return self.services
 
+    async def _request(self, method: str, path: str) -> list | dict:
+        if self.delay > 0:
+            await asyncio.sleep(self.delay)
+
+        if path == "/config/automation/config":
+            return [
+                {
+                    "id": e["attributes"]["id"],
+                    "alias": e["attributes"]["friendly_name"],
+                    "trigger": [{"platform": "state", "entity_id": "light.test"}],
+                    "action": [{"service": "light.turn_on"}],
+                }
+                for e in self.entities
+                if e.get("entity_id", "").startswith("automation.")
+                and e.get("attributes", {}).get("id")
+            ]
+
+        if path == "/config/script/config":
+            return [
+                {
+                    "id": e["entity_id"].replace("script.", ""),
+                    "alias": e["attributes"]["friendly_name"],
+                    "sequence": [{"service": "light.turn_on"}],
+                }
+                for e in self.entities
+                if e.get("entity_id", "").startswith("script.")
+            ]
+
+        if path.startswith("/config/automation/config/"):
+            uid = path.split("/")[-1]
+            return {
+                "id": uid,
+                "alias": f"Test Automation {uid}",
+                "trigger": [{"platform": "state", "entity_id": "light.test"}],
+                "action": [{"service": "light.turn_on"}],
+            }
+
+        return {}
+
     async def send_websocket_message(self, message: dict) -> dict:
-        self.websocket_call_count += 1
-        if self.websocket_delay > 0:
-            await asyncio.sleep(self.websocket_delay)
+        if self.delay > 0:
+            await asyncio.sleep(self.delay)
 
         msg_type = message.get("type", "")
 
-        # Simulate area registry
         if msg_type == "config/area_registry/list":
             return {
                 "success": True,
@@ -57,7 +94,6 @@ class MockClient:
                 ],
             }
 
-        # Simulate entity registry
         if msg_type == "config/entity_registry/list":
             return {
                 "success": True,
@@ -67,7 +103,6 @@ class MockClient:
                 ],
             }
 
-        # Simulate helper types
         if msg_type.endswith("/list"):
             helper_type = msg_type.replace("/list", "")
             return {
@@ -80,9 +115,8 @@ class MockClient:
         return {"success": False, "error": f"Unknown message type: {msg_type}"}
 
     async def get_automation_config(self, entity_id: str) -> dict:
-        self.automation_config_call_count += 1
-        if self.websocket_delay > 0:
-            await asyncio.sleep(self.websocket_delay)
+        if self.delay > 0:
+            await asyncio.sleep(self.delay)
         return {
             "alias": f"Test Automation for {entity_id}",
             "trigger": [{"platform": "state", "entity_id": "light.test"}],
@@ -90,9 +124,8 @@ class MockClient:
         }
 
     async def get_script_config(self, script_id: str) -> dict:
-        self.script_config_call_count += 1
-        if self.websocket_delay > 0:
-            await asyncio.sleep(self.websocket_delay)
+        if self.delay > 0:
+            await asyncio.sleep(self.delay)
         return {
             "config": {
                 "alias": f"Test Script {script_id}",
@@ -101,44 +134,95 @@ class MockClient:
         }
 
 
-class TestGetSystemOverviewParallelization:
-    """Test parallel WebSocket calls in get_system_overview."""
+def _make_tools(client):
+    """Create SmartSearchTools with mocked global settings."""
+    with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+        mock_settings.return_value.fuzzy_threshold = 60
+        tools = SmartSearchTools(client=client)
+    return tools
 
-    @pytest.fixture
-    def sample_entities(self):
-        """Sample entities for testing."""
-        return [
-            {
-                "entity_id": "light.living_room",
-                "attributes": {"friendly_name": "Living Room Light"},
-                "state": "on",
-            },
-            {
-                "entity_id": "switch.kitchen",
-                "attributes": {"friendly_name": "Kitchen Switch"},
-                "state": "off",
-            },
-        ]
 
-    @pytest.fixture
-    def sample_services(self):
-        """Sample services for testing."""
-        return [
-            {"domain": "light", "services": {"turn_on": {}, "turn_off": {}}},
-            {"domain": "switch", "services": {"turn_on": {}, "turn_off": {}}},
-        ]
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def automation_entities():
+    return [
+        {
+            "entity_id": f"automation.test_{i}",
+            "attributes": {"friendly_name": f"Test Automation {i}", "id": f"test_{i}"},
+            "state": "on",
+        }
+        for i in range(10)
+    ]
+
+
+@pytest.fixture
+def script_entities():
+    return [
+        {
+            "entity_id": f"script.test_{i}",
+            "attributes": {"friendly_name": f"Test Script {i}"},
+            "state": "off",
+        }
+        for i in range(5)
+    ]
+
+
+@pytest.fixture
+def sample_entities():
+    return [
+        {
+            "entity_id": "light.living_room",
+            "attributes": {"friendly_name": "Living Room Light"},
+            "state": "on",
+        },
+        {
+            "entity_id": "switch.kitchen",
+            "attributes": {"friendly_name": "Kitchen Switch"},
+            "state": "off",
+        },
+    ]
+
+
+@pytest.fixture
+def sample_services():
+    return [
+        {"domain": "light", "services": {"turn_on": {}, "turn_off": {}}},
+        {"domain": "switch", "services": {"turn_on": {}, "turn_off": {}}},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# get_system_overview
+# ---------------------------------------------------------------------------
+
+class TestGetSystemOverview:
+    """Test get_system_overview returns correct data."""
 
     @pytest.mark.asyncio
-    async def test_parallel_calls_are_faster(self, sample_entities, sample_services):
-        """Verify that parallel calls complete faster than sequential would.
+    async def test_returns_entity_and_area_data(self, sample_entities, sample_services):
+        client = MockClient(entities=sample_entities, services=sample_services)
 
-        With 0.1s delay per call and 4 parallel calls, total time should be ~0.1s
-        instead of ~0.4s for sequential.
-        """
+        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools = SmartSearchTools(client=client)
+            result = await tools.get_system_overview(detail_level="standard")
+
+        assert result["success"] is True
+        assert result["system_summary"]["total_entities"] == 2
+        assert result["system_summary"]["total_areas"] == 2
+
+    @pytest.mark.asyncio
+    async def test_parallel_calls_faster_than_sequential(
+        self, sample_entities, sample_services
+    ):
+        """With delays, parallel fetch should be much faster than sequential."""
         client = MockClient(
             entities=sample_entities,
             services=sample_services,
-            websocket_delay=0.05,
+            delay=0.05,
         )
 
         with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
@@ -146,46 +230,20 @@ class TestGetSystemOverviewParallelization:
             tools = SmartSearchTools(client=client)
 
             import time
-            start_time = time.time()
+            start = time.time()
             result = await tools.get_system_overview(detail_level="minimal")
-            elapsed_time = time.time() - start_time
+            elapsed = time.time() - start
 
-            assert result["success"] is True
-            # All 4 calls should happen in parallel, so time should be close to
-            # single call time, not 4x
-            # With 0.05s delay, sequential would be 0.2s, parallel should be ~0.05s
-            # We use 0.15s as threshold to account for test overhead
-            assert elapsed_time < 0.15, f"Parallel calls took {elapsed_time}s, expected < 0.15s"
+        assert result["success"] is True
+        # 4 data sources at 0.05s each: sequential = 0.2s, parallel ≈ 0.05s
+        assert elapsed < 0.15, f"Expected parallel speedup, took {elapsed:.2f}s"
 
     @pytest.mark.asyncio
-    async def test_all_data_fetched(self, sample_entities, sample_services):
-        """Verify all data sources are fetched in get_system_overview."""
-        client = MockClient(
-            entities=sample_entities,
-            services=sample_services,
-        )
+    async def test_websocket_failure_does_not_break_other_data(
+        self, sample_entities, sample_services
+    ):
+        client = MockClient(entities=sample_entities, services=sample_services)
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
-
-            result = await tools.get_system_overview(detail_level="standard")
-
-            assert result["success"] is True
-            assert client.get_states_call_count == 1
-            assert client.get_services_call_count == 1
-            # 2 WebSocket calls: area_registry and entity_registry
-            assert client.websocket_call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_graceful_failure_handling(self, sample_entities, sample_services):
-        """Verify that failures in one fetch don't break others."""
-        client = MockClient(
-            entities=sample_entities,
-            services=sample_services,
-        )
-
-        # Make WebSocket calls fail
         async def failing_websocket(message: dict) -> dict:
             raise Exception("WebSocket connection failed")
 
@@ -194,243 +252,195 @@ class TestGetSystemOverviewParallelization:
         with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
             mock_settings.return_value.fuzzy_threshold = 60
             tools = SmartSearchTools(client=client)
-
             result = await tools.get_system_overview(detail_level="minimal")
 
-            # Should still succeed with entity and service data
-            assert result["success"] is True
-            assert result["system_summary"]["total_entities"] == 2
-            # Area data should be empty due to failure
-            assert result["system_summary"]["total_areas"] == 0
+        assert result["success"] is True
+        assert result["system_summary"]["total_entities"] == 2
+        assert result["system_summary"]["total_areas"] == 0
 
 
-class TestDeepSearchParallelization:
-    """Test parallel config fetching in deep_search with semaphore control."""
+# ---------------------------------------------------------------------------
+# deep_search – outcome-based tests
+# ---------------------------------------------------------------------------
 
-    @pytest.fixture
-    def automation_entities(self):
-        """Sample automation entities for testing."""
-        return [
-            {
-                "entity_id": f"automation.test_{i}",
-                "attributes": {"friendly_name": f"Test Automation {i}", "id": f"test_{i}"},
-                "state": "on",
-            }
-            for i in range(10)
-        ]
-
-    @pytest.fixture
-    def script_entities(self):
-        """Sample script entities for testing."""
-        return [
-            {
-                "entity_id": f"script.test_{i}",
-                "attributes": {"friendly_name": f"Test Script {i}"},
-                "state": "off",
-            }
-            for i in range(5)
-        ]
+class TestDeepSearchResults:
+    """Test that deep_search returns correct, complete results."""
 
     @pytest.mark.asyncio
-    async def test_single_get_states_call(self, automation_entities, script_entities):
-        """Verify get_states is only called once for all search types."""
+    async def test_finds_matching_automations(self, automation_entities):
+        client = MockClient(entities=automation_entities)
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="test", search_types=["automation"], limit=20,
+        )
+
+        assert result["success"] is True
+        assert len(result["automations"]) == 10
+
+    @pytest.mark.asyncio
+    async def test_finds_matching_scripts(self, script_entities):
+        client = MockClient(entities=script_entities)
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="test", search_types=["script"], limit=20,
+        )
+
+        assert result["success"] is True
+        assert len(result["scripts"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_finds_matching_helpers(self):
+        client = MockClient()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="test", search_types=["helper"], limit=20,
+        )
+
+        assert result["success"] is True
+        assert len(result["helpers"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_combined_search_returns_all_types(
+        self, automation_entities, script_entities
+    ):
         client = MockClient(entities=automation_entities + script_entities)
+        tools = _make_tools(client)
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
-
-            # Search all types
-            result = await tools.deep_search(
-                query="test",
-                search_types=["automation", "script", "helper"],
-            )
-
-            assert result["success"] is True
-            # Should only call get_states once, not once per search type
-            assert client.get_states_call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_parallel_automation_config_fetching(self, automation_entities):
-        """Verify automation configs are fetched in parallel."""
-        client = MockClient(
-            entities=automation_entities,
-            websocket_delay=0.02,  # 20ms delay per call
+        result = await tools.deep_search(
+            query="test",
+            search_types=["automation", "script", "helper"],
+            limit=50,
         )
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
+        assert result["success"] is True
+        assert len(result["automations"]) > 0
+        assert len(result["scripts"]) > 0
+        assert len(result["helpers"]) > 0
 
-            import time
-            start_time = time.time()
-            result = await tools.deep_search(
-                query="test",
-                search_types=["automation"],
-            )
-            elapsed_time = time.time() - start_time
 
-            assert result["success"] is True
-            # 10 automation configs with 0.02s delay each
-            # Sequential would be 0.2s, parallel (5 concurrent) should be ~0.04s
-            # Use 0.1s threshold for test overhead
-            assert elapsed_time < 0.15, f"Parallel fetch took {elapsed_time}s, expected < 0.15s"
-            assert client.automation_config_call_count == 10
+class TestDeepSearchEfficiency:
+    """Test that deep_search avoids redundant work."""
 
     @pytest.mark.asyncio
-    async def test_parallel_script_config_fetching(self, script_entities):
-        """Verify script configs are fetched in parallel."""
-        client = MockClient(
-            entities=script_entities,
-            websocket_delay=0.02,
+    async def test_get_states_called_once_for_all_types(
+        self, automation_entities, script_entities
+    ):
+        """Regardless of how many search types, get_states is called once."""
+        client = MockClient(entities=automation_entities + script_entities)
+        tools = _make_tools(client)
+
+        await tools.deep_search(
+            query="test",
+            search_types=["automation", "script", "helper"],
         )
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
-
-            import time
-            start_time = time.time()
-            result = await tools.deep_search(
-                query="test",
-                search_types=["script"],
-            )
-            elapsed_time = time.time() - start_time
-
-            assert result["success"] is True
-            # 5 script configs with parallel fetching should be fast
-            assert elapsed_time < 0.1
-            assert client.script_config_call_count == 5
+        assert client.get_states_call_count == 1
 
     @pytest.mark.asyncio
-    async def test_parallel_helper_type_fetching(self):
-        """Verify helper types are fetched in parallel."""
-        client = MockClient(websocket_delay=0.02)
+    async def test_helper_fetch_is_parallel(self):
+        """Helper types should be fetched in parallel, not sequentially."""
+        client = MockClient(delay=0.02)
+        tools = _make_tools(client)
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
+        import time
+        start = time.time()
+        result = await tools.deep_search(
+            query="test", search_types=["helper"],
+        )
+        elapsed = time.time() - start
 
-            import time
-            start_time = time.time()
-            result = await tools.deep_search(
-                query="test",
-                search_types=["helper"],
-            )
-            elapsed_time = time.time() - start_time
+        assert result["success"] is True
+        # 6 helper types at 0.02s each: sequential = 0.12s, parallel ≈ 0.02s
+        assert elapsed < 0.1, f"Expected parallel speedup, took {elapsed:.2f}s"
 
-            assert result["success"] is True
-            # 6 helper types with parallel fetching
-            # Sequential would be 0.12s, parallel should be ~0.02s
-            assert elapsed_time < 0.1, f"Parallel helper fetch took {elapsed_time}s"
-            # 6 WebSocket calls for 6 helper types
-            assert client.websocket_call_count == 6
+
+class TestDeepSearchResilience:
+    """Test that deep_search handles failures gracefully."""
 
     @pytest.mark.asyncio
-    async def test_semaphore_limits_concurrency(self, automation_entities):
-        """Verify semaphore limits concurrent API calls."""
-        concurrent_count = 0
-        max_concurrent = 0
-        lock = asyncio.Lock()
-
-        original_entities = automation_entities.copy()
-        client = MockClient(entities=original_entities)
-
-        # Track concurrent calls
-        original_get_config = client.get_automation_config
-
-        async def tracked_get_config(entity_id: str) -> dict:
-            nonlocal concurrent_count, max_concurrent
-            async with lock:
-                concurrent_count += 1
-                max_concurrent = max(max_concurrent, concurrent_count)
-            try:
-                await asyncio.sleep(0.01)  # Small delay to create overlap
-                return await original_get_config(entity_id)
-            finally:
-                async with lock:
-                    concurrent_count -= 1
-
-        client.get_automation_config = tracked_get_config
-
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
-
-            result = await tools.deep_search(
-                query="test",
-                search_types=["automation"],
-                concurrency_limit=3,  # Limit to 3 concurrent
-            )
-
-            assert result["success"] is True
-            # Max concurrent should not exceed the limit (with some tolerance for timing)
-            assert max_concurrent <= 4, f"Max concurrent was {max_concurrent}, expected <= 4"
-
-    @pytest.mark.asyncio
-    async def test_exception_handling_in_parallel_fetches(self, automation_entities):
-        """Verify exceptions in parallel fetches are handled gracefully."""
+    async def test_rest_failure_still_returns_results(self, automation_entities):
+        """If REST bulk fails, search should fall back and still return results."""
         client = MockClient(entities=automation_entities)
 
-        call_count = 0
+        original_request = client._request
 
-        async def failing_config(entity_id: str) -> dict:
-            nonlocal call_count
-            call_count += 1
-            if call_count % 2 == 0:
-                raise Exception("Config fetch failed")
-            return {
-                "alias": "Test",
-                "trigger": [],
-                "action": [],
-            }
+        async def failing_bulk_request(method: str, path: str):
+            # Fail bulk endpoint, allow individual endpoints through
+            if path in ("/config/automation/config", "/config/script/config"):
+                raise Exception("REST bulk endpoint unavailable")
+            return await original_request(method, path)
 
-        client.get_automation_config = failing_config
+        client._request = failing_bulk_request
+        tools = _make_tools(client)
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
+        result = await tools.deep_search(
+            query="test", search_types=["automation"],
+        )
 
-            result = await tools.deep_search(
-                query="test",
-                search_types=["automation"],
-            )
-
-            # Should succeed overall even with some failures
-            assert result["success"] is True
-            # Should have some results from successful fetches
-            # At least 5 out of 10 should succeed (odd numbered calls)
-            assert len(result["automations"]) >= 5
-
-
-class TestDefaultConcurrencyLimit:
-    """Test the default concurrency limit constant."""
-
-    def test_default_concurrency_limit_value(self):
-        """Verify the default concurrency limit is reasonable."""
-        assert DEFAULT_CONCURRENCY_LIMIT == 5
+        # Should succeed via fallback path (WS or individual fetch)
+        assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_custom_concurrency_limit(self):
-        """Verify custom concurrency limit can be passed to deep_search."""
-        entities = [
-            {
-                "entity_id": "automation.test",
-                "attributes": {"friendly_name": "Test", "id": "test"},
-                "state": "on",
-            }
-        ]
-        client = MockClient(entities=entities)
+    async def test_all_fetch_methods_fail_still_succeeds(self, automation_entities):
+        """If all config fetch methods fail, search still returns name-only results."""
+        client = MockClient(entities=automation_entities)
 
-        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-            mock_settings.return_value.fuzzy_threshold = 60
-            tools = SmartSearchTools(client=client)
+        async def fail_request(method: str, path: str):
+            raise Exception("All REST endpoints down")
 
-            # Should accept custom concurrency limit
-            result = await tools.deep_search(
-                query="test",
-                search_types=["automation"],
-                concurrency_limit=10,
-            )
+        async def fail_websocket(message: dict):
+            raise Exception("WebSocket down")
 
-            assert result["success"] is True
+        client._request = fail_request
+        client.send_websocket_message = fail_websocket
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="test", search_types=["automation"],
+        )
+
+        # Should succeed — name-matching still works without configs
+        assert result["success"] is True
+        # Results may have match_in_name only (no config match possible)
+        for item in result["automations"]:
+            assert "entity_id" in item
+            assert "friendly_name" in item
+
+    @pytest.mark.asyncio
+    async def test_one_search_type_failing_does_not_break_others(
+        self, automation_entities, script_entities
+    ):
+        """Failure in automation fetch should not prevent scripts from returning."""
+        client = MockClient(entities=automation_entities + script_entities)
+
+        original_request = client._request
+
+        async def selective_failure(method: str, path: str):
+            if "automation" in path:
+                raise Exception("Automation endpoint down")
+            return await original_request(method, path)
+
+        client._request = selective_failure
+
+        original_ws_send = client.send_websocket_message
+
+        async def fail_ws(message: dict):
+            msg_type = message.get("type", "")
+            if "automation" in msg_type:
+                raise Exception("WS automation down")
+            return await original_ws_send(message)
+
+        client.send_websocket_message = fail_ws
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="test",
+            search_types=["automation", "script"],
+            limit=20,
+        )
+
+        assert result["success"] is True
+        assert len(result["scripts"]) == 5

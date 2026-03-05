@@ -4,8 +4,10 @@ import os
 import subprocess
 import sys
 
+import pytest
 
 
+@pytest.mark.slow
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""
 

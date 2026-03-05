@@ -854,13 +854,13 @@ async def test_automation_with_choose_block(mcp_client):
         {"query": "light", "domain_filter": "light", "limit": 5},
     )
     search_data = parse_mcp_result(search_result)
-    
+
     # Handle nested data structure
     if "data" in search_data:
         entities = search_data.get("data", {}).get("results", [])
     else:
         entities = search_data.get("results", [])
-    
+
     assert len(entities) > 0, "No light entities found for testing"
     light_entity = entities[0]["entity_id"]
     logger.info(f"🔦 Using test light: {light_entity}")
@@ -973,7 +973,7 @@ async def test_automation_with_choose_block(mcp_client):
 
     actions = config_data.get("action", config_data.get("actions", []))
     assert len(actions) > 0, "Automation should have actions"
-    
+
     choose_action = actions[0]
     assert "choose" in choose_action, "First action should be a choose block"
     assert len(choose_action["choose"]) == 2, "Choose should have 2 options"

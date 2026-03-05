@@ -138,3 +138,29 @@ jobs:
       is_prerelease: false
     permissions:
       contents: write
+
+  # Build and push addon Docker images
+  build-addon:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    uses: ./.github/workflows/addon-publish.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+
+  # Update addon config.yaml after images are published
+  update-addon-config:
+    needs: [semantic-release, build-addon]
+    if: needs.semantic-release.outputs.released == 'true'
+    uses: ./.github/workflows/_update-addon-config.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.version }}
+      commit_message_prefix: 'publish hotfix version'
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+    permissions:
+      contents: write
