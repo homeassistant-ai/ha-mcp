@@ -20,8 +20,6 @@ import json
 import logging
 from typing import Any
 
-import pytest
-
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
 
