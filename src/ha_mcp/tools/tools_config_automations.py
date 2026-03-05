@@ -457,7 +457,30 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     missing_fields=missing_fields,
                 ))
 
+            # Prevent duplicate creation when config contains an existing automation id
+            if identifier is None and "id" in config_dict:
+                existing_id = config_dict["id"]
+                raise_tool_error(create_validation_error(
+                    f"Config contains 'id' field ('{existing_id}') but no identifier was provided. "
+                    "This would create a duplicate automation instead of updating the existing one.",
+                    parameter="identifier",
+                    details=f"To update, pass identifier='{existing_id}' (or the automation's entity_id). "
+                    "To create a genuinely new automation, remove the 'id' field from the config.",
+                ))
+
             result = await client.upsert_automation_config(config_dict, identifier)
+
+            # If the client could not verify the entity was registered, warn but don't hard-fail.
+            # The automation may have been created but not yet visible (slow hardware, reload needed).
+            if result.get("entity_not_verified"):
+                result["warning"] = (
+                    "Automation was submitted to Home Assistant but the entity was not found "
+                    "after polling. The automation may still have been created — check Home "
+                    "Assistant logs and try reloading automations. Common causes: "
+                    "automations.yaml vs automation.yaml filename mismatch, invalid config "
+                    "that HA accepted but failed to load, or slow hardware."
+                )
+                result.pop("entity_not_verified", None)
 
             # Wait for automation to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
