@@ -12,7 +12,7 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 # Install build tools for C extensions (cffi) that lack prebuilt wheels
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libffi-dev && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies first (cached separately from source changes)
 COPY pyproject.toml uv.lock ./
