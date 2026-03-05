@@ -28,26 +28,6 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
-# Try to import jq - it's not available on Windows ARM64
-try:
-    import jq  # noqa: F401 - Used to check availability, re-imported in function
-
-    JQ_AVAILABLE = True
-except ImportError:
-    JQ_AVAILABLE = False
-    logger.warning(
-        "jq library not available - jq_transform features will be disabled. "
-        "This is expected on Windows ARM64 where jq cannot be compiled."
-    )
-
-# Error message when jq_transform is used without jq available
-_JQ_UNAVAILABLE_ERROR = (
-    "jq_transform is not available - jq library could not be imported. "
-    "This is a known limitation on Windows ARM64 where jq cannot be compiled. "
-    "Please use the 'config' parameter for full config replacement instead, "
-    "or use ha-mcp on Windows x64, Linux, or macOS where jq is supported."
-)
-
 # Card documentation base URL
 CARD_DOCS_BASE_URL = (
     "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
@@ -125,47 +105,6 @@ async def _verify_config_unchanged(
         ))
 
     return {"success": True}
-
-
-def _apply_jq_transform(
-    config: dict[str, Any], expression: str
-) -> tuple[dict[str, Any] | None, str | None]:
-    """
-    Apply a jq transformation to dashboard config.
-
-    Returns:
-        tuple: (transformed_config, error_message)
-        - On success: (dict, None)
-        - On failure: (None, error_string)
-    """
-    # Check if jq is available
-    if not JQ_AVAILABLE:
-        return None, _JQ_UNAVAILABLE_ERROR
-
-    import jq
-
-    try:
-        # Compile and validate the jq expression
-        program = jq.compile(expression)
-    except ValueError as e:
-        return None, f"Invalid jq expression: {e}"
-
-    try:
-        # Execute the transformation
-        result = program.input_value(config).first()
-    except StopIteration:
-        return None, "jq expression produced no output"
-    except Exception as e:
-        return None, f"jq transformation error: {e}"
-
-    # Validate result is still a valid dashboard structure
-    if not isinstance(result, dict):
-        return None, f"jq result must be a dict, got {type(result).__name__}"
-
-    if "views" not in result and "strategy" not in result:
-        return None, "jq result missing required 'views' or 'strategy' key"
-
-    return result, None
 
 
 def _find_cards_in_config(
@@ -393,7 +332,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if config_size >= 10000:
                 result["hint"] = (
                     f"Large config ({config_size:,} bytes). For edits, use "
-                    "ha_dashboard_find_card() + ha_config_set_dashboard(jq_transform=...) "
+                    "ha_dashboard_find_card() + ha_config_set_dashboard(python_transform=...) "
                     "instead of full config replacement."
                 )
 
@@ -438,26 +377,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 description="Dashboard configuration with views and cards. "
                 "Can be dict or JSON string. "
                 "Omit or set to None to create dashboard without initial config. "
-                "Mutually exclusive with jq_transform."
-            ),
-        ] = None,
-        jq_transform: Annotated[
-            str | None,
-            Field(
-                description="jq expression to transform existing dashboard config. "
-                "Mutually exclusive with config and python_transform. Requires config_hash for validation. "
-                "Examples: '.views[0].sections[1].cards[0].icon = \"mdi:thermometer\"', "
-                '\'.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]\', '
-                "'del(.views[0].sections[0].cards[2])'. "
-                "MULTI-OP: Chain with '|': 'del(.views[0].cards[2]) | .views[0].cards[0].icon = \"mdi:new\"'. "
-                "Use ha_dashboard_find_card() to get jq_path for targeted edits."
+                "Mutually exclusive with python_transform."
             ),
         ] = None,
         python_transform: Annotated[
             str | None,
             Field(
                 description="Python expression to transform existing dashboard config. "
-                "Mutually exclusive with config and jq_transform. "
+                "Mutually exclusive with config. "
                 "Requires config_hash for validation. "
                 "See PYTHON TRANSFORM SECURITY below for allowed operations. "
                 "Examples: "
@@ -471,7 +398,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             str | None,
             Field(
                 description="Config hash from ha_config_get_dashboard for optimistic locking. "
-                "REQUIRED for jq_transform (validates dashboard unchanged). "
+                "REQUIRED for python_transform (validates dashboard unchanged). "
                 "Optional for config (validates before full replacement if provided)."
             ),
         ] = None,
@@ -505,31 +432,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Create or update a Home Assistant dashboard.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports three modes: full config replacement, Python transformation, OR jq-based transformation.
+        Supports two modes: full config replacement OR Python transformation.
 
         Use 'default' or 'lovelace' to target the built-in default dashboard.
         New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
 
         WHEN TO USE WHICH MODE:
         - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
-        - jq_transform: Legacy mode. Requires jq binary (not available on Windows ARM64).
         - config: New dashboards only, or full restructure. Replaces everything.
 
-        JQ TRANSFORM EXAMPLES:
-        - Update card icon: '.views[0].sections[1].cards[0].icon = "mdi:thermometer"'
-        - Add card: '.views[0].cards += [{"type": "button", "entity": "light.bedroom"}]'
-        - Delete card: 'del(.views[0].sections[0].cards[2])'
-        - Update by selection: '(.views[0].cards[] | select(.entity == "light.living_room")).icon = "mdi:lamp"'
-
-        MULTI-OPERATION (chain with |):
-        - Delete then update: 'del(.views[0].cards[2]) | .views[0].cards[0].icon = "mdi:new"'
-        - Multiple updates: '.views[0].cards[0].icon = "mdi:a" | .views[0].cards[1].icon = "mdi:b"'
-
-        IMPORTANT: After delete/add operations, indices shift! Subsequent jq_transform calls
+        IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
         must use fresh config_hash from ha_dashboard_find_card() or ha_config_get_dashboard()
         to get updated structure. Chain multiple ops in ONE expression when possible.
 
-        TIP: Use ha_dashboard_find_card() to get the jq_path for any card.
+        TIP: Use ha_dashboard_find_card() to get the path for any card.
 
         PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
         - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
@@ -587,12 +503,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             }
         )
 
-        Update card using jq_transform (efficient for small changes):
-        ha_config_set_dashboard(
-            url_path="home-dashboard",
-            jq_transform='.views[0].sections[0].cards[0].features += [{"type": "climate-hvac-modes"}]'
-        )
-
         Create strategy-based dashboard (auto-generated):
         ha_config_set_dashboard(
             url_path="my-home",
@@ -645,24 +555,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     context={"action": "set", "url_path": url_path},
                 ))
 
-            # Validate mutual exclusivity of config, jq_transform, and python_transform
-            transforms_provided = sum(
-                [
-                    config is not None,
-                    jq_transform is not None,
-                    python_transform is not None,
-                ]
-            )
-
-            if transforms_provided > 1:
+            # Validate mutual exclusivity of config and python_transform
+            if config is not None and python_transform is not None:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Cannot use multiple transform methods simultaneously",
+                    "Cannot use both config and python_transform simultaneously",
                     suggestions=[
-                        "Use only ONE of: config, jq_transform, or python_transform",
+                        "Use only ONE of: config or python_transform",
                         "config: Full replacement",
-                        "jq_transform: jq-based edits (requires jq installation)",
-                        "python_transform: Python-based edits (recommended, works everywhere)",
+                        "python_transform: Python-based edits (recommended)",
                     ],
                     context={"action": "set", "url_path": url_path},
                 ))
@@ -781,126 +682,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Dashboard {url_path} updated via Python transform",
-                }
-
-            # Handle jq_transform mode
-            if jq_transform is not None:
-                # config_hash is REQUIRED for jq_transform
-                if config_hash is None:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "config_hash is required for jq_transform",
-                        suggestions=[
-                            "Call ha_config_get_dashboard() or ha_dashboard_find_card() first",
-                            "Use the config_hash from that response",
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                # Fetch current dashboard config
-                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-                if url_path:
-                    get_data["url_path"] = url_path
-
-                response = await client.send_websocket_message(get_data)
-
-                if isinstance(response, dict) and not response.get("success", True):
-                    error_msg = response.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Dashboard not found or inaccessible: {error_msg}",
-                        suggestions=[
-                            "jq_transform requires an existing dashboard",
-                            "Use 'config' parameter to create a new dashboard",
-                            "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                current_config = (
-                    response.get("result") if isinstance(response, dict) else response
-                )
-                if not isinstance(current_config, dict):
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Current dashboard config is invalid",
-                        suggestions=[
-                            "Initialize dashboard with 'config' parameter first"
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                # Validate config_hash for optimistic locking
-                current_hash = _compute_config_hash(current_config)
-                if current_hash != config_hash:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Dashboard modified since last read (conflict)",
-                        suggestions=[
-                            "Call ha_config_get_dashboard() or ha_dashboard_find_card() again",
-                            "Use the fresh config_hash from that response",
-                            "Indices may have changed - re-locate cards with ha_dashboard_find_card()",
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                # Apply jq transformation
-                transformed_config, error = _apply_jq_transform(
-                    current_config, jq_transform
-                )
-                if error:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_FAILED,
-                        error,
-                        suggestions=[
-                            "Verify jq syntax: https://jqlang.github.io/jq/manual/",
-                            "Use ha_dashboard_find_card() to get correct jq_path",
-                            "Test expression locally: echo '<config>' | jq '<expression>'",
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                # Save transformed config
-                save_data: dict[str, Any] = {
-                    "type": "lovelace/config/save",
-                    "config": transformed_config,
-                }
-                if url_path:
-                    save_data["url_path"] = url_path
-
-                save_result = await client.send_websocket_message(save_data)
-
-                if isinstance(save_result, dict) and not save_result.get(
-                    "success", True
-                ):
-                    error_msg = save_result.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to save transformed config: {error_msg}",
-                        suggestions=[
-                            "jq expression may have produced invalid dashboard structure",
-                            "Verify config format is valid Lovelace JSON",
-                        ],
-                        context={"action": "jq_transform", "url_path": url_path},
-                    ))
-
-                # Compute new hash for potential chaining
-                # transformed_config is guaranteed to be a dict here (validated above)
-                new_config_hash = _compute_config_hash(
-                    cast(dict[str, Any], transformed_config)
-                )
-
-                return {
-                    "success": True,
-                    "action": "jq_transform",
-                    "url_path": url_path,
-                    "config_hash": new_config_hash,
-                    "jq_expression": jq_transform,
-                    "message": f"Dashboard {url_path} updated via jq transform",
                 }
 
             # Check if dashboard exists
@@ -1068,7 +849,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         if existing_config_size >= 10000:
                             hint = (
                                 f"Replaced large config ({existing_config_size:,} bytes). "
-                                "Consider jq_transform for targeted edits."
+                                "Consider python_transform for targeted edits."
                             )
 
                 # Build save config message
@@ -1422,7 +1203,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     # =========================================================================
     # Card Search Tool (partial update tools - controlled by feature flag)
-    # Card add/update/remove replaced by jq_transform in ha_config_set_dashboard
+    # Card add/update/remove replaced by python_transform in ha_config_set_dashboard
     # =========================================================================
 
     # Check feature flag for partial update tools (lazy check, default enabled)
@@ -1477,8 +1258,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         """
         Find cards in a dashboard by entity_id, type, or heading text.
 
-        Returns card locations (view_index, section_index, card_index) and jq_path
-        for use with ha_config_set_dashboard(jq_transform=...).
+        Returns card locations (view_index, section_index, card_index) and path
+        for use with ha_config_set_dashboard(python_transform=...).
 
         Use this tool BEFORE targeted updates to find exact card positions without
         manually parsing the full dashboard config.
@@ -1510,7 +1291,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         3. ha_config_set_dashboard(
                url_path="my-dash",
                config_hash=find["config_hash"],
-               jq_transform=f'{find["matches"][0]["jq_path"]}.icon = "mdi:lamp"'
+               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
            )
         """
         try:
@@ -1594,7 +1375,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 },
                 "matches": matches,
                 "match_count": len(matches),
-                "hint": "Use jq_path with ha_config_set_dashboard(jq_transform=...) for targeted updates"
+                "hint": "Use jq_path with ha_config_set_dashboard(python_transform=...) for targeted updates"
                 if matches
                 else "No matches found. Try broader search criteria.",
             }

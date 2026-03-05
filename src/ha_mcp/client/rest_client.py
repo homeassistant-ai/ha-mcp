@@ -84,7 +84,7 @@ class HomeAssistantClient:
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
-    async def __aenter__(self) -> 'HomeAssistantClient':
+    async def __aenter__(self) -> "HomeAssistantClient":
         """Async context manager entry."""
         return self
 
