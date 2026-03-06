@@ -70,24 +70,30 @@ async def test_skills_resource_readable(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_skills_manifest_readable(mcp_client):
-    """Test that the skill manifest is accessible and lists reference files."""
-    logger.info("Testing skill manifest resource")
+async def test_skills_reference_files_readable(mcp_client):
+    """Test that skill reference files are reachable via resources/read."""
+    logger.info("Testing skill reference file access")
 
     resources = await mcp_client.list_resources()
     skill_resources = [r for r in resources if str(r.uri).startswith("skill://")]
 
-    # Find the manifest resource
-    manifest = next(
-        (r for r in skill_resources if "_manifest" in str(r.uri)),
-        None,
-    )
-    assert manifest is not None, (
-        "Skill manifest resource not found. "
-        "SkillsDirectoryProvider should expose a _manifest resource."
+    # Find reference file resources (anything that's not SKILL.md itself)
+    reference_resources = [
+        r for r in skill_resources
+        if "SKILL.md" not in str(r.uri)
+    ]
+    assert len(reference_resources) > 0, (
+        "No reference file resources found. "
+        "SkillsDirectoryProvider should expose reference files."
     )
 
-    content = await mcp_client.read_resource(manifest.uri)
-    assert content is not None, "Manifest content is None"
+    # Read the first reference file to verify accessibility
+    ref = reference_resources[0]
+    content = await mcp_client.read_resource(ref.uri)
+    assert content is not None, f"read_resource returned None for {ref.uri}"
+    assert len(str(content)) > 0, f"Reference file {ref.uri} is empty"
 
-    logger.info("Successfully read skill manifest")
+    logger.info(
+        f"Found {len(reference_resources)} reference resources, "
+        f"verified {ref.uri} is readable"
+    )

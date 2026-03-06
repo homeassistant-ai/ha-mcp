@@ -236,7 +236,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         description = frontmatter.get("description", "")
         if not description:
-            logger.debug("No description in frontmatter for skill %s", skill_name)
+            logger.warning("No description in frontmatter for skill %s", skill_name)
             return None
 
         uri = f"skill://{skill_name}/SKILL.md"
