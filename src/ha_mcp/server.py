@@ -137,8 +137,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._register_skills()
 
     def _get_skills_dir(self) -> Path | None:
-        """Return the bundled skills directory if it exists."""
-        skills_dir = Path(__file__).parent / "resources" / "skills"
+        """Return the bundled skills directory if it exists.
+
+        Skills are vendored via a git submodule at resources/skills-vendor/.
+        The actual skill directories live under the skills/ subdirectory
+        within that repo.
+        """
+        skills_dir = Path(__file__).parent / "resources" / "skills-vendor" / "skills"
         return skills_dir if skills_dir.exists() else None
 
     def _build_skills_instructions(self) -> str | None:
@@ -270,7 +275,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             if not skills_dir:
                 logger.warning(
                     "Skills directory not found at %s, skipping skill registration",
-                    Path(__file__).parent / "resources" / "skills",
+                    Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 )
                 return
 

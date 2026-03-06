@@ -42,7 +42,7 @@ class TestBundledSkillFiles:
         """Get the path to the bundled skills directory."""
         import ha_mcp
 
-        return Path(ha_mcp.__file__).parent / "resources" / "skills"
+        return Path(ha_mcp.__file__).parent / "resources" / "skills-vendor" / "skills"
 
     def test_skills_directory_exists(self):
         """Check that the skills directory exists."""
