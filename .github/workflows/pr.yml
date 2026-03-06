@@ -52,6 +52,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
+    - name: Install git for submodule checkout
+      run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+
     - uses: actions/checkout@v6
       with:
         submodules: true
