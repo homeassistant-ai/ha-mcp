@@ -31,7 +31,7 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
 
     @mcp.tool(
         annotations={
-            "destructiveHint": False,
+            "destructiveHint": True,
             "tags": ["config"],
             "title": "Start Options Flow",
         }
@@ -156,7 +156,7 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
 
     @mcp.tool(
         annotations={
-            "destructiveHint": False,
+            "destructiveHint": True,
             "tags": ["config"],
             "title": "Abort Options Flow",
         }
