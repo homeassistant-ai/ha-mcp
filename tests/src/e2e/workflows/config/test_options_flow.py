@@ -84,4 +84,4 @@ class TestOptionsFlow:
             {"flow_id": "nonexistent_flow_xyz"},
         )
         # Should fail with a structured error, not crash
-        assert "success" in data
+        assert data.get("success") is not True, "Should fail for nonexistent flow_id"

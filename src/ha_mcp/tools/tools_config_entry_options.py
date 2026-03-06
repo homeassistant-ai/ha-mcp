@@ -26,6 +26,20 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
+def _format_flow_step(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the standard flow step fields from an HA options flow response."""
+    return {
+        "success": True,
+        "flow_id": result.get("flow_id"),
+        "step_id": result.get("step_id"),
+        "type": result.get("type"),
+        "menu_options": result.get("menu_options"),
+        "data_schema": result.get("data_schema"),
+        "description_placeholders": result.get("description_placeholders"),
+        "errors": result.get("errors"),
+    }
+
+
 def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Config Entry Options Flow tools with the MCP server."""
 
@@ -60,16 +74,7 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
         """
         try:
             result = await client.start_options_flow(entry_id)
-            return {
-                "success": True,
-                "flow_id": result.get("flow_id"),
-                "step_id": result.get("step_id"),
-                "type": result.get("type"),
-                "menu_options": result.get("menu_options"),
-                "data_schema": result.get("data_schema"),
-                "description_placeholders": result.get("description_placeholders"),
-                "errors": result.get("errors"),
-            }
+            return _format_flow_step(result)
         except ToolError:
             raise
         except Exception as e:
@@ -131,16 +136,13 @@ def register_config_entry_options_tools(mcp: Any, client: Any, **kwargs: Any) ->
                 data_dict = data
 
             result = await client.submit_options_flow_step(flow_id, data_dict)
-            return {
-                "success": True,
-                "flow_id": result.get("flow_id"),
-                "step_id": result.get("step_id"),
-                "type": result.get("type"),
-                "menu_options": result.get("menu_options"),
-                "data_schema": result.get("data_schema"),
-                "description_placeholders": result.get("description_placeholders"),
-                "errors": result.get("errors"),
-            }
+            if result.get("type") == "abort":
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Options flow aborted by Home Assistant: {result.get('reason', 'unknown')}",
+                    context={"flow_id": flow_id, "details": result},
+                ))
+            return _format_flow_step(result)
         except ToolError:
             raise
         except Exception as e:
