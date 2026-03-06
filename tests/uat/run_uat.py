@@ -242,6 +242,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         tool_stats = None
         session_id = None
         cost_usd = None
+        tokens_input = None
+        tokens_output = None
         if raw_json and isinstance(raw_json, dict):
             # Claude JSON format
             if "result" in raw_json:
@@ -256,6 +258,9 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             # Gemini stats
             if "stats" in raw_json and isinstance(raw_json["stats"], dict):
                 tool_stats = raw_json["stats"].get("tools")
+            # OpenAI agent token counts (included directly in JSON output)
+            tokens_input = raw_json.get("tokens_input")
+            tokens_output = raw_json.get("tokens_output")
 
         result: dict = {
             "completed": proc.returncode == 0,
@@ -272,6 +277,10 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["session_id"] = session_id
         if cost_usd is not None:
             result["cost_usd"] = cost_usd
+        if tokens_input is not None:
+            result["tokens_input"] = tokens_input
+        if tokens_output is not None:
+            result["tokens_output"] = tokens_output
         if raw_json is not None:
             result["raw_json"] = raw_json
         return result
@@ -334,6 +343,8 @@ def build_openai_cmd(
     model: str | None = None,
     api_key: str = "no-key",
     max_tools: int | None = None,
+    no_think: bool = False,
+    max_tokens: int | None = None,
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -351,6 +362,10 @@ def build_openai_cmd(
         cmd.extend(["--model", model])
     if max_tools is not None:
         cmd.extend(["--max-tools", str(max_tools)])
+    if no_think:
+        cmd.append("--no-think")
+    if max_tokens is not None:
+        cmd.extend(["--max-tokens", str(max_tokens)])
     return cmd
 
 
@@ -365,6 +380,8 @@ async def run_agent_scenario(
     base_url: str | None = None,
     api_key: str = "no-key",
     max_tools: int | None = None,
+    no_think: bool = False,
+    max_tokens: int | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
@@ -407,6 +424,8 @@ async def run_agent_scenario(
                     model=model,
                     api_key=api_key,
                     max_tools=max_tools,
+                    no_think=no_think,
+                    max_tokens=max_tokens,
                 )
                 result = await run_cli(cmd, timeout)
             else:
@@ -422,6 +441,14 @@ async def run_agent_scenario(
             log(
                 f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)"
             )
+            # Forward agent stderr on failure so the error is visible to the user
+            if result["exit_code"] != 0 and result.get("stderr"):
+                _BOX_CHARS = frozenset("│╭╰╮─▄█▀ \t")
+                for line in result["stderr"].splitlines():
+                    if "error" in line.lower():
+                        log(f"  [{agent_name}] !! {line.strip()}")
+                    if not all(c in _BOX_CHARS for c in line):
+                        log(f"  [{agent_name}] stderr: {line}")
     finally:
         # Cleanup temp files
         if stdio_config_path and stdio_config_path.exists():
@@ -436,18 +463,22 @@ async def run_agent_scenario(
 # Summary Generation
 # ---------------------------------------------------------------------------
 def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
-    """Extract concise summary from a phase result (no raw_json, no full output on success)."""
+    """Extract concise summary from a phase result (no raw_json)."""
     summary: dict = {
         "completed": phase_result["completed"],
         "duration_ms": phase_result["duration_ms"],
         "exit_code": phase_result["exit_code"],
     }
-    if not phase_result["completed"]:
-        # Include output and stderr only on failure — the calling agent needs them to diagnose
-        summary["output"] = phase_result.get("output", "")
-        stderr = phase_result.get("stderr", "")
-        if stderr:
-            summary["stderr"] = stderr
+    # Always include output — needed for response verification checks in run_story.py
+    summary["output"] = phase_result.get("output", "")
+    # Always include tool call trace from stderr (lines containing "[tool]")
+    stderr = phase_result.get("stderr", "")
+    if stderr:
+        tool_lines = [line for line in stderr.splitlines() if "[tool]" in line]
+        if tool_lines:
+            summary["tool_trace"] = tool_lines
+    if not phase_result["completed"] and stderr:
+        summary["stderr"] = stderr
     # Always include stats (for comparison between branches)
     if phase_result.get("num_turns") is not None:
         summary["num_turns"] = phase_result["num_turns"]
@@ -457,6 +488,10 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
         summary["cost_usd"] = phase_result["cost_usd"]
     if phase_result.get("tool_stats") is not None:
         summary["tool_stats"] = phase_result["tool_stats"]
+    if phase_result.get("tokens_input") is not None:
+        summary["tokens_input"] = phase_result["tokens_input"]
+    if phase_result.get("tokens_output") is not None:
+        summary["tokens_output"] = phase_result["tokens_output"]
     return summary
 
 
@@ -595,6 +630,8 @@ async def run(args: argparse.Namespace) -> dict:
                 base_url=getattr(args, "base_url", None),
                 api_key=getattr(args, "api_key", "no-key"),
                 max_tools=getattr(args, "max_tools", None),
+                no_think=getattr(args, "no_think", False),
+                max_tokens=getattr(args, "max_tokens", None),
             )
 
         # Add unavailable agents
@@ -672,6 +709,17 @@ Examples:
         default=None,
         help="Limit MCP tools passed to the openai agent (useful for small context windows)",
     )
+    parser.add_argument(
+        "--no-think",
+        action="store_true",
+        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Max output tokens per completion for openai agent (agent default: 8192)",
+    )
     args = parser.parse_args()
 
     try:
@@ -679,6 +727,8 @@ Examples:
     except ValueError as e:
         log(f"ERROR: {e}")
         sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)
 
     # Write full results to temp file
     with tempfile.NamedTemporaryFile(
