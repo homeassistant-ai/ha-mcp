@@ -268,6 +268,17 @@ class DeviceControlTools:
         # Add parameters based on domain
         if parameters:
             if domain == "light":
+                # Backward compat: convert deprecated color temp parameters
+                if "color_temp_kelvin" not in parameters:
+                    if "kelvin" in parameters:
+                        parameters["color_temp_kelvin"] = parameters.pop("kelvin")
+                    elif "color_temp" in parameters:
+                        mired_val = parameters.pop("color_temp")
+                        if isinstance(mired_val, (int, float)) and mired_val > 0:
+                            parameters["color_temp_kelvin"] = round(
+                                1_000_000 / mired_val
+                            )
+
                 light_params = [
                     "brightness",
                     "color_temp_kelvin",
