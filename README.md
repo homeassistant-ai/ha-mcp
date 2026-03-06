@@ -71,6 +71,23 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 
 </details>
 
+<details>
+<summary><b>🏠 Home Assistant OS (Add-on)</b></summary>
+
+1. Add the repository to your Home Assistant instance:
+
+   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
+
+2. Install **"Home Assistant MCP Server"** from the Add-on Store and wait for it to complete
+3. Click **Start**, then open the **Logs** tab to find your unique MCP URL
+4. Configure your AI client with that URL
+
+No token or credential setup needed — the add-on connects to Home Assistant automatically.
+
+[Full add-on documentation →](homeassistant-addon/DOCS.md)
+
+</details>
+
 ### 🧙 Setup Wizard for 15+ clients
 
 **Claude Code, Gemini CLI, ChatGPT, Open WebUI, VSCode, Cursor, and more.**
