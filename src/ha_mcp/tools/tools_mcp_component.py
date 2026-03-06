@@ -236,7 +236,7 @@ def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ],
                 ))
 
-            result: dict[str, Any] = {
+            result = {
                 "success": True,
                 "installed": True,
                 "repository": MCP_TOOLS_REPO,
