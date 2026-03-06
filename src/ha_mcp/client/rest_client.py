@@ -618,7 +618,7 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: If flow start fails
         """
-        payload = {"handler": handler}
+        payload: dict[str, Any] = {"handler": handler}
         if context:
             payload["context"] = context
 
@@ -636,7 +636,7 @@ class HomeAssistantClient:
             user_input: Form data for current step
 
         Returns:
-            Flow result: type = "create_entry" | "form" | "abort"
+            Flow result: type = "create_entry" | "form" | "menu" | "abort"
 
         Raises:
             HomeAssistantAPIError: If flow submission fails
@@ -644,6 +644,87 @@ class HomeAssistantClient:
         logger.debug(f"Submitting flow step for flow_id: {flow_id}")
         return await self._request(
             "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
+        )
+
+    async def abort_config_flow(self, flow_id: str) -> dict[str, Any]:
+        """
+        Abort an in-progress config entry flow.
+
+        Args:
+            flow_id: Flow ID to abort
+
+        Returns:
+            Abort confirmation
+
+        Raises:
+            HomeAssistantAPIError: If flow not found or API error
+        """
+        logger.debug(f"Aborting config flow: {flow_id}")
+        return await self._request("DELETE", f"/config/config_entries/flow/{flow_id}")
+
+    async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
+        """
+        Start an options flow for a config entry.
+
+        The options flow allows configuring an existing integration
+        (equivalent to clicking "Configure" in the HA UI).
+
+        Args:
+            entry_id: Config entry ID to configure
+
+        Returns:
+            Flow data with flow_id, step_id, type (form|menu),
+            and data_schema or menu_options
+
+        Raises:
+            HomeAssistantAPIError: If flow start fails
+        """
+        logger.debug(f"Starting options flow for entry: {entry_id}")
+        return await self._request(
+            "POST",
+            "/config/config_entries/options/flow",
+            json={"handler": entry_id},
+        )
+
+    async def submit_options_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Submit data for an options flow step.
+
+        Args:
+            flow_id: Flow ID from start_options_flow or previous step
+            user_input: Form data or menu selection
+
+        Returns:
+            Flow result: type = "create_entry" | "form" | "menu" | "abort"
+
+        Raises:
+            HomeAssistantAPIError: If flow submission fails
+        """
+        logger.debug(f"Submitting options flow step for flow_id: {flow_id}")
+        return await self._request(
+            "POST",
+            f"/config/config_entries/options/flow/{flow_id}",
+            json=user_input,
+        )
+
+    async def abort_options_flow(self, flow_id: str) -> dict[str, Any]:
+        """
+        Abort an in-progress options flow without saving changes.
+
+        Args:
+            flow_id: Flow ID to abort
+
+        Returns:
+            Abort confirmation
+
+        Raises:
+            HomeAssistantAPIError: If flow not found or API error
+        """
+        logger.debug(f"Aborting options flow: {flow_id}")
+        return await self._request(
+            "DELETE", f"/config/config_entries/options/flow/{flow_id}"
         )
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
@@ -663,8 +744,10 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        # List all entries and filter by entry_id
-        entries = await self._request("GET", "/config/config_entries/entry")
+        # List all entries and filter by entry_id.
+        # Typed as Any because _request returns dict[str, Any] generically,
+        # but this endpoint actually returns a list.
+        entries: Any = await self._request("GET", "/config/config_entries/entry")
 
         if not isinstance(entries, list):
             raise HomeAssistantAPIError(
@@ -672,14 +755,15 @@ class HomeAssistantClient:
                 status_code=500,
             )
 
-        for entry in entries:
-            if entry.get("entry_id") == entry_id:
-                return entry
-
-        raise HomeAssistantAPIError(
-            f"Config entry not found: {entry_id}",
-            status_code=404,
+        found: dict[str, Any] | None = next(
+            (dict(e) for e in entries if e.get("entry_id") == entry_id), None
         )
+        if found is None:
+            raise HomeAssistantAPIError(
+                f"Config entry not found: {entry_id}",
+                status_code=404,
+            )
+        return found
 
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
@@ -735,6 +819,9 @@ class HomeAssistantClient:
 
                 logger.error(f"WebSocket message failed: {e}")
                 return {"success": False, "error": str(e)}
+
+        # Unreachable: loop always returns inside try/except, but satisfies mypy
+        return {"success": False, "error": "WebSocket retries exhausted"}
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]

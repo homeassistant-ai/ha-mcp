@@ -36,57 +36,121 @@ SUPPORTED_HELPERS = Literal[
     "generic_hygrostat",
 ]
 
+# Keys used to specify a menu selection — stripped before submitting form data.
+_MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
+
 
 def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Config Entry Flow API tools with the MCP server."""
 
     async def _handle_flow_steps(
-        flow_id: str, config: dict[str, Any]
+        flow_id: str,
+        initial_step: dict[str, Any],
+        config: dict[str, Any],
     ) -> dict[str, Any]:
-        """
-        Handle multi-step flow internally (max 10 steps).
+        """Walk a multi-step config flow handling menu and form steps (max 10 steps).
+
+        HA flows can present steps in sequence:
+        - ``menu``: caller supplies selection via ``group_type``/``next_step_id`` key
+        - ``form``: caller supplies field values; aborts immediately on validation errors
+        - ``create_entry``: flow complete
+        - ``abort``: flow terminated by HA
 
         Args:
             flow_id: Flow ID from start_config_flow
-            config: Configuration data to submit
+            initial_step: The first step returned by start_config_flow
+            config: Full caller-provided config dict. Menu selection keys are
+                consumed by menu steps; remaining keys are submitted on the
+                first form step.
 
         Returns:
-            Result dict with success/error and flow details
+            ``{"success": True, "entry": result}`` on success.
+            Raises ToolError on any failure.
         """
+        remaining_config = dict(config)
+        current_step = initial_step
         max_steps = 10
-        for _ in range(max_steps):
-            result = await client.submit_config_flow_step(flow_id, config)
 
-            result_type = result.get("type")
+        for step_num in range(max_steps):
+            result_type = current_step.get("type")
+
             if result_type == "create_entry":
-                return {"success": True, "entry": result}
+                return {"success": True, "entry": current_step}
+
             elif result_type == "abort":
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Flow aborted: {result.get('reason')}",
-                    context={"flow_id": flow_id, "details": result},
+                    f"Flow aborted: {current_step.get('reason')}",
+                    context={"flow_id": flow_id, "details": current_step},
                 ))
+
+            elif result_type == "menu":
+                # Extract the menu selection from config.
+                menu_choice = None
+                for key in _MENU_SELECTION_KEYS:
+                    if key in remaining_config:
+                        menu_choice = remaining_config.pop(key)
+                        break
+
+                if not menu_choice:
+                    menu_options = current_step.get("menu_options", [])
+                    raise_tool_error(create_error_response(
+                        ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                        "Menu step requires a selection. "
+                        "Add 'group_type' or 'next_step_id' to your config.",
+                        suggestions=[
+                            f"Available options: {menu_options}",
+                            "Example: {\"group_type\": \"light\", \"name\": \"My Group\", ...}",
+                        ],
+                        context={
+                            "flow_id": flow_id,
+                            "step_id": current_step.get("step_id"),
+                            "menu_options": menu_options,
+                        },
+                    ))
+
+                logger.debug(
+                    f"Flow step {step_num}: menu '{menu_choice}' "
+                    f"(step_id={current_step.get('step_id')})"
+                )
+                current_step = await client.submit_config_flow_step(
+                    flow_id, {"next_step_id": menu_choice}
+                )
+
             elif result_type == "form":
-                # Need more input - for unified tool, this is an error
-                raise_tool_error(create_error_response(
-                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                    "Multi-step flow requires additional input",
-                    suggestions=[
-                        "This helper may require manual configuration through the Home Assistant UI",
-                        "Use ha_get_helper_schema() to discover required config fields",
-                    ],
-                    context={
-                        "flow_id": flow_id,
-                        "step_id": result.get("step_id"),
-                        "data_schema": result.get("data_schema"),
-                    },
-                ))
+                # If HA returned validation errors, surface them immediately.
+                if current_step.get("errors"):
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Form validation failed",
+                        suggestions=["Fix the field errors and retry with corrected values"],
+                        context={
+                            "flow_id": flow_id,
+                            "step_id": current_step.get("step_id"),
+                            "errors": current_step["errors"],
+                            "data_schema": current_step.get("data_schema"),
+                        },
+                    ))
+
+                # Submit remaining config, stripping any leftover menu keys.
+                form_data = {
+                    k: v
+                    for k, v in remaining_config.items()
+                    if k not in _MENU_SELECTION_KEYS
+                }
+                logger.debug(
+                    f"Flow step {step_num}: form submit "
+                    f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
+                )
+                current_step = await client.submit_config_flow_step(flow_id, form_data)
+                # Clear so subsequent steps don't re-submit the same data.
+                remaining_config = {}
+
             else:
-                # Unexpected flow result type
                 raise_tool_error(create_error_response(
                     ErrorCode.INTERNAL_UNEXPECTED,
                     f"Unexpected flow result type: {result_type}",
-                    context={"flow_id": flow_id, "details": result},
+                    context={"flow_id": flow_id, "details": current_step},
                 ))
 
         raise_tool_error(create_error_response(
@@ -115,6 +179,10 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         Supports 15 helper types that use Config Entry Flow API.
         Use ha_get_helper_schema(helper_type) to discover required config fields.
+
+        For menu-based helpers (e.g. group), include the menu selection in config:
+        - group: {"group_type": "light", "name": "My Group", "entities": [...]}
+        - template: {"name": "My Template", "state": "{{ ... }}", ...}
         """
         try:
             flow_id = None  # Track flow_id for error context
@@ -133,7 +201,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             else:
                 config_dict = config
 
-            # Start flow
+            # Start flow — returns the first step (menu or form)
             flow_result = await client.start_config_flow(helper_type)
             flow_id = flow_result.get("flow_id")
 
@@ -145,8 +213,8 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     context={"helper_type": helper_type, "details": flow_result},
                 ))
 
-            # Handle flow steps
-            result = await _handle_flow_steps(flow_id, config_dict)
+            # Walk through flow steps, passing the initial step to avoid a wasted round-trip
+            result = await _handle_flow_steps(flow_id, flow_result, config_dict)
 
             entry = result["entry"].get("result", {})
             return {
@@ -185,17 +253,22 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         Returns the form fields and their types needed to create this helper.
         Use before ha_create_config_entry_helper to understand required config.
+
+        For menu-based helpers (e.g. group), returns the available menu options.
+        Include 'group_type' (or 'next_step_id') in your config when calling
+        ha_create_config_entry_helper to navigate the menu.
         """
+        flow_id = None
         try:
-            # Start flow but don't submit anything - just get the schema
+            # Start flow to inspect the schema, then immediately abort to avoid
+            # leaving dangling flows in HA memory.
             flow_result = await client.start_config_flow(helper_type)
+            flow_id = flow_result.get("flow_id")
 
             flow_type = flow_result.get("type")
 
-            # Handle different flow types
             if flow_type == "form":
-                # Standard form with data_schema
-                return {
+                result: dict[str, Any] = {
                     "success": True,
                     "helper_type": helper_type,
                     "flow_type": "form",
@@ -204,12 +277,9 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "description_placeholders": flow_result.get(
                         "description_placeholders", {}
                     ),
-                    "errors": flow_result.get("errors", {}),
                 }
-
             elif flow_type == "menu":
-                # Menu selection (e.g., group type selection)
-                return {
+                result = {
                     "success": True,
                     "helper_type": helper_type,
                     "flow_type": "menu",
@@ -218,19 +288,30 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "description_placeholders": flow_result.get(
                         "description_placeholders", {}
                     ),
-                    "note": "This helper requires selecting from a menu first. Choose an option and submit to get the actual configuration schema.",
+                    "note": (
+                        "This helper requires selecting from a menu first. "
+                        "Include 'group_type' (or 'next_step_id') in your config "
+                        "when calling ha_create_config_entry_helper."
+                    ),
                 }
-
             else:
-                # Unexpected flow type
                 raise_tool_error(create_error_response(
                     ErrorCode.INTERNAL_UNEXPECTED,
                     f"Unexpected flow type: {flow_type}",
                     context={"helper_type": helper_type, "details": flow_result},
                 ))
 
+            return result
+
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error getting helper schema: {e}")
             exception_to_structured_error(e, context={"helper_type": helper_type})
+        finally:
+            # Always abort the introspection flow to avoid leaking it in HA memory.
+            if flow_id:
+                try:
+                    await client.abort_config_flow(flow_id)
+                except Exception:
+                    pass  # Best-effort; flow may have already completed or timed out
