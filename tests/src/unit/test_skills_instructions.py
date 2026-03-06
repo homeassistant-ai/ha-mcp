@@ -1,6 +1,5 @@
 """Unit tests for _build_skill_block() and _build_skills_instructions()."""
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

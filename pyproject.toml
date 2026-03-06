@@ -25,7 +25,6 @@ classifiers = [
 
 dependencies = [
     "fastmcp==3.0.2",
-    "pyyaml>=6.0",
     "httpx[socks]==0.28.1",
     'jq==1.11.0; sys_platform != "win32"',
     "pydantic==2.12.5",
