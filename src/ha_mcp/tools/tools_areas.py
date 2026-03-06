@@ -156,7 +156,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         suggestions=["Provide a name for the new area"],
                     ))
 
-                message: dict[str, Any] = {
+                message = {
                     "type": "config/area_registry/create",
                     "name": name,
                 }
@@ -380,7 +380,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         suggestions=["Provide a name for the new floor"],
                     ))
 
-                message: dict[str, Any] = {
+                message = {
                     "type": "config/floor_registry/create",
                     "name": name,
                 }

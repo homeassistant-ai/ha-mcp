@@ -11,6 +11,12 @@ repos:
       - id: uv-lock
   - repo: local
     hooks:
+      - id: mypy
+        name: mypy type check
+        entry: uv run mypy src/
+        language: system
+        pass_filenames: false
+        files: ^(src/|pyproject\.toml)
       - id: unit-tests
         name: unit tests
         entry: uv run pytest tests/src/unit/ -n auto -m "not slow" --tb=short -q

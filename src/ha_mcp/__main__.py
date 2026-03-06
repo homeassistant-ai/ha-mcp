@@ -13,7 +13,13 @@ import signal  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
-from typing import Any  # noqa: E402
+from collections.abc import Coroutine  # noqa: E402
+from typing import TYPE_CHECKING, Any, cast  # noqa: E402
+
+if TYPE_CHECKING:
+    from ha_mcp.auth.provider import HomeAssistantOAuthProvider
+    from ha_mcp.client.rest_client import HomeAssistantClient
+    from ha_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +31,12 @@ class OAuthProxyClient:
     The proxy allows us to inject different credentials per-request based on OAuth token claims.
     """
 
-    def __init__(self, auth_provider):
+    def __init__(self, auth_provider: "HomeAssistantOAuthProvider") -> None:
         self._auth_provider = auth_provider
-        self._oauth_clients = {}
+        self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self):
+    def _get_oauth_client(self) -> "HomeAssistantClient":
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
@@ -74,7 +80,7 @@ class OAuthProxyClient:
         for client in clients:
             await client.close()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Forward all attribute access to the OAuth client."""
         client = self._get_oauth_client()
         return getattr(client, name)
@@ -217,7 +223,7 @@ For setup instructions, see:
     sys.exit(1)
 
 
-def _validate_standard_credentials(settings) -> None:
+def _validate_standard_credentials(settings: "Settings") -> None:
     """Exit with error if HA credentials are OAuth sentinels in standard (non-OAuth) mode."""
     from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL
 
@@ -264,14 +270,12 @@ def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
     }
 
 
-def _create_server():
+def _create_server() -> Any:
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
     try:
-        from ha_mcp.server import (
-            HomeAssistantSmartMCPServer,  # type: ignore[import-not-found]
-        )
+        from ha_mcp.server import HomeAssistantSmartMCPServer
 
         return HomeAssistantSmartMCPServer()
     except ValidationError as e:
@@ -283,7 +287,7 @@ def _create_server():
 _server = None
 
 
-def _get_mcp():
+def _get_mcp() -> Any:
     """Get the MCP instance, creating server if needed."""
     global _server
     if _server is None:
@@ -291,7 +295,7 @@ def _get_mcp():
     return _server.mcp
 
 
-def _get_server():
+def _get_server() -> Any:
     """Get the server instance, creating if needed."""
     global _server
     if _server is None:
@@ -390,7 +394,7 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
                 pass
 
 
-async def _run_with_shutdown(server_coro) -> None:
+async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
     """Run a server coroutine with graceful shutdown support.
 
     Handles signal-based shutdown, resource cleanup, and task cancellation.
@@ -431,7 +435,7 @@ async def _run_with_shutdown(server_coro) -> None:
         await _cancel_tasks(server_task, shutdown_task)
 
 
-def _run_entrypoint(coro, label: str) -> None:
+def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
     """Run an async entrypoint with standard exception handling."""
     _setup_signal_handlers()
 
@@ -659,7 +663,10 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     proxy_client = OAuthProxyClient(auth_provider)
 
     global _server
-    _server = HomeAssistantSmartMCPServer(client=proxy_client)
+    from ha_mcp.client.rest_client import (
+        HomeAssistantClient as _HAClient,  # local to avoid circular import
+    )
+    _server = HomeAssistantSmartMCPServer(client=cast(_HAClient, proxy_client))
     mcp = _server.mcp
     mcp.auth = auth_provider
 
