@@ -136,11 +136,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id=entity_id, start_time=start_timestamp, end_time=end_time
             )
 
-            # Normalize falsy response (None, empty list) to empty list
-            # Empty results are a valid outcome, not an error
-            if not response:
-                response = []
-
             # Get total count before pagination
             total_entries = len(response) if isinstance(response, list) else 1
 

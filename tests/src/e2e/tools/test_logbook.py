@@ -227,7 +227,7 @@ async def test_logbook_entity_filter(mcp_client):
 
     # Verify entity filter is recorded in response
     assert data["entity_filter"] == "sun.sun", (
-        f"Entity filter should be 'sun.sun', got: {data.get('entity_filter')}"
+        f"Entity filter should be 'sun.sun', got: {data['entity_filter']}"
     )
 
     # If there are entries, verify they are for the filtered entity
