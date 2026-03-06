@@ -159,8 +159,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if not skills_dir:
             return None
 
+        try:
+            entries = sorted(skills_dir.iterdir())
+        except OSError:
+            logger.warning("Could not read skills directory: %s", skills_dir)
+            return None
+
         skill_blocks: list[str] = []
-        for skill_dir in sorted(skills_dir.iterdir()):
+        for skill_dir in entries:
             main_file = skill_dir / "SKILL.md"
             if not skill_dir.is_dir() or not main_file.exists():
                 continue
@@ -209,25 +215,28 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         try:
             content = main_file.read_text(encoding="utf-8")
         except OSError:
-            logger.debug("Could not read %s", main_file)
+            logger.warning("Could not read %s", main_file)
             return None
 
         # Extract YAML frontmatter between --- markers
         parts = content.split("---", 2)
         if len(parts) < 3:
+            logger.warning("No valid frontmatter delimiters in %s", main_file)
             return None
 
         try:
             frontmatter = yaml.safe_load(parts[1])
         except yaml.YAMLError:
-            logger.debug("Could not parse frontmatter in %s", main_file)
+            logger.warning("Could not parse YAML frontmatter in %s", main_file)
             return None
 
         if not isinstance(frontmatter, dict):
+            logger.warning("Frontmatter is not a mapping in %s", main_file)
             return None
 
         description = frontmatter.get("description", "")
         if not description:
+            logger.debug("No description in frontmatter for skill %s", skill_name)
             return None
 
         uri = f"skill://{skill_name}/SKILL.md"
@@ -246,30 +255,53 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if not self.settings.enable_skills:
             return
 
+        # Phase 1: Import SkillsDirectoryProvider
         try:
             from fastmcp.server.providers.skills import SkillsDirectoryProvider
+        except ImportError:
+            logger.warning(
+                "SkillsDirectoryProvider not available in fastmcp, skipping skills"
+            )
+            return
 
+        # Phase 2: Register skills as MCP resources
+        try:
             skills_dir = self._get_skills_dir()
             if not skills_dir:
-                logger.debug("Skills directory not found, skipping")
+                logger.warning(
+                    "Skills directory not found at %s, skipping skill registration",
+                    Path(__file__).parent / "resources" / "skills",
+                )
                 return
 
             self.mcp.add_provider(SkillsDirectoryProvider(
                 roots=[skills_dir], supporting_files="resources"
             ))
             logger.info("Registered bundled skills as MCP resources")
+        except Exception:
+            logger.exception("Failed to register skills as resources")
+            return
 
-            if self.settings.enable_skills_as_tools:
-                from fastmcp.server.transforms import ResourcesAsTools
+        # Phase 3: Optionally expose skills as tools
+        if not self.settings.enable_skills_as_tools:
+            return
 
-                self.mcp.add_transform(ResourcesAsTools(self.mcp))
-                logger.info("Skills also exposed as tools (ResourcesAsTools)")
+        try:
+            from fastmcp.server.transforms import ResourcesAsTools
         except ImportError:
             logger.warning(
-                "SkillsDirectoryProvider not available in fastmcp, skipping skills"
+                "ResourcesAsTools not available in fastmcp, "
+                "skills registered as resources but not exposed as tools"
             )
-        except Exception as e:
-            logger.error("Failed to register skills: %s", e)
+            return
+
+        try:
+            self.mcp.add_transform(ResourcesAsTools(self.mcp))
+            logger.info("Skills also exposed as tools (ResourcesAsTools)")
+        except Exception:
+            logger.exception(
+                "Failed to expose skills as tools (resources still available)"
+            )
 
     # Helper methods required by EnhancedToolsMixin
 

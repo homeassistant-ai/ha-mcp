@@ -97,8 +97,10 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
-            enable_skills = config.get("enable_skills", True)
-            enable_skills_as_tools = config.get("enable_skills_as_tools", False)
+            raw_skills = config.get("enable_skills", True)
+            enable_skills = raw_skills if isinstance(raw_skills, bool) else True
+            raw_skills_as_tools = config.get("enable_skills_as_tools", False)
+            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 

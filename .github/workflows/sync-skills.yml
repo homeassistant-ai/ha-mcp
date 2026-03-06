@@ -46,13 +46,12 @@ jobs:
           git checkout -b chore/sync-skills
           git add src/ha_mcp/resources/skills/ vendor/skills
           git commit -m "chore: sync bundled skills from homeassistant-ai/skills"
-          git push -f origin chore/sync-skills
+          git push --force-with-lease origin chore/sync-skills
           # Create PR if one doesn't already exist
           if ! gh pr list --head chore/sync-skills --state open --json number --jq '.[0].number' | grep -q .; then
             gh pr create \
               --title "chore: sync bundled skills from homeassistant-ai/skills" \
               --body "Automated sync of bundled skill files from [homeassistant-ai/skills](https://github.com/homeassistant-ai/skills).
 
-          Automated sync — the skills submodule has new commits." \
-              --label chore
+          Automated sync — the skills submodule has new commits."
           fi
