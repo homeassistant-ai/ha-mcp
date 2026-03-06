@@ -618,7 +618,7 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: If flow start fails
         """
-        payload = {"handler": handler}
+        payload: dict[str, Any] = {"handler": handler}
         if context:
             payload["context"] = context
 
@@ -735,6 +735,8 @@ class HomeAssistantClient:
 
                 logger.error(f"WebSocket message failed: {e}")
                 return {"success": False, "error": str(e)}
+
+        return {"success": False, "error": "WebSocket request failed"}
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]

@@ -10,7 +10,7 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastmcp import FastMCP
 from mcp.types import Icon
@@ -129,9 +129,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self, query: str, domain_filter: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
         """Bridge method to existing smart search implementation."""
-        return await self.smart_tools.smart_entity_search(
+        return cast(dict[str, Any], await self.smart_tools.smart_entity_search(
             query=query, limit=limit, include_attributes=False
-        )
+        ))
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         """Bridge method to existing entity state implementation."""
@@ -148,13 +148,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         service_data = data or {}
         if entity_id:
             service_data["entity_id"] = entity_id
-        return await self.client.call_service(domain, service, service_data)
+        result = await self.client.call_service(domain, service, service_data)
+        return result if isinstance(result, list) else [result]
 
     async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
         """Bridge method to existing area functionality."""
-        return await self.smart_tools.get_entities_by_area(
+        return cast(dict[str, Any], await self.smart_tools.get_entities_by_area(
             area_query=area_name, group_by_domain=True
-        )
+        ))
 
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""

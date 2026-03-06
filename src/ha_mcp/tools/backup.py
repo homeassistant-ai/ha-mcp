@@ -105,6 +105,7 @@ async def create_backup(
                 ErrorCode.CONNECTION_FAILED,
                 "Failed to connect to Home Assistant WebSocket for backup",
             ))
+        assert ws_client is not None
 
         # Get backup password
         password, error = await _get_backup_password(ws_client)
@@ -256,6 +257,7 @@ async def restore_backup(
                 ErrorCode.CONNECTION_FAILED,
                 "Failed to connect to Home Assistant WebSocket for restore",
             ))
+        assert ws_client is not None
 
         # Verify backup exists
         backup_info = await ws_client.send_command("backup/info")
@@ -354,7 +356,7 @@ async def restore_backup(
                 pass  # Ignore errors during cleanup
 
 
-def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs) -> None:
+def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register backup and restore tools with the MCP server.
 

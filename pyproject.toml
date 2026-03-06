@@ -55,7 +55,8 @@ packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
+mypy_path = "src"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -71,6 +72,7 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = [
     "fastmcp.*",
+    "jq",
 ]
 ignore_missing_imports = true
 
