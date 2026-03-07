@@ -17,6 +17,7 @@ Protection against accidental real-HA usage is instead ensured by:
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -171,6 +172,21 @@ def ha_container_with_fresh_config():
 
     # Copy all files from initial_test_state
     shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
+
+    # Inject GITHUB_TOKEN into HACS config entry if available.
+    # Without a valid token HACS disables itself, causing flaky test skips.
+    # In CI the automatic GITHUB_TOKEN provides sufficient read access.
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        storage_file = config_path / ".storage" / "core.config_entries"
+        if storage_file.exists():
+            ce_data = json.loads(storage_file.read_text())
+            for entry in ce_data.get("data", {}).get("entries", []):
+                if entry.get("domain") == "hacs":
+                    entry["data"] = {"token": github_token}
+                    logger.info("Injected GITHUB_TOKEN into HACS config entry")
+                    break
+            storage_file.write_text(json.dumps(ce_data, indent=2))
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)

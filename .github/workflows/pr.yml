@@ -144,6 +144,7 @@ jobs:
         echo "✅ Full E2E test suite passed"
       env:
         HAMCP_ENV_FILE: "tests/.env.test"
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Docker and Add-on validation
   docker-validation:
