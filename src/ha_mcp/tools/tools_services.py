@@ -325,8 +325,8 @@ def _get_field_type(selector: dict[str, Any]) -> str:
     if "datetime" in selector:
         return "datetime"
 
-    if "color_temp" in selector:
-        return "color_temp"
+    if "color_temp" in selector or "color_temp_kelvin" in selector:
+        return "color_temp_kelvin"
 
     if "color_rgb" in selector:
         return "color_rgb"
