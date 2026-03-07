@@ -8,9 +8,11 @@ helpers (template, group, utility_meter, etc.) via the Config Entry Flow API.
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .helpers import exception_to_structured_error, log_tool_usage
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -59,32 +61,39 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             if result_type == "create_entry":
                 return {"success": True, "entry": result}
             elif result_type == "abort":
-                return {
-                    "success": False,
-                    "error": f"Flow aborted: {result.get('reason')}",
-                    "details": result,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Flow aborted: {result.get('reason')}",
+                    context={"flow_id": flow_id, "details": result},
+                ))
             elif result_type == "form":
                 # Need more input - for unified tool, this is an error
-                return {
-                    "success": False,
-                    "error": "Multi-step flow requires additional input",
-                    "step_id": result.get("step_id"),
-                    "data_schema": result.get("data_schema"),
-                    "suggestion": "This helper may require manual configuration through the Home Assistant UI",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    "Multi-step flow requires additional input",
+                    suggestions=[
+                        "This helper may require manual configuration through the Home Assistant UI",
+                        "Use ha_get_helper_schema() to discover required config fields",
+                    ],
+                    context={
+                        "flow_id": flow_id,
+                        "step_id": result.get("step_id"),
+                        "data_schema": result.get("data_schema"),
+                    },
+                ))
             else:
                 # Unexpected flow result type
-                return {
-                    "success": False,
-                    "error": f"Unexpected flow result type: {result_type}",
-                    "details": result,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.INTERNAL_UNEXPECTED,
+                    f"Unexpected flow result type: {result_type}",
+                    context={"flow_id": flow_id, "details": result},
+                ))
 
-        return {
-            "success": False,
-            "error": f"Flow exceeded {max_steps} steps",
-        }
+        raise_tool_error(create_error_response(
+            ErrorCode.TIMEOUT_OPERATION,
+            f"Flow exceeded {max_steps} steps",
+            context={"flow_id": flow_id, "max_steps": max_steps},
+        ))
 
     @mcp.tool(
         annotations={
@@ -114,10 +123,12 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             if isinstance(config, str):
                 parsed_config = parse_json_param(config)
                 if not isinstance(parsed_config, dict):
-                    return {
-                        "success": False,
-                        "error": "Config must be a dictionary/object",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Config must be a dictionary/object",
+                        suggestions=["Provide config as a JSON object, e.g. {\"name\": \"my_helper\"}"],
+                        context={"helper_type": helper_type},
+                    ))
                 config_dict: dict[str, Any] = parsed_config
             else:
                 config_dict = config
@@ -127,27 +138,27 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             flow_id = flow_result.get("flow_id")
 
             if not flow_id:
-                return {
-                    "success": False,
-                    "error": "Failed to start config flow",
-                    "details": flow_result,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to start config flow",
+                    suggestions=["Check that the helper type is supported and Home Assistant is reachable"],
+                    context={"helper_type": helper_type, "details": flow_result},
+                ))
 
             # Handle flow steps
             result = await _handle_flow_steps(flow_id, config_dict)
 
-            if result.get("success"):
-                entry = result["entry"].get("result", {})
-                return {
-                    "success": True,
-                    "entry_id": entry.get("entry_id"),
-                    "title": entry.get("title"),
-                    "domain": helper_type,
-                    "message": f"{helper_type} helper created successfully",
-                }
-            else:
-                return result
+            entry = result["entry"].get("result", {})
+            return {
+                "success": True,
+                "entry_id": entry.get("entry_id"),
+                "title": entry.get("title"),
+                "domain": helper_type,
+                "message": f"{helper_type} helper created successfully",
+            }
 
+        except ToolError:
+            raise
         except Exception as e:
             error_msg = f"Error creating {helper_type} helper"
             if flow_id:
@@ -212,12 +223,14 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
             else:
                 # Unexpected flow type
-                return {
-                    "success": False,
-                    "error": f"Unexpected flow type: {flow_type}",
-                    "details": flow_result,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.INTERNAL_UNEXPECTED,
+                    f"Unexpected flow type: {flow_type}",
+                    context={"helper_type": helper_type, "details": flow_result},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting helper schema: {e}")
             exception_to_structured_error(e, context={"helper_type": helper_type})

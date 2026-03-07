@@ -35,8 +35,7 @@ setup:
     args:
       domain: automation
       service: turn_off
-      target:
-        entity_id: automation.morning_bedroom_lights_test
+      entity_id: automation.morning_bedroom_lights_test
 
 prompt: >
   My "Morning Bedroom Lights Test" automation was supposed to turn on the bedroom

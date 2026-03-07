@@ -8,7 +8,10 @@ allowing AI to explore available Home Assistant services/actions.
 import logging
 from typing import Any
 
-from .helpers import log_tool_usage
+from fastmcp.exceptions import ToolError
+
+from ..errors import ErrorCode, create_error_response
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +71,15 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return result
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Failed to list services: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "suggestions": [
-                    "Check Home Assistant connection",
-                    "Verify WebSocket API is available",
-                    "Try with a specific domain filter",
-                ],
-            }
+            exception_to_structured_error(e, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket API is available",
+                "Try with a specific domain filter",
+            ])
 
 
 async def _get_service_translations(client: Any) -> dict[str, Any]:
@@ -141,13 +142,14 @@ def _process_services(
             for domain, data in rest_services.items()
         ]
     else:
-        return {
-            "success": False,
-            "error": "Unexpected service data format",
-            "services": {},
-            "domains": [],
-            "total_count": 0,
-        }
+        raise_tool_error(create_error_response(
+            ErrorCode.INTERNAL_UNEXPECTED,
+            "Unexpected service data format",
+            suggestions=[
+                "Retry the request — this may be a transient issue",
+                "Check Home Assistant is running and responding correctly",
+            ],
+        ))
 
     query_lower = query_filter.lower() if query_filter else None
 

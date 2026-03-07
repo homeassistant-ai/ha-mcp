@@ -180,12 +180,15 @@ async def test_deep_search_script(mcp_client):
         logger.info(f"✅ Found {len(scripts2)} scripts with delay")
 
     finally:
-        # Cleanup: Delete the test script
-        await mcp_client.call_tool(
-            "ha_config_remove_script",
-            {"script_id": "script.deep_search_test_script"},
-        )
-        logger.info("🧹 Cleaned up test script")
+        # Cleanup: Delete the test script (use bare id, no domain prefix)
+        try:
+            await mcp_client.call_tool(
+                "ha_config_remove_script",
+                {"script_id": "deep_search_test_script"},
+            )
+            logger.info("🧹 Cleaned up test script")
+        except Exception:
+            logger.warning("⚠️ Cleanup of test script failed (may not have been created)")
 
 
 @pytest.mark.asyncio

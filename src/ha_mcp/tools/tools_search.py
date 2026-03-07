@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
-from ..errors import create_entity_not_found_error, create_validation_error
+from ..errors import create_validation_error
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -683,26 +683,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
         except Exception as e:
-            error_str = str(e).lower()
-            # Check if entity not found
-            if "404" in error_str or "not found" in error_str:
-                error_response = create_entity_not_found_error(
-                    entity_id,
-                    details=str(e),
-                )
-            else:
-                error_response = exception_to_structured_error(
-                    e,
-                    context={"entity_id": entity_id},
-                    raise_error=False,
-                )
-            # Add entity-specific suggestions
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+            error_response = exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
+                raise_error=False,
+                suggestions=[
                     f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 

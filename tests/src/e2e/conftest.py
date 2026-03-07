@@ -1,16 +1,23 @@
 """
-Simple Testcontainers integration for E2E testing.
+Testcontainers integration for E2E testing.
 
-This provides testcontainers integration but falls back to the existing
-Docker environment if testcontainers has issues.
+Spins up an isolated Home Assistant Docker container for each test session.
+Tests MUST run against this container — never against a real HA instance.
 
 Environment Variables:
-    HA_TEST_PORT: Optional fixed port for Home Assistant container (default: dynamic)
-                  Set this to bind to a specific host port instead of random assignment.
-                  Example: HA_TEST_PORT=8123
+    HA_TEST_PORT: Optional fixed port for HA container (default: dynamic).
+                  Example: HA_TEST_PORT=8124
+
+NOTE: config.py loads HOMEASSISTANT_URL from the .env.test file at import
+time, so checking os.environ for a pre-set URL is not a reliable guard here.
+Protection against accidental real-HA usage is instead ensured by:
+  - Guard 1: Docker must be available (testcontainers requirement)
+  - Guard 3: HA API must become ready within 60s (container health check)
+  - AGENTS.md: documents correct test-run commands
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -118,6 +125,65 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             logger.warning("HACS tests may be skipped without the frontend")
 
 
+def _install_mcp_proxy_component(config_path: Path) -> None:
+    """Dynamically install mcp_proxy from the webhook proxy addon source.
+
+    Copies the integration source, writes the test config file, and injects
+    a config entry into HA storage. This avoids duplicating source files in
+    initial_test_state and survives test environment rebuilds.
+    """
+    import json
+
+    repo_root = Path(__file__).parent.parent.parent.parent
+    addon_mcp_proxy = repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy"
+
+    if not addon_mcp_proxy.exists():
+        logger.info("mcp_proxy addon source not found — skipping installation")
+        return
+
+    # Copy component source
+    dest = config_path / "custom_components" / "mcp_proxy"
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(addon_mcp_proxy, dest, dirs_exist_ok=True)
+
+    # Write config file (target_url points at HA's own API for testing)
+    proxy_config = {
+        "target_url": "http://localhost:8123/api/",
+        "webhook_id": "mcp_e2e_test_webhook_proxy",
+    }
+    (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
+
+    # Inject config entry if not already present
+    storage_file = config_path / ".storage" / "core.config_entries"
+    if storage_file.exists():
+        data = json.loads(storage_file.read_text())
+        entries = data.get("data", {}).get("entries", [])
+        if not any(e.get("domain") == "mcp_proxy" for e in entries):
+            entries.append(
+                {
+                    "created_at": "2025-09-07T23:56:28.040744+00:00",
+                    "data": {},
+                    "disabled_by": None,
+                    "discovery_keys": {},
+                    "domain": "mcp_proxy",
+                    "entry_id": "e2e_test_mcp_proxy_entry",
+                    "minor_version": 1,
+                    "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                    "options": {},
+                    "pref_disable_new_entities": False,
+                    "pref_disable_polling": False,
+                    "source": "import",
+                    "subentries": [],
+                    "title": "MCP Webhook Proxy",
+                    "unique_id": "mcp_proxy",
+                    "version": 1,
+                }
+            )
+            storage_file.write_text(json.dumps(data, indent=2))
+
+    logger.info("Installed mcp_proxy component from addon source")
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for the test session."""
@@ -137,6 +203,17 @@ async def test_settings():
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config():
     """Create Home Assistant container with fresh config using testcontainers."""
+    # --- Safety guard 1: ensure Docker is available before doing anything else ---
+    try:
+        import docker as docker_sdk
+        docker_sdk.from_env().ping()
+    except Exception as e:
+        pytest.fail(
+            f"Docker is not available: {e}\n"
+            "E2E tests require a running Docker daemon (testcontainers).\n"
+            "Start Docker and retry."
+        )
+
     logger.info("🐳 Creating Home Assistant container with testcontainers...")
 
     # Create temporary directory for this test session
@@ -154,6 +231,24 @@ def ha_container_with_fresh_config():
 
     # Copy all files from initial_test_state
     shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
+
+    # Inject GITHUB_TOKEN into HACS config entry if available.
+    # Without a valid token HACS disables itself, causing flaky test skips.
+    # In CI the automatic GITHUB_TOKEN provides sufficient read access.
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        storage_file = config_path / ".storage" / "core.config_entries"
+        if storage_file.exists():
+            ce_data = json.loads(storage_file.read_text())
+            for entry in ce_data.get("data", {}).get("entries", []):
+                if entry.get("domain") == "hacs":
+                    entry["data"] = {"token": github_token}
+                    logger.info("Injected GITHUB_TOKEN into HACS config entry")
+                    break
+            storage_file.write_text(json.dumps(ce_data, indent=2))
+
+    # Install mcp_proxy from addon source (avoids duplicating files in test state)
+    _install_mcp_proxy_component(config_path)
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)
@@ -258,7 +353,10 @@ def ha_container_with_fresh_config():
                 time.sleep(1)
 
         if not api_ready:
-            logger.warning("⚠️ API not fully ready, but continuing with tests")
+            pytest.fail(
+                f"Home Assistant API at {base_url} did not become ready within 60 seconds.\n"
+                "The container may have failed to start. Check Docker logs for details."
+            )
 
         # Additional stabilization period to allow components to fully load
         logger.info(

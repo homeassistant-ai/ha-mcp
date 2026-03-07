@@ -492,7 +492,7 @@ class TestEntityManagement:
 
         assert not data.get("success", True), "Should fail for non-existent entity"
         assert "error" in data, f"Missing error field: {data}"
-        assert "suggestions" in data, f"Missing suggestions field: {data}"
+        assert data.get("error", {}).get("suggestions"), f"Missing suggestions field: {data}"
 
         logger.info("Non-existent entity error handling verified")
 

@@ -16,7 +16,10 @@ production-level functionality and compatibility.
 import logging
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import MCPAssertions, parse_mcp_result
+from tests.src.e2e.utilities.assertions import (
+    MCPAssertions,
+    safe_call_tool,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -259,16 +262,17 @@ class TestDashboardResourceValidation:
         logger.info("Invalid resource type test completed successfully")
 
     async def test_delete_nonexistent_resource(self, mcp_client):
-        """Test that deleting nonexistent resource is idempotent (succeeds)."""
+        """Test that deleting nonexistent resource returns RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent resource test")
         mcp = MCPAssertions(mcp_client)
 
-        # Deleting a resource that doesn't exist should succeed (idempotent)
-        delete_data = await mcp.call_tool_success(
+        # Deleting a resource that doesn't exist should return RESOURCE_NOT_FOUND
+        delete_data = await mcp.call_tool_failure(
             "ha_config_delete_dashboard_resource",
             {"resource_id": "nonexistent-resource-id-12345"},
+            expected_error="not found",
         )
-        assert delete_data["success"] is True
+        assert delete_data["success"] is False
 
         logger.info("Delete nonexistent resource test completed successfully")
 
@@ -517,13 +521,15 @@ class TestInlineDashboardResource:
         """Test that empty content returns error."""
         logger.info("Starting inline empty content error test")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_dashboard_resource",
             {"content": ""},
         )
-        data = parse_mcp_result(result)
         assert data["success"] is False
-        assert "empty" in data.get("error", "").lower()
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
 

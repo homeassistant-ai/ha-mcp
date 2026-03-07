@@ -208,6 +208,8 @@ cd worktree/<branch-name>
 
 **Never push or create PRs without user permission.**
 
+**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user.
+
 ### PR Workflow
 
 **After creating or updating a PR, always follow this workflow:**
@@ -343,7 +345,7 @@ git checkout -b fix/description master
 git checkout -b hotfix/description stable
 # Make your fix
 git add . && git commit -m "fix: description"
-gh pr create --base master
+gh pr create --draft --base master
 ```
 
 **Hotfix workflow execution:**
@@ -431,19 +433,26 @@ cp .env.example .env       # Configure HA connection
 - Personal workflow helper (gitignored, not committed)
 
 ### Testing
-E2E tests are in `tests/src/e2e/` (not `tests/e2e/`).
+E2E tests are in `tests/src/e2e/` (not `tests/e2e/`). Tests use **testcontainers** to spin up
+an isolated Docker HA instance — Docker daemon must be running.
 
 ```bash
-# Run E2E tests (requires Docker daemon)
-uv run pytest tests/src/e2e/ -v --tb=short
+# Run FULL E2E suite (required before claiming all tests pass)
+cd tests && uv run pytest src/e2e/ -v --tb=short
 
-# Run specific test
-uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v
+# Run specific file (partial coverage only — never substitute for full suite)
+cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
 
 # Interactive test environment
 uv run hamcp-test-env                    # Interactive mode
 uv run hamcp-test-env --no-interactive   # For automation
 ```
+
+**CRITICAL RULES:**
+- Always run from the `tests/` directory so pytest picks up the correct `conftest.py`
+- Always run the **full suite** before declaring tests pass
+- `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
+- Never set `HOMEASSISTANT_URL` manually in your shell before running tests
 
 Test token centralized in `tests/test_constants.py`.
 
@@ -535,45 +544,79 @@ def register_<domain>_tools(mcp, client, **kwargs):
 
 **Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
 
-**Domain-specific errors** (`errors.py`) — use these when the error type is known:
+**All tool-level failures must raise `ToolError`** (sets `isError=true` per MCP spec). Batch item failures within result arrays are the only exception — those return structured dicts without raising.
+
+**Pattern A — Exception blocks** (most common): call `exception_to_structured_error` without `return` — it raises `ToolError` by default:
 ```python
-from ..errors import create_entity_not_found_error, create_validation_error, create_service_error
+from .helpers import exception_to_structured_error, raise_tool_error
+from fastmcp.exceptions import ToolError
 
-# Entity lookup failures (404 / not found)
-return create_entity_not_found_error(entity_id, details=str(e))
-
-# Invalid parameters
-return create_validation_error("Invalid format", parameter="entity_ids", details=str(e))
-
-# Service call failures
-return create_service_error(domain, service, message=f"Service call failed: {e}", details=str(e))
-```
-
-Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
-
-**Catch-all exception handler** (`helpers.py`) — use in `except Exception` blocks:
-```python
-from .helpers import exception_to_structured_error
-
-except Exception as e:
-    return exception_to_structured_error(e, context={"entity_id": entity_id})
-```
-
-**Pattern for tools**: Use `exception_to_structured_error` as the catch-all — it already classifies 404s, auth errors, timeouts, etc. based on exception type and message. Pass `context={"entity_id": ...}` so it can produce `ENTITY_NOT_FOUND` for 404 errors automatically. No manual 404 string matching needed:
-```python
 try:
-    result = await client.get_entity_state(entity_id)
-    return await add_timezone_metadata(client, result)
+    # ... tool logic ...
+except ToolError:
+    raise  # must re-raise; prevents ToolError being swallowed by outer except
 except Exception as e:
-    error_response = exception_to_structured_error(e, context={"entity_id": entity_id})
-    return await add_timezone_metadata(client, error_response)
+    exception_to_structured_error(
+        e,
+        context={"entity_id": entity_id},
+        suggestions=["Verify entity exists", "Check HA connection"],
+    )
 ```
+
+The `except ToolError: raise` guard is required whenever `raise_tool_error()` or validation errors are called inside the same `try` block — without it, `except Exception` catches the `ToolError` and re-maps it to `INTERNAL_ERROR`.
+
+**Pattern B — Input validation errors**:
+```python
+from ..errors import ErrorCode, create_error_response, create_validation_error
+
+if not entity_id.startswith("light."):
+    raise_tool_error(create_error_response(
+        ErrorCode.VALIDATION_INVALID_PARAMETER,
+        f"entity_id must start with 'light.', got: {entity_id}",
+        suggestions=["Use ha_search_entities(domain_filter='light') to find valid IDs"],
+        context={"entity_id": entity_id},
+    ))
+```
+
+**Pattern C — WebSocket / service call failures**:
+```python
+if not result.get("success"):
+    raise_tool_error(create_error_response(
+        ErrorCode.SERVICE_CALL_FAILED,
+        result.get("error", "Operation failed"),
+        context={"entity_id": entity_id},
+    ))
+```
+
+**Pattern D — Batch item failures** (items inside a results list — do NOT raise):
+```python
+results.append(create_error_response(
+    ErrorCode.SERVICE_CALL_FAILED,
+    str(e),
+    context={"entity_id": eid},
+))
+```
+
+**Special case** — when the error dict needs post-processing before raising (e.g., timezone metadata injection), use `raise_error=False` then `raise_tool_error()`:
+```python
+except Exception as e:
+    error_response = exception_to_structured_error(
+        e, context={"entity_id": entity_id}, raise_error=False
+    )
+    error_with_tz = await add_timezone_metadata(client, error_response)
+    raise_tool_error(error_with_tz)
+```
+
+Available `errors.py` helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
+
+`exception_to_structured_error` already classifies 404s, auth errors, timeouts, etc. based on exception type. Pass `context={"entity_id": ...}` so it produces `ENTITY_NOT_FOUND` for 404 errors automatically — no manual string matching needed.
 
 ### Return Values
 ```python
 {"success": True, "data": result}                    # Success
 {"success": True, "partial": True, "warning": "..."}  # Degraded
-{"success": False, "error": {...}}                    # Failure
+raise ToolError(json.dumps({...}))                   # Tool-level failure (isError=true)
+{"success": False, "error": {...}}                   # Batch item failure only (in results list)
 ```
 
 ### Tool Consolidation

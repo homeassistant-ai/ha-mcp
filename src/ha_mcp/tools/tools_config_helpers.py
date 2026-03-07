@@ -14,7 +14,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import log_tool_usage, raise_tool_error
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     coerce_bool_param,
     parse_string_list_param,
@@ -107,24 +107,25 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(items)} {helper_type} helper(s)",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": f"Failed to list helpers: {result.get('error', 'Unknown error')}",
-                    "helper_type": helper_type,
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list helpers: {result.get('error', 'Unknown error')}",
+                    context={"helper_type": helper_type},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error listing helpers: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to list {helper_type} helpers: {str(e)}",
-                "helper_type": helper_type,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"helper_type": helper_type},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                     "Use ha_search_entities(domain_filter='input_*') as alternative",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -410,10 +411,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             if action == "create":
                 if not name:
-                    return {
-                        "success": False,
-                        "error": "name is required for create action",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "name is required for create action",
+                        context={"helper_type": helper_type},
+                    ))
 
                 # Build create message based on helper type
                 message: dict[str, Any] = {
@@ -428,15 +430,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Type-specific parameters
                 if helper_type == "input_select":
                     if not options:
-                        return {
-                            "success": False,
-                            "error": "options list is required for input_select",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options list is required for input_select",
+                            context={"helper_type": helper_type},
+                        ))
                     if not isinstance(options, list) or len(options) == 0:
-                        return {
-                            "success": False,
-                            "error": "options must be a non-empty list for input_select",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options must be a non-empty list for input_select",
+                            context={"helper_type": helper_type},
+                        ))
                     message["options"] = options
                     if initial and initial in options:
                         message["initial"] = initial
@@ -448,12 +452,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         and max_value is not None
                         and min_value > max_value
                     ):
-                        return {
-                            "success": False,
-                            "error": f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
-                            "min_value": min_value,
-                            "max_value": max_value,
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
+                            context={"min_value": min_value, "max_value": max_value},
+                        ))
 
                     if min_value is not None:
                         message["min"] = min_value
@@ -504,10 +507,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Validate that at least one is True
                     if not message["has_date"] and not message["has_time"]:
-                        return {
-                            "success": False,
-                            "error": "At least one of has_date or has_time must be True for input_datetime",
-                        }
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "At least one of has_date or has_time must be True for input_datetime",
+                            context={"helper_type": helper_type},
+                        ))
 
                     if initial:
                         message["initial"] = initial
@@ -638,91 +642,268 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "message": f"Successfully created {helper_type}: {name}",
                     }
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to create helper: {result.get('error', 'Unknown error')}",
-                        "helper_type": helper_type,
-                        "name": name,
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to create helper: {result.get('error', 'Unknown error')}",
+                        context={"helper_type": helper_type, "name": name},
+                    ))
 
             elif action == "update":
                 if not helper_id:
-                    return {
-                        "success": False,
-                        "error": "helper_id is required for update action",
-                    }
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "helper_id is required for update action",
+                        context={"helper_type": helper_type},
+                    ))
 
-                # For updates, we primarily use entity registry update
                 entity_id = (
                     helper_id
                     if helper_id.startswith(helper_type)
                     else f"{helper_type}.{helper_id}"
                 )
 
-                update_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/update",
-                    "entity_id": entity_id,
-                }
+                # Person, zone, and tag store config in separate config stores
+                # (not just the entity registry). Route updates accordingly.
+                # Person and zone have entity registry entries with unique_id
+                # used as the config store identifier. Tags use their own tag
+                # registry and don't have entity registry entries.
+                config_store_types = {"person", "zone"}
 
-                if name:
-                    update_msg["name"] = name
-                if icon:
-                    update_msg["icon"] = icon
-                if area_id:
-                    update_msg["area_id"] = area_id
-                if labels:
-                    update_msg["labels"] = labels
+                updated_data: dict[str, Any] = {}
 
-                result = await client.send_websocket_message(update_msg)
+                if helper_type == "tag":
+                    # Tags use their own registry — no entity registry entries.
+                    # The helper_id IS the tag_id (strip "tag." prefix if present).
+                    tag_update_id = (
+                        helper_id.removeprefix("tag.")
+                        if helper_id.startswith("tag.")
+                        else helper_id
+                    )
+                    update_msg: dict[str, Any] = {
+                        "type": "tag/update",
+                        "tag_id": tag_update_id,
+                    }
+                    if name is not None:
+                        update_msg["name"] = name
+                    if description is not None:
+                        update_msg["description"] = description
 
-                if result.get("success"):
-                    entity_data = result.get("result", {}).get("entity_entry", {})
+                    result = await client.send_websocket_message(update_msg)
+                    if not result.get("success"):
+                        raise_tool_error(create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Failed to update tag config: {result.get('error', 'Unknown error')}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+                    updated_data = result.get("result", {})
 
-                    # Wait for entity to reflect the update
-                    wait_bool = coerce_bool_param(wait, "wait", default=True)
-                    response: dict[str, Any] = {
+                    # Tags don't have entity registry entries, so return directly
+                    # without wait_for_entity_registered (they're not entities).
+                    return {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
                         "entity_id": entity_id,
-                        "updated_data": entity_data,
+                        "updated_data": updated_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
-                    if wait_bool:
-                        try:
-                            registered = await wait_for_entity_registered(client, entity_id)
-                            if not registered:
-                                response["warning"] = f"Update applied but {entity_id} not yet queryable."
-                        except Exception as e:
-                            response["warning"] = f"Update applied but verification failed: {e}"
-                    return response
+
+                elif helper_type in config_store_types:
+                    # Person and zone: look up unique_id from entity registry
+                    registry_msg: dict[str, Any] = {
+                        "type": "config/entity_registry/get",
+                        "entity_id": entity_id,
+                    }
+                    registry_result = await client.send_websocket_message(
+                        registry_msg
+                    )
+                    if not registry_result.get("success"):
+                        raise_tool_error(create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Could not find {helper_type} entity: {entity_id}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+                    registry_entry = registry_result.get("result", {})
+                    if not isinstance(registry_entry, dict):
+                        raise_tool_error(create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"Unexpected registry response for {entity_id}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+                    unique_id = registry_entry.get("unique_id")
+                    if not unique_id:
+                        raise_tool_error(create_error_response(
+                            ErrorCode.CONFIG_NOT_FOUND,
+                            f"No unique_id found in entity registry for {entity_id}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+
+                    if helper_type == "person":
+                        # Person config API is full-replace (not patch):
+                        # fetch current config, merge with new values, then send.
+                        list_result = await client.send_websocket_message(
+                            {"type": "person/list"}
+                        )
+                        if not list_result.get("success"):
+                            raise_tool_error(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to fetch person config list: {list_result.get('error', 'Unknown')}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+
+                        # person/list returns {"storage": [...], "config": [...]}
+                        # "storage" contains UI-managed (editable) persons
+                        person_result = list_result.get("result", {})
+                        person_list = (
+                            person_result.get("storage", [])
+                            if isinstance(person_result, dict)
+                            else person_result
+                        )
+
+                        current_config = next(
+                            (
+                                p for p in person_list
+                                if isinstance(p, dict) and p.get("id") == unique_id
+                            ),
+                            None,
+                        )
+
+                        if not current_config:
+                            raise_tool_error(create_error_response(
+                                ErrorCode.CONFIG_NOT_FOUND,
+                                f"Person config not found for id: {unique_id}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+
+                        # Merge: use new values if provided, else keep current
+                        update_msg = {
+                            "type": "person/update",
+                            "person_id": unique_id,
+                            "name": name if name is not None else current_config.get("name"),
+                            "user_id": user_id
+                            if user_id is not None
+                            else current_config.get("user_id"),
+                            "device_trackers": device_trackers
+                            if device_trackers is not None
+                            else current_config.get("device_trackers", []),
+                        }
+                        if picture is not None:
+                            update_msg["picture"] = picture
+                        elif current_config.get("picture"):
+                            update_msg["picture"] = current_config["picture"]
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            raise_tool_error(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to update person config: {result.get('error', 'Unknown error')}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+                        updated_data = result.get("result", {})
+
+                    elif helper_type == "zone":
+                        update_msg = {
+                            "type": "zone/update",
+                            "zone_id": unique_id,
+                        }
+                        if name is not None:
+                            update_msg["name"] = name
+                        if latitude is not None:
+                            update_msg["latitude"] = latitude
+                        if longitude is not None:
+                            update_msg["longitude"] = longitude
+                        if radius is not None:
+                            update_msg["radius"] = radius
+                        if passive is not None:
+                            update_msg["passive"] = passive
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            raise_tool_error(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to update zone config: {result.get('error', 'Unknown error')}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+                        updated_data = result.get("result", {})
+
+                    # Also update entity registry for icon, area, and labels
+                    if icon or area_id or labels:
+                        registry_update: dict[str, Any] = {
+                            "type": "config/entity_registry/update",
+                            "entity_id": entity_id,
+                        }
+                        if icon:
+                            registry_update["icon"] = icon
+                        if area_id:
+                            registry_update["area_id"] = area_id
+                        if labels:
+                            registry_update["labels"] = labels
+                        await client.send_websocket_message(registry_update)
+
                 else:
-                    return {
-                        "success": False,
-                        "error": f"Failed to update helper: {result.get('error', 'Unknown error')}",
+                    # Standard helpers: entity registry update only
+                    update_msg = {
+                        "type": "config/entity_registry/update",
                         "entity_id": entity_id,
                     }
 
+                    if name is not None:
+                        update_msg["name"] = name
+                    if icon:
+                        update_msg["icon"] = icon
+                    if area_id:
+                        update_msg["area_id"] = area_id
+                    if labels:
+                        update_msg["labels"] = labels
+
+                    result = await client.send_websocket_message(update_msg)
+
+                    if result.get("success"):
+                        updated_data = result.get("result", {}).get("entity_entry", {})
+                    else:
+                        raise_tool_error(create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Failed to update helper: {result.get('error', 'Unknown error')}",
+                            context={"helper_type": helper_type, "entity_id": entity_id},
+                        ))
+
+                # Wait for entity to reflect the update
+                wait_bool = coerce_bool_param(wait, "wait", default=True)
+                response: dict[str, Any] = {
+                    "success": True,
+                    "action": "update",
+                    "helper_type": helper_type,
+                    "entity_id": entity_id,
+                    "updated_data": updated_data,
+                    "message": f"Successfully updated {helper_type}: {entity_id}",
+                }
+                if wait_bool:
+                    try:
+                        registered = await wait_for_entity_registered(client, entity_id)
+                        if not registered:
+                            response["warning"] = f"Update applied but {entity_id} not yet queryable."
+                    except Exception as e:
+                        response["warning"] = f"Update applied but verification failed: {e}"
+                return response
+
             # This should never be reached since action is either "create" or "update"
-            return {
-                "success": False,
-                "error": f"Unexpected action: {action}",
-            }
+            raise_tool_error(create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Unexpected action: {action}",
+            ))
 
         except ToolError:
             raise
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Helper management failed: {str(e)}",
-                "action": action,
-                "helper_type": helper_type,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"action": action, "helper_type": helper_type},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify helper_id exists for update operations",
                     "Ensure required parameters are provided for the helper type",
                 ],
-            }
+            )
 
     @mcp.tool(
         annotations={
@@ -902,13 +1083,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     pass
 
                 # Final fallback failed
-                return {
-                    "success": False,
-                    "error": f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
-                    "helper_id": helper_id,
-                    "entity_id": entity_id,
-                    "suggestion": "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
+                    suggestions=[
+                        "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
+                    ],
+                    context={"helper_id": helper_id, "entity_id": entity_id},
+                ))
 
             # Delete helper using unique_id (correct API from docs)
             delete_message: dict[str, Any] = {
@@ -947,24 +1129,24 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
 
-                return {
-                    "success": False,
-                    "error": f"Failed to delete helper: {error_msg}",
-                    "helper_id": helper_id,
-                    "entity_id": entity_id,
-                    "unique_id": unique_id,
-                    "suggestion": "Make sure the helper exists and is not being used by automations or scripts",
-                }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete helper: {error_msg}",
+                    suggestions=[
+                        "Make sure the helper exists and is not being used by automations or scripts",
+                    ],
+                    context={"helper_id": helper_id, "entity_id": entity_id, "unique_id": unique_id},
+                ))
 
+        except ToolError:
+            raise
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Helper deletion failed: {str(e)}",
-                "helper_type": helper_type,
-                "helper_id": helper_id,
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"helper_type": helper_type, "helper_id": helper_id},
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify helper_id exists using ha_search_entities()",
                     "Ensure helper is not being used by automations or scripts",
                 ],
-            }
+            )

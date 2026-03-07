@@ -1,9 +1,11 @@
 """Unit tests for dashboard resource tools."""
 
 import base64
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_resources import (
     MAX_CONTENT_SIZE,
@@ -206,18 +208,22 @@ class TestHaConfigSetDashboardResource:
     @pytest.mark.asyncio
     async def test_neither_content_nor_url_error(self, set_tool, mock_client):
         """Test that providing neither content nor url returns error."""
-        result = await set_tool()
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool()
 
-        assert result["success"] is False
-        assert "required" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "required" in error_data["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_both_content_and_url_error(self, set_tool, mock_client):
         """Test that providing both content and url returns error."""
-        result = await set_tool(content="const x = 1;", url="/local/card.js")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content="const x = 1;", url="/local/card.js")
 
-        assert result["success"] is False
-        assert "not both" in result["error"]["message"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "not both" in error_data["error"]["message"].lower()
 
     # ---- Inline content mode ----
 
@@ -285,36 +291,44 @@ class TestHaConfigSetDashboardResource:
     @pytest.mark.asyncio
     async def test_inline_empty_content_error(self, set_tool, mock_client):
         """Test that empty content returns error."""
-        result = await set_tool(content="")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content="")
 
-        assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "empty" in error_data["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_inline_whitespace_only_error(self, set_tool, mock_client):
         """Test that whitespace-only content returns error."""
-        result = await set_tool(content="   \n\t  ")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content="   \n\t  ")
 
-        assert result["success"] is False
-        assert "empty" in result["error"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "empty" in error_data["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_inline_content_too_large_error(self, set_tool, mock_client):
         """Test that oversized content returns error."""
         large_content = "x" * (MAX_CONTENT_SIZE + 1000)
-        result = await set_tool(content=large_content)
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content=large_content)
 
-        assert result["success"] is False
-        assert "too large" in result["error"].lower()
-        assert "suggestions" in result
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "too large" in error_data["error"]["message"].lower()
+        assert "suggestions" in error_data["error"]
 
     @pytest.mark.asyncio
     async def test_inline_js_type_not_supported(self, set_tool, mock_client):
         """Test that resource_type='js' is rejected for inline content."""
-        result = await set_tool(content="var x = 1;", resource_type="js")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(content="var x = 1;", resource_type="js")
 
-        assert result["success"] is False
-        assert "js" in result["error"]["message"].lower()
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "js" in error_data["error"]["message"].lower()
 
     # ---- URL mode ----
 
@@ -411,8 +425,8 @@ class TestHaConfigDeleteDashboardResource:
         assert result["resource_id"] == "abc123"
 
     @pytest.mark.asyncio
-    async def test_delete_idempotent_not_found(self, delete_tool, mock_client):
-        """Test that deleting non-existent resource is idempotent."""
+    async def test_delete_not_found_returns_error(self, delete_tool, mock_client):
+        """Test that deleting non-existent resource returns RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.return_value = {
             "success": False,
             "error": {"message": "Resource not found"},
@@ -420,8 +434,8 @@ class TestHaConfigDeleteDashboardResource:
 
         result = await delete_tool(resource_id="nonexistent")
 
-        assert result["success"] is True  # Idempotent
-        assert "already deleted" in result["message"].lower()
+        assert result["success"] is False
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 class TestToolRegistration:
