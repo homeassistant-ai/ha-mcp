@@ -704,7 +704,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
-        """Get detailed state information for a Home Assistant entity with timezone metadata."""
+        """Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.)."""
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
