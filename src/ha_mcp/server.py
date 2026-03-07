@@ -19,6 +19,7 @@ from mcp.types import Icon
 
 from .config import get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
+from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
     from .client.rest_client import HomeAssistantClient
@@ -278,14 +279,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
     # Tools pinned outside the search transform for individual permission gating.
     # These are always visible in list_tools() regardless of search transform.
-    _PINNED_TOOLS: ClassVar[list[str]] = [
-        "ha_restart",
-        "ha_reload_core",
-        "ha_backup_create",
-        "ha_backup_restore",
-        "ha_get_overview",
-        "ha_report_issue",
-    ]
+    _PINNED_TOOLS: ClassVar[list[str]] = list(DEFAULT_PINNED_TOOLS)
 
     # Description for the unified search tool
     _SEARCH_TOOL_DESCRIPTION = (

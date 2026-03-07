@@ -13,14 +13,18 @@ Tools are categorized by their existing MCP annotations:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
+
+from ..errors import ErrorCode, create_error_response
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -40,6 +44,22 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
+
+# Proxy tool descriptions (shared between transform_tools and get_tool)
+_READ_PROXY_DESC = (
+    "Execute a read-only tool discovered via ha_search_tools. "
+    "Safe — does not modify any data or state."
+)
+_WRITE_PROXY_DESC = (
+    "Execute a write tool discovered via ha_search_tools. "
+    "Creates or updates data. Use for any tool that modifies "
+    "state but does not delete/remove resources."
+)
+_DELETE_PROXY_DESC = (
+    "Execute a delete/remove tool discovered via ha_search_tools. "
+    "Permanently removes data. Use for tools that delete or "
+    "remove resources (areas, automations, devices, etc.)."
+)
 
 
 def _categorize_tool(tool: Tool) -> str:
@@ -147,6 +167,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
             if name not in allowed:
                 # Provide a helpful error with the correct proxy name
                 actual_category = "unknown"
+                correct_proxy = ""
                 if name in transform._read_tools:
                     actual_category = "read"
                     correct_proxy = transform._call_read_name
@@ -157,14 +178,17 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     actual_category = "delete"
                     correct_proxy = transform._call_delete_name
                 else:
-                    raise ValueError(
-                        f"Tool '{name}' not found. Use ha_search_tools to "
-                        f"discover available tools."
-                    )
-                raise ValueError(
-                    f"Tool '{name}' is a {actual_category} tool. "
-                    f"Use {correct_proxy} instead of {proxy_name}."
-                )
+                    raise ToolError(json.dumps(create_error_response(
+                        code=ErrorCode.RESOURCE_NOT_FOUND,
+                        message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
+                        context={"tool_name": name},
+                    )))
+                raise ToolError(json.dumps(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
+                    suggestions=[f"Use '{correct_proxy}' for {actual_category} operations."],
+                    context={"tool_name": name, "proxy_used": proxy_name, "correct_proxy": correct_proxy},
+                )))
 
             return await ctx.fastmcp.call_tool(name, arguments)
 
@@ -192,32 +216,21 @@ class CategorizedSearchTransform(BM25SearchTransform):
             proxy_name=self._call_read_name,
             category="read",
             annotations=ToolAnnotations(readOnlyHint=True),
-            description=(
-                "Execute a read-only tool discovered via ha_search_tools. "
-                "Safe — does not modify any data or state."
-            ),
+            description=_READ_PROXY_DESC,
         )
 
         call_write = self._make_categorized_proxy(
             proxy_name=self._call_write_name,
             category="write",
             annotations=ToolAnnotations(destructiveHint=True),
-            description=(
-                "Execute a write tool discovered via ha_search_tools. "
-                "Creates or updates data. Use for any tool that modifies "
-                "state but does not delete/remove resources."
-            ),
+            description=_WRITE_PROXY_DESC,
         )
 
         call_delete = self._make_categorized_proxy(
             proxy_name=self._call_delete_name,
             category="delete",
             annotations=ToolAnnotations(destructiveHint=True),
-            description=(
-                "Execute a delete/remove tool discovered via ha_search_tools. "
-                "Permanently removes data. Use for tools that delete or "
-                "remove resources (areas, automations, devices, etc.)."
-            ),
+            description=_DELETE_PROXY_DESC,
         )
 
         return [*pinned, search_tool, call_read, call_write, call_delete]
@@ -235,21 +248,18 @@ class CategorizedSearchTransform(BM25SearchTransform):
             return self._make_categorized_proxy(
                 self._call_read_name, "read",
                 ToolAnnotations(readOnlyHint=True),
-                "Execute a read-only tool discovered via ha_search_tools. "
-                "Safe — does not modify any data or state.",
+                _READ_PROXY_DESC,
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
                 self._call_write_name, "write",
                 ToolAnnotations(destructiveHint=True),
-                "Execute a write tool discovered via ha_search_tools. "
-                "Creates or updates data.",
+                _WRITE_PROXY_DESC,
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
                 self._call_delete_name, "delete",
                 ToolAnnotations(destructiveHint=True),
-                "Execute a delete/remove tool discovered via ha_search_tools. "
-                "Permanently removes data.",
+                _DELETE_PROXY_DESC,
             )
         return await super().get_tool(name, call_next, version=version)
