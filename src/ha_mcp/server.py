@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 from fastmcp import FastMCP
@@ -217,15 +217,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             instructions += (
                 "\n\n## Tool Discovery\n"
                 "This server uses search-based tool discovery. Most tools "
-                "are NOT listed directly \u2014 use search_tools to find them.\n\n"
+                "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
                 "WORKFLOW:\n"
-                "1. Call search_tools(query=\"...\") to find relevant tools\n"
+                "1. Call ha_search_tools(query=\"...\") to find relevant tools\n"
                 "2. Results include name, description, parameters, and "
                 "annotations (readOnlyHint/destructiveHint)\n"
                 "3. Execute using the matching proxy:\n"
-                "   - call_read_tool \u2014 safe, read-only operations\n"
-                "   - call_write_tool \u2014 creates or modifies data\n"
-                "   - call_delete_tool \u2014 removes data permanently\n\n"
+                "   - ha_call_read_tool \u2014 safe, read-only operations\n"
+                "   - ha_call_write_tool \u2014 creates or modifies data\n"
+                "   - ha_call_delete_tool \u2014 removes data permanently\n\n"
                 "A few critical tools are listed directly (ha_restart, "
                 "ha_backup_create, ha_backup_restore, ha_reload_core, "
                 "ha_get_overview, ha_report_issue). Everything else must "
@@ -278,7 +278,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
     # Tools pinned outside the search transform for individual permission gating.
     # These are always visible in list_tools() regardless of search transform.
-    _PINNED_TOOLS = [
+    _PINNED_TOOLS: ClassVar[list[str]] = [
         "ha_restart",
         "ha_reload_core",
         "ha_backup_create",
@@ -296,9 +296,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "history, statistics, devices, integrations, services, backups, "
         "todo, camera, blueprints, system, and more.\n\n"
         "After finding a tool, execute it with the matching proxy:\n"
-        "- call_read_tool: safe read-only operations (readOnlyHint)\n"
-        "- call_write_tool: create/update operations (destructiveHint)\n"
-        "- call_delete_tool: remove/delete operations (destructiveHint)\n\n"
+        "- ha_call_read_tool: safe read-only operations (readOnlyHint)\n"
+        "- ha_call_write_tool: create/update operations (destructiveHint)\n"
+        "- ha_call_delete_tool: remove/delete operations (destructiveHint)\n\n"
         "IMPORTANT: ALWAYS search before assuming a capability is unavailable. "
         "Most tools are discoverable only through this search."
     )

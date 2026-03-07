@@ -549,26 +549,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         settings = get_global_settings()
         if settings.enable_tool_search:
+            from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+
             result["tool_discovery"] = {
                 "hint": (
                     "This server uses search-based tool discovery. "
-                    "Use search_tools(query='...') to find tools, then "
-                    "execute via call_read_tool, call_write_tool, or "
-                    "call_delete_tool. Do NOT assume a capability is "
+                    "Use ha_search_tools(query='...') to find tools, then "
+                    "execute via ha_call_read_tool, ha_call_write_tool, or "
+                    "ha_call_delete_tool. Do NOT assume a capability is "
                     "unavailable without searching first."
                 ),
-                "pinned_tools": [
-                    "ha_get_overview",
-                    "ha_report_issue",
-                    "ha_restart",
-                    "ha_reload_core",
-                    "ha_backup_create",
-                    "ha_backup_restore",
-                    "search_tools",
-                    "call_read_tool",
-                    "call_write_tool",
-                    "call_delete_tool",
-                ],
+                "pinned_tools": sorted([
+                    *DEFAULT_PINNED_TOOLS,
+                    "ha_search_tools",
+                    "ha_call_read_tool",
+                    "ha_call_write_tool",
+                    "ha_call_delete_tool",
+                ]),
             }
 
         return result
