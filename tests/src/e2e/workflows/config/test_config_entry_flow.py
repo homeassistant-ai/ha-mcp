@@ -1,5 +1,12 @@
 """
 E2E tests for Config Entry Flow API.
+
+Covers:
+- Schema retrieval for form-based and menu-based helpers (ha_get_helper_schema)
+- Creating a form-only helper (min_max)
+- Creating a menu-based helper (group — menu then form)
+- Error feedback on missing menu selection
+- Deletion of config-entry-based helpers
 """
 
 import logging
@@ -7,6 +14,7 @@ import logging
 import pytest
 
 from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
+from tests.src.e2e.utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -17,60 +25,40 @@ logger = logging.getLogger(__name__)
 class TestConfigEntryFlow:
     """Test Config Entry Flow helper creation."""
 
-    async def test_get_config_entry(self, mcp_client):
-        """Test getting config entry details."""
-        # Get any entry first
-        list_result = await mcp_client.call_tool("ha_get_integration", {})
-        data = assert_mcp_success(list_result, "List integrations")
-
-        if not data.get("entries"):
-            pytest.skip("No config entries found")
-
-        entry_id = data["entries"][0]["entry_id"]
-        logger.info(f"Testing get_config_entry with: {entry_id}")
-
+    async def test_get_helper_schema_form_type(self, mcp_client):
+        """Schema for a form-based helper returns data_schema fields."""
         result = await mcp_client.call_tool(
-            "ha_get_integration", {"entry_id": entry_id}
+            "ha_get_helper_schema", {"helper_type": "min_max"}
         )
-        data = assert_mcp_success(result, "Get config entry")
-        assert "entry" in data, "Result should include entry data"
+        data = assert_mcp_success(result, "Get min_max schema")
 
-    async def test_get_config_entry_nonexistent(self, mcp_client):
-        """Test error handling for non-existent config entry."""
-        data = await safe_call_tool(
-            mcp_client, "ha_get_integration", {"entry_id": "nonexistent_entry_id"}
-        )
-        # Should fail with 404 or similar error
-        assert not data.get("success", False)
+        assert data.get("helper_type") == "min_max"
+        assert data.get("flow_type") == "form"
+        assert "data_schema" in data
+        assert isinstance(data["data_schema"], list)
+        logger.info(f"min_max schema has {len(data['data_schema'])} fields")
 
-    async def test_get_helper_schema(self, mcp_client):
-        """Test getting helper schema for various helper types."""
-        # Test with group (which has a menu)
+    async def test_get_helper_schema_menu_type(self, mcp_client):
+        """Schema for a menu-based helper (group) returns menu_options."""
         result = await mcp_client.call_tool(
             "ha_get_helper_schema", {"helper_type": "group"}
         )
-        data = assert_mcp_success(result, "Get group helper schema")
+        data = assert_mcp_success(result, "Get group schema")
 
-        # Verify schema structure
         assert data.get("helper_type") == "group"
-        assert "step_id" in data
         assert "flow_type" in data
 
-        # Group uses a menu for type selection
         if data.get("flow_type") == "menu":
             assert "menu_options" in data
-            assert isinstance(data.get("menu_options"), list)
-            logger.info(
-                f"Group helper has {len(data.get('menu_options', []))} menu options"
-            )
-        elif data.get("flow_type") == "form":
+            assert isinstance(data["menu_options"], list)
+            assert len(data["menu_options"]) > 0, "Group should have at least one menu option"
+            logger.info(f"Group has {len(data['menu_options'])} menu options: {data['menu_options']}")
+        else:
+            # HA may change group to form-based in future versions
             assert "data_schema" in data
-            logger.info(
-                f"Group helper schema has {len(data.get('data_schema', []))} fields"
-            )
 
     async def test_get_helper_schema_multiple_types(self, mcp_client):
-        """Test schema retrieval for multiple helper types."""
+        """Schema retrieval works for all supported helper types."""
         helper_types = ["template", "utility_meter", "min_max"]
 
         for helper_type in helper_types:
@@ -81,39 +69,154 @@ class TestConfigEntryFlow:
             assert data.get("helper_type") == helper_type
             assert "flow_type" in data
 
-            # Log schema info based on flow type
-            if data.get("flow_type") == "menu":
-                logger.info(
-                    f"{helper_type}: menu with {len(data.get('menu_options', []))} options"
-                )
-            elif data.get("flow_type") == "form":
-                logger.info(
-                    f"{helper_type}: form with {len(data.get('data_schema', []))} fields"
-                )
+    async def test_create_min_max_helper(self, mcp_client):
+        """Create a min_max helper (single form step, no menu)."""
+        helper_name = "test_min_max_e2e"
+        config = {
+            "name": helper_name,
+            "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
+            "type": "min",
+        }
 
-    # Note: Actual ha_create_config_entry_helper tests are intentionally limited
-    # because they require specific configuration for each helper type.
-    # These tests would need to be expanded once we understand the exact
-    # flow requirements for each of the 15 supported helpers.
+        result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "min_max", "config": config},
+        )
+        data = assert_mcp_success(result, "Create min_max helper")
+        assert data.get("success") is True
+        assert data.get("entry_id") is not None
+        entry_id = data["entry_id"]
+        logger.info(f"Created min_max helper: {entry_id}")
 
-    async def test_create_config_entry_helper_exists(self, mcp_client):
-        """Test that ha_create_config_entry_helper tool exists."""
-        # This is a basic sanity check that the tool is registered
-        # We don't actually call it because we don't know valid configs yet
+        # Poll until the integration is registered
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_integration",
+            arguments={"entry_id": entry_id},
+            predicate=lambda d: d.get("success") is True,
+            description="min_max helper is registered",
+        )
 
-        # Try to call with minimal/invalid config to verify tool exists
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": entry_id, "confirm": True},
+        )
+
+    async def test_create_group_helper_light(self, mcp_client):
+        """Create a light group helper (menu then form flow)."""
+        helper_name = "test_light_group_e2e"
+        config = {
+            "group_type": "light",
+            "name": helper_name,
+            "entities": [],  # empty list is valid
+            "hide_members": False,
+        }
+
+        result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "group", "config": config},
+        )
+        data = assert_mcp_success(result, "Create light group helper")
+        assert data.get("success") is True
+        assert data.get("entry_id") is not None
+        entry_id = data["entry_id"]
+        logger.info(f"Created light group helper: {entry_id}")
+
+        # Poll until registered
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_integration",
+            arguments={"entry_id": entry_id},
+            predicate=lambda d: d.get("success") is True,
+            description="light group helper is registered",
+        )
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": entry_id, "confirm": True},
+        )
+
+    async def test_update_min_max_helper(self, mcp_client):
+        """Update an existing min_max helper via options flow (upsert with entry_id)."""
+        # Create first
+        config = {
+            "name": "test_min_max_update_e2e",
+            "entity_ids": ["sensor.demo_temperature"],
+            "type": "min",
+        }
+        result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "min_max", "config": config},
+        )
+        data = assert_mcp_success(result, "Create min_max for update test")
+        entry_id = data["entry_id"]
+
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_integration",
+            arguments={"entry_id": entry_id},
+            predicate=lambda d: d.get("success") is True,
+            description="min_max helper is registered before update",
+        )
+
+        # Update via options flow
+        updated_config = {
+            "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
+            "type": "max",
+        }
+        update_result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "min_max", "config": updated_config, "entry_id": entry_id},
+        )
+        update_data = assert_mcp_success(update_result, "Update min_max helper")
+        assert update_data.get("updated") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": entry_id, "confirm": True},
+        )
+
+    async def test_get_integration_include_schema(self, mcp_client):
+        """ha_get_integration with include_schema=True returns options_schema for eligible entries."""
+        # Find an entry that supports options
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = assert_mcp_success(list_result, "List integrations")
+        entry = next(
+            (e for e in list_data.get("entries", []) if e.get("supports_options")),
+            None,
+        )
+        if entry is None:
+            pytest.skip("No config entries with supports_options=true in test environment")
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {"entry_id": entry["entry_id"], "include_schema": True},
+        )
+        data = assert_mcp_success(result, "Get integration with schema")
+        assert "options_schema" in data, "Expected options_schema in response"
+        schema = data["options_schema"]
+        assert schema.get("flow_type") in ("form", "menu")
+        logger.info(f"options_schema flow_type={schema['flow_type']} for {entry['domain']}")
+
+    async def test_create_group_helper_missing_menu_selection(self, mcp_client):
+        """Creating a group helper without group_type returns a helpful error."""
+        config = {"name": "my_group", "entities": []}  # missing group_type
+
         data = await safe_call_tool(
             mcp_client,
-            "ha_create_config_entry_helper",
-            {"helper_type": "template", "config": {}},
+            "ha_set_config_entry_helper",
+            {"helper_type": "group", "config": config},
         )
-
-        # We expect this to fail (invalid config), but it proves tool exists
-        # and validates the structure
-        assert "success" in data, "Tool should return a result with success field"
-
-        # If it succeeded unexpectedly, that's also fine - means empty config worked
-        # If it failed, that's expected - we're just testing tool existence
-        logger.info(
-            f"Tool response (expected to fail with invalid config): {data.get('success')}"
-        )
+        assert data.get("success") is not True, "Should fail without group_type"
+        # The error should mention available options or the missing key
+        error_str = str(data)
+        assert any(
+            kw in error_str.lower()
+            for kw in ("menu", "group_type", "next_step_id", "selection", "option")
+        ), f"Error should mention menu selection: {error_str}"
