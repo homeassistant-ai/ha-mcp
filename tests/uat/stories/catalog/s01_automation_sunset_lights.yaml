@@ -30,6 +30,12 @@ verify:
     - "Does an automation with alias 'Sunset Porch Light' exist? Show its entity_id."
     - "Does it have sun triggers for both sunset and sunrise?"
     - "Does it control light.bed_light in its actions?"
+  ha_checks:
+    - type: automation_exists
+      alias: "Sunset Porch Light"
+    - type: entity_state
+      entity_id: automation.sunset_porch_light
+      state: "on"
 
 expected:
   tools_should_use:

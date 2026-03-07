@@ -49,6 +49,11 @@ verify:
     - "Does it have a sun condition (below_horizon/after sunset)?"
     - "Does it have a state condition checking alarm_home_mode_test is on?"
     - "Does it turn on light.bed_light and then turn it off after a delay?"
+  ha_checks:
+    - type: automation_exists
+      alias: "Door Alert Lights"
+    - type: automation_has_condition
+      alias: "Door Alert Lights"
 
 expected:
   tools_should_use:
