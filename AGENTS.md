@@ -208,6 +208,8 @@ cd worktree/<branch-name>
 
 **Never push or create PRs without user permission.**
 
+**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user.
+
 ### PR Workflow
 
 **After creating or updating a PR, always follow this workflow:**
@@ -343,7 +345,7 @@ git checkout -b fix/description master
 git checkout -b hotfix/description stable
 # Make your fix
 git add . && git commit -m "fix: description"
-gh pr create --base master
+gh pr create --draft --base master
 ```
 
 **Hotfix workflow execution:**
