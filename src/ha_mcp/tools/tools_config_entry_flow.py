@@ -223,7 +223,19 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 config_dict = config
 
             if entry_id is not None:
-                # Update path: use options flow
+                # Update path: verify domain matches helper_type, then use options flow
+                config_entry = await client.get_config_entry(entry_id)
+                actual_domain = config_entry.get("domain")
+                if actual_domain != helper_type:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"entry_id '{entry_id}' belongs to domain '{actual_domain}', not '{helper_type}'",
+                        suggestions=[
+                            f"Use ha_get_integration(domain='{helper_type}') to find valid entry IDs",
+                        ],
+                        context={"entry_id": entry_id, "expected": helper_type, "actual": actual_domain},
+                    ))
+
                 flow_result = await client.start_options_flow(entry_id)
                 flow_id = flow_result.get("flow_id")
 
@@ -235,10 +247,18 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         context={"entry_id": entry_id, "details": flow_result},
                     ))
 
-                result = await _handle_flow_steps(
-                    flow_id, flow_result, config_dict,
-                    submit_fn=client.submit_options_flow_step,
-                )
+                try:
+                    result = await _handle_flow_steps(
+                        flow_id, flow_result, config_dict,
+                        submit_fn=client.submit_options_flow_step,
+                    )
+                except Exception:
+                    try:
+                        await client.abort_options_flow(flow_id)
+                    except Exception as abort_err:
+                        logger.debug(f"Failed to abort options flow {flow_id} after error: {abort_err}")
+                    raise
+
                 entry = result["entry"].get("result", {})
                 return {
                     "success": True,
