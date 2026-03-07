@@ -171,15 +171,19 @@ def parse_string_list_param(
         raise ValueError(f"{param_name} must be a list of strings")
 
     if isinstance(param, str):
-        try:
-            parsed = json.loads(param)
-            if not isinstance(parsed, list):
-                raise ValueError(f"{param_name} must be a JSON array")
-            if not all(isinstance(item, str) for item in parsed):
-                raise ValueError(f"{param_name} must be a JSON array of strings")
-            return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+        # Try JSON array first, then fall back to comma-separated
+        if param.strip().startswith("["):
+            try:
+                parsed = json.loads(param)
+                if not isinstance(parsed, list):
+                    raise ValueError(f"{param_name} must be a JSON array")
+                if not all(isinstance(item, str) for item in parsed):
+                    raise ValueError(f"{param_name} must be a JSON array of strings")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+        # Comma-separated string (e.g. "light,sensor")
+        return [item.strip() for item in param.split(",") if item.strip()]
 
     raise ValueError(f"{param_name} must be string, list, or None")
 

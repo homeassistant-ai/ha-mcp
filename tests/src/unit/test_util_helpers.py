@@ -37,20 +37,25 @@ class TestParseStringListParam:
         result = parse_string_list_param("[]")
         assert result == []
 
-    def test_invalid_json_raises_error(self):
-        """Invalid JSON string raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid JSON"):
-            parse_string_list_param("not valid json")
+    def test_comma_separated_string_parsed(self):
+        """A comma-separated string is parsed into a list."""
+        result = parse_string_list_param("light,sensor")
+        assert result == ["light", "sensor"]
+
+    def test_comma_separated_with_spaces(self):
+        """Comma-separated string with spaces is trimmed."""
+        result = parse_string_list_param("light , sensor , switch")
+        assert result == ["light", "sensor", "switch"]
+
+    def test_single_string_without_comma(self):
+        """A plain string without commas is returned as single-element list."""
+        result = parse_string_list_param("light")
+        assert result == ["light"]
 
     def test_json_object_raises_error(self):
         """JSON object (not array) raises ValueError."""
         with pytest.raises(ValueError, match="must be a JSON array"):
             parse_string_list_param('{"key": "value"}')
-
-    def test_json_number_raises_error(self):
-        """JSON number raises ValueError."""
-        with pytest.raises(ValueError, match="must be a JSON array"):
-            parse_string_list_param("123")
 
     def test_json_array_with_non_strings_raises_error(self):
         """JSON array with non-string elements raises ValueError."""

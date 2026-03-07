@@ -309,6 +309,114 @@ class TestGetSystemOverview:
         assert area["count"] == 1
         assert area["domains"]["light"] == 1
 
+    @pytest.mark.asyncio
+    async def test_domains_filter_returns_only_requested_domains(
+        self, sample_entities, sample_services
+    ):
+        """domains_filter limits domain_stats to requested domains."""
+        client = MockClient(entities=sample_entities, services=sample_services)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(
+            detail_level="standard", domains_filter=["light"]
+        )
+
+        assert result["success"] is True
+        # Only light domain in domain_stats
+        assert "light" in result["domain_stats"]
+        assert "switch" not in result["domain_stats"]
+        # System-wide totals still reflect ALL entities
+        assert result["system_summary"]["total_entities"] == 2
+        assert result["system_summary"]["total_domains"] == 2
+        assert result["system_summary"]["filtered_domains"] == ["light"]
+
+    @pytest.mark.asyncio
+    async def test_states_summary_capped_in_minimal(self):
+        """Minimal mode caps states_summary to top 5."""
+        # Create entities with many unique states
+        entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": f"state_{i}",
+            }
+            for i in range(20)
+        ]
+        client = MockClient(entities=entities)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(detail_level="minimal")
+
+        states = result["domain_stats"]["sensor"]["states_summary"]
+        # 5 top states + _other = at most 6 entries
+        assert len(states) <= 6
+        assert "_other" in states
+        # Total count still reflects all entities
+        assert result["domain_stats"]["sensor"]["count"] == 20
+
+    @pytest.mark.asyncio
+    async def test_states_summary_uncapped_in_full(self):
+        """Full mode returns all states."""
+        entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": f"state_{i}",
+            }
+            for i in range(20)
+        ]
+        client = MockClient(entities=entities)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(detail_level="full")
+
+        states = result["domain_stats"]["sensor"]["states_summary"]
+        assert len(states) == 20
+        assert "_other" not in states
+
+    @pytest.mark.asyncio
+    async def test_standard_caps_entities_per_domain(self):
+        """Standard mode caps to 50 entities per domain by default."""
+        entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": "on",
+            }
+            for i in range(100)
+        ]
+        client = MockClient(entities=entities)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(detail_level="standard")
+
+        domain = result["domain_stats"]["sensor"]
+        assert domain["count"] == 100
+        assert len(domain["entities"]) == 50
+        assert domain["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_max_entities_override_zero_means_no_limit(self):
+        """max_entities_per_domain=0 disables the cap."""
+        entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": "on",
+            }
+            for i in range(100)
+        ]
+        client = MockClient(entities=entities)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(
+            detail_level="standard", max_entities_per_domain=0
+        )
+
+        domain = result["domain_stats"]["sensor"]
+        assert len(domain["entities"]) == 100
+        assert domain["truncated"] is False
+
 
 # ---------------------------------------------------------------------------
 # deep_search – outcome-based tests
