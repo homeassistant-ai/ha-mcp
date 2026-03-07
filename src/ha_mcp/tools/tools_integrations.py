@@ -127,14 +127,14 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "step_id": flow_result.get("step_id"),
                                     "menu_options": flow_result.get("menu_options", []),
                                 }
-                        except Exception:
-                            pass  # Best-effort; don't fail the whole call
+                        except Exception as schema_err:
+                            logger.debug(f"Failed to fetch options schema for {entry_id}: {schema_err}")
                         finally:
                             if flow_id:
                                 try:
                                     await client.abort_options_flow(flow_id)
-                                except Exception:
-                                    pass
+                                except Exception as abort_err:
+                                    logger.debug(f"Failed to abort options flow {flow_id}: {abort_err}")
 
                     return resp
                 except ToolError:

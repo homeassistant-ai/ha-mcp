@@ -361,5 +361,5 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             if flow_id:
                 try:
                     await client.abort_config_flow(flow_id)
-                except Exception:
-                    pass  # Best-effort; flow may have already completed or timed out
+                except Exception as abort_err:
+                    logger.debug(f"Failed to abort introspection flow {flow_id}: {abort_err}")
