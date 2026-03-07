@@ -544,6 +544,33 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
 
+        # Include tool discovery hint when search transform is active
+        from ..config import get_global_settings
+
+        settings = get_global_settings()
+        if settings.enable_tool_search:
+            result["tool_discovery"] = {
+                "hint": (
+                    "This server uses search-based tool discovery. "
+                    "Use search_tools(query='...') to find tools, then "
+                    "execute via call_read_tool, call_write_tool, or "
+                    "call_delete_tool. Do NOT assume a capability is "
+                    "unavailable without searching first."
+                ),
+                "pinned_tools": [
+                    "ha_get_overview",
+                    "ha_report_issue",
+                    "ha_restart",
+                    "ha_reload_core",
+                    "ha_backup_create",
+                    "ha_backup_restore",
+                    "search_tools",
+                    "call_read_tool",
+                    "call_write_tool",
+                    "call_delete_tool",
+                ],
+            }
+
         return result
 
     @mcp.tool(

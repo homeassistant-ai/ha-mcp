@@ -136,6 +136,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
+        # Apply tool search transform (must come after all tools and
+        # ResourcesAsTools are registered so it can wrap everything)
+        self._apply_tool_search()
+
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -206,7 +210,31 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             f"How to access: {access_method}\n"
         )
 
-        return header + "\n".join(skill_blocks)
+        instructions = header + "\n".join(skill_blocks)
+
+        # Append tool search instructions when enabled
+        if self.settings.enable_tool_search:
+            instructions += (
+                "\n\n## Tool Discovery\n"
+                "This server uses search-based tool discovery. Most tools "
+                "are NOT listed directly \u2014 use search_tools to find them.\n\n"
+                "WORKFLOW:\n"
+                "1. Call search_tools(query=\"...\") to find relevant tools\n"
+                "2. Results include name, description, parameters, and "
+                "annotations (readOnlyHint/destructiveHint)\n"
+                "3. Execute using the matching proxy:\n"
+                "   - call_read_tool \u2014 safe, read-only operations\n"
+                "   - call_write_tool \u2014 creates or modifies data\n"
+                "   - call_delete_tool \u2014 removes data permanently\n\n"
+                "A few critical tools are listed directly (ha_restart, "
+                "ha_backup_create, ha_backup_restore, ha_reload_core, "
+                "ha_get_overview, ha_report_issue). Everything else must "
+                "be discovered via search.\n\n"
+                "DO NOT assume a capability is unavailable because you "
+                "don't see a direct tool for it. ALWAYS search first."
+            )
+
+        return instructions
 
     def _build_skill_block(
         self, skill_name: str, main_file: Path
@@ -247,6 +275,74 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         uri = f"skill://{skill_name}/SKILL.md"
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
+
+    # Tools pinned outside the search transform for individual permission gating.
+    # These are always visible in list_tools() regardless of search transform.
+    _PINNED_TOOLS = [
+        "ha_restart",
+        "ha_reload_core",
+        "ha_backup_create",
+        "ha_backup_restore",
+        "ha_get_overview",
+        "ha_report_issue",
+    ]
+
+    # Description for the unified search tool
+    _SEARCH_TOOL_DESCRIPTION = (
+        "Search ALL Home Assistant tools by keyword. Returns matching tools "
+        "with descriptions, parameters, and annotations (read/write/delete). "
+        "Categories: entities, states, automations, scripts, dashboards, "
+        "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
+        "history, statistics, devices, integrations, services, backups, "
+        "todo, camera, blueprints, system, and more.\n\n"
+        "After finding a tool, execute it with the matching proxy:\n"
+        "- call_read_tool: safe read-only operations (readOnlyHint)\n"
+        "- call_write_tool: create/update operations (destructiveHint)\n"
+        "- call_delete_tool: remove/delete operations (destructiveHint)\n\n"
+        "IMPORTANT: ALWAYS search before assuming a capability is unavailable. "
+        "Most tools are discoverable only through this search."
+    )
+
+    def _apply_tool_search(self) -> None:
+        """Apply the CategorizedSearchTransform if enabled.
+
+        Replaces the full tool catalog with a unified BM25 search tool and
+        three categorized call proxies (read/write/delete). Pinned tools
+        remain directly visible in list_tools() for individual permission
+        gating. ResourcesAsTools (list_resources/read_resource) are also
+        pinned when enabled.
+        """
+        if not self.settings.enable_tool_search:
+            return
+
+        try:
+            from .transforms import CategorizedSearchTransform
+        except ImportError:
+            logger.warning(
+                "CategorizedSearchTransform not available, skipping tool search"
+            )
+            return
+
+        # Build the always_visible list
+        pinned = list(self._PINNED_TOOLS)
+
+        # Pin ResourcesAsTools if skills-as-tools is enabled
+        if self.settings.enable_skills_as_tools:
+            pinned.extend(["list_resources", "read_resource"])
+
+        try:
+            self.mcp.add_transform(
+                CategorizedSearchTransform(
+                    max_results=10,
+                    always_visible=pinned,
+                    search_tool_description=self._SEARCH_TOOL_DESCRIPTION,
+                )
+            )
+            logger.info(
+                "Tool search transform applied (%d pinned tools)", len(pinned)
+            )
+        except Exception:
+            logger.exception("Failed to apply tool search transform")
 
     def _register_skills(self) -> None:
         """Register bundled HA best-practice skills as MCP resources.
