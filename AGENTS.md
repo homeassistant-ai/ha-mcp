@@ -67,7 +67,7 @@ Custom agent workflows are located in `.claude/agents/`:
 
 - **Repo**: `homeassistant-ai/ha-mcp`
 - **Package**: `ha-mcp` on PyPI
-- **Python**: 3.13 only
+- **Python**: 3.13+
 
 ## External Documentation
 

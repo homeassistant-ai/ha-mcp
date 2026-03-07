@@ -177,7 +177,7 @@ body:
     attributes:
       label: "🐍 Python Version"
       description: "Output of `python --version` or `python3 --version`"
-      placeholder: "Python 3.13.0"
+      placeholder: "Python 3.13.3"
     validations:
       required: false
 
