@@ -463,6 +463,8 @@ class SmartSearchTools:
                     entity_area_map[entity_id] = area_id
 
             # Determine defaults based on detail_level
+            # max_entities_per_domain=0 means "uncap everything" (entities + states)
+            uncap_all = max_entities_per_domain == 0
             if max_entities_per_domain is None:
                 if detail_level == "minimal":
                     max_entities_per_domain = 10
@@ -615,7 +617,8 @@ class SmartSearchTools:
                 formatted_domain_stats[domain] = {
                     "count": stats["count"],
                     "states_summary": _simplify_states_summary(
-                        stats["states_summary"], detail_level
+                        stats["states_summary"],
+                        "full" if uncap_all else detail_level,
                     ),
                     "entities": selected_entities,
                     "truncated": truncated,

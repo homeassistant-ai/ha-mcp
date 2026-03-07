@@ -486,7 +486,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | None,
             Field(
                 default=None,
-                description="Override default entity cap per domain (minimal=10, standard=50, full=unlimited). 0 = no limit.",
+                description="Override default entity cap per domain (minimal=10, standard=50, full=unlimited). 0 = no limit on entities or states.",
             ),
         ] = None,
         include_state: Annotated[

@@ -397,12 +397,12 @@ class TestGetSystemOverview:
 
     @pytest.mark.asyncio
     async def test_max_entities_override_zero_means_no_limit(self):
-        """max_entities_per_domain=0 disables the cap."""
+        """max_entities_per_domain=0 disables entity and states caps."""
         entities = [
             {
                 "entity_id": f"sensor.s{i}",
                 "attributes": {"friendly_name": f"Sensor {i}"},
-                "state": "on",
+                "state": f"state_{i}",
             }
             for i in range(100)
         ]
@@ -416,6 +416,9 @@ class TestGetSystemOverview:
         domain = result["domain_stats"]["sensor"]
         assert len(domain["entities"]) == 100
         assert domain["truncated"] is False
+        # states_summary also uncapped — all 100 unique states present
+        assert len(domain["states_summary"]) == 100
+        assert "_other" not in domain["states_summary"]
 
 
 # ---------------------------------------------------------------------------
