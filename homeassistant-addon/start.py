@@ -90,6 +90,7 @@ def main() -> int:
     custom_secret_path = ""  # default
     enable_skills = True  # default
     enable_skills_as_tools = False  # default
+    enable_tool_search = False  # default
 
     if config_file.exists():
         try:
@@ -101,6 +102,8 @@ def main() -> int:
             enable_skills = raw_skills if isinstance(raw_skills, bool) else True
             raw_skills_as_tools = config.get("enable_skills_as_tools", False)
             enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
+            raw_tool_search = config.get("enable_tool_search", False)
+            enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -114,6 +117,7 @@ def main() -> int:
     os.environ["BACKUP_HINT"] = backup_hint
     os.environ["ENABLE_SKILLS"] = str(enable_skills).lower()
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
+    os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
 
     # Validate Supervisor token
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
