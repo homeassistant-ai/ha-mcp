@@ -47,7 +47,8 @@ Implement GitHub issues completely, from initial branch creation through to a cl
 ### Phase 2: PR Creation and Initial Check
 5. **Push and create PR**:
    - `git push -u origin feature/issue-<number>`
-   - `gh pr create --title "<descriptive title>" --body "Closes #<issue-number>\n\n<description of changes>" --base main`
+   - `gh pr create --draft --title "<descriptive title>" --body "Closes #<issue-number>\n\n<description of changes>" --base main`
+   - PRs are always created as draft. Only mark ready (`gh pr ready <PR>`) when explicitly asked by the user.
 6. **Wait for CI**: Sleep for 5 minutes to allow PR checks to populate
    - `sleep 300`
 7. **Check PR status**:
