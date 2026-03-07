@@ -578,6 +578,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except Exception as e:
                 logger.debug(f"Failed to fetch notifications for overview: {e}")
 
+        # Include tool discovery hint when search transform is active
+        from ..config import get_global_settings
+
+        settings = get_global_settings()
+        if settings.enable_tool_search:
+            from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+
+            result["tool_discovery"] = {
+                "hint": (
+                    "This server uses search-based tool discovery. "
+                    "Use ha_search_tools(query='...') to find tools, then "
+                    "execute via ha_call_read_tool, ha_call_write_tool, or "
+                    "ha_call_delete_tool. Each proxy takes name and arguments "
+                    "as separate top-level params. Call proxy tools SEQUENTIALLY "
+                    "(not in parallel) to avoid cascading cancellations. "
+                    "Do NOT assume a capability is unavailable without searching first."
+                ),
+                "pinned_tools": sorted([
+                    *DEFAULT_PINNED_TOOLS,
+                    "ha_search_tools",
+                    "ha_call_read_tool",
+                    "ha_call_write_tool",
+                    "ha_call_delete_tool",
+                ]),
+            }
+
         return result
 
     @mcp.tool(
