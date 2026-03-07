@@ -223,8 +223,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Maintainers
 
 - **[@julienld](https://github.com/julienld)** — Project creator & core maintainer.
-- **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
-- **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
+- **[@sergeykad](https://github.com/sergeykad)** — Dashboard CRUD, search pagination, `__main__` security refactor, pre-commit hooks & CI lint, addon Docker fixes, `.gitattributes` enforcement, human-readable log timestamps, and removed the textdistance/numpy dependency.
+- **[@kingpanther13](https://github.com/kingpanther13)** — Dev channel documentation, bulk control validation, OAuth 2.1 docs, tool consolidation, error handling improvements, native solutions guidance, default dashboard editing fix, and search response optimization.
 
 ### Contributors
 
