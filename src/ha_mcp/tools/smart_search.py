@@ -436,13 +436,11 @@ class SmartSearchTools:
             if include_entity_id is None:
                 include_entity_id = detail_level == "full"
 
-            # Build area_id -> name lookup and pre-populate area_stats
-            area_name_map: dict[str, str] = {}
+            # Pre-populate area_stats to include empty areas
             area_stats: dict[str, dict[str, Any]] = {}
             for area in area_registry:
                 area_id = area.get("area_id", "")
                 if area_id:
-                    area_name_map[area_id] = area.get("name", area_id)
                     area_stats[area_id] = {
                         "name": area.get("name", area_id),
                         "count": 0,
