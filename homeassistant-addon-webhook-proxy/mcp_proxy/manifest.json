@@ -1,0 +1,10 @@
+{
+  "domain": "mcp_proxy",
+  "name": "MCP Webhook Proxy",
+  "documentation": "https://github.com/homeassistant-ai/ha-mcp",
+  "version": "1.0.0",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["webhook"],
+  "iot_class": "local_push"
+}

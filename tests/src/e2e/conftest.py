@@ -125,6 +125,65 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             logger.warning("HACS tests may be skipped without the frontend")
 
 
+def _install_mcp_proxy_component(config_path: Path) -> None:
+    """Dynamically install mcp_proxy from the webhook proxy addon source.
+
+    Copies the integration source, writes the test config file, and injects
+    a config entry into HA storage. This avoids duplicating source files in
+    initial_test_state and survives test environment rebuilds.
+    """
+    import json
+
+    repo_root = Path(__file__).parent.parent.parent.parent
+    addon_mcp_proxy = repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy"
+
+    if not addon_mcp_proxy.exists():
+        logger.info("mcp_proxy addon source not found — skipping installation")
+        return
+
+    # Copy component source
+    dest = config_path / "custom_components" / "mcp_proxy"
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(addon_mcp_proxy, dest, dirs_exist_ok=True)
+
+    # Write config file (target_url points at HA's own API for testing)
+    proxy_config = {
+        "target_url": "http://localhost:8123/api/",
+        "webhook_id": "mcp_e2e_test_webhook_proxy",
+    }
+    (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
+
+    # Inject config entry if not already present
+    storage_file = config_path / ".storage" / "core.config_entries"
+    if storage_file.exists():
+        data = json.loads(storage_file.read_text())
+        entries = data.get("data", {}).get("entries", [])
+        if not any(e.get("domain") == "mcp_proxy" for e in entries):
+            entries.append(
+                {
+                    "created_at": "2025-09-07T23:56:28.040744+00:00",
+                    "data": {},
+                    "disabled_by": None,
+                    "discovery_keys": {},
+                    "domain": "mcp_proxy",
+                    "entry_id": "e2e_test_mcp_proxy_entry",
+                    "minor_version": 1,
+                    "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                    "options": {},
+                    "pref_disable_new_entities": False,
+                    "pref_disable_polling": False,
+                    "source": "import",
+                    "subentries": [],
+                    "title": "MCP Webhook Proxy",
+                    "unique_id": "mcp_proxy",
+                    "version": 1,
+                }
+            )
+            storage_file.write_text(json.dumps(data, indent=2))
+
+    logger.info("Installed mcp_proxy component from addon source")
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for the test session."""
@@ -187,6 +246,9 @@ def ha_container_with_fresh_config():
                     logger.info("Injected GITHUB_TOKEN into HACS config entry")
                     break
             storage_file.write_text(json.dumps(ce_data, indent=2))
+
+    # Install mcp_proxy from addon source (avoids duplicating files in test state)
+    _install_mcp_proxy_component(config_path)
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)
