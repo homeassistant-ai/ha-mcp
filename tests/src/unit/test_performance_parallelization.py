@@ -235,7 +235,7 @@ class TestGetSystemOverview:
             elapsed = time.time() - start
 
         assert result["success"] is True
-        # 4 data sources at 0.05s each: sequential = 0.2s, parallel ≈ 0.05s
+        # 5 data sources at 0.05s each: sequential = 0.25s, parallel ≈ 0.05s
         assert elapsed < 0.15, f"Expected parallel speedup, took {elapsed:.2f}s"
 
     @pytest.mark.asyncio
