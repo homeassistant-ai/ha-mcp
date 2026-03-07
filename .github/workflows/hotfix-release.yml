@@ -78,8 +78,8 @@ jobs:
         VERSION="${{ steps.semantic.outputs.version }}"
         TAG="v${VERSION}"
 
-        # Extract changelog for this version
-        awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 > release_notes.md
+        # Extract changelog for this version (content between version headers)
+        awk -v ver="## v${VERSION}" '$0 ~ "^"ver {found=1; next} found && /^## v[0-9]/ {exit} found' CHANGELOG.md > release_notes.md
         if [ ! -s release_notes.md ]; then
           echo "Hotfix Release v${VERSION}" > release_notes.md
           echo "" >> release_notes.md
