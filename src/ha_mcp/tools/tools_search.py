@@ -497,7 +497,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, and entity overview.
-        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+        Default is 'minimal' — use this unless you specifically need all entities.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
