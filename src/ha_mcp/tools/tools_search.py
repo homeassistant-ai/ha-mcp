@@ -497,7 +497,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, and entity overview.
-        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+        Default is 'minimal' — use this unless you specifically need all entities.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -543,6 +543,30 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result["system_info"] = system_info
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
+
+        # Include tool discovery hint when search transform is active
+        from ..config import get_global_settings
+
+        settings = get_global_settings()
+        if settings.enable_tool_search:
+            from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+
+            result["tool_discovery"] = {
+                "hint": (
+                    "This server uses search-based tool discovery. "
+                    "Use ha_search_tools(query='...') to find tools, then "
+                    "execute via ha_call_read_tool, ha_call_write_tool, or "
+                    "ha_call_delete_tool. Do NOT assume a capability is "
+                    "unavailable without searching first."
+                ),
+                "pinned_tools": sorted([
+                    *DEFAULT_PINNED_TOOLS,
+                    "ha_search_tools",
+                    "ha_call_read_tool",
+                    "ha_call_write_tool",
+                    "ha_call_delete_tool",
+                ]),
+            }
 
         return result
 
@@ -644,7 +668,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
-        """Get detailed state information for a Home Assistant entity with timezone metadata."""
+        """Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.)."""
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
