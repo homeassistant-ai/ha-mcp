@@ -47,6 +47,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         flow_id: str,
         initial_step: dict[str, Any],
         config: dict[str, Any],
+        submit_fn: Any = None,
     ) -> dict[str, Any]:
         """Walk a multi-step config flow handling menu and form steps (max 10 steps).
 
@@ -57,16 +58,21 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - ``abort``: flow terminated by HA
 
         Args:
-            flow_id: Flow ID from start_config_flow
-            initial_step: The first step returned by start_config_flow
+            flow_id: Flow ID from start_config_flow or start_options_flow
+            initial_step: The first step returned by the flow start call
             config: Full caller-provided config dict. Menu selection keys are
                 consumed by menu steps; remaining keys are submitted on the
                 first form step.
+            submit_fn: Async function to submit a step. Defaults to
+                client.submit_config_flow_step (create). Pass
+                client.submit_options_flow_step for options (update) flows.
 
         Returns:
             ``{"success": True, "entry": result}`` on success.
             Raises ToolError on any failure.
         """
+        if submit_fn is None:
+            submit_fn = client.submit_config_flow_step
         remaining_config = dict(config)
         current_step = initial_step
         max_steps = 10
@@ -113,7 +119,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     f"Flow step {step_num}: menu '{menu_choice}' "
                     f"(step_id={current_step.get('step_id')})"
                 )
-                current_step = await client.submit_config_flow_step(
+                current_step = await submit_fn(
                     flow_id, {"next_step_id": menu_choice}
                 )
 
@@ -142,7 +148,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     f"Flow step {step_num}: form submit "
                     f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
                 )
-                current_step = await client.submit_config_flow_step(flow_id, form_data)
+                current_step = await submit_fn(flow_id, form_data)
                 # Clear so subsequent steps don't re-submit the same data.
                 remaining_config = {}
 
@@ -163,22 +169,37 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         annotations={
             "destructiveHint": True,
             "tags": ["config"],
-            "title": "Create Config Entry Helper",
+            "title": "Set Config Entry Helper",
         }
     )
     @log_tool_usage
-    async def ha_create_config_entry_helper(
+    async def ha_set_config_entry_helper(
         helper_type: Annotated[
             SUPPORTED_HELPERS, Field(description="Helper type")
         ],
         config: Annotated[
             str | dict, Field(description="Helper config (JSON or dict)")
         ],
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Config entry ID to update. If omitted, creates a new helper. "
+                    "Use ha_get_integration(domain=helper_type) to find entry IDs."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Create Config Entry Flow helper (template, group, utility_meter, etc.).
+        """Create or update a Config Entry Flow helper (template, group, utility_meter, etc.).
+
+        Without entry_id: creates a new helper.
+        With entry_id: reconfigures an existing helper via its options flow.
 
         Supports 15 helper types that use Config Entry Flow API.
         Use ha_get_helper_schema(helper_type) to discover required config fields.
+        Use ha_get_integration(entry_id=..., include_schema=True) before updating
+        to inspect available fields.
 
         For menu-based helpers (e.g. group), include the menu selection in config:
         - group: {"group_type": "light", "name": "My Group", "entities": [...]}
@@ -201,39 +222,66 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             else:
                 config_dict = config
 
-            # Start flow — returns the first step (menu or form)
-            flow_result = await client.start_config_flow(helper_type)
-            flow_id = flow_result.get("flow_id")
+            if entry_id is not None:
+                # Update path: use options flow
+                flow_result = await client.start_options_flow(entry_id)
+                flow_id = flow_result.get("flow_id")
 
-            if not flow_id:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to start config flow",
-                    suggestions=["Check that the helper type is supported and Home Assistant is reachable"],
-                    context={"helper_type": helper_type, "details": flow_result},
-                ))
+                if not flow_id:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Failed to start options flow",
+                        suggestions=["Check that the entry supports options (supports_options=true)"],
+                        context={"entry_id": entry_id, "details": flow_result},
+                    ))
 
-            # Walk through flow steps, passing the initial step to avoid a wasted round-trip
-            result = await _handle_flow_steps(flow_id, flow_result, config_dict)
+                result = await _handle_flow_steps(
+                    flow_id, flow_result, config_dict,
+                    submit_fn=client.submit_options_flow_step,
+                )
+                entry = result["entry"].get("result", {})
+                return {
+                    "success": True,
+                    "entry_id": entry_id,
+                    "title": entry.get("title"),
+                    "domain": helper_type,
+                    "message": f"{helper_type} helper updated successfully",
+                    "updated": True,
+                }
+            else:
+                # Create path: use config flow
+                flow_result = await client.start_config_flow(helper_type)
+                flow_id = flow_result.get("flow_id")
 
-            entry = result["entry"].get("result", {})
-            return {
-                "success": True,
-                "entry_id": entry.get("entry_id"),
-                "title": entry.get("title"),
-                "domain": helper_type,
-                "message": f"{helper_type} helper created successfully",
-            }
+                if not flow_id:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Failed to start config flow",
+                        suggestions=["Check that the helper type is supported and Home Assistant is reachable"],
+                        context={"helper_type": helper_type, "details": flow_result},
+                    ))
+
+                result = await _handle_flow_steps(flow_id, flow_result, config_dict)
+                entry = result["entry"].get("result", {})
+                return {
+                    "success": True,
+                    "entry_id": entry.get("entry_id"),
+                    "title": entry.get("title"),
+                    "domain": helper_type,
+                    "message": f"{helper_type} helper created successfully",
+                }
 
         except ToolError:
             raise
         except Exception as e:
-            error_msg = f"Error creating {helper_type} helper"
+            error_msg = f"Error {'updating' if entry_id else 'creating'} {helper_type} helper"
             if flow_id:
                 error_msg += f" (flow_id: {flow_id})"
             logger.error(f"{error_msg}: {e}")
 
-            context = {"helper_type": helper_type}
+            context: dict[str, Any] = {"helper_type": helper_type}
+            if entry_id:
+                context["entry_id"] = entry_id
             if flow_id:
                 context["flow_id"] = flow_id
             exception_to_structured_error(e, context=context)

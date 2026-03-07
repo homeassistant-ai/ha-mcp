@@ -79,7 +79,7 @@ class TestConfigEntryFlow:
         }
 
         result = await mcp_client.call_tool(
-            "ha_create_config_entry_helper",
+            "ha_set_config_entry_helper",
             {"helper_type": "min_max", "config": config},
         )
         data = assert_mcp_success(result, "Create min_max helper")
@@ -115,7 +115,7 @@ class TestConfigEntryFlow:
         }
 
         result = await mcp_client.call_tool(
-            "ha_create_config_entry_helper",
+            "ha_set_config_entry_helper",
             {"helper_type": "group", "config": config},
         )
         data = assert_mcp_success(result, "Create light group helper")
@@ -140,13 +140,77 @@ class TestConfigEntryFlow:
             {"entry_id": entry_id, "confirm": True},
         )
 
+    async def test_update_min_max_helper(self, mcp_client):
+        """Update an existing min_max helper via options flow (upsert with entry_id)."""
+        # Create first
+        config = {
+            "name": "test_min_max_update_e2e",
+            "entity_ids": ["sensor.demo_temperature"],
+            "type": "min",
+        }
+        result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "min_max", "config": config},
+        )
+        data = assert_mcp_success(result, "Create min_max for update test")
+        entry_id = data["entry_id"]
+
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_integration",
+            arguments={"entry_id": entry_id},
+            predicate=lambda d: d.get("success") is True,
+            description="min_max helper is registered before update",
+        )
+
+        # Update via options flow
+        updated_config = {
+            "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
+            "type": "max",
+        }
+        update_result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "min_max", "config": updated_config, "entry_id": entry_id},
+        )
+        update_data = assert_mcp_success(update_result, "Update min_max helper")
+        assert update_data.get("updated") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": entry_id, "confirm": True},
+        )
+
+    async def test_get_integration_include_schema(self, mcp_client):
+        """ha_get_integration with include_schema=True returns options_schema for eligible entries."""
+        # Find an entry that supports options
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = assert_mcp_success(list_result, "List integrations")
+        entry = next(
+            (e for e in list_data.get("entries", []) if e.get("supports_options")),
+            None,
+        )
+        if entry is None:
+            pytest.skip("No config entries with supports_options=true in test environment")
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {"entry_id": entry["entry_id"], "include_schema": True},
+        )
+        data = assert_mcp_success(result, "Get integration with schema")
+        assert "options_schema" in data, "Expected options_schema in response"
+        schema = data["options_schema"]
+        assert schema.get("flow_type") in ("form", "menu")
+        logger.info(f"options_schema flow_type={schema['flow_type']} for {entry['domain']}")
+
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
         """Creating a group helper without group_type returns a helpful error."""
         config = {"name": "my_group", "entities": []}  # missing group_type
 
         data = await safe_call_tool(
             mcp_client,
-            "ha_create_config_entry_helper",
+            "ha_set_config_entry_helper",
             {"helper_type": "group", "config": config},
         )
         assert data.get("success") is not True, "Should fail without group_type"
