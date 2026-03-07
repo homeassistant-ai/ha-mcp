@@ -520,7 +520,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
 
         # Parse domains filter
-        parsed_domains = parse_string_list_param(domains, "domains")
+        parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
         result = await smart_tools.get_system_overview(
             detail_level,
