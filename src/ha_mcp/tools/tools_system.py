@@ -333,16 +333,23 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Failed to connect to Home Assistant WebSocket",
                 ))
 
-            # Request system health info via WebSocket
-            health_response = await ws_client.send_command("system_health/info")
-
-            if not health_response.get("success"):
+            # system_health/info returns a result + follow-up event
+            try:
+                _, event_response = await ws_client.send_command_with_event(
+                    "system_health/info", wait_timeout=10.0
+                )
+            except TimeoutError:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    health_response.get("error", "Failed to retrieve system health"),
+                    "Timeout waiting for system health data",
+                ))
+            except Exception as e:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(e),
                 ))
 
-            health_info = health_response.get("result") or {}
+            health_info = event_response.get("event", {})
 
             return {
                 "success": True,
