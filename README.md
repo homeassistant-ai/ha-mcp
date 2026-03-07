@@ -237,6 +237,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
+- **[@adraguidev](https://github.com/adraguidev)** — Fix menu-based config entry flows for group helpers (#647).
+- **[@transportrefer](https://github.com/transportrefer)** — Integration options inspection (`ha_get_integration` schema support, #689).
 
 ---
 
