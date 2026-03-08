@@ -278,6 +278,7 @@ async def _call_addon_api(
     method: str = "GET",
     body: dict[str, Any] | str | None = None,
     timeout: int = 30,
+    debug: bool = False,
 ) -> dict[str, Any]:
     """Call an add-on's web API through Home Assistant's Ingress proxy.
 
@@ -418,6 +419,14 @@ async def _call_addon_api(
         "addon_name": addon_name,
         "slug": slug,
     }
+
+    # Include diagnostic info when debug mode is enabled
+    if debug:
+        result["_debug"] = {
+            "url": url,
+            "request_headers": {k: v for k, v in headers.items()},
+            "response_headers": dict(response.headers),
+        }
 
     if truncated:
         result["truncated"] = True
@@ -569,6 +578,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        debug: Annotated[
+            bool,
+            Field(
+                description="Include diagnostic info (request URL, headers sent, response headers). Default: false.",
+                default=False,
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Call an add-on's web API through Home Assistant's Ingress proxy.
 
@@ -602,6 +618,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             path=path,
             method=method,
             body=body,
+            debug=debug,
         )
         if not result.get("success"):
             raise_tool_error(result)
