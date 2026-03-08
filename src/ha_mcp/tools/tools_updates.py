@@ -287,7 +287,9 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "include_skipped": include_skipped,
         }
 
-    async def _get_update_details(entity_id: str) -> dict[str, Any]:
+    async def _get_update_details(
+        entity_id: str, include_release_notes: bool = False
+    ) -> dict[str, Any]:
         """Internal helper to get details for a specific update entity."""
         # Validate entity_id format
         if not entity_id.startswith("update."):
@@ -370,6 +372,26 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"View them at: {release_url}"
                 )
 
+        # Include multi-version breaking change analysis for Core updates
+        if include_release_notes and result.get("category") == "core":
+            installed = result.get("installed_version")
+            target = result.get("latest_version")
+            if installed and target:
+                rd_result, domains_result = await asyncio.gather(
+                    _fetch_release_data(installed, target),
+                    _get_installed_integration_domains(client),
+                    return_exceptions=True,
+                )
+                rd = rd_result if isinstance(rd_result, dict) else {}
+                domains = domains_result if isinstance(domains_result, set) else set()
+                result["installed_integrations"] = sorted(domains)
+                result["multi_version_release_notes"] = rd.get("release_notes", [])
+                result["breaking_changes"] = {
+                    "entries": rd.get("entries", []),
+                    "count": rd.get("count", 0),
+                    "versions_checked": rd.get("versions_checked", []),
+                }
+
         return result
 
     @mcp.tool(annotations={"idempotentHint": True, "openWorldHint": True, "readOnlyHint": True, "tags": ["update"], "title": "Get Updates"})
@@ -390,6 +412,15 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=False,
             ),
         ] = False,
+        include_release_notes: Annotated[
+            bool | str,
+            Field(
+                description="When getting a Core update entity, fetch multi-version release notes "
+                "and breaking changes for all versions between installed and latest (default: False). "
+                "Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.",
+                default=False,
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get update information - list all updates or get details for a specific one.
@@ -400,10 +431,15 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         With an entity_id: Returns detailed information about a specific update including
         version info, category, and release notes (if available).
 
+        With include_release_notes=True (Core updates only): Also fetches HA release
+        blog posts for every monthly version between installed and latest. Returns
+        structured breaking changes and installed integration domains for cross-referencing.
+
         EXAMPLES:
         - List all updates: ha_get_updates()
         - List including skipped: ha_get_updates(include_skipped=True)
         - Get specific update: ha_get_updates(entity_id="update.home_assistant_core_update")
+        - Pre-update analysis: ha_get_updates(entity_id="update.home_assistant_core_update", include_release_notes=True)
 
         RETURNS (when listing):
         - updates_available: Count of available updates
@@ -415,8 +451,10 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Release notes (fetched from WebSocket API or GitHub)
         - Category and installation status
 
-        TIP: Before updating, use ha_check_update_notes() to review release
-        notes, breaking changes, and your installed integrations.
+        RETURNS (with include_release_notes=True, Core only):
+        - breaking_changes.entries[]: Each has integration, description, version
+        - multi_version_release_notes[]: Full text per version {version, content, source_url}
+        - installed_integrations: Your integration domains for cross-referencing
         """
         try:
             if entity_id is None:
@@ -427,7 +465,10 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return await _list_updates(include_skipped_bool)
             else:
                 # Get mode: return details for specific update
-                return await _get_update_details(entity_id)
+                include_rn_bool = coerce_bool_param(
+                    include_release_notes, "include_release_notes", default=False
+                ) or False
+                return await _get_update_details(entity_id, include_rn_bool)
 
         except ToolError:
             raise
@@ -445,102 +486,6 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Check Home Assistant connection",
                 "Verify API access permissions",
             ])
-
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["update"], "title": "Check Update Notes"})
-    @log_tool_usage
-    async def ha_check_update_notes(
-        version: Annotated[
-            str | None,
-            Field(
-                description="Target HA Core version to check (e.g., '2026.2.0'). "
-                "If omitted, uses the latest available Core update version.",
-                default=None,
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Check for changes that may affect the user before updating HA Core.
-
-        Fetches HA release blog posts for every monthly version between the
-        current installed version and the target. Returns full release notes
-        (feature changes, deprecations, behavior changes, renamed entities,
-        UI changes) and structured breaking change entries.
-
-        Call before update.install to review ALL changes — not just breaking
-        ones — that may require adjusting automations, dashboards, or
-        integrations.
-
-        RETURNS:
-        - release_notes[]: Full text per version {version, content, source_url}
-        - breaking_changes.entries[]: Each has integration, description, version
-        - installed_integrations: Your integration domains for cross-referencing
-        """
-        try:
-            # Find core update entity and determine versions
-            current_version = None
-            target_version = version
-
-            states = await client.get_states()
-            for state in states:
-                eid = state.get("entity_id", "")
-                if eid.startswith("update.") and _categorize_update(
-                    eid, state.get("attributes", {})
-                ) == "core":
-                    attrs = state.get("attributes", {})
-                    current_version = attrs.get("installed_version")
-                    if not target_version:
-                        target_version = attrs.get("latest_version")
-                    break
-
-            if not current_version:
-                return create_error_response(
-                    code=ErrorCode.ENTITY_NOT_FOUND,
-                    message="Could not determine current HA Core version",
-                    suggestions=["Ensure Home Assistant Core update entity exists"],
-                )
-
-            if not target_version:
-                return {
-                    "success": True,
-                    "current_version": current_version,
-                    "message": "No Core update available - already on latest version",
-                }
-
-            # Fetch release data and installed integrations in parallel
-            rd_result, domains_result = await asyncio.gather(
-                _fetch_release_data(current_version, target_version),
-                _get_installed_integration_domains(client),
-                return_exceptions=True,
-            )
-
-            rd = rd_result if isinstance(rd_result, dict) else {}
-            domains = domains_result if isinstance(domains_result, set) else set()
-
-            return {
-                "success": True,
-                "current_version": current_version,
-                "target_version": target_version,
-                "installed_integrations": sorted(domains),
-                "release_notes": rd.get("release_notes", []),
-                "breaking_changes": {
-                    "entries": rd.get("entries", []),
-                    "count": rd.get("count", 0),
-                    "versions_checked": rd.get("versions_checked", []),
-                },
-            }
-
-        except httpx.RequestError as e:
-            logger.error(f"Failed to check update notes: {e}")
-            return create_error_response(
-                code=ErrorCode.CONNECTION_FAILED,
-                message=f"Failed to check update notes: {e}",
-            )
-        except Exception as e:
-            logger.error(f"Unexpected error checking update notes: {e}")
-            return create_error_response(
-                code=ErrorCode.INTERNAL_ERROR,
-                message=f"Unexpected error checking update notes: {e}",
-            )
 
 
 def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
