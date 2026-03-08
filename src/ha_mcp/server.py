@@ -308,6 +308,68 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "Failed to expose skills as tools (resources still available)"
             )
 
+        # Phase 4: Register skill guidance tools for clients that don't read
+        # server instructions (e.g., claude.ai). The tool description contains
+        # the trigger conditions so the AI sees them in the tool listing.
+        self._register_skill_guidance_tools(skills_dir)
+
+    def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
+        """Register a guidance tool per skill for clients without instructions support.
+
+        Clients like claude.ai don't read the MCP server instructions field,
+        so the bootstrap prompt (trigger conditions, symptoms) is invisible.
+        This registers a tool per skill whose description contains the trigger
+        conditions, and whose response returns the full SKILL.md content.
+        """
+        for skill_dir in sorted(skills_dir.iterdir()):
+            main_file = skill_dir / "SKILL.md"
+            if not skill_dir.is_dir() or not main_file.exists():
+                continue
+
+            # Read frontmatter for the description
+            try:
+                content = main_file.read_text(encoding="utf-8")
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    continue
+                frontmatter = yaml.safe_load(parts[1])
+                if not isinstance(frontmatter, dict):
+                    continue
+                description = frontmatter.get("description", "").strip()
+                if not description:
+                    continue
+            except Exception:
+                continue
+
+            skill_name = skill_dir.name
+            tool_name = f"ha_skill_{skill_name.replace('-', '_')}"
+            uri = f"skill://{skill_name}/SKILL.md"
+
+            tool_description = (
+                f"IMPORTANT: Read this skill BEFORE performing matching actions. "
+                f"{description}\n\n"
+                f"Returns the full best-practices guide. "
+                f"Also available as MCP resource at {uri}"
+            )
+
+            # Use factory to properly capture content in closure
+            def _make_skill_handler(skill_content: str):
+                async def handler() -> str:
+                    return skill_content
+                return handler
+
+            self.mcp.tool(
+                name=tool_name,
+                description=tool_description,
+                annotations={"readOnlyHint": True},
+            )(_make_skill_handler(content))
+
+            logger.info(
+                "Registered skill guidance tool %s for clients without "
+                "instructions support",
+                tool_name,
+            )
+
     # Helper methods required by EnhancedToolsMixin
 
     async def smart_entity_search(
