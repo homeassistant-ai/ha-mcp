@@ -42,6 +42,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          submodules: true
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -93,7 +95,7 @@ jobs:
           mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
@@ -114,13 +116,13 @@ jobs:
           python-version: '3.13'
 
       - name: Download Windows binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ha-mcp-windows
           path: mcpb-bundle
 
       - name: Download macOS binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ha-mcp-macos-arm64
           path: mcpb-bundle
@@ -150,7 +152,7 @@ jobs:
           unzip -l ha-mcp.mcpb
 
       - name: Upload MCPB artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ha-mcp-mcpb
           path: ha-mcp.mcpb
@@ -166,7 +168,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ha-mcp-*
           path: artifacts

@@ -71,6 +71,23 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 
 </details>
 
+<details>
+<summary><b>🏠 Home Assistant OS (Add-on)</b></summary>
+
+1. Add the repository to your Home Assistant instance:
+
+   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
+
+2. Install **"Home Assistant MCP Server"** from the Add-on Store and wait for it to complete
+3. Click **Start**, then open the **Logs** tab to find your unique MCP URL
+4. Configure your AI client with that URL
+
+No token or credential setup needed — the add-on connects to Home Assistant automatically.
+
+[Full add-on documentation →](homeassistant-addon/DOCS.md)
+
+</details>
+
 ### 🧙 Setup Wizard for 15+ clients
 
 **Claude Code, Gemini CLI, ChatGPT, Open WebUI, VSCode, Cursor, and more.**
@@ -146,6 +163,17 @@ Spend less time configuring, more time enjoying your smart home.
 This server gives your AI agent tools to control Home Assistant. For better configurations, pair it with [Home Assistant Agent Skills](https://github.com/homeassistant-ai/skills) — domain knowledge that teaches the agent Home Assistant best practices.
 
 An MCP server can create automations, helpers, and dashboards, but it has no opinion on *how* to structure them. Without domain knowledge, agents tend to over-rely on templates, pick the wrong helper type, or produce automations that are hard to maintain. The skills fill that gap: native constructs over Jinja2 workarounds, correct helper selection, safe refactoring workflows, and proper use of automation modes.
+
+### Bundled Skills (built-in)
+
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
+| `ENABLE_SKILLS_AS_TOOLS` | `false` | Also expose skills via `list_resources`/`read_resource` tools for clients that don't support MCP resources natively. |
+
+Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
 
 ---
 
