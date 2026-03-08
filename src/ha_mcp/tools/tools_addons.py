@@ -332,41 +332,21 @@ async def _call_addon_api(
             context={"slug": slug, "state": addon.get("state")},
         )
 
-    # 5. Build Ingress URL
-    ingress_entry = addon.get("ingress_entry", "")
-    if not ingress_entry:
+    # 5. Build direct add-on URL using internal Docker network
+    # Add-ons run on the same Docker network (hassio) and can communicate
+    # directly via ip_address:ingress_port, bypassing the Ingress proxy.
+    addon_ip = addon.get("ip_address", "")
+    ingress_port = addon.get("ingress_port")
+    if not addon_ip or not ingress_port:
         return create_error_response(
             ErrorCode.INTERNAL_ERROR,
-            f"Add-on '{addon_name}' has Ingress enabled but no ingress_entry path",
-            context={"slug": slug},
+            f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
+            context={"slug": slug, "ip_address": addon_ip, "ingress_port": ingress_port},
         )
 
-    url = f"{client.base_url}{ingress_entry}/{normalized}"
+    url = f"http://{addon_ip}:{ingress_port}/{normalized}"
 
-    # 6. Create Ingress session via Supervisor API
-    # The Supervisor validates Ingress requests using a session cookie,
-    # not Bearer tokens. We must create a session first.
-    session_response = await _supervisor_api_call(
-        client, "/ingress/session", method="POST"
-    )
-    if not session_response.get("success"):
-        return create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to create Ingress session for '{addon_name}'",
-            details=str(session_response),
-            suggestions=["Check that the Supervisor is running and accessible"],
-            context={"slug": slug},
-        )
-
-    ingress_session_token = session_response.get("result", {}).get("session")
-    if not ingress_session_token:
-        return create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            "Supervisor returned empty Ingress session token",
-            context={"slug": slug},
-        )
-
-    # 7. Make HTTP request through Ingress with session cookie
+    # 6. Make HTTP request directly to the add-on container
     headers: dict[str, str] = {}
 
     # Set content type based on body type
@@ -379,15 +359,12 @@ async def _call_addon_api(
     else:
         request_content = None
 
-    cookies = {"ingress_session": ingress_session_token}
-
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http_client:
             response = await http_client.request(
                 method=method.upper(),
                 url=url,
                 headers=headers,
-                cookies=cookies,
                 content=request_content,
             )
     except httpx.TimeoutException:
