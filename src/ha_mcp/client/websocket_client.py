@@ -8,6 +8,7 @@ This module handles WebSocket connections to Home Assistant for:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -553,16 +554,21 @@ class HomeAssistantWebSocketClient:
 
 
 
+MAX_POOL_SIZE = 50
+
+
 class WebSocketManager:
     """Singleton manager for Home Assistant WebSocket connections.
 
     Maintains a pool of WebSocket connections keyed by (url, token) so that
     multiple OAuth users can have concurrent connections without interfering
-    with each other.
+    with each other.  The pool is bounded to ``MAX_POOL_SIZE`` entries; when
+    this limit is exceeded the least-recently-used connection is evicted.
     """
 
     _instance = None
     _clients: dict[str, HomeAssistantWebSocketClient]
+    _last_used: dict[str, float]
     _current_loop: asyncio.AbstractEventLoop | None = None
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
@@ -572,6 +578,7 @@ class WebSocketManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._clients = {}
+            cls._instance._last_used = {}
             cls._instance._lock = None
             cls._instance._lock_loop = None
             cls._instance._client_factory = HomeAssistantWebSocketClient
@@ -609,8 +616,6 @@ class WebSocketManager:
     @staticmethod
     def _client_key(url: str, token: str) -> str:
         """Create a cache key from credentials."""
-        import hashlib
-
         return hashlib.sha256(f"{url.rstrip('/')}:{token}".encode()).hexdigest()
 
     async def get_client(
@@ -645,6 +650,7 @@ class WebSocketManager:
                     except Exception:
                         pass
                 self._clients.clear()
+                self._last_used.clear()
 
             self._current_loop = current_loop
 
@@ -662,11 +668,13 @@ class WebSocketManager:
             # Return existing connected client for these credentials
             existing = self._clients.get(key)
             if existing and existing.is_connected:
+                self._last_used[key] = time.monotonic()
                 return existing
 
             # Remove stale client if present
             if existing:
                 self._clients.pop(key, None)
+                self._last_used.pop(key, None)
 
             factory = self._client_factory or HomeAssistantWebSocketClient
             client = factory(ws_url, ws_token)
@@ -676,6 +684,22 @@ class WebSocketManager:
                 raise Exception("Failed to connect to Home Assistant WebSocket")
 
             self._clients[key] = client
+            self._last_used[key] = time.monotonic()
+
+            # Evict least-recently-used connection if over limit
+            if len(self._clients) > MAX_POOL_SIZE:
+                oldest_key = min(self._last_used, key=self._last_used.get)
+                stale = self._clients.pop(oldest_key, None)
+                self._last_used.pop(oldest_key, None)
+                if stale:
+                    try:
+                        await stale.disconnect()
+                    except Exception:
+                        logger.warning(
+                            "Error disconnecting evicted WebSocket client",
+                            exc_info=True,
+                        )
+
             return client
 
     async def disconnect(self) -> None:
@@ -686,8 +710,14 @@ class WebSocketManager:
             raise Exception("Lock not initialized")
         async with self._lock:
             for client in self._clients.values():
-                await client.disconnect()
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.warning(
+                        "Error disconnecting WebSocket client", exc_info=True
+                    )
             self._clients.clear()
+            self._last_used.clear()
             self._current_loop = None
 
 
