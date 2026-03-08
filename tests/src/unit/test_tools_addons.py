@@ -7,6 +7,24 @@ import pytest
 
 from ha_mcp.tools.tools_addons import _call_addon_api
 
+# Standard mock return for a running addon with Ingress support
+_RUNNING_ADDON_INFO = {
+    "success": True,
+    "addon": {
+        "name": "Test Addon",
+        "slug": "test_addon",
+        "ingress": True,
+        "state": "started",
+        "ingress_entry": "/api/hassio_ingress/abc123",
+    },
+}
+
+# Standard mock return for a successful ingress session creation
+_INGRESS_SESSION = {
+    "success": True,
+    "result": {"session": "fake-session-token-12345"},
+}
+
 
 def _make_mock_client() -> MagicMock:
     """Create a mock HomeAssistantClient."""
@@ -148,6 +166,25 @@ class TestCallAddonApiErrors:
         assert "ingress_entry" in result["error"]["message"].lower() or "ingress" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
+    async def test_ingress_session_creation_failure(self):
+        """Should return error when Ingress session cannot be created."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO,
+        ), patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": False, "error": {"code": "SERVICE_CALL_FAILED", "message": "WS failed"}},
+        ):
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["success"] is False
+        assert "ingress session" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
     async def test_http_timeout(self):
         """Should return timeout error when add-on API doesn't respond."""
         client = _make_mock_client()
@@ -155,16 +192,11 @@ class TestCallAddonApiErrors:
         with patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
-            return_value={
-                "success": True,
-                "addon": {
-                    "name": "Test Addon",
-                    "slug": "test_addon",
-                    "ingress": True,
-                    "state": "started",
-                    "ingress_entry": "/api/hassio_ingress/abc123",
-                },
-            },
+            return_value=_RUNNING_ADDON_INFO,
+        ), patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=_INGRESS_SESSION,
         ), patch(
             "ha_mcp.tools.tools_addons.httpx.AsyncClient",
         ) as mock_httpx:
@@ -186,16 +218,11 @@ class TestCallAddonApiErrors:
         with patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
-            return_value={
-                "success": True,
-                "addon": {
-                    "name": "Test Addon",
-                    "slug": "test_addon",
-                    "ingress": True,
-                    "state": "started",
-                    "ingress_entry": "/api/hassio_ingress/abc123",
-                },
-            },
+            return_value=_RUNNING_ADDON_INFO,
+        ), patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=_INGRESS_SESSION,
         ), patch(
             "ha_mcp.tools.tools_addons.httpx.AsyncClient",
         ) as mock_httpx:

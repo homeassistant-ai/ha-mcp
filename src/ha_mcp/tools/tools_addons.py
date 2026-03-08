@@ -343,10 +343,31 @@ async def _call_addon_api(
 
     url = f"{client.base_url}{ingress_entry}/{normalized}"
 
-    # 6. Make HTTP request through Ingress
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {client.token}",
-    }
+    # 6. Create Ingress session via Supervisor API
+    # The Supervisor validates Ingress requests using a session cookie,
+    # not Bearer tokens. We must create a session first.
+    session_response = await _supervisor_api_call(
+        client, "/ingress/session", method="POST"
+    )
+    if not session_response.get("success"):
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Failed to create Ingress session for '{addon_name}'",
+            details=str(session_response),
+            suggestions=["Check that the Supervisor is running and accessible"],
+            context={"slug": slug},
+        )
+
+    ingress_session_token = session_response.get("result", {}).get("session")
+    if not ingress_session_token:
+        return create_error_response(
+            ErrorCode.INTERNAL_ERROR,
+            "Supervisor returned empty Ingress session token",
+            context={"slug": slug},
+        )
+
+    # 7. Make HTTP request through Ingress with session cookie
+    headers: dict[str, str] = {}
 
     # Set content type based on body type
     if isinstance(body, dict):
@@ -358,12 +379,15 @@ async def _call_addon_api(
     else:
         request_content = None
 
+    cookies = {"ingress_session": ingress_session_token}
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http_client:
             response = await http_client.request(
                 method=method.upper(),
                 url=url,
                 headers=headers,
+                cookies=cookies,
                 content=request_content,
             )
     except httpx.TimeoutException:
@@ -380,7 +404,7 @@ async def _call_addon_api(
             context={"slug": slug},
         )
 
-    # 6. Parse response
+    # 8. Parse response
     content_type = response.headers.get("content-type", "")
     response_data: Any
 
@@ -392,7 +416,7 @@ async def _call_addon_api(
     else:
         response_data = response.text
 
-    # 7. Truncate large responses
+    # 9. Truncate large responses
     truncated = False
     if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
         response_data = response_data[:_MAX_RESPONSE_SIZE]
