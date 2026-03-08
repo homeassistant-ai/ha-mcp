@@ -19,14 +19,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source and install the project itself
 COPY src/ ./src/
 
-# Ensure bundled skills are present (fallback when submodule not initialized)
-# When submodules: true is set in CI, COPY src/ already includes the pinned commit —
-# skip extraction to preserve the submodule pin (zero-sync design)
+# Always fetch latest skills from upstream (auto-updates on every build)
+# The submodule is for local dev only; Docker builds always pull latest main
 ADD https://github.com/homeassistant-ai/skills/archive/main.tar.gz /tmp/skills.tar.gz
-RUN if [ ! -d src/ha_mcp/resources/skills-vendor/skills ]; then \
-    mkdir -p src/ha_mcp/resources/skills-vendor && \
-    tar xzf /tmp/skills.tar.gz --strip-components=1 -C src/ha_mcp/resources/skills-vendor; \
-    fi && rm -f /tmp/skills.tar.gz
+RUN mkdir -p src/ha_mcp/resources/skills-vendor && \
+    tar xzf /tmp/skills.tar.gz --strip-components=1 -C src/ha_mcp/resources/skills-vendor && \
+    rm /tmp/skills.tar.gz
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
