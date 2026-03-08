@@ -375,8 +375,8 @@ class TestGetSystemOverview:
         assert "_other" not in states
 
     @pytest.mark.asyncio
-    async def test_standard_caps_entities_per_domain(self):
-        """Standard mode caps to 50 entities per domain by default."""
+    async def test_standard_returns_all_entities_by_default(self):
+        """Standard mode returns all entities (no default cap)."""
         entities = [
             {
                 "entity_id": f"sensor.s{i}",
@@ -392,7 +392,30 @@ class TestGetSystemOverview:
 
         domain = result["domain_stats"]["sensor"]
         assert domain["count"] == 100
-        assert len(domain["entities"]) == 50
+        assert len(domain["entities"]) == 100
+        assert domain["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_max_entities_override_caps_any_level(self):
+        """max_entities_per_domain caps entities on any detail level."""
+        entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": "on",
+            }
+            for i in range(100)
+        ]
+        client = MockClient(entities=entities)
+        tools = _make_tools(client)
+
+        result = await tools.get_system_overview(
+            detail_level="standard", max_entities_per_domain=25
+        )
+
+        domain = result["domain_stats"]["sensor"]
+        assert domain["count"] == 100
+        assert len(domain["entities"]) == 25
         assert domain["truncated"] is True
 
     @pytest.mark.asyncio

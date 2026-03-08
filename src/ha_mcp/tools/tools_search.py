@@ -466,7 +466,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default="minimal",
                 description=(
                     "'minimal': 10 entities/domain, top-5 states (default); "
-                    "'standard': 50 entities/domain, top-10 states; "
+                    "'standard': ALL entities, top-10 states (good for context priming); "
                     "'full': ALL entities + entity_id + state + full states. "
                     "Use 'domains' and/or max_entities_per_domain to control size"
                 ),
@@ -486,7 +486,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | None,
             Field(
                 default=None,
-                description="Override default entity cap per domain (minimal=10, standard=50, full=unlimited). 0 = no limit on entities or states.",
+                description="Override default entity cap per domain (minimal=10, standard/full=unlimited). 0 = no limit on entities or states.",
             ),
         ] = None,
         include_state: Annotated[

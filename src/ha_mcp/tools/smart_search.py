@@ -387,7 +387,7 @@ class SmartSearchTools:
         Args:
             detail_level: Level of detail to return:
                 - "minimal": 10 entities/domain sample, top-5 states (friendly_name only)
-                - "standard": 50 entities/domain, top-10 states (friendly_name only)
+                - "standard": ALL entities, top-10 states (friendly_name only)
                 - "full": ALL entities with entity_id + friendly_name + state + full states
             max_entities_per_domain: Override default entity cap (0 = no limit)
             include_state: Override whether to include state field
@@ -468,9 +468,7 @@ class SmartSearchTools:
             if max_entities_per_domain is None:
                 if detail_level == "minimal":
                     max_entities_per_domain = 10
-                elif detail_level == "standard":
-                    max_entities_per_domain = 50
-                # full: no default cap (None = all entities)
+                # standard and full: no default cap (None = all entities)
             if include_state is None:
                 include_state = detail_level == "full"
             if include_entity_id is None:
