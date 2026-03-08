@@ -314,12 +314,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._register_skill_guidance_tools(skills_dir)
 
     def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
-        """Register a guidance tool per skill for clients without instructions support.
+        """Register a lightweight guidance tool per skill.
 
         Clients like claude.ai don't read the MCP server instructions field,
         so the bootstrap prompt (trigger conditions, symptoms) is invisible.
         This registers a tool per skill whose description contains the trigger
-        conditions, and whose response returns the full SKILL.md content.
+        conditions. The tool itself just lists available reference files —
+        actual content is loaded on demand via read_resource.
         """
         for skill_dir in sorted(skills_dir.iterdir()):
             main_file = skill_dir / "SKILL.md"
@@ -348,26 +349,45 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_description = (
                 f"IMPORTANT: Read this skill BEFORE performing matching actions. "
                 f"{description}\n\n"
-                f"Returns the full best-practices guide. "
-                f"Also available as MCP resource at {uri}"
+                f"Returns available reference files. Use read_resource with "
+                f"the file URI to load specific guides as needed."
             )
 
-            # Use factory to properly capture content in closure
-            def _make_skill_handler(skill_content: str):
-                async def handler() -> str:
-                    return skill_content
+            # Collect available reference files for the listing
+            ref_files = []
+            for f in sorted(skill_dir.rglob("*")):
+                if f.is_file():
+                    rel = f.relative_to(skill_dir)
+                    ref_uri = f"skill://{skill_name}/{rel}"
+                    ref_files.append({"name": str(rel), "uri": ref_uri})
+
+            # Use factory to capture ref_files in closure
+            def _make_skill_handler(
+                s_name: str, s_uri: str, files: list[dict[str, str]],
+            ):
+                async def handler() -> dict[str, Any]:
+                    return {
+                        "skill": s_name,
+                        "skill_uri": s_uri,
+                        "how_to_use": (
+                            "Use read_resource with a file URI below to load "
+                            "the specific reference you need. Start with "
+                            "SKILL.md for the decision workflow."
+                        ),
+                        "available_files": files,
+                    }
                 return handler
 
             self.mcp.tool(
                 name=tool_name,
                 description=tool_description,
                 annotations={"readOnlyHint": True},
-            )(_make_skill_handler(content))
+            )(_make_skill_handler(skill_name, uri, ref_files))
 
             logger.info(
-                "Registered skill guidance tool %s for clients without "
-                "instructions support",
+                "Registered skill guidance tool %s (%d reference files)",
                 tool_name,
+                len(ref_files),
             )
 
     # Helper methods required by EnhancedToolsMixin
