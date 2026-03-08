@@ -27,6 +27,7 @@ from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
     log_tool_usage,
+    raise_tool_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -502,21 +503,28 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         """
         # If slug is provided, return detailed info for that specific add-on
         if slug:
-            return await get_addon_info(client, slug)
+            result = await get_addon_info(client, slug)
+            if not result.get("success"):
+                raise_tool_error(result)
+            return result
 
         # Default to installed if not specified
         effective_source = (source or "installed").lower()
 
         if effective_source == "available":
-            return await list_available_addons(client, repository, query)
+            result = await list_available_addons(client, repository, query)
         elif effective_source == "installed":
-            return await list_addons(client, include_stats)
+            result = await list_addons(client, include_stats)
         else:
-            return create_validation_error(
+            raise_tool_error(create_validation_error(
                 f"Invalid source: {source}. Must be 'installed' or 'available'.",
                 parameter="source",
                 details="Valid sources: installed, available",
-            )
+            ))
+
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
 
     @mcp.tool(annotations={
         "destructiveHint": True,
@@ -576,15 +584,18 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         # Validate HTTP method
         valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
         if method.upper() not in valid_methods:
-            return create_validation_error(
+            raise_tool_error(create_validation_error(
                 f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
                 parameter="method",
-            )
+            ))
 
-        return await _call_addon_api(
+        result = await _call_addon_api(
             client=client,
             slug=slug,
             path=path,
             method=method,
             body=body,
         )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
