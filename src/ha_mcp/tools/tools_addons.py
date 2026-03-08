@@ -347,7 +347,13 @@ async def _call_addon_api(
     url = f"http://{addon_ip}:{ingress_port}/{normalized}"
 
     # 6. Make HTTP request directly to the add-on container
-    headers: dict[str, str] = {}
+    # Include Ingress headers so the add-on's web server (e.g., Nginx) recognizes
+    # this as an authenticated Ingress request and bypasses its own auth layer.
+    ingress_entry = addon.get("ingress_entry", "")
+    headers: dict[str, str] = {
+        "X-Ingress-Path": ingress_entry,
+        "X-Hass-Source": "core.ingress",
+    }
 
     # Set content type based on body type
     if isinstance(body, dict):
