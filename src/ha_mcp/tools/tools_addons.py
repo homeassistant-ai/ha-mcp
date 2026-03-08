@@ -280,23 +280,23 @@ async def _try_supervisor_ingress_proxy(
     headers: dict[str, str],
     content: bytes | None,
     timeout: int,
-) -> httpx.Response | None:
+) -> tuple[httpx.Response | None, str]:
     """Try routing through Supervisor Ingress proxy.
 
     Fallback for add-ons with IP-restricted Nginx configs (e.g., community add-ons).
     Requires SUPERVISOR_TOKEN env var (available when running as HA add-on).
 
     Returns:
-        httpx.Response if successful, None if fallback is unavailable or fails.
+        Tuple of (httpx.Response or None, status_message).
     """
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
     if not supervisor_token:
-        return None
+        return None, "SUPERVISOR_TOKEN not available"
 
     # Extract ingress token from entry path (e.g., "/api/hassio_ingress/abc123" -> "abc123")
     ingress_token = ingress_entry.rstrip("/").split("/")[-1]
     if not ingress_token:
-        return None
+        return None, f"Could not extract ingress token from: {ingress_entry}"
 
     try:
         # Create Ingress session via Supervisor API
@@ -308,14 +308,12 @@ async def _try_supervisor_ingress_proxy(
             )
 
         if session_resp.status_code != 200:
-            logger.debug("Failed to create Ingress session: %s", session_resp.status_code)
-            return None
+            return None, f"Ingress session creation returned {session_resp.status_code}: {session_resp.text}"
 
         session_data = session_resp.json()
         session_id = session_data.get("data", {}).get("session")
         if not session_id:
-            logger.debug("No session token in Ingress session response")
-            return None
+            return None, f"No session token in response: {session_data}"
 
         # Route through Supervisor Ingress proxy
         proxy_url = f"http://supervisor/ingress/{ingress_token}/{path}"
@@ -325,16 +323,16 @@ async def _try_supervisor_ingress_proxy(
         }
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http:
-            return await http.request(
+            resp = await http.request(
                 method=method,
                 url=proxy_url,
                 headers=proxy_headers,
                 cookies={"ingress_session": session_id},
                 content=content,
             )
+        return resp, f"Supervisor proxy succeeded (status {resp.status_code})"
     except Exception as e:
-        logger.debug("Supervisor Ingress fallback failed: %s", e)
-        return None
+        return None, f"Exception: {e}"
 
 
 async def _call_addon_api(
@@ -456,8 +454,9 @@ async def _call_addon_api(
 
     # 7. If direct access returned 403, try Supervisor Ingress proxy as fallback.
     # Community add-ons (hassio-addons) restrict direct access by IP.
+    fallback_status = None
     if response.status_code == 403:
-        fallback = await _try_supervisor_ingress_proxy(
+        fallback, fallback_status = await _try_supervisor_ingress_proxy(
             slug, ingress_entry, normalized, method.upper(),
             headers, request_content, timeout,
         )
@@ -499,11 +498,14 @@ async def _call_addon_api(
 
     # Include diagnostic info when debug mode is enabled
     if debug:
-        result["_debug"] = {
+        debug_info: dict[str, Any] = {
             "url": url,
             "request_headers": dict(headers),
             "response_headers": dict(response.headers),
         }
+        if fallback_status:
+            debug_info["fallback_status"] = fallback_status
+        result["_debug"] = debug_info
 
     if truncated:
         result["truncated"] = True
