@@ -9,7 +9,6 @@ Note: These tools only work with Home Assistant OS or Supervised installations.
 
 import json
 import logging
-import os
 from typing import Annotated, Any
 
 import httpx
@@ -272,120 +271,6 @@ async def list_available_addons(
     }
 
 
-async def _try_ingress_proxy(
-    client: "HomeAssistantClient",
-    slug: str,
-    ingress_entry: str,
-    path: str,
-    method: str,
-    headers: dict[str, str],
-    content: bytes | None,
-    timeout: int,
-) -> tuple[httpx.Response | None, str]:
-    """Try routing through Ingress proxy with a session cookie.
-
-    Fallback for add-ons with IP-restricted Nginx configs (e.g., community add-ons).
-    Tries two approaches:
-    1. Direct Supervisor API with SUPERVISOR_TOKEN (when running as add-on)
-    2. HA Core REST API with Bearer token (universal)
-
-    Returns:
-        Tuple of (httpx.Response or None, status_message).
-    """
-    if not ingress_entry:
-        return None, "No ingress_entry available"
-
-    ingress_token = ingress_entry.rstrip("/").split("/")[-1]
-    if not ingress_token:
-        return None, f"Could not extract ingress token from: {ingress_entry}"
-
-    attempts: list[str] = []
-
-    # --- Attempt 1: Direct Supervisor with SUPERVISOR_TOKEN ---
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if supervisor_token:
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
-                session_resp = await http.post(
-                    "http://supervisor/ingress/session",
-                    headers={"Authorization": f"Bearer {supervisor_token}"},
-                    json={"addon": slug},
-                )
-
-            if session_resp.status_code == 200:
-                session_data = session_resp.json()
-                session_id = session_data.get("data", {}).get("session")
-                if session_id:
-                    proxy_url = f"http://supervisor/ingress/{ingress_token}/{path}"
-                    proxy_headers = {
-                        k: v
-                        for k, v in headers.items()
-                        if k not in ("X-Ingress-Path", "X-Hass-Source")
-                    }
-                    async with httpx.AsyncClient(
-                        timeout=httpx.Timeout(timeout), follow_redirects=True,
-                    ) as http:
-                        resp = await http.request(
-                            method=method,
-                            url=proxy_url,
-                            headers=proxy_headers,
-                            cookies={"ingress_session": session_id},
-                            content=content,
-                        )
-                    return resp, f"Supervisor proxy succeeded (status {resp.status_code})"
-                else:
-                    attempts.append(f"Supervisor: no session in response: {session_data}")
-            else:
-                attempts.append(
-                    f"Supervisor: session creation returned {session_resp.status_code}"
-                )
-        except Exception as e:
-            attempts.append(f"Supervisor: exception: {e}")
-    else:
-        attempts.append("Supervisor: SUPERVISOR_TOKEN not set")
-
-    # --- Attempt 2: HA Core REST API ---
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
-            session_resp = await http.post(
-                f"{client.base_url}/api/hassio/ingress/session",
-                headers={"Authorization": f"Bearer {client.token}"},
-                json={"addon": slug},
-            )
-
-        if session_resp.status_code == 200:
-            session_data = session_resp.json()
-            session_id = session_data.get("data", {}).get("session")
-            if session_id:
-                proxy_url = f"{client.base_url}{ingress_entry}/{path}"
-                proxy_headers = {
-                    k: v
-                    for k, v in headers.items()
-                    if k not in ("X-Ingress-Path", "X-Hass-Source")
-                }
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(timeout), follow_redirects=True,
-                ) as http:
-                    resp = await http.request(
-                        method=method,
-                        url=proxy_url,
-                        headers=proxy_headers,
-                        cookies={"ingress_session": session_id},
-                        content=content,
-                    )
-                return resp, f"HA Core proxy succeeded (status {resp.status_code})"
-            else:
-                attempts.append(f"HA Core: no session in response: {session_data}")
-        else:
-            attempts.append(
-                f"HA Core: session creation returned {session_resp.status_code}"
-            )
-    except Exception as e:
-        attempts.append(f"HA Core: exception: {e}")
-
-    return None, f"All fallbacks failed: {'; '.join(attempts)}"
-
-
 async def _call_addon_api(
     client: HomeAssistantClient,
     slug: str,
@@ -503,19 +388,7 @@ async def _call_addon_api(
             context={"slug": slug},
         )
 
-    # 7. If direct access returned 403, try HA Core Ingress proxy as fallback.
-    # Community add-ons (hassio-addons) restrict direct access by IP.
-    fallback_status = None
-    if response.status_code == 403:
-        fallback, fallback_status = await _try_ingress_proxy(
-            client, slug, ingress_entry, normalized, method.upper(),
-            headers, request_content, timeout,
-        )
-        if fallback is not None:
-            response = fallback
-            url = str(fallback.url)  # Update for debug output
-
-    # 8. Parse response
+    # 7. Parse response
     content_type = response.headers.get("content-type", "")
     response_data: Any
 
@@ -549,14 +422,11 @@ async def _call_addon_api(
 
     # Include diagnostic info when debug mode is enabled
     if debug:
-        debug_info: dict[str, Any] = {
+        result["_debug"] = {
             "url": url,
             "request_headers": dict(headers),
             "response_headers": dict(response.headers),
         }
-        if fallback_status:
-            debug_info["fallback_status"] = fallback_status
-        result["_debug"] = debug_info
 
     if truncated:
         result["truncated"] = True
