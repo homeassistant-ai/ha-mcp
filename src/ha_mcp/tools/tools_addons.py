@@ -293,23 +293,22 @@ async def _try_ingress_proxy(
     if not ingress_entry:
         return None, "No ingress_entry available"
 
-    ws_client = None
     try:
-        # 1. Create Ingress session via dedicated WS command
-        ws_client, ws_error = await get_connected_ws_client(client.base_url, client.token)
-        if ws_error or ws_client is None:
-            return None, f"WS connection failed: {ws_error}"
+        # 1. Create Ingress session via HA Core REST API
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
+            session_resp = await http.post(
+                f"{client.base_url}/api/hassio/ingress/session",
+                headers={"Authorization": f"Bearer {client.token}"},
+                json={"addon": slug},
+            )
 
-        session_response = await ws_client.send_command(
-            "hassio/ingress_session", addon=slug,
-        )
+        if session_resp.status_code != 200:
+            return None, f"Ingress session creation returned {session_resp.status_code}: {session_resp.text}"
 
-        if not session_response.get("success"):
-            return None, f"Ingress session creation failed: {session_response}"
-
-        session_id = session_response.get("result", {}).get("session")
+        session_data = session_resp.json()
+        session_id = session_data.get("data", {}).get("session")
         if not session_id:
-            return None, f"No session token in response: {session_response}"
+            return None, f"No session token in response: {session_data}"
 
         # 2. Route through HA Core's Ingress proxy
         # HA Core proxies /api/hassio_ingress/{token}/* to Supervisor's Ingress handler
@@ -332,12 +331,6 @@ async def _try_ingress_proxy(
         return resp, f"HA Core Ingress proxy succeeded (status {resp.status_code})"
     except Exception as e:
         return None, f"Exception: {e}"
-    finally:
-        if ws_client:
-            try:
-                await ws_client.disconnect()
-            except Exception:
-                pass
 
 
 async def _call_addon_api(
