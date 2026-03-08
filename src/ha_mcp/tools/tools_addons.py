@@ -293,10 +293,15 @@ async def _try_ingress_proxy(
     if not ingress_entry:
         return None, "No ingress_entry available"
 
+    ws_client = None
     try:
-        # 1. Create Ingress session via WebSocket (uses existing auth)
-        session_response = await _supervisor_api_call(
-            client, "/ingress/session", method="POST", data={"addon": slug},
+        # 1. Create Ingress session via dedicated WS command
+        ws_client, ws_error = await get_connected_ws_client(client.base_url, client.token)
+        if ws_error or ws_client is None:
+            return None, f"WS connection failed: {ws_error}"
+
+        session_response = await ws_client.send_command(
+            "hassio/ingress_session", addon=slug,
         )
 
         if not session_response.get("success"):
@@ -327,6 +332,12 @@ async def _try_ingress_proxy(
         return resp, f"HA Core Ingress proxy succeeded (status {resp.status_code})"
     except Exception as e:
         return None, f"Exception: {e}"
+    finally:
+        if ws_client:
+            try:
+                await ws_client.disconnect()
+            except Exception:
+                pass
 
 
 async def _call_addon_api(
