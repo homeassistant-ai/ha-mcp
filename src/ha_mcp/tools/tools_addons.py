@@ -9,6 +9,7 @@ Note: These tools only work with Home Assistant OS or Supervised installations.
 
 import json
 import logging
+import os
 from typing import Annotated, Any
 
 import httpx
@@ -281,11 +282,12 @@ async def _try_ingress_proxy(
     content: bytes | None,
     timeout: int,
 ) -> tuple[httpx.Response | None, str]:
-    """Try routing through HA Core's Ingress proxy with a session cookie.
+    """Try routing through Ingress proxy with a session cookie.
 
     Fallback for add-ons with IP-restricted Nginx configs (e.g., community add-ons).
-    Creates an Ingress session via the WebSocket API, then routes the request
-    through HA Core's /api/hassio_ingress/{token}/ endpoint.
+    Tries two approaches:
+    1. Direct Supervisor API with SUPERVISOR_TOKEN (when running as add-on)
+    2. HA Core REST API with Bearer token (universal)
 
     Returns:
         Tuple of (httpx.Response or None, status_message).
@@ -293,8 +295,57 @@ async def _try_ingress_proxy(
     if not ingress_entry:
         return None, "No ingress_entry available"
 
+    ingress_token = ingress_entry.rstrip("/").split("/")[-1]
+    if not ingress_token:
+        return None, f"Could not extract ingress token from: {ingress_entry}"
+
+    attempts: list[str] = []
+
+    # --- Attempt 1: Direct Supervisor with SUPERVISOR_TOKEN ---
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if supervisor_token:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
+                session_resp = await http.post(
+                    "http://supervisor/ingress/session",
+                    headers={"Authorization": f"Bearer {supervisor_token}"},
+                    json={"addon": slug},
+                )
+
+            if session_resp.status_code == 200:
+                session_data = session_resp.json()
+                session_id = session_data.get("data", {}).get("session")
+                if session_id:
+                    proxy_url = f"http://supervisor/ingress/{ingress_token}/{path}"
+                    proxy_headers = {
+                        k: v
+                        for k, v in headers.items()
+                        if k not in ("X-Ingress-Path", "X-Hass-Source")
+                    }
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(timeout), follow_redirects=True,
+                    ) as http:
+                        resp = await http.request(
+                            method=method,
+                            url=proxy_url,
+                            headers=proxy_headers,
+                            cookies={"ingress_session": session_id},
+                            content=content,
+                        )
+                    return resp, f"Supervisor proxy succeeded (status {resp.status_code})"
+                else:
+                    attempts.append(f"Supervisor: no session in response: {session_data}")
+            else:
+                attempts.append(
+                    f"Supervisor: session creation returned {session_resp.status_code}"
+                )
+        except Exception as e:
+            attempts.append(f"Supervisor: exception: {e}")
+    else:
+        attempts.append("Supervisor: SUPERVISOR_TOKEN not set")
+
+    # --- Attempt 2: HA Core REST API ---
     try:
-        # 1. Create Ingress session via HA Core REST API
         async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
             session_resp = await http.post(
                 f"{client.base_url}/api/hassio/ingress/session",
@@ -302,35 +353,37 @@ async def _try_ingress_proxy(
                 json={"addon": slug},
             )
 
-        if session_resp.status_code != 200:
-            return None, f"Ingress session creation returned {session_resp.status_code}: {session_resp.text}"
-
-        session_data = session_resp.json()
-        session_id = session_data.get("data", {}).get("session")
-        if not session_id:
-            return None, f"No session token in response: {session_data}"
-
-        # 2. Route through HA Core's Ingress proxy
-        # HA Core proxies /api/hassio_ingress/{token}/* to Supervisor's Ingress handler
-        proxy_url = f"{client.base_url}{ingress_entry}/{path}"
-        # Remove our custom headers — the proxy layers will add their own
-        proxy_headers = {
-            k: v for k, v in headers.items() if k not in ("X-Ingress-Path", "X-Hass-Source")
-        }
-
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout), follow_redirects=True,
-        ) as http:
-            resp = await http.request(
-                method=method,
-                url=proxy_url,
-                headers=proxy_headers,
-                cookies={"ingress_session": session_id},
-                content=content,
+        if session_resp.status_code == 200:
+            session_data = session_resp.json()
+            session_id = session_data.get("data", {}).get("session")
+            if session_id:
+                proxy_url = f"{client.base_url}{ingress_entry}/{path}"
+                proxy_headers = {
+                    k: v
+                    for k, v in headers.items()
+                    if k not in ("X-Ingress-Path", "X-Hass-Source")
+                }
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(timeout), follow_redirects=True,
+                ) as http:
+                    resp = await http.request(
+                        method=method,
+                        url=proxy_url,
+                        headers=proxy_headers,
+                        cookies={"ingress_session": session_id},
+                        content=content,
+                    )
+                return resp, f"HA Core proxy succeeded (status {resp.status_code})"
+            else:
+                attempts.append(f"HA Core: no session in response: {session_data}")
+        else:
+            attempts.append(
+                f"HA Core: session creation returned {session_resp.status_code}"
             )
-        return resp, f"HA Core Ingress proxy succeeded (status {resp.status_code})"
     except Exception as e:
-        return None, f"Exception: {e}"
+        attempts.append(f"HA Core: exception: {e}")
+
+    return None, f"All fallbacks failed: {'; '.join(attempts)}"
 
 
 async def _call_addon_api(
