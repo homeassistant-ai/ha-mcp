@@ -516,8 +516,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, entity overview,
         and active persistent notifications (if any).
-        Use 'minimal' (default) for most queries. Optionally customize entity fields and limits.
-        Each domain always includes total 'count' regardless of entity cap.
+        Use 'minimal' (default) for most queries. Each domain always includes total 'count'
+        regardless of entity cap. If the response is too large, retry with a lower
+        max_entities_per_domain or use 'domains' to filter to specific domains.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
