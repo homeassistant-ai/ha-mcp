@@ -311,6 +311,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Phase 4: Register skill guidance tools for clients that don't read
         # server instructions (e.g., claude.ai). The tool description contains
         # the trigger conditions so the AI sees them in the tool listing.
+        # Names stored for pinning in search transforms (always-visible).
+        self._skill_tool_names: list[str] = []
         self._register_skill_guidance_tools(skills_dir)
 
     def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
@@ -384,6 +386,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 annotations={"readOnlyHint": True},
             )(_make_skill_handler(skill_name, uri, ref_files))
 
+            self._skill_tool_names.append(tool_name)
             logger.info(
                 "Registered skill guidance tool %s (%d reference files)",
                 tool_name,
