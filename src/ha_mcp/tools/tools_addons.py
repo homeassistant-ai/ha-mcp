@@ -9,7 +9,6 @@ Note: These tools only work with Home Assistant OS or Supervised installations.
 
 import json
 import logging
-import os
 from typing import Annotated, Any
 
 import httpx
@@ -272,7 +271,8 @@ async def list_available_addons(
     }
 
 
-async def _try_supervisor_ingress_proxy(
+async def _try_ingress_proxy(
+    client: "HomeAssistantClient",
     slug: str,
     ingress_entry: str,
     path: str,
@@ -281,48 +281,42 @@ async def _try_supervisor_ingress_proxy(
     content: bytes | None,
     timeout: int,
 ) -> tuple[httpx.Response | None, str]:
-    """Try routing through Supervisor Ingress proxy.
+    """Try routing through HA Core's Ingress proxy with a session cookie.
 
     Fallback for add-ons with IP-restricted Nginx configs (e.g., community add-ons).
-    Requires SUPERVISOR_TOKEN env var (available when running as HA add-on).
+    Creates an Ingress session via the WebSocket API, then routes the request
+    through HA Core's /api/hassio_ingress/{token}/ endpoint.
 
     Returns:
         Tuple of (httpx.Response or None, status_message).
     """
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        return None, "SUPERVISOR_TOKEN not available"
-
-    # Extract ingress token from entry path (e.g., "/api/hassio_ingress/abc123" -> "abc123")
-    ingress_token = ingress_entry.rstrip("/").split("/")[-1]
-    if not ingress_token:
-        return None, f"Could not extract ingress token from: {ingress_entry}"
+    if not ingress_entry:
+        return None, "No ingress_entry available"
 
     try:
-        # Create Ingress session via Supervisor API
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as http:
-            session_resp = await http.post(
-                "http://supervisor/ingress/session",
-                headers={"Authorization": f"Bearer {supervisor_token}"},
-                json={"addon": slug},
-            )
+        # 1. Create Ingress session via WebSocket (uses existing auth)
+        session_response = await _supervisor_api_call(
+            client, "/ingress/session", method="POST", data={"addon": slug},
+        )
 
-        if session_resp.status_code != 200:
-            return None, f"Ingress session creation returned {session_resp.status_code}: {session_resp.text}"
+        if not session_response.get("success"):
+            return None, f"Ingress session creation failed: {session_response}"
 
-        session_data = session_resp.json()
-        session_id = session_data.get("data", {}).get("session")
+        session_id = session_response.get("result", {}).get("session")
         if not session_id:
-            return None, f"No session token in response: {session_data}"
+            return None, f"No session token in response: {session_response}"
 
-        # Route through Supervisor Ingress proxy
-        proxy_url = f"http://supervisor/ingress/{ingress_token}/{path}"
-        # Remove our custom headers — the Supervisor will add its own
+        # 2. Route through HA Core's Ingress proxy
+        # HA Core proxies /api/hassio_ingress/{token}/* to Supervisor's Ingress handler
+        proxy_url = f"{client.base_url}{ingress_entry}/{path}"
+        # Remove our custom headers — the proxy layers will add their own
         proxy_headers = {
             k: v for k, v in headers.items() if k not in ("X-Ingress-Path", "X-Hass-Source")
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout), follow_redirects=True,
+        ) as http:
             resp = await http.request(
                 method=method,
                 url=proxy_url,
@@ -330,7 +324,7 @@ async def _try_supervisor_ingress_proxy(
                 cookies={"ingress_session": session_id},
                 content=content,
             )
-        return resp, f"Supervisor proxy succeeded (status {resp.status_code})"
+        return resp, f"HA Core Ingress proxy succeeded (status {resp.status_code})"
     except Exception as e:
         return None, f"Exception: {e}"
 
@@ -452,12 +446,12 @@ async def _call_addon_api(
             context={"slug": slug},
         )
 
-    # 7. If direct access returned 403, try Supervisor Ingress proxy as fallback.
+    # 7. If direct access returned 403, try HA Core Ingress proxy as fallback.
     # Community add-ons (hassio-addons) restrict direct access by IP.
     fallback_status = None
     if response.status_code == 403:
-        fallback, fallback_status = await _try_supervisor_ingress_proxy(
-            slug, ingress_entry, normalized, method.upper(),
+        fallback, fallback_status = await _try_ingress_proxy(
+            client, slug, ingress_entry, normalized, method.upper(),
             headers, request_content, timeout,
         )
         if fallback is not None:
