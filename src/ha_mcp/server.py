@@ -341,11 +341,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 description = frontmatter.get("description", "").strip()
                 if not description:
                     continue
-            except Exception:
+            except (OSError, yaml.YAMLError):
+                logger.warning("Could not read frontmatter from %s", main_file)
                 continue
 
             skill_name = skill_dir.name
-            tool_name = f"ha_skill_{skill_name.replace('-', '_')}"
+            tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
             uri = f"skill://{skill_name}/SKILL.md"
 
             tool_description = (
@@ -356,9 +357,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
 
             # Collect available reference files for the listing
+            # Skip symlinks to prevent potential path traversal
             ref_files = []
             for f in sorted(skill_dir.rglob("*")):
-                if f.is_file():
+                if f.is_file() and not f.is_symlink():
                     rel = f.relative_to(skill_dir)
                     ref_uri = f"skill://{skill_name}/{rel}"
                     ref_files.append({"name": str(rel), "uri": ref_uri})
