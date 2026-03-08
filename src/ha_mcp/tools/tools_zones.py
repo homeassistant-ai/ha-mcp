@@ -103,7 +103,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Use ha_search_entities(domain_filter='zone') as alternative",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["zone"], "title": "Set Zone"})
+    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Set Zone"})
     @log_tool_usage
     async def ha_set_zone(
         name: Annotated[
@@ -186,27 +186,27 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 fields_to_update = {k: v for k, v in update_fields.items() if v is not None}
 
                 if not fields_to_update:
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         "No fields to update. Provide at least one field to change.",
                         context={"zone_id": zone_id},
-                    )
+                    ))
 
                 # Validate coordinates if provided
                 if latitude is not None and not (-90 <= latitude <= 90):
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid latitude: {latitude}. Must be between -90 and 90.",
                         parameter="latitude",
-                    )
+                    ))
                 if longitude is not None and not (-180 <= longitude <= 180):
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid longitude: {longitude}. Must be between -180 and 180.",
                         parameter="longitude",
-                    )
+                    ))
                 if radius is not None and radius <= 0:
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid radius: {radius}. Must be greater than 0.",
                         parameter="radius",
-                    )
+                    ))
 
                 message: dict[str, Any] = {
                     "type": "zone/update",
@@ -216,26 +216,26 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 # CREATE operation
                 if name is None or latitude is None or longitude is None:
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         "name, latitude, and longitude are required when creating a zone.",
-                    )
+                    ))
 
                 # Validate coordinates
                 if not (-90 <= latitude <= 90):
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid latitude: {latitude}. Must be between -90 and 90.",
                         parameter="latitude",
-                    )
+                    ))
                 if not (-180 <= longitude <= 180):
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid longitude: {longitude}. Must be between -180 and 180.",
                         parameter="longitude",
-                    )
+                    ))
                 if radius is not None and radius <= 0:
-                    return create_validation_error(
+                    raise_tool_error(create_validation_error(
                         f"Invalid radius: {radius}. Must be greater than 0.",
                         parameter="radius",
-                    )
+                    ))
 
                 message = {
                     "type": "zone/create",
