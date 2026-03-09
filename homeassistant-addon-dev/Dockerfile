@@ -18,14 +18,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Copy source and install the project itself
 COPY src/ ./src/
-
-# Always fetch latest skills from upstream (auto-updates on every build)
-# The submodule is for local dev only; Docker builds always pull latest main
-ADD https://github.com/homeassistant-ai/skills/archive/main.tar.gz /tmp/skills.tar.gz
-RUN mkdir -p src/ha_mcp/resources/skills-vendor && \
-    tar xzf /tmp/skills.tar.gz --strip-components=1 -C src/ha_mcp/resources/skills-vendor && \
-    rm /tmp/skills.tar.gz
-
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 

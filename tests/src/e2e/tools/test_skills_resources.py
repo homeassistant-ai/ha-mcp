@@ -15,10 +15,10 @@ import pytest
 logger = logging.getLogger(__name__)
 
 SKILLS_MISSING_HINT = (
-    "Skills directory not found. If this fails in a Docker build, ensure the "
-    "Dockerfile fetches skills via ADD from the skills repo. If running locally, "
-    "ensure the git submodule at src/ha_mcp/resources/skills-vendor/ is initialized "
-    "(git submodule update --init)."
+    "Skills directory not found. Ensure the git submodule at "
+    "src/ha_mcp/resources/skills-vendor/ is initialized "
+    "(git submodule update --init). CI workflows use submodules: true "
+    "in the checkout step to handle this automatically."
 )
 
 
