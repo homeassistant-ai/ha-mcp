@@ -177,6 +177,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # accidentally nested name/arguments inside the arguments param
             # e.g. ha_call_read_tool(name="ha_call_read_tool",
             #   arguments={"name": "actual_tool", "arguments": {...}})
+            all_known = (
+                transform._read_tools | transform._write_tools | transform._delete_tools
+            )
             if (
                 arguments
                 and isinstance(arguments.get("name"), str)
@@ -186,6 +189,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     transform._call_write_name,
                     transform._call_delete_name,
                 )
+                and arguments["name"] in all_known
             ):
                 logger.warning(
                     "Detected double-wrapped proxy call for '%s' via %s — unwrapping",

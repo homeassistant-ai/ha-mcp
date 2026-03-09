@@ -191,7 +191,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Build the access method instruction based on config
         if self.settings.enable_skills_as_tools:
             access_method = (
-                "Use the read_resource tool with the skill's URI to load it."
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI) — if you can read these instructions, you "
+                "should be able to access resources as well. If for any "
+                "reason you cannot access MCP resources, use the "
+                "list_resources and read_resource tools as a fallback. "
+                "If you can access resources normally, do not waste "
+                "time or tokens on those tools."
             )
         else:
             access_method = (
@@ -338,11 +344,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         description = self._SEARCH_TOOL_DESCRIPTION
         if self.settings.enable_skills_as_tools:
             description += (
-                "\n\nThis server also provides best-practice skills. "
-                "Call list_resources directly (no proxy needed) to see "
-                "available skills, then read_resource(uri='skill://...') "
-                "to load the relevant SKILL.md before creating automations "
-                "or configuring devices."
+                "\n\nThis server also provides best-practice skills via "
+                "skill:// resources. If your client supports MCP resources, "
+                "prefer reading them directly. Otherwise, call "
+                "list_resources and read_resource (directly, no proxy "
+                "needed) to access the relevant SKILL.md before creating "
+                "automations or configuring devices."
             )
 
         try:
