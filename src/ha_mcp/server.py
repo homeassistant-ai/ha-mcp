@@ -289,11 +289,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
         "history, statistics, devices, integrations, services, backups, "
         "todo, camera, blueprints, system, and more.\n\n"
-        "After finding a tool, execute it with the matching proxy:\n"
-        "- ha_call_read_tool: safe read-only operations (readOnlyHint)\n"
-        "- ha_call_write_tool: create/update operations (destructiveHint)\n"
-        "- ha_call_delete_tool: remove/delete operations (destructiveHint)\n\n"
-        "IMPORTANT: ALWAYS search before assuming a capability is unavailable. "
+        "WORKFLOW — search first, then call via the correct proxy:\n"
+        "1. ha_search_tools(query='...') — find tools (this tool)\n"
+        "2. Check the annotations in the results to pick the right proxy:\n"
+        "   - ha_call_read_tool — readOnlyHint tools (safe, no side effects)\n"
+        "   - ha_call_write_tool — destructiveHint tools that create/update\n"
+        "   - ha_call_delete_tool — destructiveHint tools that remove/delete\n"
+        "3. Call the proxy with TWO top-level params:\n"
+        '   ha_call_read_tool(name="ha_search_entities", arguments={"query": "..."})\n'
+        "   Do NOT nest name/arguments inside the arguments param.\n\n"
+        "IMPORTANT: Call proxy tools SEQUENTIALLY, not in parallel. "
+        "If one parallel MCP call errors, the client cancels all sibling "
+        "calls. Sequential calls prevent cascading failures.\n\n"
+        "ALWAYS search before assuming a capability is unavailable. "
         "Most tools are discoverable only through this search."
     )
 
@@ -324,12 +332,25 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if self.settings.enable_skills_as_tools:
             pinned.extend(["list_resources", "read_resource"])
 
+        # When skills-as-tools is enabled, the client likely doesn't support
+        # resources or server instructions — add skills hint to the search
+        # tool description (the one place the LLM is guaranteed to see).
+        description = self._SEARCH_TOOL_DESCRIPTION
+        if self.settings.enable_skills_as_tools:
+            description += (
+                "\n\nThis server also provides best-practice skills. "
+                "Call list_resources directly (no proxy needed) to see "
+                "available skills, then read_resource(uri='skill://...') "
+                "to load the relevant SKILL.md before creating automations "
+                "or configuring devices."
+            )
+
         try:
             self.mcp.add_transform(
                 CategorizedSearchTransform(
                     max_results=10,
                     always_visible=pinned,
-                    search_tool_description=self._SEARCH_TOOL_DESCRIPTION,
+                    search_tool_description=description,
                 )
             )
             logger.info(

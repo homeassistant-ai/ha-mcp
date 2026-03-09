@@ -48,17 +48,26 @@ _DELETE_PATTERNS = ("_remove_", "_delete_")
 # Proxy tool descriptions (shared between transform_tools and get_tool)
 _READ_PROXY_DESC = (
     "Execute a read-only tool discovered via ha_search_tools. "
-    "Safe — does not modify any data or state."
+    "Safe — does not modify any data or state.\n"
+    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
+    "These are separate top-level params, not nested.\n"
+    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
 )
 _WRITE_PROXY_DESC = (
     "Execute a write tool discovered via ha_search_tools. "
     "Creates or updates data. Use for any tool that modifies "
-    "state but does not delete/remove resources."
+    "state but does not delete/remove resources.\n"
+    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
+    "These are separate top-level params, not nested.\n"
+    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
 )
 _DELETE_PROXY_DESC = (
     "Execute a delete/remove tool discovered via ha_search_tools. "
     "Permanently removes data. Use for tools that delete or "
-    "remove resources (areas, automations, devices, etc.)."
+    "remove resources (areas, automations, devices, etc.).\n"
+    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
+    "These are separate top-level params, not nested.\n"
+    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
 )
 
 
@@ -163,6 +172,28 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 allowed = transform._delete_tools
             else:
                 allowed = transform._write_tools
+
+            # Detect and unwrap double-wrapped arguments where the LLM
+            # accidentally nested name/arguments inside the arguments param
+            # e.g. ha_call_read_tool(name="ha_call_read_tool",
+            #   arguments={"name": "actual_tool", "arguments": {...}})
+            if (
+                arguments
+                and isinstance(arguments.get("name"), str)
+                and "arguments" in arguments
+                and name in (
+                    transform._call_read_name,
+                    transform._call_write_name,
+                    transform._call_delete_name,
+                )
+            ):
+                logger.warning(
+                    "Detected double-wrapped proxy call for '%s' via %s — unwrapping",
+                    arguments["name"],
+                    name,
+                )
+                name = arguments["name"]
+                arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
                 # Provide a helpful error with the correct proxy name
