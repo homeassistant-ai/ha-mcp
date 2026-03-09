@@ -10,6 +10,7 @@ Note: These tools only work with Home Assistant OS or Supervised installations.
 import json
 import logging
 from typing import Annotated, Any
+from urllib.parse import unquote
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -293,8 +294,8 @@ async def _call_addon_api(
     Returns:
         Dictionary with response data, status code, and content type.
     """
-    # 1. Sanitize path to prevent traversal attacks
-    normalized = path.lstrip("/")
+    # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
+    normalized = unquote(path).lstrip("/")
     if ".." in normalized.split("/"):
         return create_validation_error(
             "Path contains '..' traversal component",
@@ -408,7 +409,12 @@ async def _call_addon_api(
     elif isinstance(response_data, (dict, list)):
         serialized = json.dumps(response_data, default=str)
         if len(serialized) > _MAX_RESPONSE_SIZE:
-            response_data = serialized[:_MAX_RESPONSE_SIZE]
+            # Return a structured message instead of broken truncated JSON
+            response_data = {
+                "error": "RESPONSE_TOO_LARGE",
+                "message": f"The JSON response ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                "original_size_bytes": len(serialized),
+            }
             truncated = True
 
     result: dict[str, Any] = {
