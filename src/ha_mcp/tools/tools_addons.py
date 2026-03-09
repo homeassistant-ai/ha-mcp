@@ -434,6 +434,24 @@ async def _call_addon_api(
 
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
+        # On 403/401, include addon config so the LLM can spot relevant settings
+        # (e.g., "leave_front_door_open", auth toggles, port mappings)
+        if response.status_code in (401, 403):
+            addon_options = addon.get("options")
+            addon_ports = addon.get("network") or addon.get("ports")
+            addon_host_network = addon.get("host_network")
+            result["addon_config"] = {
+                "options": addon_options,
+                "ports": addon_ports,
+                "host_network": addon_host_network,
+                "ingress_port": ingress_port,
+            }
+            result["suggestion"] = (
+                "This add-on is blocking direct connections (likely Nginx IP restriction). "
+                "Review the addon_config.options above for settings that may enable access "
+                "(e.g., authentication toggles, direct port access). The user may need to "
+                "change add-on settings in the HA UI and restart the add-on."
+            )
 
     return result
 
@@ -601,12 +619,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Important — some add-ons may require configuration changes:**
         - Community add-ons (slug prefix `a0d7b954_`) often have Nginx IP restrictions
-          that block direct connections. If you get a 403 Forbidden error, the user may
-          need to adjust the add-on's settings (e.g., Node-RED: enable "Credential Secret"
-          and set `leave_front_door_open: true` for direct port access).
-        - Some add-ons expose a separate direct-access port (e.g., Node-RED port 1880,
-          Grafana port 3000). If ingress access returns 403, check the add-on info for
-          available port mappings and inform the user.
+          that block direct connections. On 401/403 errors, the response automatically
+          includes the add-on's configuration options and port mappings — review these
+          for settings that enable access (e.g., `leave_front_door_open`, auth toggles).
+        - Before calling an unfamiliar add-on, use ha_get_addon(slug="...") to inspect
+          its options, ports, and ingress settings.
+        - The user may need to change add-on settings in the HA UI and restart the add-on.
         - Use `debug=True` to see the exact URL, headers, and response details when
           troubleshooting connection issues.
 
