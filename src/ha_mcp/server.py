@@ -334,9 +334,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Build the always_visible list
         pinned = list(self._PINNED_TOOLS)
 
-        # Pin ResourcesAsTools if skills-as-tools is enabled
+        # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
             pinned.extend(["list_resources", "read_resource"])
+            # Forward-compatible: pin skill guidance tools registered by #732
+            pinned.extend(getattr(self, "_skill_tool_names", []))
 
         # When skills-as-tools is enabled, the client likely doesn't support
         # resources or server instructions — add skills hint to the search
