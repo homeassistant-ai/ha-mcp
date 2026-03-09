@@ -586,23 +586,34 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Call an add-on's web API through Home Assistant's Ingress proxy.
+        """Call an add-on's web API via its internal Docker network address.
 
-        Sends HTTP requests to any add-on that supports Ingress, enabling programmatic
-        interaction with add-on APIs like Node-RED Admin API, Frigate HTTP API, etc.
+        Sends HTTP requests directly to add-on containers, enabling programmatic
+        interaction with add-on APIs like Frigate HTTP API, EVCC API, etc.
 
-        The request is authenticated via the HA Bearer token and proxied through
-        Home Assistant's Ingress system — no direct network access to the add-on is needed.
+        **How it works:** Connects to the add-on's Docker IP and ingress port with
+        Ingress headers (X-Ingress-Path, X-Hass-Source) so the add-on recognizes the
+        request as authenticated.
 
         **Prerequisites:**
-        - Add-on must support Ingress (most add-ons with a web UI do)
-        - Add-on must be running
+        - Add-on must support Ingress and be running
         - Use ha_get_addon(slug="...") to check Ingress support and discover API paths
 
+        **Important — some add-ons may require configuration changes:**
+        - Community add-ons (slug prefix `a0d7b954_`) often have Nginx IP restrictions
+          that block direct connections. If you get a 403 Forbidden error, the user may
+          need to adjust the add-on's settings (e.g., Node-RED: enable "Credential Secret"
+          and set `leave_front_door_open: true` for direct port access).
+        - Some add-ons expose a separate direct-access port (e.g., Node-RED port 1880,
+          Grafana port 3000). If ingress access returns 403, check the add-on info for
+          available port mappings and inform the user.
+        - Use `debug=True` to see the exact URL, headers, and response details when
+          troubleshooting connection issues.
+
         **Examples:**
-        - Get Node-RED flows: ha_call_addon_api(slug="a0d7b954_nodered", path="/flows")
         - Get Frigate events: ha_call_addon_api(slug="ccab4aaf_frigate", path="/api/events")
-        - Deploy Node-RED flows: ha_call_addon_api(slug="a0d7b954_nodered", path="/flows", method="POST", body={...})
+        - Get EVCC state: ha_call_addon_api(slug="2790e6a0_evcc", path="/api/state")
+        - Debug a failing call: ha_call_addon_api(slug="...", path="/api/test", debug=True)
         """
         # Validate HTTP method
         valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
