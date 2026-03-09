@@ -67,6 +67,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._smart_tools: Any = None
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
+        self._skill_tool_names: list[str] = []
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -312,7 +313,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # server instructions (e.g., claude.ai). The tool description contains
         # the trigger conditions so the AI sees them in the tool listing.
         # Names stored for pinning in search transforms (always-visible).
-        self._skill_tool_names: list[str] = []
         self._register_skill_guidance_tools(skills_dir)
 
     def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
@@ -324,7 +324,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         conditions. The tool itself just lists available reference files —
         actual content is loaded on demand via read_resource.
         """
-        for skill_dir in sorted(skills_dir.iterdir()):
+        try:
+            entries = sorted(skills_dir.iterdir())
+        except OSError:
+            logger.warning("Could not read skills directory: %s", skills_dir)
+            return
+
+        for skill_dir in entries:
             main_file = skill_dir / "SKILL.md"
             if not skill_dir.is_dir() or not main_file.exists():
                 continue
@@ -334,12 +340,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 content = main_file.read_text(encoding="utf-8")
                 parts = content.split("---", 2)
                 if len(parts) < 3:
+                    logger.warning("No valid frontmatter delimiters in %s", main_file)
                     continue
                 frontmatter = yaml.safe_load(parts[1])
                 if not isinstance(frontmatter, dict):
+                    logger.warning("Frontmatter is not a mapping in %s", main_file)
                     continue
                 description = frontmatter.get("description", "").strip()
                 if not description:
+                    logger.warning("No description in frontmatter for skill %s", skill_dir.name)
                     continue
             except (OSError, yaml.YAMLError):
                 logger.warning("Could not read frontmatter from %s", main_file)
