@@ -350,11 +350,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             uri = f"skill://{skill_name}/SKILL.md"
 
             tool_description = (
-                f"IMPORTANT: Read this skill BEFORE performing matching actions. "
+                f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
                 f"Returns available reference files. Use read_resource with "
                 f"the file URI to load specific guides as needed."
             )
+
+            # When tool search is enabled, append the search workflow so
+            # clients that don't read server instructions (e.g., claude.ai)
+            # still get the bootstrap context for using search + proxies.
+            if getattr(self.settings, "enable_tool_search", False):
+                tool_description += (
+                    "\n\nThis server uses search-based tool discovery. "
+                    "Use ha_search_tools(query='...') to find tools, then "
+                    "execute via the matching proxy:\n"
+                    "- ha_call_read_tool — safe, read-only operations\n"
+                    "- ha_call_write_tool — create/update operations\n"
+                    "- ha_call_delete_tool — remove/delete operations\n"
+                    "Call the proxy with name and arguments as separate "
+                    "top-level params. Call proxy tools SEQUENTIALLY, "
+                    "not in parallel."
+                )
 
             # Collect available reference files for the listing
             # Skip symlinks to prevent potential path traversal
