@@ -209,14 +209,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return header + "\n".join(skill_blocks)
 
-    def _build_skill_block(
-        self, skill_name: str, main_file: Path
-    ) -> str | None:
-        """Build an instruction block for a single skill.
+    @staticmethod
+    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
+        """Parse YAML frontmatter from a SKILL.md file.
 
-        Reads the description field from YAML frontmatter and includes it
-        verbatim. The description is designed for LLM consumption and
-        contains its own trigger conditions and symptom indicators.
+        Returns the frontmatter dict if valid, or None with a logged
+        warning for each failure case.
         """
         try:
             content = main_file.read_text(encoding="utf-8")
@@ -224,7 +222,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Could not read %s", main_file)
             return None
 
-        # Extract YAML frontmatter between --- markers
         parts = content.split("---", 2)
         if len(parts) < 3:
             logger.warning("No valid frontmatter delimiters in %s", main_file)
@@ -240,11 +237,28 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Frontmatter is not a mapping in %s", main_file)
             return None
 
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning("No description in frontmatter for skill %s", skill_name)
+        if not frontmatter.get("description", ""):
+            logger.warning(
+                "No description in frontmatter for %s", main_file.parent.name
+            )
             return None
 
+        return frontmatter
+
+    def _build_skill_block(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Build an instruction block for a single skill.
+
+        Reads the description field from YAML frontmatter and includes it
+        verbatim. The description is designed for LLM consumption and
+        contains its own trigger conditions and symptom indicators.
+        """
+        frontmatter = self._parse_skill_frontmatter(main_file)
+        if not frontmatter:
+            return None
+
+        description = frontmatter["description"]
         uri = f"skill://{skill_name}/SKILL.md"
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
@@ -335,25 +349,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             if not skill_dir.is_dir() or not main_file.exists():
                 continue
 
-            # Read frontmatter for the description
-            try:
-                content = main_file.read_text(encoding="utf-8")
-                parts = content.split("---", 2)
-                if len(parts) < 3:
-                    logger.warning("No valid frontmatter delimiters in %s", main_file)
-                    continue
-                frontmatter = yaml.safe_load(parts[1])
-                if not isinstance(frontmatter, dict):
-                    logger.warning("Frontmatter is not a mapping in %s", main_file)
-                    continue
-                description = frontmatter.get("description", "").strip()
-                if not description:
-                    logger.warning("No description in frontmatter for skill %s", skill_dir.name)
-                    continue
-            except (OSError, yaml.YAMLError):
-                logger.warning("Could not read frontmatter from %s", main_file)
+            frontmatter = self._parse_skill_frontmatter(main_file)
+            if not frontmatter:
                 continue
 
+            description = frontmatter["description"].strip()
             skill_name = skill_dir.name
             tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
             uri = f"skill://{skill_name}/SKILL.md"
@@ -381,14 +381,23 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     "not in parallel."
                 )
 
-            # Collect available reference files for the listing
-            # Skip symlinks to prevent potential path traversal
+            # Collect available reference files for the listing.
+            # Filter out symlinks and verify path containment to prevent
+            # traversal via symlinked directories.
             ref_files = []
-            for f in sorted(skill_dir.rglob("*")):
-                if f.is_file() and not f.is_symlink():
+            resolved_root = skill_dir.resolve()
+            try:
+                for f in sorted(skill_dir.rglob("*")):
+                    if not f.is_file() or f.is_symlink():
+                        continue
+                    # Ensure resolved path stays within the skill directory
+                    if not f.resolve().is_relative_to(resolved_root):
+                        continue
                     rel = f.relative_to(skill_dir)
                     ref_uri = f"skill://{skill_name}/{rel}"
                     ref_files.append({"name": str(rel), "uri": ref_uri})
+            except OSError:
+                logger.warning("Error reading skill files in %s", skill_dir)
 
             # Use factory to capture ref_files in closure
             def _make_skill_handler(
