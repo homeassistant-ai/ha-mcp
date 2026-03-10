@@ -10,8 +10,10 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
 from mcp.types import Icon
 
@@ -71,8 +73,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
+        # Build server instructions from bundled skills (if enabled)
+        instructions = self._build_skills_instructions()
+
         # Create FastMCP server with Home Assistant icons for client UI display
-        self.mcp = FastMCP(name=server_name, version=server_version, icons=SERVER_ICONS)
+        self.mcp = FastMCP(
+            name=server_name,
+            version=server_version,
+            icons=SERVER_ICONS,
+            instructions=instructions,
+        )
 
         # Register all tools and expert prompts
         self._initialize_server()
@@ -122,6 +132,181 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Register enhanced tools for first/second interaction success
         self.register_enhanced_tools()
+
+        # Register bundled skills as MCP resources
+        self._register_skills()
+
+    def _get_skills_dir(self) -> Path | None:
+        """Return the bundled skills directory if it exists.
+
+        Skills are vendored via a git submodule at resources/skills-vendor/.
+        The actual skill directories live under the skills/ subdirectory
+        within that repo.
+        """
+        skills_dir = Path(__file__).parent / "resources" / "skills-vendor" / "skills"
+        return skills_dir if skills_dir.exists() else None
+
+    def _build_skills_instructions(self) -> str | None:
+        """Build server instructions from bundled skill frontmatter.
+
+        Reads the description field from each SKILL.md's YAML frontmatter
+        and includes it as-is in the server instructions. The description
+        is authored for LLM consumption and should not be parsed or
+        restructured by code.
+
+        Returns None when skills are disabled, leaving instructions unchanged
+        from the default (None).
+        """
+        if not self.settings.enable_skills:
+            return None
+
+        skills_dir = self._get_skills_dir()
+        if not skills_dir:
+            return None
+
+        try:
+            entries = sorted(skills_dir.iterdir())
+        except OSError:
+            logger.warning("Could not read skills directory: %s", skills_dir)
+            return None
+
+        skill_blocks: list[str] = []
+        for skill_dir in entries:
+            main_file = skill_dir / "SKILL.md"
+            if not skill_dir.is_dir() or not main_file.exists():
+                continue
+
+            block = self._build_skill_block(skill_dir.name, main_file)
+            if block:
+                skill_blocks.append(block)
+
+        if not skill_blocks:
+            return None
+
+        # Build the access method instruction based on config
+        if self.settings.enable_skills_as_tools:
+            access_method = (
+                "Use the read_resource tool with the skill's URI to load it."
+            )
+        else:
+            access_method = (
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI)."
+            )
+
+        header = (
+            "IMPORTANT: This server provides best-practice skills that MUST "
+            "be consulted before performing matching actions. "
+            "Read the SKILL.md for the matching skill "
+            "\u2014 it contains a Reference Files table that maps tasks to "
+            "specific reference files. You MUST read the referenced files "
+            "that match your current task before proceeding. "
+            "Do NOT load all reference files upfront "
+            "\u2014 only the ones the table directs you to.\n\n"
+            f"How to access: {access_method}\n"
+        )
+
+        return header + "\n".join(skill_blocks)
+
+    def _build_skill_block(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Build an instruction block for a single skill.
+
+        Reads the description field from YAML frontmatter and includes it
+        verbatim. The description is designed for LLM consumption and
+        contains its own trigger conditions and symptom indicators.
+        """
+        try:
+            content = main_file.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("Could not read %s", main_file)
+            return None
+
+        # Extract YAML frontmatter between --- markers
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            logger.warning("No valid frontmatter delimiters in %s", main_file)
+            return None
+
+        try:
+            frontmatter = yaml.safe_load(parts[1])
+        except yaml.YAMLError:
+            logger.warning("Could not parse YAML frontmatter in %s", main_file)
+            return None
+
+        if not isinstance(frontmatter, dict):
+            logger.warning("Frontmatter is not a mapping in %s", main_file)
+            return None
+
+        description = frontmatter.get("description", "")
+        if not description:
+            logger.warning("No description in frontmatter for skill %s", skill_name)
+            return None
+
+        uri = f"skill://{skill_name}/SKILL.md"
+
+        return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
+
+    def _register_skills(self) -> None:
+        """Register bundled HA best-practice skills as MCP resources.
+
+        Uses FastMCP's SkillsDirectoryProvider to serve skill files via skill:// URIs.
+        Optionally exposes skills as tools (list_resources/read_resource) for clients
+        that don't support MCP resources natively.
+
+        Controlled by ENABLE_SKILLS and ENABLE_SKILLS_AS_TOOLS settings.
+        """
+        if not self.settings.enable_skills:
+            return
+
+        # Phase 1: Import SkillsDirectoryProvider
+        try:
+            from fastmcp.server.providers.skills import SkillsDirectoryProvider
+        except ImportError:
+            logger.warning(
+                "SkillsDirectoryProvider not available in fastmcp, skipping skills"
+            )
+            return
+
+        # Phase 2: Register skills as MCP resources
+        try:
+            skills_dir = self._get_skills_dir()
+            if not skills_dir:
+                logger.warning(
+                    "Skills directory not found at %s, skipping skill registration",
+                    Path(__file__).parent / "resources" / "skills-vendor" / "skills",
+                )
+                return
+
+            self.mcp.add_provider(SkillsDirectoryProvider(
+                roots=[skills_dir], supporting_files="resources"
+            ))
+            logger.info("Registered bundled skills as MCP resources")
+        except Exception:
+            logger.exception("Failed to register skills as resources")
+            return
+
+        # Phase 3: Optionally expose skills as tools
+        if not self.settings.enable_skills_as_tools:
+            return
+
+        try:
+            from fastmcp.server.transforms import ResourcesAsTools
+        except ImportError:
+            logger.warning(
+                "ResourcesAsTools not available in fastmcp, "
+                "skills registered as resources but not exposed as tools"
+            )
+            return
+
+        try:
+            self.mcp.add_transform(ResourcesAsTools(self.mcp))
+            logger.info("Skills also exposed as tools (ResourcesAsTools)")
+        except Exception:
+            logger.exception(
+                "Failed to expose skills as tools (resources still available)"
+            )
 
     # Helper methods required by EnhancedToolsMixin
 

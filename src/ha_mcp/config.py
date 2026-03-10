@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     # Disable when using clients with programmatic tool use (future).
     enable_dashboard_partial_tools: bool = Field(True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS")
 
+    # Skills configuration
+    # Serve bundled HA best-practice skills as MCP resources (skill:// URIs).
+    # Resources are not auto-injected — clients must explicitly request them.
+    enable_skills: bool = Field(True, alias="ENABLE_SKILLS")
+
+    # Expose skills as tools (list_resources/read_resource) for clients
+    # that don't support MCP resources natively.
+    enable_skills_as_tools: bool = Field(False, alias="ENABLE_SKILLS_AS_TOOLS")
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""
