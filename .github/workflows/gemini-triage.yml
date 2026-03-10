@@ -444,6 +444,9 @@ jobs:
             - Suggest similar existing tools if applicable
             - Recommend filing a feature request
 
+            **IMPORTANT**: If you are applying the `duplicate` label, the Analysis section MUST include a sentence like:
+            "This appears to be a duplicate of #123." — use the actual issue number you found with `gh issue list`.
+
             ## 🛠️ Suggested Steps
 
             1. [First concrete action - be specific, include exact commands if relevant]
@@ -491,6 +494,24 @@ jobs:
 
             *🤖 Automated analysis by Issue Bot*
 
+            **LABEL CLASSIFICATION (CRITICAL):**
+            As the very last line of your response, output a hidden HTML comment with labels to apply.
+            Format: `<!-- TRIAGE_LABELS: label1,label2 -->`
+            Choose ONLY from these labels (can combine multiple):
+            - `bug` — user is reporting broken/incorrect behavior (error, crash, wrong output)
+            - `enhancement` — user is requesting a new feature or improvement that doesn't exist yet
+            - `question` — user is asking how to do something; no clear bug or feature request
+            - `documentation` — issue is about missing, wrong, or unclear documentation
+            - `duplicate` — you found a matching open issue via `gh issue list`
+            - `invalid` — issue is off-topic, spam, unrelated to ha-mcp, or not actionable
+
+            Rules:
+            - Always include exactly one primary label: `bug`, `enhancement`, `question`, or `invalid`
+            - Add `documentation` in addition to the primary label if docs are clearly part of the problem
+            - Add `duplicate` in addition to the primary label if you found a matching issue with `gh issue list`
+            - Do NOT apply `duplicate` alone — always pair it with `bug` or `enhancement`
+            - The comment MUST be the very last line, after `*🤖 Automated analysis by Issue Bot*`
+
             **HTML FORMAT RULES (CRITICAL):**
             - The `<details>` tag MUST be on its own line
             - The `<summary>` tag MUST be on the NEXT line after `<details>`
@@ -530,10 +551,23 @@ jobs:
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
+            let extraLabels = [];
 
             if (geminiSummary) {
               // Full analysis completed
-              analysisBody = geminiSummary;
+              // Extract TRIAGE_LABELS from the hidden comment before displaying
+              const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
+              if (labelMatch) {
+                const validLabels = ['bug', 'enhancement', 'question', 'documentation', 'duplicate', 'invalid'];
+                const parsed = labelMatch[1].split(',').map(l => l.trim().toLowerCase());
+                extraLabels = parsed.filter(l => validLabels.includes(l));
+                const rejected = parsed.filter(l => !validLabels.includes(l));
+                if (rejected.length > 0) {
+                  core.warning(`Ignoring unrecognized labels from LLM: ${rejected.join(', ')}`);
+                }
+              }
+              // Strip the hidden comment from the displayed body
+              analysisBody = geminiSummary.replace(/\n?<!--\s*TRIAGE_LABELS:.*?-->\n?/g, '').trimEnd();
               shouldAddTriagedLabel = true;
             } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
               // Missing info - use evaluation's generated message
@@ -559,13 +593,15 @@ jobs:
               body: analysisBody
             });
 
-            // Add triaged label when analysis is done
+            // Add triaged label (and any extra classification labels) when analysis is done
             if (shouldAddTriagedLabel) {
               const issueNumber = ${{ steps.issue_number.outputs.number }};
+              const labelsToAdd = ['triaged', ...extraLabels];
+              core.info(`Adding labels: ${labelsToAdd.join(', ')}`);
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                labels: ['triaged']
+                labels: labelsToAdd
               });
             }

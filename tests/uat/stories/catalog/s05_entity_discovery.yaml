@@ -28,6 +28,15 @@ verify:
   questions:
     - "How many areas are configured in this HA instance?"
     - "How many light entities exist? How many automation entities?"
+  ha_checks:
+    - type: response_contains
+      value: "area"
+    - type: response_contains
+      value: "light"
+    - type: response_contains
+      value: "automation"
+    - type: response_matches
+      pattern: "\\b\\d+\\b"
 
 expected:
   tools_should_use:

@@ -169,7 +169,7 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     if "trigger" in normalized and isinstance(normalized["trigger"], list):
         normalized["trigger"] = _normalize_trigger_keys(normalized["trigger"])
 
-    return normalized
+    return cast(dict[str, Any], normalized)
 
 
 def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:

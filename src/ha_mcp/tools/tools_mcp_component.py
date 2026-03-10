@@ -37,7 +37,7 @@ MCP_TOOLS_REPO = "julienld/ha-mcp-test-custom-component"
 MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 
 
-def register_mcp_component_tools(mcp, client, **kwargs):
+def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register MCP component installation tools.
 
     This function only registers tools if the feature flag is enabled.
@@ -236,7 +236,7 @@ def register_mcp_component_tools(mcp, client, **kwargs):
                     ],
                 ))
 
-            result = {
+            result: dict[str, Any] = {
                 "success": True,
                 "installed": True,
                 "repository": MCP_TOOLS_REPO,
