@@ -9,9 +9,9 @@ order: 3
 ## Overview
 
 The easiest way to run ha-mcp if you use Home Assistant OS. The add-on:
-- Auto-discovers Home Assistant connection
-- Generates secure secret path automatically
-- No token configuration needed
+- Auto-discovers the Home Assistant connection
+- Generates a secure secret path automatically
+- Configures the token automatically
 
 ## Installation
 
@@ -25,7 +25,10 @@ The easiest way to run ha-mcp if you use Home Assistant OS. The add-on:
 
 3. **Start** the add-on
 
-4. **Check the logs** for your MCP server URL:
+4. **Check the add-on logs** for your MCP server URL:
+
+   > **Note:** These are the **add-on logs**, not the main Home Assistant logs.
+   > Navigate to **Settings → Add-ons → Home Assistant MCP Server → Logs** tab.
 
    ```
    MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
@@ -33,7 +36,7 @@ The easiest way to run ha-mcp if you use Home Assistant OS. The add-on:
 
 ## Using the Add-on URL
 
-Configure your AI client with the URL from the logs.
+Configure your AI client with the URL from the add-on logs.
 
 **For Claude Desktop** (requires mcp-proxy):
 

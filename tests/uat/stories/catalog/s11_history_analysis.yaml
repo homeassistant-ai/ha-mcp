@@ -30,6 +30,11 @@ verify:
   questions:
     - "What is the current state of light.bed_light?"
     - "Does light.bed_light have any history entries in the last 24 hours?"
+  ha_checks:
+    - type: response_contains
+      value: "light.bed_light"
+    - type: response_contains
+      value: "automation"
 
 expected:
   tools_should_use:
