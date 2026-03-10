@@ -447,7 +447,7 @@ async def run_agent_scenario(
                 for line in result["stderr"].splitlines():
                     if "error" in line.lower():
                         log(f"  [{agent_name}] !! {line.strip()}")
-                    if not all(c in _BOX_CHARS for c in line):
+                    elif not all(c in _BOX_CHARS for c in line):
                         log(f"  [{agent_name}] stderr: {line}")
     finally:
         # Cleanup temp files

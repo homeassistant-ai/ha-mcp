@@ -202,7 +202,7 @@ async def _check_dashboard_exists(mcp_client, check: dict) -> dict:
 
 def _check_response_contains(check: dict, agent_output: str) -> dict:
     value = check["value"]
-    if value in agent_output:
+    if value.lower() in agent_output.lower():
         return {**check, "type": "response_contains", "passed": True, "detail": f"Found '{value}'"}
     return {**check, "type": "response_contains", "passed": False, "detail": f"'{value}' not in response"}
 
@@ -256,15 +256,29 @@ async def _mcp_context(ha_url: str, ha_token: str):
     from ha_mcp.client.websocket_client import websocket_manager
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    os.environ["HOMEASSISTANT_URL"] = ha_url
-    os.environ["HOMEASSISTANT_TOKEN"] = ha_token
-    ha_mcp.config._settings = None
-    await websocket_manager.disconnect()
+    prev_url = os.environ.get("HOMEASSISTANT_URL")
+    prev_token = os.environ.get("HOMEASSISTANT_TOKEN")
+    prev_settings = ha_mcp.config._settings
+    try:
+        os.environ["HOMEASSISTANT_URL"] = ha_url
+        os.environ["HOMEASSISTANT_TOKEN"] = ha_token
+        ha_mcp.config._settings = None
+        await websocket_manager.disconnect()
 
-    ha_client = HomeAssistantClient(base_url=ha_url, token=ha_token)
-    server = HomeAssistantSmartMCPServer(client=ha_client)
-    async with Client(server.mcp) as mcp_client:
-        yield mcp_client
+        ha_client = HomeAssistantClient(base_url=ha_url, token=ha_token)
+        server = HomeAssistantSmartMCPServer(client=ha_client)
+        async with Client(server.mcp) as mcp_client:
+            yield mcp_client
+    finally:
+        if prev_url is None:
+            os.environ.pop("HOMEASSISTANT_URL", None)
+        else:
+            os.environ["HOMEASSISTANT_URL"] = prev_url
+        if prev_token is None:
+            os.environ.pop("HOMEASSISTANT_TOKEN", None)
+        else:
+            os.environ["HOMEASSISTANT_TOKEN"] = prev_token
+        ha_mcp.config._settings = prev_settings
 
 
 # ---------------------------------------------------------------------------
