@@ -7,7 +7,7 @@ Provides backup creation and restoration capabilities with safety mechanisms.
 import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -105,6 +105,7 @@ async def create_backup(
                 ErrorCode.CONNECTION_FAILED,
                 "Failed to connect to Home Assistant WebSocket for backup",
             ))
+        ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
         # Get backup password
         password, error = await _get_backup_password(ws_client)
@@ -256,6 +257,7 @@ async def restore_backup(
                 ErrorCode.CONNECTION_FAILED,
                 "Failed to connect to Home Assistant WebSocket for restore",
             ))
+        ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
         # Verify backup exists
         backup_info = await ws_client.send_command("backup/info")
@@ -354,7 +356,7 @@ async def restore_backup(
                 pass  # Ignore errors during cleanup
 
 
-def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs) -> None:
+def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register backup and restore tools with the MCP server.
 
