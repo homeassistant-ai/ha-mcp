@@ -235,7 +235,7 @@ class TestGetSystemOverview:
             elapsed = time.time() - start
 
         assert result["success"] is True
-        # 4 data sources at 0.05s each: sequential = 0.2s, parallel ≈ 0.05s
+        # 5 data sources at 0.05s each: sequential = 0.25s, parallel ≈ 0.05s
         assert elapsed < 0.15, f"Expected parallel speedup, took {elapsed:.2f}s"
 
     @pytest.mark.asyncio
@@ -257,6 +257,57 @@ class TestGetSystemOverview:
         assert result["success"] is True
         assert result["system_summary"]["total_entities"] == 2
         assert result["system_summary"]["total_areas"] == 0
+
+    @pytest.mark.asyncio
+    async def test_resolves_area_through_device_registry(self, sample_services):
+        """Entities with no direct area_id inherit area from their parent device."""
+        entities = [
+            {
+                "entity_id": "light.kitchen",
+                "attributes": {"friendly_name": "Kitchen Light"},
+                "state": "on",
+            },
+        ]
+        client = MockClient(entities=entities, services=sample_services)
+
+        # Override websocket to return entity without area_id but with device_id,
+        # and a device registry that maps that device to an area.
+        original_ws = client.send_websocket_message
+
+        async def ws_with_device_registry(message: dict) -> dict:
+            msg_type = message.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "light.kitchen",
+                            "area_id": None,
+                            "device_id": "device_1",
+                        },
+                    ],
+                }
+            if msg_type == "config/device_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"id": "device_1", "area_id": "living_room"},
+                    ],
+                }
+            return await original_ws(message)
+
+        client.send_websocket_message = ws_with_device_registry
+
+        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools = SmartSearchTools(client=client)
+            result = await tools.get_system_overview(detail_level="full")
+
+        assert result["success"] is True
+        assert result["system_summary"]["total_areas"] == 2
+        area = result["area_analysis"]["living_room"]
+        assert area["count"] == 1
+        assert area["domains"]["light"] == 1
 
 
 # ---------------------------------------------------------------------------
