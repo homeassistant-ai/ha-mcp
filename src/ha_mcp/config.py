@@ -12,7 +12,7 @@ from pathlib import Path
 try:
     _PACKAGE_VERSION = importlib.metadata.version("ha-mcp")
 except importlib.metadata.PackageNotFoundError:
-    _PACKAGE_VERSION = "0.0.0-dev"
+    _PACKAGE_VERSION = "unknown"
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
