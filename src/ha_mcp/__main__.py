@@ -14,12 +14,15 @@ import stat  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
-from typing import TYPE_CHECKING, Any, cast  # noqa: E402
+from typing import TYPE_CHECKING, Any  # noqa: E402
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
     from ha_mcp.auth.provider import HomeAssistantOAuthProvider
     from ha_mcp.client.rest_client import HomeAssistantClient
     from ha_mcp.config import Settings
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +273,7 @@ def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
     }
 
 
-def _create_server() -> Any:
+def _create_server() -> "HomeAssistantSmartMCPServer":
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
@@ -284,10 +287,10 @@ def _create_server() -> Any:
 
 
 # Lazy server creation - only create when needed
-_server = None
+_server: "HomeAssistantSmartMCPServer | None" = None
 
 
-def _get_mcp() -> Any:
+def _get_mcp() -> "FastMCP":
     """Get the MCP instance, creating server if needed."""
     global _server
     if _server is None:
@@ -295,7 +298,7 @@ def _get_mcp() -> Any:
     return _server.mcp
 
 
-def _get_server() -> Any:
+def _get_server() -> "HomeAssistantSmartMCPServer":
     """Get the server instance, creating if needed."""
     global _server
     if _server is None:
@@ -663,10 +666,9 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
     proxy_client = OAuthProxyClient(auth_provider)
 
     global _server
-    from ha_mcp.client.rest_client import (
-        HomeAssistantClient as _HAClient,  # local to avoid circular import
+    _server = HomeAssistantSmartMCPServer(
+        client=proxy_client,  # type: ignore[arg-type]  # OAuthProxyClient forwards all HomeAssistantClient attrs via __getattr__
     )
-    _server = HomeAssistantSmartMCPServer(client=cast(_HAClient, proxy_client))
     mcp = _server.mcp
     mcp.auth = auth_provider
 

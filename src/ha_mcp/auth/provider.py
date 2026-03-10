@@ -507,7 +507,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             ),
             scopes=scopes_list,
             expires_at=expires_at,
-            code_challenge=pending.get("code_challenge"),  # type: ignore[arg-type]
+            code_challenge=pending.get("code_challenge"),  # type: ignore[arg-type]  # None is valid per PKCE spec (RFC 7636 §4.3); empty string would break validation
         )
         self.auth_codes[auth_code_value] = auth_code
 

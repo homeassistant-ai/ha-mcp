@@ -328,13 +328,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         service: str,
         entity_id: str | None = None,
         data: dict | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """Bridge method to existing service call implementation."""
         service_data = data or {}
         if entity_id:
             service_data["entity_id"] = entity_id
-        result = await self.client.call_service(domain, service, service_data)
-        return result if isinstance(result, list) else [result]
+        return await self.client.call_service(domain, service, service_data)
 
     async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
         """Bridge method to existing area functionality."""
