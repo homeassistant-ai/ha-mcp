@@ -36,6 +36,9 @@ verify:
     - "Does a dashboard with URL path 'living-room-test' exist?"
     - "Does it contain cards that show light entities with toggle controls?"
     - "Does it contain any climate or temperature-related cards?"
+  ha_checks:
+    - type: dashboard_exists
+      url_path: "living-room-test"
 
 expected:
   tools_should_use:
