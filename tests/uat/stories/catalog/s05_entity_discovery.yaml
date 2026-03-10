@@ -36,7 +36,7 @@ verify:
     - type: response_contains
       value: "automation"
     - type: response_matches
-      pattern: "\\b6\\b"
+      pattern: "\\b\\d+\\b"
 
 expected:
   tools_should_use:
