@@ -17,7 +17,7 @@ import yaml
 from fastmcp import FastMCP
 from mcp.types import Icon
 
-from .config import get_global_settings
+from .config import _PACKAGE_VERSION, get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self,
         client: HomeAssistantClient | None = None,
         server_name: str = "ha-mcp",
-        server_version: str = "0.1.0",
+        server_version: str = _PACKAGE_VERSION,
     ):
         """Initialize the smart MCP server with lazy loading support."""
         # Load settings first (fast operation)
