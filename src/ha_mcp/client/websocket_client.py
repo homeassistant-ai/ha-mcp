@@ -688,7 +688,7 @@ class WebSocketManager:
 
             # Evict least-recently-used connection if over limit
             if len(self._clients) > MAX_POOL_SIZE:
-                oldest_key = min(self._last_used, key=self._last_used.get)
+                oldest_key = min(self._last_used, key=lambda k: self._last_used[k])
                 stale = self._clients.pop(oldest_key, None)
                 self._last_used.pop(oldest_key, None)
                 if stale:

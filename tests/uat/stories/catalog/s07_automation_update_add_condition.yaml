@@ -51,6 +51,11 @@ verify:
     - "Does automation 'Evening Lights Test' still exist with its original time trigger at 18:00?"
     - "Does it now have a condition checking input_boolean.someone_home_test is on?"
     - "Does it still have the original action to turn on light.bed_light at 80% brightness?"
+  ha_checks:
+    - type: automation_exists
+      alias: "Evening Lights Test"
+    - type: automation_has_condition
+      alias: "Evening Lights Test"
 
 expected:
   tools_should_use:

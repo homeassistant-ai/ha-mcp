@@ -33,6 +33,9 @@ verify:
     - "Does it contain actions to turn off lights?"
     - "Does it contain an action to set climate/thermostat to 18 degrees?"
     - "Does it include delay steps between actions?"
+  ha_checks:
+    - type: script_exists
+      alias: "Goodnight Routine"
 
 expected:
   tools_should_use:
