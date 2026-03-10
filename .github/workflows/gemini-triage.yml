@@ -444,6 +444,9 @@ jobs:
             - Suggest similar existing tools if applicable
             - Recommend filing a feature request
 
+            **IMPORTANT**: If you are applying the `duplicate` label, the Analysis section MUST include a sentence like:
+            "This appears to be a duplicate of #123." — use the actual issue number you found with `gh issue list`.
+
             ## 🛠️ Suggested Steps
 
             1. [First concrete action - be specific, include exact commands if relevant]
