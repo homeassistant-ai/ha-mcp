@@ -333,7 +333,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """
         if client.client_id is None:
             raise AuthorizeError(
-                error="invalid_client",
+                error="invalid_request",
                 error_description="Client ID is required",
             )
 
@@ -487,7 +487,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             ),
             scopes=scopes_list,
             expires_at=expires_at,
-            code_challenge=pending.get("code_challenge"),
+            code_challenge=pending.get("code_challenge"),  # type: ignore[arg-type]  # None is valid per PKCE spec (RFC 7636 §4.3); empty string would break validation
         )
         self.auth_codes[auth_code_value] = auth_code
 
@@ -542,7 +542,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         ha_credentials = self.ha_credentials.get(client.client_id)
         if not ha_credentials:
             raise TokenError(
-                "server_error",
+                "invalid_client",
                 f"No Home Assistant credentials found for client {client.client_id}",
             )
 

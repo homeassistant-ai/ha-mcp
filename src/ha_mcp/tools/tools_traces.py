@@ -230,7 +230,7 @@ async def _resolve_trace_item_id(
                 logger.debug(
                     f"Resolved {entity_id} to unique_id: {unique_id}"
                 )
-                return unique_id
+                return str(unique_id)
 
         # Fallback to object_id if no unique_id found
         logger.debug(
@@ -449,7 +449,7 @@ def _format_detailed_trace(
                 actions.append(step_info)
 
     # Sort by timestamp (if available) or path to maintain execution order
-    def sort_key(item):
+    def sort_key(item: dict[str, Any]) -> tuple[str, str]:
         return (item.get("timestamp", ""), item.get("path", ""))
 
     triggers.sort(key=sort_key)

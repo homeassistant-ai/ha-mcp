@@ -13,7 +13,16 @@ import signal  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
-from typing import Any  # noqa: E402
+from collections.abc import Coroutine  # noqa: E402
+from typing import TYPE_CHECKING, Any  # noqa: E402
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from ha_mcp.auth.provider import HomeAssistantOAuthProvider
+    from ha_mcp.client.rest_client import HomeAssistantClient
+    from ha_mcp.config import Settings
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +37,12 @@ class OAuthProxyClient:
     Only the access token varies per-user (from OAuth consent form).
     """
 
-    def __init__(self, ha_url: str):
+    def __init__(self, ha_url: str) -> None:
         self._ha_url = ha_url.rstrip("/")
-        self._oauth_clients = {}
+        self._oauth_clients: dict[str, "HomeAssistantClient"] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self):
+    def _get_oauth_client(self) -> "HomeAssistantClient":
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
@@ -76,7 +85,7 @@ class OAuthProxyClient:
         for client in clients:
             await client.close()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Forward all attribute access to the OAuth client."""
         client = self._get_oauth_client()
         return getattr(client, name)
@@ -219,7 +228,7 @@ For setup instructions, see:
     sys.exit(1)
 
 
-def _validate_standard_credentials(settings) -> None:
+def _validate_standard_credentials(settings: "Settings") -> None:
     """Exit with error if HA credentials are OAuth sentinels in standard (non-OAuth) mode."""
     from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL
 
@@ -266,14 +275,12 @@ def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
     }
 
 
-def _create_server():
+def _create_server() -> "HomeAssistantSmartMCPServer":
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
     try:
-        from ha_mcp.server import (
-            HomeAssistantSmartMCPServer,  # type: ignore[import-not-found]
-        )
+        from ha_mcp.server import HomeAssistantSmartMCPServer
 
         return HomeAssistantSmartMCPServer()
     except ValidationError as e:
@@ -282,10 +289,10 @@ def _create_server():
 
 
 # Lazy server creation - only create when needed
-_server = None
+_server: "HomeAssistantSmartMCPServer | None" = None
 
 
-def _get_mcp():
+def _get_mcp() -> "FastMCP":
     """Get the MCP instance, creating server if needed."""
     global _server
     if _server is None:
@@ -293,7 +300,7 @@ def _get_mcp():
     return _server.mcp
 
 
-def _get_server():
+def _get_server() -> "HomeAssistantSmartMCPServer":
     """Get the server instance, creating if needed."""
     global _server
     if _server is None:
@@ -392,7 +399,7 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
                 pass
 
 
-async def _run_with_shutdown(server_coro) -> None:
+async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
     """Run a server coroutine with graceful shutdown support.
 
     Handles signal-based shutdown, resource cleanup, and task cancellation.
@@ -433,7 +440,7 @@ async def _run_with_shutdown(server_coro) -> None:
         await _cancel_tasks(server_task, shutdown_task)
 
 
-def _run_entrypoint(coro, label: str) -> None:
+def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
     """Run an async entrypoint with standard exception handling."""
     _setup_signal_handlers()
 
@@ -685,7 +692,9 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     proxy_client = OAuthProxyClient(ha_url)
 
     global _server
-    _server = HomeAssistantSmartMCPServer(client=proxy_client)
+    _server = HomeAssistantSmartMCPServer(
+        client=proxy_client,  # type: ignore[arg-type]  # OAuthProxyClient forwards all HomeAssistantClient attrs via __getattr__
+    )
     mcp = _server.mcp
     mcp.auth = auth_provider
 
