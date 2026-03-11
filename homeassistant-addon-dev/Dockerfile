@@ -4,7 +4,7 @@
 # WARNING: This is unstable and may break at any time
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.10.7-python3.13-trixie-slim@sha256:645c625876d01c77393338e2bccf4342ee2447680b3069f37004231fb97e2a62 AS builder
+FROM ghcr.io/astral-sh/uv:0.10.9-python3.13-trixie-slim@sha256:b8292819f163f11271a5143517dd7ce5d4a5d01a593cfedac569b2d8d842ad64 AS builder
 
 WORKDIR /app
 
