@@ -41,7 +41,7 @@ class OAuthProxyClient:
         self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self) -> HomeAssistantClient:
+    def _get_oauth_client(self) -> "HomeAssistantClient":
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
@@ -644,6 +644,7 @@ def main_oauth() -> None:
         missing.append("  - HOMEASSISTANT_URL (e.g., http://homeassistant.local:8123)")
 
     if missing:
+        missing_vars = "\n".join(missing)
         print(
             f"""
 ==============================================================================
@@ -651,7 +652,7 @@ def main_oauth() -> None:
 ==============================================================================
 
 Missing required environment variables for OAuth mode:
-{'\n'.join(missing)}
+{missing_vars}
 
 For setup instructions, see:
   https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md
