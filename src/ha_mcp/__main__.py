@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any  # noqa: E402
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from ha_mcp.auth.provider import HomeAssistantOAuthProvider
     from ha_mcp.client.rest_client import HomeAssistantClient
     from ha_mcp.config import Settings
     from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -39,10 +38,10 @@ class OAuthProxyClient:
 
     def __init__(self, ha_url: str) -> None:
         self._ha_url = ha_url.rstrip("/")
-        self._oauth_clients: dict[str, "HomeAssistantClient"] = {}
+        self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self) -> "HomeAssistantClient":
+    def _get_oauth_client(self) -> HomeAssistantClient:
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
@@ -652,7 +651,7 @@ def main_oauth() -> None:
 ==============================================================================
 
 Missing required environment variables for OAuth mode:
-{chr(10).join(missing)}
+{'\n'.join(missing)}
 
 For setup instructions, see:
   https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md

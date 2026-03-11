@@ -14,7 +14,7 @@ def _extract_domain(redirect_uri: str) -> str:
     try:
         parsed = urlparse(redirect_uri)
         return parsed.netloc or redirect_uri
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return redirect_uri
 
 
