@@ -2,8 +2,10 @@
 Consent form HTML template for Home Assistant OAuth authentication.
 
 This module provides the HTML consent form where users enter their
-Home Assistant URL and Long-Lived Access Token (LLAT).
+Long-Lived Access Token (LLAT) to authorize MCP client access.
 """
+
+import html
 
 
 def create_consent_html(
@@ -12,6 +14,7 @@ def create_consent_html(
     redirect_uri: str,
     state: str,
     scopes: list[str],
+    txn_id: str,
     error_message: str | None = None,
 ) -> str:
     """
@@ -23,19 +26,25 @@ def create_consent_html(
         redirect_uri: OAuth redirect URI
         state: OAuth state parameter
         scopes: Requested OAuth scopes
+        txn_id: Transaction ID for this authorization request
         error_message: Optional error message to display
 
     Returns:
         HTML string for the consent form
     """
-    display_name = client_name or client_id
-    scopes_display = ", ".join(scopes) if scopes else "full access"
+    display_name = html.escape(client_name or client_id)
+    scopes_display = html.escape(", ".join(scopes) if scopes else "full access")
+    safe_client_id = html.escape(client_id)
+    safe_redirect_uri = html.escape(redirect_uri)
+    safe_state = html.escape(state)
+    safe_txn_id = html.escape(txn_id)
 
     error_html = ""
     if error_message:
+        safe_error = html.escape(error_message)
         error_html = f"""
         <div class="error-message">
-            <strong>Error:</strong> {error_message}
+            <strong>Error:</strong> {safe_error}
         </div>
         """
 
@@ -52,6 +61,8 @@ def create_consent_html(
             --primary-hover: #0288d1;
             --error-color: #f44336;
             --error-bg: #ffebee;
+            --warning-color: #ff9800;
+            --warning-bg: #fff3e0;
             --success-color: #4caf50;
             --text-color: #212121;
             --text-secondary: #757575;
@@ -66,6 +77,8 @@ def create_consent_html(
                 --primary-hover: #4fc3f7;
                 --error-color: #ef5350;
                 --error-bg: #3e2723;
+                --warning-color: #ffb74d;
+                --warning-bg: #3e2723;
                 --success-color: #66bb6a;
                 --text-color: #e0e0e0;
                 --text-secondary: #9e9e9e;
@@ -153,6 +166,21 @@ def create_consent_html(
             margin-bottom: 20px;
             font-size: 14px;
             color: var(--error-color);
+        }}
+
+        .warning-box {{
+            background: var(--warning-bg);
+            border: 1px solid var(--warning-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: var(--text-color);
+            line-height: 1.5;
+        }}
+
+        .warning-box strong {{
+            color: var(--warning-color);
         }}
 
         .form-group {{
@@ -306,25 +334,18 @@ def create_consent_html(
 
         {error_html}
 
-        <form method="POST" id="consent-form">
-            <input type="hidden" name="client_id" value="{client_id}">
-            <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-            <input type="hidden" name="state" value="{state}">
+        <div class="warning-box">
+            <strong>Important:</strong> Your access token will be shared with
+            <strong>{display_name}</strong> and used for ongoing access to your
+            Home Assistant instance. To revoke access, delete the token in
+            Home Assistant &rarr; Profile &rarr; Security &rarr; Long-Lived Access Tokens.
+        </div>
 
-            <div class="form-group">
-                <label for="ha_url">Home Assistant URL</label>
-                <input
-                    type="url"
-                    id="ha_url"
-                    name="ha_url"
-                    placeholder="https://homeassistant.local:8123"
-                    required
-                    autocomplete="url"
-                >
-                <p class="help-text">
-                    The URL of your Home Assistant instance (e.g., http://homeassistant.local:8123)
-                </p>
-            </div>
+        <form method="POST" id="consent-form">
+            <input type="hidden" name="txn_id" value="{safe_txn_id}">
+            <input type="hidden" name="client_id" value="{safe_client_id}">
+            <input type="hidden" name="redirect_uri" value="{safe_redirect_uri}">
+            <input type="hidden" name="state" value="{safe_state}">
 
             <div class="form-group">
                 <label for="ha_token">Long-Lived Access Token</label>
@@ -361,8 +382,7 @@ def create_consent_html(
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
             </svg>
-            Your credentials are validated directly with your Home Assistant instance
-            and stored securely for this session only.
+            Your token is stored securely for this session only.
         </div>
     </div>
 
@@ -374,22 +394,7 @@ def create_consent_html(
 
             btn.disabled = true;
             loading.classList.add('active');
-            btnText.textContent = 'Validating...';
-        }});
-
-        // Try to detect Home Assistant URL from common patterns
-        (function() {{
-            var savedUrl = localStorage.getItem('ha_mcp_url');
-            if (savedUrl) {{
-                document.getElementById('ha_url').value = savedUrl;
-            }}
-        }})();
-
-        // Save URL on successful form navigation
-        document.getElementById('ha_url').addEventListener('change', function(e) {{
-            if (e.target.value) {{
-                localStorage.setItem('ha_mcp_url', e.target.value);
-            }}
+            btnText.textContent = 'Authorizing...';
         }});
     </script>
 </body>
@@ -408,6 +413,9 @@ def create_error_html(error: str, error_description: str) -> str:
     Returns:
         HTML string for the error page
     """
+    safe_error = html.escape(error)
+    safe_description = html.escape(error_description)
+
     return f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -493,8 +501,8 @@ def create_error_html(error: str, error_description: str) -> str:
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
         </svg>
         <h1>Authentication Error</h1>
-        <div class="error-code">{error}</div>
-        <p>{error_description}</p>
+        <div class="error-code">{safe_error}</div>
+        <p>{safe_description}</p>
     </div>
 </body>
 </html>

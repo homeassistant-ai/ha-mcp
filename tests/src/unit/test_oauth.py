@@ -19,25 +19,20 @@ class TestHomeAssistantCredentials:
     def test_credentials_creation(self):
         """Test creating credentials stores values correctly."""
         creds = HomeAssistantCredentials(
-            ha_url="http://homeassistant.local:8123/",
             ha_token="test_token_123",
         )
 
-        # URL should have trailing slash stripped
-        assert creds.ha_url == "http://homeassistant.local:8123"
         assert creds.ha_token == "test_token_123"
         assert creds.validated_at > 0
 
     def test_credentials_to_dict(self):
         """Test converting credentials to dictionary."""
         creds = HomeAssistantCredentials(
-            ha_url="http://ha.local:8123",
             ha_token="token",
         )
 
         result = creds.to_dict()
 
-        assert result["ha_url"] == "http://ha.local:8123"
         assert result["ha_token"] == "token"
         assert "validated_at" in result
 
@@ -53,6 +48,7 @@ class TestConsentForm:
             redirect_uri="http://localhost:8080/callback",
             state="test-state",
             scopes=["homeassistant", "mcp"],
+            txn_id="test-txn-123",
         )
 
         # Verify essential elements are present
@@ -60,9 +56,11 @@ class TestConsentForm:
         assert "Claude AI" in html
         assert "test-client" in html
         assert "homeassistant, mcp" in html
-        assert 'name="ha_url"' in html
         assert 'name="ha_token"' in html
         assert "Authorize" in html
+        assert "test-txn-123" in html
+        # ha_url field should NOT be present (SSRF fix)
+        assert 'name="ha_url"' not in html
 
     def test_create_consent_html_with_error(self):
         """Test consent HTML includes error message when provided."""
@@ -72,6 +70,7 @@ class TestConsentForm:
             redirect_uri="http://localhost/cb",
             state="state",
             scopes=[],
+            txn_id="txn-123",
             error_message="Invalid credentials",
         )
 
@@ -86,9 +85,42 @@ class TestConsentForm:
             redirect_uri="http://localhost/cb",
             state="state",
             scopes=["homeassistant"],
+            txn_id="txn-456",
         )
 
         assert "my-client-id" in html
+
+    def test_create_consent_html_xss_prevention(self):
+        """Test that user-controlled values are HTML-escaped."""
+        html = create_consent_html(
+            client_id='<script>alert("xss")</script>',
+            client_name='<img src=x onerror=alert(1)>',
+            redirect_uri='"><script>alert(1)</script>',
+            state='"><script>alert(1)</script>',
+            scopes=["homeassistant"],
+            txn_id='"><script>alert(1)</script>',
+        )
+
+        # Raw XSS payloads should NOT appear in user-controlled output areas
+        # (template has its own <script> for form handling, so check escaped versions)
+        assert "&lt;script&gt;alert(" in html
+        assert "&lt;img src=x onerror=alert(1)&gt;" in html
+        assert "&quot;&gt;&lt;script&gt;" in html
+
+    def test_create_consent_html_warning_box(self):
+        """Test that consent form includes token sharing warning."""
+        html = create_consent_html(
+            client_id="test-client",
+            client_name="Claude AI",
+            redirect_uri="http://localhost/cb",
+            state="state",
+            scopes=["homeassistant"],
+            txn_id="txn-789",
+        )
+
+        assert "warning-box" in html
+        assert "shared with" in html
+        assert "revoke access" in html.lower() or "Long-Lived Access Tokens" in html
 
     def test_create_error_html(self):
         """Test error HTML generation."""
@@ -100,6 +132,17 @@ class TestConsentForm:
         assert "invalid_request" in html
         assert "The request was malformed" in html
         assert "Authentication Error" in html
+
+    def test_create_error_html_xss_prevention(self):
+        """Test that error page HTML-escapes user-controlled values."""
+        html = create_error_html(
+            error='<script>alert("xss")</script>',
+            error_description='<img src=x onerror=alert(1)>',
+        )
+
+        assert "<script>" not in html
+        assert '<img src=x onerror' not in html
+        assert "&lt;script&gt;" in html
 
 
 class TestHomeAssistantOAuthProvider:
@@ -239,72 +282,8 @@ class TestHomeAssistantOAuthProvider:
         assert "not registered" in str(exc.value.error_description)
 
     @pytest.mark.asyncio
-    async def test_validate_ha_credentials_success(self, provider):
-        """Test successful HA credentials validation."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "location_name": "Home",
-                "version": "2024.1.0",
-            }
-
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_client_instance.__aenter__.return_value = mock_client_instance
-            mock_client_instance.__aexit__.return_value = None
-            mock_client.return_value = mock_client_instance
-
-            error = await provider._validate_ha_credentials(
-                "http://ha.local:8123", "valid_token"
-            )
-
-            assert error is None
-
-    @pytest.mark.asyncio
-    async def test_validate_ha_credentials_unauthorized(self, provider):
-        """Test HA credentials validation with invalid token."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_response = MagicMock()
-            mock_response.status_code = 401
-
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_client_instance.__aenter__.return_value = mock_client_instance
-            mock_client_instance.__aexit__.return_value = None
-            mock_client.return_value = mock_client_instance
-
-            error = await provider._validate_ha_credentials(
-                "http://ha.local:8123", "invalid_token"
-            )
-
-            assert error is not None
-            assert "Invalid access token" in error
-
-    @pytest.mark.asyncio
-    async def test_validate_ha_credentials_connection_error(self, provider):
-        """Test HA credentials validation with connection error."""
-        import httpx
-
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.side_effect = httpx.ConnectError(
-                "Connection failed"
-            )
-            mock_client_instance.__aenter__.return_value = mock_client_instance
-            mock_client_instance.__aexit__.return_value = None
-            mock_client.return_value = mock_client_instance
-
-            error = await provider._validate_ha_credentials(
-                "http://ha.local:8123", "token"
-            )
-
-            assert error is not None
-            assert "Could not connect" in error
-
-    @pytest.mark.asyncio
     async def test_exchange_authorization_code(self, provider):
-        """Test exchanging auth code for tokens with encrypted credentials."""
+        """Test exchanging auth code for tokens with stateless credentials."""
         from mcp.server.auth.provider import AuthorizationCode
         from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
@@ -318,7 +297,6 @@ class TestHomeAssistantOAuthProvider:
 
         # Store HA credentials (simulates consent form submission)
         provider.ha_credentials["test-client"] = HomeAssistantCredentials(
-            ha_url="http://homeassistant.local:8123",
             ha_token="test_token_abc123",
         )
 
@@ -351,17 +329,14 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_load_access_token(self, provider):
         """Test loading base64-encoded stateless access token."""
-        # Create an encoded token
-        encoded_token = provider._encode_credentials(
-            "http://homeassistant.local:8123",
-            "test_token_xyz"
-        )
+        # Create an encoded token (only ha_token, no ha_url)
+        encoded_token = provider._encode_credentials("test_token_xyz")
 
         result = await provider.load_access_token(encoded_token)
 
         assert result is not None
-        assert result.claims["ha_url"] == "http://homeassistant.local:8123"
         assert result.claims["ha_token"] == "test_token_xyz"
+        assert "ha_url" not in result.claims  # ha_url no longer in token
         assert result.expires_at is None  # Stateless tokens don't expire
 
     @pytest.mark.asyncio
@@ -376,14 +351,11 @@ class TestHomeAssistantOAuthProvider:
     async def test_verify_token(self, provider):
         """Test verify_token delegates to load_access_token with base64 tokens."""
         # Create an encoded token
-        encoded_token = provider._encode_credentials(
-            "http://ha.local:8123",
-            "valid_token"
-        )
+        encoded_token = provider._encode_credentials("valid_token")
 
         result = await provider.verify_token(encoded_token)
         assert result is not None
-        assert result.claims["ha_url"] == "http://ha.local:8123"
+        assert result.claims["ha_token"] == "valid_token"
 
         result_invalid = await provider.verify_token("invalid_token_string")
         assert result_invalid is None
@@ -444,13 +416,12 @@ class TestHomeAssistantOAuthProvider:
     def test_get_ha_credentials(self, provider):
         """Test getting HA credentials for a client."""
         provider.ha_credentials["client-123"] = HomeAssistantCredentials(
-            ha_url="http://ha.local:8123",
             ha_token="token",
         )
 
         result = provider.get_ha_credentials("client-123")
         assert result is not None
-        assert result.ha_url == "http://ha.local:8123"
+        assert result.ha_token == "token"
 
         result_none = provider.get_ha_credentials("nonexistent")
         assert result_none is None
@@ -461,7 +432,6 @@ class TestHomeAssistantOAuthProvider:
 
         # Set up client credentials
         provider.ha_credentials["client-abc"] = HomeAssistantCredentials(
-            ha_url="http://ha.local:8123",
             ha_token="token",
         )
 
@@ -475,7 +445,7 @@ class TestHomeAssistantOAuthProvider:
 
         result = provider.get_ha_credentials_for_token("token-xyz")
         assert result is not None
-        assert result.ha_url == "http://ha.local:8123"
+        assert result.ha_token == "token"
 
         result_none = provider.get_ha_credentials_for_token("invalid")
         assert result_none is None
@@ -624,7 +594,7 @@ class TestOAuthRoutes:
 
     @pytest.mark.asyncio
     async def test_consent_post_success(self, provider, mock_request):
-        """Test consent form POST with valid credentials."""
+        """Test consent form POST with valid token."""
         from mcp.shared.auth import OAuthClientInformationFull
 
         # Register client
@@ -645,16 +615,14 @@ class TestOAuthRoutes:
             "created_at": time.time(),
         }
 
-        # Mock HA validation
-        with patch.object(provider, "_validate_ha_credentials", return_value=None):
-            request = mock_request(
-                form_data={
-                    "txn_id": txn_id,
-                    "ha_url": "http://homeassistant.local:8123",
-                    "ha_token": "test_token",
-                }
-            )
-            response = await provider._consent_post(request)
+        # No more _validate_ha_credentials mock needed - validation removed
+        request = mock_request(
+            form_data={
+                "txn_id": txn_id,
+                "ha_token": "test_token",
+            }
+        )
+        response = await provider._consent_post(request)
 
         # Should redirect with auth code
         assert response.status_code == 303
@@ -662,8 +630,8 @@ class TestOAuthRoutes:
         assert "state=test-state" in response.headers["location"]
 
     @pytest.mark.asyncio
-    async def test_consent_post_invalid_credentials(self, provider, mock_request):
-        """Test consent form POST with invalid HA credentials."""
+    async def test_consent_post_missing_token(self, provider, mock_request):
+        """Test consent form POST with missing token redirects with error."""
         txn_id = "test-txn-789"
         provider.pending_authorizations[txn_id] = {
             "client_id": "test-client",
@@ -671,20 +639,13 @@ class TestOAuthRoutes:
             "created_at": time.time(),
         }
 
-        # Mock HA validation to return error
-        with patch.object(
-            provider,
-            "_validate_ha_credentials",
-            return_value="Invalid access token"
-        ):
-            request = mock_request(
-                form_data={
-                    "txn_id": txn_id,
-                    "ha_url": "http://homeassistant.local:8123",
-                    "ha_token": "invalid_token",
-                }
-            )
-            response = await provider._consent_post(request)
+        request = mock_request(
+            form_data={
+                "txn_id": txn_id,
+                # No ha_token provided
+            }
+        )
+        response = await provider._consent_post(request)
 
         # Should redirect back to consent with error
         assert response.status_code == 303
@@ -745,9 +706,8 @@ class TestEndToEndOAuthFlow:
         pending = provider.pending_authorizations[txn_id]
         assert pending["client_id"] == "e2e-client"
 
-        # Store HA credentials (simulates successful consent)
+        # Store HA credentials (simulates successful consent - only token, no URL)
         provider.ha_credentials["e2e-client"] = HomeAssistantCredentials(
-            ha_url="http://homeassistant.local:8123",
             ha_token="e2e_test_token",
         )
 
@@ -777,13 +737,13 @@ class TestEndToEndOAuthFlow:
         # Auth code should be consumed
         assert auth_code_value not in provider.auth_codes
 
-        # Step 5: Verify access token contains encrypted credentials
+        # Step 5: Verify access token contains only ha_token (no ha_url - SSRF fix)
         access_token_obj = await provider.load_access_token(
             token_response.access_token
         )
         assert access_token_obj is not None
-        assert access_token_obj.claims["ha_url"] == "http://homeassistant.local:8123"
         assert access_token_obj.claims["ha_token"] == "e2e_test_token"
+        assert "ha_url" not in access_token_obj.claims
 
         # Step 6: Use refresh token to get new access token
         refresh_token_obj = provider.refresh_tokens[token_response.refresh_token]
@@ -804,41 +764,40 @@ class TestOAuthProxyClient:
     """Tests for OAuthProxyClient in __main__.py."""
 
     @pytest.fixture
-    def mock_auth_provider(self):
-        """Create a mock auth provider."""
-        provider = MagicMock()
-        provider._cipher = None
-        return provider
-
-    @pytest.fixture
     def mock_access_token(self):
-        """Create a mock access token with claims."""
+        """Create a mock access token with claims (no ha_url - SSRF fix)."""
         from fastmcp.server.auth.auth import AccessToken
 
         return AccessToken(
-            token="encrypted-token-123",
+            token="encoded-token-123",
             client_id="test-client",
             scopes=["homeassistant"],
             expires_at=None,
             claims={
-                "ha_url": "http://homeassistant.local:8123",
                 "ha_token": "test_ha_token_xyz",
             },
         )
 
-    def test_oauth_proxy_client_initialization(self, mock_auth_provider):
+    def test_oauth_proxy_client_initialization(self):
         """Test OAuthProxyClient initialization."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
-        assert proxy._auth_provider == mock_auth_provider
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
+        assert proxy._ha_url == "http://homeassistant.local:8123"
         assert proxy._oauth_clients == {}
 
-    def test_oauth_proxy_client_attribute_forwarding(self, mock_auth_provider, mock_access_token):
+    def test_oauth_proxy_client_strips_trailing_slash(self):
+        """Test OAuthProxyClient strips trailing slash from URL."""
+        from ha_mcp.__main__ import OAuthProxyClient
+
+        proxy = OAuthProxyClient("http://homeassistant.local:8123/")
+        assert proxy._ha_url == "http://homeassistant.local:8123"
+
+    def test_oauth_proxy_client_attribute_forwarding(self, mock_access_token):
         """Test that OAuthProxyClient forwards attributes to HA client."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         # Mock get_access_token to return our mock token
         with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
@@ -848,7 +807,7 @@ class TestOAuthProxyClient:
             # Access a method - this triggers __getattr__ which creates the client
             _ = proxy.get_state
 
-            # Verify HomeAssistantClient was created with correct params
+            # Verify HomeAssistantClient was created with server-side URL + per-user token
             mock_ha_client.assert_called_once_with(
                 base_url="http://homeassistant.local:8123",
                 token="test_ha_token_xyz",
@@ -857,11 +816,11 @@ class TestOAuthProxyClient:
             # Verify the client instance was stored
             assert len(proxy._oauth_clients) == 1
 
-    def test_oauth_proxy_client_reuses_clients(self, mock_auth_provider, mock_access_token):
+    def test_oauth_proxy_client_reuses_clients(self, mock_access_token):
         """Test that OAuthProxyClient reuses client instances for same credentials."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
             mock_client_instance = MagicMock()
@@ -874,17 +833,17 @@ class TestOAuthProxyClient:
             # Client should only be created once
             assert mock_ha_client.call_count == 1
 
-    def test_oauth_proxy_client_no_token_raises_error(self, mock_auth_provider):
+    def test_oauth_proxy_client_no_token_raises_error(self):
         """Test that OAuthProxyClient raises error when no token in context."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         # Mock get_access_token to return None
         with patch("fastmcp.server.dependencies.get_access_token", return_value=None), pytest.raises(RuntimeError, match="No OAuth token"):
             _ = proxy.get_state
 
-    def test_oauth_proxy_client_missing_claims_raises_error(self, mock_auth_provider):
+    def test_oauth_proxy_client_missing_claims_raises_error(self):
         """Test that OAuthProxyClient raises error when token has no claims."""
         from fastmcp.server.auth.auth import AccessToken
 
@@ -899,17 +858,17 @@ class TestOAuthProxyClient:
             claims={},  # Empty claims
         )
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         with patch("fastmcp.server.dependencies.get_access_token", return_value=token_no_claims), pytest.raises(RuntimeError, match="No Home Assistant credentials"):
             _ = proxy.get_state
 
     @pytest.mark.asyncio
-    async def test_oauth_proxy_client_close_all_clients(self, mock_auth_provider, mock_access_token):
+    async def test_oauth_proxy_client_close_all_clients(self, mock_access_token):
         """Test that close() closes all cached OAuth clients."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client:
             mock_client_instance = MagicMock()
@@ -927,11 +886,11 @@ class TestOAuthProxyClient:
             assert len(proxy._oauth_clients) == 0
 
     @pytest.mark.asyncio
-    async def test_oauth_websocket_uses_per_client_credentials(self, mock_auth_provider, mock_access_token):
-        """Test that send_websocket_message passes OAuth credentials to WebSocket client."""
+    async def test_oauth_websocket_uses_server_url_with_per_user_token(self, mock_access_token):
+        """Test that send_websocket_message uses server-side URL with per-user token."""
         from ha_mcp.__main__ import OAuthProxyClient
 
-        proxy = OAuthProxyClient(mock_auth_provider)
+        proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         with patch("fastmcp.server.dependencies.get_access_token", return_value=mock_access_token), \
              patch("ha_mcp.client.websocket_client.get_websocket_client", new_callable=AsyncMock) as mock_get_ws:
@@ -941,7 +900,7 @@ class TestOAuthProxyClient:
 
             await proxy.send_websocket_message({"type": "get_states"})
 
-            # WebSocket client must be created with the OAuth user's credentials
+            # WebSocket client must use server-side URL + per-user token
             mock_get_ws.assert_awaited_once_with(
                 url="http://homeassistant.local:8123",
                 token="test_ha_token_xyz",
