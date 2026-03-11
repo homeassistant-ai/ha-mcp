@@ -6,14 +6,22 @@ Long-Lived Access Token (LLAT) to authorize MCP client access.
 """
 
 import html
+from urllib.parse import urlparse
+
+
+def _extract_domain(redirect_uri: str) -> str:
+    """Extract display domain from redirect URI."""
+    try:
+        parsed = urlparse(redirect_uri)
+        return parsed.netloc or redirect_uri
+    except Exception:
+        return redirect_uri
 
 
 def create_consent_html(
     client_id: str,
-    client_name: str | None,
     redirect_uri: str,
     state: str,
-    scopes: list[str],
     txn_id: str,
     error_message: str | None = None,
 ) -> str:
@@ -22,18 +30,16 @@ def create_consent_html(
 
     Args:
         client_id: OAuth client ID
-        client_name: Human-readable client name
-        redirect_uri: OAuth redirect URI
+        redirect_uri: OAuth redirect URI (used to derive the display domain)
         state: OAuth state parameter
-        scopes: Requested OAuth scopes
         txn_id: Transaction ID for this authorization request
         error_message: Optional error message to display
 
     Returns:
         HTML string for the consent form
     """
-    display_name = html.escape(client_name or client_id)
-    scopes_display = html.escape(", ".join(scopes) if scopes else "full access")
+    domain = _extract_domain(redirect_uri)
+    safe_domain = html.escape(domain)
     safe_client_id = html.escape(client_id)
     safe_redirect_uri = html.escape(redirect_uri)
     safe_state = html.escape(state)
@@ -63,7 +69,6 @@ def create_consent_html(
             --error-bg: #ffebee;
             --warning-color: #ff9800;
             --warning-bg: #fff3e0;
-            --success-color: #4caf50;
             --text-color: #212121;
             --text-secondary: #757575;
             --border-color: #e0e0e0;
@@ -78,8 +83,7 @@ def create_consent_html(
                 --error-color: #ef5350;
                 --error-bg: #3e2723;
                 --warning-color: #ffb74d;
-                --warning-bg: #3e2723;
-                --success-color: #66bb6a;
+                --warning-bg: #2a1f0a;
                 --text-color: #e0e0e0;
                 --text-secondary: #9e9e9e;
                 --border-color: #424242;
@@ -136,28 +140,6 @@ def create_consent_html(
             font-size: 14px;
         }}
 
-        .client-info {{
-            background: var(--bg-color);
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 24px;
-        }}
-
-        .client-info p {{
-            font-size: 14px;
-            color: var(--text-secondary);
-        }}
-
-        .client-info strong {{
-            color: var(--text-color);
-        }}
-
-        .scopes {{
-            margin-top: 8px;
-            font-size: 13px;
-            color: var(--text-secondary);
-        }}
-
         .error-message {{
             background: var(--error-bg);
             border: 1px solid var(--error-color);
@@ -194,8 +176,6 @@ def create_consent_html(
             margin-bottom: 8px;
         }}
 
-        input[type="text"],
-        input[type="url"],
         input[type="password"] {{
             width: 100%;
             padding: 12px 16px;
@@ -273,23 +253,6 @@ def create_consent_html(
             background: var(--bg-color);
         }}
 
-        .security-note {{
-            margin-top: 20px;
-            padding: 12px;
-            background: var(--bg-color);
-            border-radius: 8px;
-            font-size: 12px;
-            color: var(--text-secondary);
-            text-align: center;
-        }}
-
-        .security-note svg {{
-            width: 14px;
-            height: 14px;
-            vertical-align: middle;
-            margin-right: 4px;
-        }}
-
         .loading {{
             display: none;
         }}
@@ -324,19 +287,14 @@ def create_consent_html(
                 <circle fill="#18BCF2" cx="120" cy="120" r="40"/>
             </svg>
             <h1>Connect to Home Assistant</h1>
-            <p class="subtitle">Authorize {display_name} to access your smart home</p>
-        </div>
-
-        <div class="client-info">
-            <p>Application: <strong>{display_name}</strong></p>
-            <p class="scopes">Requested access: <strong>{scopes_display}</strong></p>
+            <p class="subtitle">Authorization request from <strong>{safe_domain}</strong></p>
         </div>
 
         {error_html}
 
         <div class="warning-box">
             <strong>Important:</strong> Your access token will be shared with
-            <strong>{display_name}</strong> and used for ongoing access to your
+            <strong>{safe_domain}</strong> and used for ongoing access to your
             Home Assistant instance. To revoke access, delete the token in
             Home Assistant &rarr; Profile &rarr; Security &rarr; Long-Lived Access Tokens.
         </div>
@@ -377,13 +335,6 @@ def create_consent_html(
                 </button>
             </div>
         </form>
-
-        <div class="security-note">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
-            </svg>
-            Your token is stored securely for this session only.
-        </div>
     </div>
 
     <script>

@@ -44,32 +44,39 @@ class TestConsentForm:
         """Test basic consent HTML generation."""
         html = create_consent_html(
             client_id="test-client",
-            client_name="Claude AI",
-            redirect_uri="http://localhost:8080/callback",
+            redirect_uri="http://claude.ai/callback",
             state="test-state",
-            scopes=["homeassistant", "mcp"],
             txn_id="test-txn-123",
         )
 
         # Verify essential elements are present
         assert "<form" in html
-        assert "Claude AI" in html
+        assert "claude.ai" in html
         assert "test-client" in html
-        assert "homeassistant, mcp" in html
         assert 'name="ha_token"' in html
         assert "Authorize" in html
         assert "test-txn-123" in html
         # ha_url field should NOT be present (SSRF fix)
         assert 'name="ha_url"' not in html
 
+    def test_create_consent_html_shows_redirect_domain(self):
+        """Test consent HTML shows domain from redirect_uri instead of client name."""
+        html = create_consent_html(
+            client_id="test-client",
+            redirect_uri="https://chatgpt.com/aip/callback",
+            state="state",
+            txn_id="txn-123",
+        )
+
+        assert "chatgpt.com" in html
+        assert "warning-box" in html
+
     def test_create_consent_html_with_error(self):
         """Test consent HTML includes error message when provided."""
         html = create_consent_html(
             client_id="test-client",
-            client_name=None,
             redirect_uri="http://localhost/cb",
             state="state",
-            scopes=[],
             txn_id="txn-123",
             error_message="Invalid credentials",
         )
@@ -77,50 +84,33 @@ class TestConsentForm:
         assert "Invalid credentials" in html
         assert "error-message" in html
 
-    def test_create_consent_html_without_client_name(self):
-        """Test consent HTML uses client_id when no name provided."""
-        html = create_consent_html(
-            client_id="my-client-id",
-            client_name=None,
-            redirect_uri="http://localhost/cb",
-            state="state",
-            scopes=["homeassistant"],
-            txn_id="txn-456",
-        )
-
-        assert "my-client-id" in html
-
     def test_create_consent_html_xss_prevention(self):
         """Test that user-controlled values are HTML-escaped."""
         html = create_consent_html(
             client_id='<script>alert("xss")</script>',
-            client_name='<img src=x onerror=alert(1)>',
-            redirect_uri='"><script>alert(1)</script>',
+            redirect_uri='http://evil.com/"><script>alert(1)</script>',
             state='"><script>alert(1)</script>',
-            scopes=["homeassistant"],
             txn_id='"><script>alert(1)</script>',
         )
 
         # Raw XSS payloads should NOT appear in user-controlled output areas
         # (template has its own <script> for form handling, so check escaped versions)
         assert "&lt;script&gt;alert(" in html
-        assert "&lt;img src=x onerror=alert(1)&gt;" in html
         assert "&quot;&gt;&lt;script&gt;" in html
 
     def test_create_consent_html_warning_box(self):
-        """Test that consent form includes token sharing warning."""
+        """Test that consent form includes token sharing warning with domain."""
         html = create_consent_html(
             client_id="test-client",
-            client_name="Claude AI",
-            redirect_uri="http://localhost/cb",
+            redirect_uri="https://claude.ai/callback",
             state="state",
-            scopes=["homeassistant"],
             txn_id="txn-789",
         )
 
         assert "warning-box" in html
         assert "shared with" in html
-        assert "revoke access" in html.lower() or "Long-Lived Access Tokens" in html
+        assert "claude.ai" in html
+        assert "Long-Lived Access Tokens" in html
 
     def test_create_error_html(self):
         """Test error HTML generation."""
@@ -533,7 +523,7 @@ class TestOAuthRoutes:
         client_info = OAuthClientInformationFull(
             client_id="test-client",
             client_name="Test Client",
-            redirect_uris=["http://localhost/cb"],
+            redirect_uris=["http://claude.ai/callback"],
         )
         await provider.register_client(client_info)
 
@@ -542,7 +532,7 @@ class TestOAuthRoutes:
         provider.pending_authorizations[txn_id] = {
             "client_id": "test-client",
             "client_name": "Test Client",
-            "redirect_uri": "http://localhost/cb",
+            "redirect_uri": "http://claude.ai/callback",
             "state": "test-state",
             "scopes": ["homeassistant"],
             "created_at": time.time(),
@@ -553,8 +543,24 @@ class TestOAuthRoutes:
         response = await provider._consent_get(request)
 
         assert response.status_code == 200
-        assert b"Test Client" in response.body
+        assert b"claude.ai" in response.body
         assert b"test-txn-123" in response.body
+
+    @pytest.mark.asyncio
+    async def test_consent_get_no_redirect_uri(self, provider, mock_request):
+        """Test consent form GET returns error when redirect_uri is missing."""
+        txn_id = "test-txn-no-redirect"
+        provider.pending_authorizations[txn_id] = {
+            "client_id": "test-client",
+            "redirect_uri": "",  # Empty
+            "created_at": time.time(),
+        }
+
+        request = mock_request(query_params={"txn_id": txn_id})
+        response = await provider._consent_get(request)
+
+        assert response.status_code == 400
+        assert b"redirect URI" in response.body
 
     @pytest.mark.asyncio
     async def test_consent_get_missing_txn_id(self, provider, mock_request):

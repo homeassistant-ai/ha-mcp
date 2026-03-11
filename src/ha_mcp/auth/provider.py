@@ -400,17 +400,25 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 status_code=400,
             )
 
-        html = create_consent_html(
+        redirect_uri = pending.get("redirect_uri", "")
+        if not redirect_uri:
+            return HTMLResponse(
+                create_error_html(
+                    "invalid_request",
+                    "No redirect URI provided. The client must specify a redirect URI.",
+                ),
+                status_code=400,
+            )
+
+        consent_html = create_consent_html(
             client_id=pending["client_id"],
-            client_name=pending.get("client_name"),
-            redirect_uri=pending["redirect_uri"],
+            redirect_uri=redirect_uri,
             state=pending.get("state", ""),
-            scopes=pending.get("scopes", []),
             txn_id=txn_id,
             error_message=error_message,
         )
 
-        return HTMLResponse(html)
+        return HTMLResponse(consent_html)
 
     async def _consent_post(self, request: Request) -> Response:
         """Handle POST request from consent form."""
