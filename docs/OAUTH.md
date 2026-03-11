@@ -2,6 +2,8 @@
 
 > **Status:** Beta - OAuth provides an alternative to the private URL method. It's fully functional but still being refined.
 
+> **Breaking change:** `HOMEASSISTANT_URL` is now a required environment variable in OAuth mode. The consent form no longer accepts a Home Assistant URL for security reasons.
+
 OAuth authentication allows multiple users to authenticate with their own Home Assistant Long-Lived Access Token via a consent form.
 
 ## When to Use OAuth
