@@ -311,6 +311,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "Most tools are discoverable only through this search."
     )
 
+    # Extra keywords appended to tool descriptions for BM25 ranking.
+    # Only active behind enable_tool_search — the original docstrings
+    # are unchanged; these keywords are appended by SearchKeywordsTransform.
+    _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
+        # s02: "find entities" → ha_search_entities should outrank ha_deep_search
+        "ha_search_entities": (
+            "find entities lookup discover lights sensors switches "
+            "covers climate fans media_player"
+        ),
+        # s07: "get/read automation" → ha_config_get_automation should outrank set
+        "ha_config_get_automation": (
+            "read inspect fetch view existing automation config"
+        ),
+        # s09: "create helper" → ha_config_set_helper should outrank remove_helper
+        "ha_config_set_helper": (
+            "create new add helper input_boolean input_number input_text "
+            "counter timer input_datetime input_select input_button "
+            "schedule zone group min_max"
+        ),
+    }
+
     def _apply_tool_search(self) -> None:
         """Apply the CategorizedSearchTransform if enabled.
 
@@ -355,6 +376,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
 
         try:
+            # Enrich tool descriptions for BM25 ranking (innermost transform).
+            # Added first so the search transform indexes enriched descriptions.
+            # Original tool docstrings are unchanged.
+            from .transforms import SearchKeywordsTransform
+
+            self.mcp.add_transform(SearchKeywordsTransform(self._SEARCH_KEYWORDS))
+
             self.mcp.add_transform(
                 CategorizedSearchTransform(
                     max_results=10,

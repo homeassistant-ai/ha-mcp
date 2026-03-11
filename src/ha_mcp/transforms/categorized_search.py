@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
+from fastmcp.server.transforms import Transform
 from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
@@ -44,6 +45,39 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
+
+
+class SearchKeywordsTransform(Transform):
+    """Append BM25 search keywords to tool descriptions.
+
+    A simple Transform that appends extra keywords to specific tools'
+    descriptions so BM25 ranks them higher for common queries.  The
+    original description is fully preserved — keywords are appended
+    after a blank line at the end.
+
+    Only active when added to the transform pipeline (i.e., behind
+    the ``enable_tool_search`` toggle).
+    """
+
+    def __init__(self, keywords: dict[str, str]) -> None:
+        """Initialize with a mapping of tool name → keywords to append."""
+        self._keywords = keywords
+
+    def _enrich(self, tool: Tool) -> Tool:
+        keywords = self._keywords.get(tool.name)
+        if not keywords:
+            return tool
+        enriched = f"{tool.description}\n\n{keywords}" if tool.description else keywords
+        return tool.model_copy(update={"description": enriched})
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [self._enrich(t) for t in tools]
+
+    async def get_tool(
+        self, name: str, call_next: "GetToolNext", *, version: "VersionSpec | None" = None
+    ) -> Tool | None:
+        tool = await call_next(name, version=version)
+        return self._enrich(tool) if tool else None
 
 # Proxy tool descriptions (shared between transform_tools and get_tool)
 _READ_PROXY_DESC = (
