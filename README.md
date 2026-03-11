@@ -1,3 +1,5 @@
+> ⚠️ **Breaking change in OAuth (beta) mode** — v7.0.0 requires `HOMEASSISTANT_URL` to be set server-side. [See issue #749 for migration instructions.](https://github.com/homeassistant-ai/ha-mcp/issues/749)
+
 <div align="center">
   <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
