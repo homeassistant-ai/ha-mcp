@@ -74,7 +74,7 @@ class SearchKeywordsTransform(Transform):
         return [self._enrich(t) for t in tools]
 
     async def get_tool(
-        self, name: str, call_next: "GetToolNext", *, version: "VersionSpec | None" = None
+        self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
     ) -> Tool | None:
         tool = await call_next(name, version=version)
         return self._enrich(tool) if tool else None
