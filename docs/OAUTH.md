@@ -48,7 +48,7 @@ docker run -d --name ha-mcp-oauth \
 ```bash
 export HOMEASSISTANT_URL=http://homeassistant.local:8123
 export MCP_BASE_URL=https://your-tunnel.trycloudflare.com
-uvx ha-mcp@latest ha-mcp-oauth
+uvx --from=ha-mcp@latest ha-mcp-oauth
 ```
 
 ### 3. Environment Variables
