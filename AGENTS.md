@@ -529,9 +529,70 @@ def register_<domain>_tools(mcp, client, **kwargs):
     @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
     async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
-        """One-line summary starting with action verb."""
-        # For complex schemas, add: "Use ha_get_domain_docs('<domain>') for details."
+        """<Action verb> <what this tool does in one sentence>.
+
+        <Optional: when to use this vs related tools, or key behavioral distinction>
+
+        EXAMPLES:
+        - <minimal call>: ha_<verb>_<noun>(required_param)
+        - <common variant>: ha_<verb>_<noun>(required_param, optional=value) - why you'd use this
+
+        <Optional NOTE/IMPORTANT about gotcha, limitation, or surprising behavior>
+        """
 ```
+
+### Tool Docstrings
+
+Tool docstrings are the **primary interface between the LLM and the tool**. The LLM reads them to decide when and how to call each tool — accuracy and clarity directly affect quality of AI-assisted home automation. This is not optional documentation; it is the API contract.
+
+**What every non-trivial tool docstring must include:**
+
+| Element | Required | Notes |
+|---------|----------|-------|
+| Action verb opening | Always | `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Execute` — never `Returns` |
+| One-line summary | Always | What the tool does, not how it does it |
+| Concrete examples | Always | 2-5 realistic calls with real-looking values (e.g. `light.living_room`) |
+| Related tools | When applicable | Next step in the workflow, or the alternative for a different use case |
+| Gotchas / limitations | When they exist | Non-obvious behavior that would cause wrong usage |
+| Schema pointer | Complex schemas | `Use ha_get_domain_docs('<domain>') for full schema` — never embed the schema inline |
+
+**HA vocabulary — always use correct terms:**
+- Entity IDs: `domain.slug` (e.g. `light.living_room`, `climate.thermostat`)
+- Domains: `light`, `switch`, `climate`, `automation`, `script`, `input_boolean`, `sensor`, `cover`, `media_player`, etc.
+- Services: `turn_on`, `turn_off`, `toggle`, `set_temperature` — not `activate`, `enable`, `switch`
+- Hierarchy: areas (rooms) contain devices (physical hardware) which expose entities (controllable units)
+- Config entries = integrations (e.g. Zigbee, Z-Wave); helpers = `input_*` entities created via UI
+
+**Discoverability — connecting tools into workflows:**
+
+A tool is only as useful as how easily an LLM can discover it at the right moment. Make each tool point forward:
+
+```python
+# Search/list → point to detail tool
+"""Search entities by name, area, domain, or state.
+
+NEXT: Use ha_get_state(entity_id) for full state and attributes of a specific entity.
+"""
+
+# Create → point to verify tool
+"""Create an input_boolean helper entity.
+
+After creation, use ha_list_helpers(domain_filter="input_boolean") to confirm it registered.
+"""
+
+# Complex schema → point to docs tool
+"""Create or update a Home Assistant automation.
+
+For the full trigger/condition/action schema, call ha_get_domain_docs('automation').
+"""
+```
+
+**What NOT to put in docstrings:**
+- Full JSON schemas or configuration reference — use `ha_get_domain_docs()`
+- Parameter descriptions already covered by `Field(description=...)` Pydantic annotations
+- Implementation details or internal logic
+
+**Boy Scout rule:** Always improve the docstring of any tool you touch. Added a parameter? Add an example using it. Fixed a bug? Add a NOTE about the gotcha.
 
 ### Safety Annotations
 | Annotation | Default | Use For |
