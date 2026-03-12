@@ -200,14 +200,13 @@ class WebSocketListenerService:
                                 "giving up on reconnection."
                             )
                             break
-                        # Use exponential backoff from the guard
-                        # (we don't have the key here, but the guard
-                        # records it in get_client; use a generic delay
-                        # proportional to error count)
-                        backoff = min(
-                            base_interval * (2 ** self.stats.get("connection_errors", 1)),
-                            300,
+                        # Use exponential backoff from the AuthenticationGuard.
+                        # Since this listener uses global settings, derive the key.
+                        settings = get_global_settings()
+                        key = websocket_manager._client_key(
+                            settings.homeassistant_url, settings.homeassistant_token
                         )
+                        backoff = guard.get_backoff_seconds(key)
                         logger.info(
                             f"Waiting {backoff}s before next reconnection attempt"
                         )
