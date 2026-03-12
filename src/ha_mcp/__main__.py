@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any  # noqa: E402
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from ha_mcp.auth.provider import HomeAssistantOAuthProvider
     from ha_mcp.client.rest_client import HomeAssistantClient
     from ha_mcp.config import Settings
     from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -32,10 +31,13 @@ class OAuthProxyClient:
 
     This class is necessary because tools capture a reference to the client at registration time.
     The proxy allows us to inject different credentials per-request based on OAuth token claims.
+
+    The Home Assistant URL is fixed server-side (HOMEASSISTANT_URL env var).
+    Only the access token varies per-user (from OAuth consent form).
     """
 
-    def __init__(self, auth_provider: "HomeAssistantOAuthProvider") -> None:
-        self._auth_provider = auth_provider
+    def __init__(self, ha_url: str) -> None:
+        self._ha_url = ha_url.rstrip("/")
         self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
@@ -52,26 +54,25 @@ class OAuthProxyClient:
             logger.warning("No access token in context")
             raise RuntimeError("No OAuth token in request context")
 
-        # Extract HA credentials from token claims
+        # Extract HA token from claims (URL is server-side config)
         claims = token.claims
 
-        if not claims or "ha_url" not in claims or "ha_token" not in claims:
+        if not claims or "ha_token" not in claims:
             logger.error(f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}")
             raise RuntimeError("No Home Assistant credentials in OAuth token claims")
 
-        ha_url = claims["ha_url"]
         ha_token = claims["ha_token"]
 
-        # Hash credentials for cache key to avoid raw tokens appearing in dict keys
-        client_key = hashlib.sha256(f"{ha_url}:{ha_token}".encode()).hexdigest()
+        # Hash token for cache key to avoid raw tokens appearing in dict keys
+        client_key = hashlib.sha256(ha_token.encode()).hexdigest()
 
         with self._lock:
             if client_key not in self._oauth_clients:
                 self._oauth_clients[client_key] = HomeAssistantClient(
-                    base_url=ha_url,
+                    base_url=self._ha_url,
                     token=ha_token,
                 )
-                logger.info(f"Created OAuth client for {ha_url}")
+                logger.info(f"Created OAuth client for {self._ha_url}")
 
             return self._oauth_clients[client_key]
 
@@ -610,18 +611,19 @@ def main_sse() -> None:
 def main_oauth() -> None:
     """Run server with OAuth 2.1 authentication over HTTP.
 
-    This mode enables zero-config authentication for MCP clients like Claude.ai.
-    Users authenticate via a consent form where they enter their Home Assistant
-    URL and Long-Lived Access Token.
+    This mode enables per-user authentication for MCP clients like Claude.ai.
+    Users authenticate via a consent form where they provide their
+    Long-Lived Access Token.
 
     Environment:
+    - HOMEASSISTANT_URL (required): URL of the Home Assistant instance
     - MCP_BASE_URL (required): Public URL where this server is accessible (e.g., https://your-tunnel.com)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
 
-    Note: HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN are NOT required in this mode.
-    They are collected via the OAuth consent form.
+    Note: HOMEASSISTANT_TOKEN is NOT required in this mode.
+    Per-user tokens are collected via the OAuth consent form.
     """
     # Configure logging for OAuth mode
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -633,21 +635,45 @@ def main_oauth() -> None:
 
     port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")
+    ha_url = os.getenv("HOMEASSISTANT_URL")
 
+    missing = []
     if not base_url:
-        logger.error("MCP_BASE_URL environment variable is required for OAuth mode")
-        logger.error(
-            "Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com"
+        missing.append("  - MCP_BASE_URL (e.g., https://your-tunnel.trycloudflare.com)")
+    if not ha_url:
+        missing.append("  - HOMEASSISTANT_URL (e.g., http://homeassistant.local:8123)")
+
+    if missing:
+        missing_vars = "\n".join(missing)
+        print(
+            f"""
+==============================================================================
+                    Home Assistant MCP Server - Configuration Error
+==============================================================================
+
+Missing required environment variables for OAuth mode:
+{missing_vars}
+
+For setup instructions, see:
+  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md
+
+==============================================================================
+""",
+            file=sys.stderr,
         )
         sys.exit(1)
 
-    _run_entrypoint(_run_oauth_server(base_url, port, path), "OAuth server")
+    # Type narrowing: ha_url and base_url are guaranteed non-None after the check above
+    assert ha_url is not None
+    assert base_url is not None
+    _run_entrypoint(_run_oauth_server(ha_url, base_url, port, path), "OAuth server")
 
 
-async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
+async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) -> None:
     """Run the OAuth-authenticated MCP server.
 
     Args:
+        ha_url: Home Assistant instance URL (server-side config)
         base_url: Public URL where this server is accessible (required)
         port: Port to listen on
         path: MCP endpoint path
@@ -661,9 +687,9 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         service_documentation_url="https://github.com/homeassistant-ai/ha-mcp",
     )
 
-    # In OAuth mode, credentials come from the OAuth consent form per-request.
-    # The proxy client extracts them from token claims on each tool invocation.
-    proxy_client = OAuthProxyClient(auth_provider)
+    # In OAuth mode, the HA URL is fixed server-side. Per-user tokens come
+    # from the OAuth consent form and are extracted from token claims.
+    proxy_client = OAuthProxyClient(ha_url)
 
     global _server
     _server = HomeAssistantSmartMCPServer(
