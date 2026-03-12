@@ -239,6 +239,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@knowald](https://github.com/knowald)** — Area resolution via device registry in `ha_get_system_overview` for entities assigned through their parent device.
+- **[@zorrobyte](https://github.com/zorrobyte)** — Per-client WebSocket credentials in OAuth mode, fixing WebSocket tool failures.
+- **[@deanbenson](https://github.com/deanbenson)** — Fixed `ha_deep_search` timeout on large Home Assistant instances with many automations.
 
 ---
 
