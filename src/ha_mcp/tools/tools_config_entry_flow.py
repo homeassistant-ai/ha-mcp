@@ -320,11 +320,11 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """Get configuration schema for a helper type.
 
         Returns the form fields and their types needed to create this helper.
-        Use before ha_create_config_entry_helper to understand required config.
+        Use before ha_set_config_entry_helper to understand required config.
 
         For menu-based helpers (e.g. group), returns the available menu options.
         Include 'group_type' (or 'next_step_id') in your config when calling
-        ha_create_config_entry_helper to navigate the menu.
+        ha_set_config_entry_helper to navigate the menu.
         """
         flow_id = None
         try:
@@ -359,7 +359,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "note": (
                         "This helper requires selecting from a menu first. "
                         "Include 'group_type' (or 'next_step_id') in your config "
-                        "when calling ha_create_config_entry_helper."
+                        "when calling ha_set_config_entry_helper."
                     ),
                 }
             else:
