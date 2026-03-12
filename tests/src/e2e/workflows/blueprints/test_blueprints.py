@@ -13,7 +13,12 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool, wait_for_automation
+from ...utilities.assertions import (
+    MCPAssertions,
+    _extract_error_message,
+    safe_call_tool,
+    wait_for_automation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +235,65 @@ class TestBlueprintManagement:
             # Should fail with appropriate error (suggestions nested under "error")
             assert "suggestions" in result.get("error", {}), "Error response should include suggestions"
             logger.info("ha_import_blueprint properly handles non-existent URL")
+
+    @pytest.mark.slow
+    async def test_import_blueprint_saves_to_disk(self, mcp_client):
+        """
+        Test: Import blueprint actually saves to disk (issue #685)
+
+        Validates that ha_import_blueprint calls both blueprint/import (validate)
+        AND blueprint/save (persist), so the blueprint appears in the list.
+        Uses a known community blueprint that won't already be installed.
+        """
+        logger.info("Testing ha_import_blueprint saves blueprint to disk...")
+
+        # Use a community blueprint unlikely to be pre-installed
+        test_url = "https://gist.github.com/Blackshome/4010fb83bb8c19b5fa1425526c6ff0e2"
+
+        async with MCPAssertions(mcp_client) as mcp:
+            # List blueprints before import
+            before = await mcp.call_tool_success(
+                "ha_get_blueprint",
+                {"domain": "automation"},
+            )
+            before_paths = [bp["path"] for bp in before.get("blueprints", [])]
+
+            # Try to import
+            result = await safe_call_tool(
+                mcp_client,
+                "ha_import_blueprint",
+                {"url": test_url},
+            )
+
+            if result.get("success"):
+                # Import succeeded - verify metadata is populated
+                imported = result.get("imported_blueprint", {})
+                assert imported.get("path", "").endswith(".yaml"), \
+                    f"Blueprint path should end with .yaml, got: {imported.get('path')}"
+                assert imported.get("domain") in ("automation", "script"), \
+                    f"Blueprint domain should be automation or script, got: {imported.get('domain')}"
+                assert imported.get("name"), "Blueprint name should not be empty"
+                assert imported["path"] not in before_paths, \
+                    f"Blueprint {imported['path']} should not have existed before import"
+                logger.info(f"Blueprint imported: {imported.get('name')} at {imported.get('path')}")
+
+                # Verify it appears in the blueprint list
+                after = await mcp.call_tool_success(
+                    "ha_get_blueprint",
+                    {"domain": imported.get("domain", "automation")},
+                )
+                after_paths = [bp["path"] for bp in after.get("blueprints", [])]
+                assert imported["path"] in after_paths, \
+                    f"Imported blueprint {imported['path']} should appear in blueprint list"
+                logger.info("Blueprint appears in list after import")
+            else:
+                # Only acceptable failure is "already exists"
+                error_msg = _extract_error_message(result)
+                assert "already exists" in error_msg.lower(), \
+                    f"Expected 'already exists' error, got: {result}"
+                logger.info("Blueprint already existed (prior test run), still valid")
+
+            logger.info("ha_import_blueprint save-to-disk test completed")
 
 
 @pytest.mark.blueprint
