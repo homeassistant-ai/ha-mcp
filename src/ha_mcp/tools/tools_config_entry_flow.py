@@ -281,7 +281,15 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         context={"helper_type": helper_type, "details": flow_result},
                     ))
 
-                result = await _handle_flow_steps(flow_id, flow_result, config_dict)
+                try:
+                    result = await _handle_flow_steps(flow_id, flow_result, config_dict)
+                except Exception:
+                    try:
+                        await client.abort_config_flow(flow_id)
+                    except Exception as abort_err:
+                        logger.debug(f"Failed to abort config flow {flow_id} after error: {abort_err}")
+                    raise
+
                 entry = result["entry"].get("result", {})
                 return {
                     "success": True,
