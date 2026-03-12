@@ -23,6 +23,105 @@ from ..config import get_global_settings
 
 logger = logging.getLogger(__name__)
 
+# Auth guard constants
+_AUTH_MAX_CONSECUTIVE_FAILURES = 5
+_AUTH_BASE_BACKOFF_SECONDS = 30.0
+_AUTH_MAX_BACKOFF_SECONDS = 300.0
+
+
+class AuthenticationError(Exception):
+    """Raised when WebSocket authentication fails due to invalid credentials.
+
+    Distinct from generic connection errors so callers can apply different
+    retry strategies (auth failures are typically permanent until the token
+    is rotated, while network errors are transient).
+    """
+
+
+class AuthenticationGuard:
+    """Tracks consecutive authentication failures per credential set.
+
+    Implements exponential backoff and a circuit breaker to prevent
+    infinite login-attempt loops when credentials are invalid.
+    """
+
+    def __init__(
+        self,
+        max_failures: int = _AUTH_MAX_CONSECUTIVE_FAILURES,
+        base_backoff: float = _AUTH_BASE_BACKOFF_SECONDS,
+        max_backoff: float = _AUTH_MAX_BACKOFF_SECONDS,
+    ) -> None:
+        self._max_failures = max_failures
+        self._base_backoff = base_backoff
+        self._max_backoff = max_backoff
+        # key → consecutive failure count
+        self._failures: dict[str, int] = {}
+        # key → monotonic timestamp of last failure
+        self._last_failure_time: dict[str, float] = {}
+
+    def record_failure(self, key: str) -> None:
+        """Record an authentication failure for *key*."""
+        self._failures[key] = self._failures.get(key, 0) + 1
+        self._last_failure_time[key] = time.monotonic()
+        count = self._failures[key]
+        logger.warning(
+            "Authentication failure #%d for credential set %s…%s",
+            count,
+            key[:8],
+            key[-4:],
+        )
+        if count >= self._max_failures:
+            logger.error(
+                "Circuit breaker OPEN — %d consecutive auth failures. "
+                "Will not retry until credentials are reset or the server "
+                "is restarted.",
+                count,
+            )
+
+    def record_success(self, key: str) -> None:
+        """Clear failure tracking for *key* after a successful auth."""
+        if key in self._failures:
+            logger.info(
+                "Authentication succeeded — resetting failure count for %s…%s",
+                key[:8],
+                key[-4:],
+            )
+        self._failures.pop(key, None)
+        self._last_failure_time.pop(key, None)
+
+    @property
+    def has_any_tripped_breaker(self) -> bool:
+        """Return True if any credential set has tripped the circuit breaker."""
+        return any(c >= self._max_failures for c in self._failures.values())
+
+    def is_circuit_open(self, key: str) -> bool:
+        """Return True if the circuit breaker has tripped for *key*."""
+        return self._failures.get(key, 0) >= self._max_failures
+
+    def get_backoff_seconds(self, key: str) -> float:
+        """Return the backoff delay for the next retry attempt.
+
+        Uses exponential backoff: base * 2^(failures-1), capped at max.
+        """
+        failures = self._failures.get(key, 0)
+        if failures == 0:
+            return 0.0
+        delay = self._base_backoff * (2 ** (failures - 1))
+        return float(min(delay, self._max_backoff))
+
+    def consecutive_failures(self, key: str) -> int:
+        """Return the current consecutive failure count for *key*."""
+        return self._failures.get(key, 0)
+
+    def reset(self, key: str | None = None) -> None:
+        """Reset failure tracking.  If *key* is None, reset everything."""
+        if key is None:
+            self._failures.clear()
+            self._last_failure_time.clear()
+        else:
+            self._failures.pop(key, None)
+            self._last_failure_time.pop(key, None)
+
 
 class WebSocketConnectionState:
     """Encapsulates mutable state used by the WebSocket client."""
@@ -232,13 +331,22 @@ class HomeAssistantWebSocketClient:
                     message_type="auth_invalid", timeout=1
                 )
                 if auth_invalid:
-                    raise Exception("Authentication failed: Invalid token")
-                raise Exception("Authentication timeout")
+                    raise AuthenticationError("Authentication failed: Invalid token")
+                # We sent credentials and got neither auth_ok nor auth_invalid.
+                # This is still an authentication failure (e.g. HA closed the
+                # connection or the token is malformed).
+                raise AuthenticationError(
+                    "Authentication failed: No auth response received after "
+                    "sending credentials (timeout)"
+                )
 
             self._state.mark_authenticated()
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
+        except AuthenticationError:
+            await self.disconnect()
+            raise
         except Exception as e:
             logger.error(f"WebSocket connection failed: {e}")
             await self.disconnect()
@@ -564,6 +672,9 @@ class WebSocketManager:
     multiple OAuth users can have concurrent connections without interfering
     with each other.  The pool is bounded to ``MAX_POOL_SIZE`` entries; when
     this limit is exceeded the least-recently-used connection is evicted.
+
+    An :class:`AuthenticationGuard` prevents infinite reconnection loops
+    when credentials are invalid.
     """
 
     _instance = None
@@ -573,6 +684,7 @@ class WebSocketManager:
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
     _client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None
+    _auth_guard: AuthenticationGuard
 
     def __new__(cls) -> "WebSocketManager":
         if cls._instance is None:
@@ -582,6 +694,7 @@ class WebSocketManager:
             cls._instance._lock = None
             cls._instance._lock_loop = None
             cls._instance._client_factory = HomeAssistantWebSocketClient
+            cls._instance._auth_guard = AuthenticationGuard()
         return cls._instance
 
     def configure(
@@ -592,6 +705,11 @@ class WebSocketManager:
         """Configure the manager with injectable dependencies."""
         if client_factory is not None:
             self._client_factory = client_factory
+
+    @property
+    def auth_guard(self) -> AuthenticationGuard:
+        """Access the authentication guard for backoff / circuit-breaker queries."""
+        return self._auth_guard
 
     def _ensure_lock(self) -> None:
         """Ensure lock is created in the current event loop."""
@@ -629,6 +747,11 @@ class WebSocketManager:
         each user gets their own connection. In non-OAuth mode, the global
         settings are used as the key.
 
+        Raises:
+            AuthenticationError: If the circuit breaker has tripped for
+                the requested credentials (too many consecutive auth failures).
+            Exception: If connection fails for non-auth reasons.
+
         Args:
             url: Optional HA URL. If provided with token, uses these
                  credentials instead of global settings. This is required
@@ -665,6 +788,15 @@ class WebSocketManager:
 
             key = self._client_key(ws_url, ws_token)
 
+            # Circuit breaker: refuse to connect if auth has failed too many times
+            if self._auth_guard.is_circuit_open(key):
+                failures = self._auth_guard.consecutive_failures(key)
+                raise AuthenticationError(
+                    f"Authentication circuit breaker is OPEN after {failures} "
+                    f"consecutive failures. Check your HOMEASSISTANT_TOKEN and "
+                    f"restart the server."
+                )
+
             # Return existing connected client for these credentials
             existing = self._clients.get(key)
             if existing and existing.is_connected:
@@ -679,9 +811,21 @@ class WebSocketManager:
             factory = self._client_factory or HomeAssistantWebSocketClient
             client = factory(ws_url, ws_token)
 
-            connected = await client.connect()
+            try:
+                connected = await client.connect()
+            except AuthenticationError:
+                self._auth_guard.record_failure(key)
+                raise
+            except Exception:
+                # Non-auth failure (network, timeout, etc.) — don't count
+                # against the auth circuit breaker.
+                raise
+
             if not connected:
                 raise Exception("Failed to connect to Home Assistant WebSocket")
+
+            # Auth succeeded — reset any prior failure tracking
+            self._auth_guard.record_success(key)
 
             self._clients[key] = client
             self._last_used[key] = time.monotonic()

@@ -12,7 +12,12 @@ from typing import Any
 
 from ..config import get_global_settings
 from ..utils.operation_manager import get_operation_manager, update_pending_operations
-from .websocket_client import HomeAssistantWebSocketClient, get_websocket_client
+from .websocket_client import (
+    AuthenticationError,
+    HomeAssistantWebSocketClient,
+    get_websocket_client,
+    websocket_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +147,12 @@ class WebSocketListenerService:
             logger.error(f"Error handling state change event: {e}")
 
     async def _connection_monitor(self) -> None:
-        """Monitor WebSocket connection health."""
+        """Monitor WebSocket connection health.
+
+        Uses exponential backoff for reconnection attempts and stops
+        retrying when the authentication circuit breaker trips.
+        """
+        base_interval = 30  # seconds between health checks when connected
         while self.running:
             try:
                 if self.websocket_client and self.websocket_client.is_connected:
@@ -153,11 +163,23 @@ class WebSocketListenerService:
                         connection_errors = self.stats["connection_errors"]
                         if isinstance(connection_errors, int):
                             self.stats["connection_errors"] = connection_errors + 1
+                    await asyncio.sleep(base_interval)
                 else:
                     logger.warning("WebSocket connection lost")
                     connection_errors = self.stats["connection_errors"]
                     if isinstance(connection_errors, int):
                         self.stats["connection_errors"] = connection_errors + 1
+
+                    # Check if the auth circuit breaker has tripped
+                    guard = websocket_manager.auth_guard
+                    if guard.has_any_tripped_breaker:
+                        logger.error(
+                            "Authentication circuit breaker is OPEN — "
+                            "stopping reconnection attempts. "
+                            "Fix credentials and restart the server."
+                        )
+                        # Stop the monitor; no point retrying with bad creds
+                        break
 
                     # Try to reconnect
                     try:
@@ -167,17 +189,38 @@ class WebSocketListenerService:
                             "state_changed", self._handle_state_change
                         )
                         logger.info("WebSocket reconnected successfully")
+                        await asyncio.sleep(base_interval)
+                    except AuthenticationError as e:
+                        logger.error(f"WebSocket reconnection auth failure: {e}")
+                        # Backoff is already tracked by the guard via
+                        # WebSocketManager — just wait longer before next attempt.
+                        if guard.has_any_tripped_breaker:
+                            logger.error(
+                                "Authentication circuit breaker tripped — "
+                                "giving up on reconnection."
+                            )
+                            break
+                        # Use exponential backoff from the guard
+                        # (we don't have the key here, but the guard
+                        # records it in get_client; use a generic delay
+                        # proportional to error count)
+                        backoff = min(
+                            base_interval * (2 ** self.stats.get("connection_errors", 1)),
+                            300,
+                        )
+                        logger.info(
+                            f"Waiting {backoff}s before next reconnection attempt"
+                        )
+                        await asyncio.sleep(backoff)
                     except Exception as e:
                         logger.error(f"WebSocket reconnection failed: {e}")
-
-                # Wait before next health check
-                await asyncio.sleep(30)  # Check every 30 seconds
+                        await asyncio.sleep(base_interval)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Connection monitor error: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(base_interval)
 
     async def _periodic_cleanup(self) -> None:
         """Periodic cleanup of expired operations."""
