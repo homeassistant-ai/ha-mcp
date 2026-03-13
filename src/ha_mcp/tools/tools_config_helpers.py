@@ -388,6 +388,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         TEMPLATE SENSORS AND BINARY SENSORS:
         Use ha_set_config_entry_helper(helper_type="template", ...) — not this tool.
         Template helpers are managed via the Config Entry Flow API.
+        Before reaching for a template, check if a simpler built-in exists:
+        - min_max instead of template for combining sensors
+        - group instead of template binary sensor for any/all logic
+        - counter instead of template with math for counting
+        - input_number instead of template for storing values
+        - schedule instead of template with weekday checks
         Workflow:
           1. ha_get_helper_schema("template") → see available sub-types
           2. ha_get_helper_schema("template", menu_option="sensor") → see form fields

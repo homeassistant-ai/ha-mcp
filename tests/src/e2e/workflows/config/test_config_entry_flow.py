@@ -135,7 +135,7 @@ class TestConfigEntryFlow:
         error_str = str(data).lower()
         assert any(
             kw in error_str
-            for kw in ("valid options", "not valid", "menu_option", "nonexistent", "400", "api error")
+            for kw in ("valid options", "not valid", "menu_option", "400", "api error")
         ), f"Error should mention valid options or invalid menu_option: {data}"
 
     async def test_get_helper_schema_multiple_types(self, mcp_client):
