@@ -636,7 +636,7 @@ class HomeAssistantClient:
             user_input: Form data for current step
 
         Returns:
-            Flow result: type = "create_entry" | "form" | "abort"
+            Flow result: type = "create_entry" | "form" | "menu" | "abort"
 
         Raises:
             HomeAssistantAPIError: If flow submission fails
@@ -644,6 +644,87 @@ class HomeAssistantClient:
         logger.debug(f"Submitting flow step for flow_id: {flow_id}")
         return await self._request(
             "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
+        )
+
+    async def abort_config_flow(self, flow_id: str) -> dict[str, Any]:
+        """
+        Abort an in-progress config entry flow.
+
+        Args:
+            flow_id: Flow ID to abort
+
+        Returns:
+            Abort confirmation
+
+        Raises:
+            HomeAssistantAPIError: If flow not found or API error
+        """
+        logger.debug(f"Aborting config flow: {flow_id}")
+        return await self._request("DELETE", f"/config/config_entries/flow/{flow_id}")
+
+    async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
+        """
+        Start an options flow for a config entry.
+
+        The options flow allows configuring an existing integration
+        (equivalent to clicking "Configure" in the HA UI).
+
+        Args:
+            entry_id: Config entry ID to configure
+
+        Returns:
+            Flow data with flow_id, step_id, type (form|menu),
+            and data_schema or menu_options
+
+        Raises:
+            HomeAssistantAPIError: If flow start fails
+        """
+        logger.debug(f"Starting options flow for entry: {entry_id}")
+        return await self._request(
+            "POST",
+            "/config/config_entries/options/flow",
+            json={"handler": entry_id},
+        )
+
+    async def submit_options_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Submit data for an options flow step.
+
+        Args:
+            flow_id: Flow ID from start_options_flow or previous step
+            user_input: Form data or menu selection
+
+        Returns:
+            Flow result: type = "create_entry" | "form" | "menu" | "abort"
+
+        Raises:
+            HomeAssistantAPIError: If flow submission fails
+        """
+        logger.debug(f"Submitting options flow step for flow_id: {flow_id}")
+        return await self._request(
+            "POST",
+            f"/config/config_entries/options/flow/{flow_id}",
+            json=user_input,
+        )
+
+    async def abort_options_flow(self, flow_id: str) -> dict[str, Any]:
+        """
+        Abort an in-progress options flow without saving changes.
+
+        Args:
+            flow_id: Flow ID to abort
+
+        Returns:
+            Abort confirmation
+
+        Raises:
+            HomeAssistantAPIError: If flow not found or API error
+        """
+        logger.debug(f"Aborting options flow: {flow_id}")
+        return await self._request(
+            "DELETE", f"/config/config_entries/options/flow/{flow_id}"
         )
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
@@ -663,8 +744,10 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        # List all entries and filter by entry_id
-        entries = await self._request("GET", "/config/config_entries/entry")
+        # List all entries and filter by entry_id.
+        # Typed as Any because _request returns dict[str, Any] generically,
+        # but this endpoint actually returns a list.
+        entries: Any = await self._request("GET", "/config/config_entries/entry")
 
         if not isinstance(entries, list):
             raise HomeAssistantAPIError(
@@ -672,14 +755,15 @@ class HomeAssistantClient:
                 status_code=500,
             )
 
-        for entry in entries:
-            if entry.get("entry_id") == entry_id:
-                return entry
-
-        raise HomeAssistantAPIError(
-            f"Config entry not found: {entry_id}",
-            status_code=404,
+        found: dict[str, Any] | None = next(
+            (dict(e) for e in entries if e.get("entry_id") == entry_id), None
         )
+        if found is None:
+            raise HomeAssistantAPIError(
+                f"Config entry not found: {entry_id}",
+                status_code=404,
+            )
+        return found
 
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
@@ -746,91 +830,43 @@ class HomeAssistantClient:
         self, ws_client: Any, message: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle render_template WebSocket command with event-based response."""
-
-        # Generate our own message ID to track the response
-        message_id = ws_client.get_next_message_id()
-
-        # Construct the full message with proper ID
-        full_message = {
-            "id": message_id,
-            "type": "render_template",
-            "template": message.get("template"),
-            "timeout": message.get("timeout", 3),
-            "report_errors": message.get("report_errors", True),
-        }
-
-        # Create futures for both result and event responses
-        result_future = ws_client.register_pending_response(message_id)
-        event_future = ws_client.register_render_template_event(message_id)
-
-        # Use WebSocket client's send helper to transmit the message
-        try:
-            await ws_client.send_json_message(full_message)
-        except Exception as e:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
-            raise e
+        template_timeout = message.get("timeout", 3)
 
         try:
-            # Wait for the initial result response (should be success with null result)
-            result_response = await asyncio.wait_for(
-                result_future, timeout=message.get("timeout", 3) + 2
+            _, event_response = await ws_client.send_command_with_event(
+                "render_template",
+                wait_timeout=template_timeout + 2,
+                template=message.get("template"),
+                timeout=template_timeout,
+                report_errors=message.get("report_errors", True),
             )
-            logger.debug(f"WebSocket render_template result: {result_response}")
+            logger.debug(f"WebSocket render_template event: {event_response}")
 
-            if not result_response.get("success"):
-                ws_client.cancel_render_template_event(message_id)
-                error = result_response.get("error", "Unknown error")
+            # Extract template result from event
+            if "event" in event_response and "result" in event_response["event"]:
+                template_result = event_response["event"]["result"]
+                listeners_info = event_response["event"].get("listeners", {})
+
                 return {
-                    "success": False,
-                    "error": str(error),
+                    "success": True,
+                    "result": template_result,
                     "template": message.get("template"),
+                    "listeners": listeners_info,
                 }
-
-            # Wait for the event with the actual template result
-            try:
-                event_response = await asyncio.wait_for(
-                    event_future, timeout=message.get("timeout", 3) + 1
-                )
-                logger.debug(f"WebSocket render_template event: {event_response}")
-
-                # Extract template result from event
-                if "event" in event_response and "result" in event_response["event"]:
-                    template_result = event_response["event"]["result"]
-                    listeners_info = event_response["event"].get("listeners", {})
-
-                    return {
-                        "success": True,
-                        "result": template_result,
-                        "template": message.get("template"),
-                        "listeners": listeners_info,
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": "Invalid event response format",
-                        "template": message.get("template"),
-                    }
-
-            except TimeoutError:
-                ws_client.cancel_render_template_event(message_id)
+            else:
                 return {
                     "success": False,
-                    "error": "Event timeout - template result not received",
+                    "error": "Invalid event response format",
                     "template": message.get("template"),
                 }
 
         except TimeoutError:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
-                "error": "Command timeout",
+                "error": "Event timeout - template result not received",
                 "template": message.get("template"),
             }
         except Exception as e:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
                 "error": str(e),
