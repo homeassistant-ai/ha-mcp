@@ -373,6 +373,13 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             flow_id = flow_result.get("flow_id")
             flow_type = flow_result.get("type")
 
+            if flow_type == _FlowType.ABORT:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Could not get schema, flow aborted: {flow_result.get('reason')}",
+                    context={"helper_type": helper_type, "details": flow_result},
+                ))
+
             if not flow_id:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
