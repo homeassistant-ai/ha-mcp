@@ -168,7 +168,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             decoded = urlsafe_b64decode(token.encode()).decode()
             payload = json.loads(decoded)
 
-            ha_token = payload.get("ha_token")
+            ha_token: str | None = payload.get("ha_token")
 
             if ha_token:
                 return ha_token
