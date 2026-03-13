@@ -465,17 +465,28 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 default="minimal",
                 description=(
-                    "'minimal': 10 entities per domain sample (default); "
-                    "'standard': ALL entities per domain (friendly_name only); "
-                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
+                    "'minimal': 10 entities/domain, top-5 states (default); "
+                    "'standard': ALL entities, top-10 states (good for context priming); "
+                    "'full': ALL entities + entity_id + state + full states. "
+                    "Use 'domains' and/or max_entities_per_domain to control size"
                 ),
             ),
         ] = "minimal",
+        domains: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). "
+                    "None = all domains. Useful to avoid context window overload."
+                ),
+            ),
+        ] = None,
         max_entities_per_domain: Annotated[
             int | None,
             Field(
                 default=None,
-                description="Override max entities per domain (None = all). Minimal defaults to 10.",
+                description="Override default entity cap per domain (minimal=10, standard/full=unlimited). 0 = no limit on entities or states.",
             ),
         ] = None,
         include_state: Annotated[
@@ -505,7 +516,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, entity overview,
         and active persistent notifications (if any).
-        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+        Use 'minimal' (default) for most queries. Each domain always includes total 'count'
+        regardless of entity cap. If the response is too large, retry with a lower
+        max_entities_per_domain or use 'domains' to filter to specific domains.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -518,11 +531,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             include_notifications, "include_notifications", default=True
         )
 
+        # Parse domains filter
+        parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
+
         result = await smart_tools.get_system_overview(
             detail_level,
             max_entities_per_domain,
             include_state_bool,
             include_entity_id_bool,
+            domains_filter=parsed_domains,
         )
         result = cast(dict[str, Any], result)
 
