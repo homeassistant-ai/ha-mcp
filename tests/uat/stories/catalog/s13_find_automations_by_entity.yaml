@@ -1,0 +1,53 @@
+id: s13
+title: "Find automations and scripts that reference a specific entity"
+category: automation
+weight: 3
+description: >
+  User wants to know which automations or scripts use a specific entity.
+  This requires searching inside configuration definitions (triggers, actions),
+  not just entity names. A common troubleshooting workflow when a user wants
+  to understand what controls a device or before renaming/removing an entity.
+
+tags:
+  - search
+  - automation
+  - script
+  - deep_search
+
+setup:
+  - tool: ha_config_set_automation
+    args:
+      config:
+        alias: "Bed Light Evening"
+        description: "Turn on bed light in the evening"
+        mode: single
+        trigger:
+          - platform: time
+            at: "20:00:00"
+        action:
+          - action: light.turn_on
+            target:
+              entity_id: light.bed_light
+            data:
+              brightness_pct: 80
+
+prompt: >
+  Which automations or scripts reference light.bed_light? I want to know all the
+  places in my configuration that use this entity.
+
+teardown: []
+
+verify:
+  ha_checks:
+    - type: automation_exists
+      alias: "Bed Light Evening"
+    - type: response_contains
+      value: "Bed Light Evening"
+
+expected:
+  tools_should_use:
+    - ha_deep_search
+  description: >
+    Agent should use ha_deep_search to search inside automation/script
+    configurations for references to light.bed_light. A good agent will
+    report the automation name, its purpose, and how it uses the entity.

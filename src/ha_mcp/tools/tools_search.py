@@ -156,7 +156,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = 0,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
-        """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
+        """PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+
+        For searching *inside* automation/script/helper configurations, use ha_deep_search instead.
 
         **Listing Entities by Domain:**
         Use domain_filter with an empty query to list all entities of a specific type:
@@ -614,12 +616,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Deep search across automation, script, and helper definitions.
+        """Search inside automation, script, and helper *configurations* — not for finding entity IDs.
 
-        Searches not only entity names but also within configuration definitions including
-        triggers, actions, sequences, and other config fields. Perfect for finding automations
-        that use specific services, helpers referenced in scripts, or tracking down where
-        particular entities are being used.
+        Use this when you need to find automations/scripts by what they *do* (e.g., which automations
+        call a specific service, reference a particular entity, or contain a certain action).
+        For finding entity IDs by name, use ha_search_entities instead.
+
+        Searches within configuration definitions including triggers, actions, sequences, and other
+        config fields. Perfect for finding automations that use specific services, helpers referenced
+        in scripts, or tracking down where particular entities are being used.
 
         Args:
             query: Search query (can be partial, with typos)
