@@ -365,22 +365,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 f"the file URI to load specific guides as needed."
             )
 
-            # When tool search is enabled, append the search workflow so
-            # clients that don't read server instructions (e.g., claude.ai)
-            # still get the bootstrap context for using search + proxies.
-            if getattr(self.settings, "enable_tool_search", False):
-                tool_description += (
-                    "\n\nThis server uses search-based tool discovery. "
-                    "Use ha_search_tools(query='...') to find tools, then "
-                    "execute via the matching proxy:\n"
-                    "- ha_call_read_tool — safe, read-only operations\n"
-                    "- ha_call_write_tool — create/update operations\n"
-                    "- ha_call_delete_tool — remove/delete operations\n"
-                    "Call the proxy with name and arguments as separate "
-                    "top-level params. Call proxy tools SEQUENTIALLY, "
-                    "not in parallel."
-                )
-
             # Collect available reference files for the listing.
             # Filter out symlinks and verify path containment to prevent
             # traversal via symlinked directories.

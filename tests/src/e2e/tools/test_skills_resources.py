@@ -23,14 +23,17 @@ SKILLS_MISSING_HINT = (
 
 
 @pytest.mark.asyncio
-async def test_skills_bootstrap_instructions(mcp_server):
-    """Test that server instructions contain skill guidance (bootstrap prompt).
+async def test_skills_bootstrap_instructions(mcp_client):
+    """Test that MCP server instructions contain skill guidance (bootstrap prompt).
 
-    When skills are loaded, _build_skills_instructions() returns a string with
-    skill blocks built from SKILL.md frontmatter. If this is None, skills
-    failed to load silently — the exact regression from missing skills-vendor.
+    Verifies the observable behavior: the instructions field in the MCP
+    InitializeResult contains skill blocks built from SKILL.md frontmatter.
+    If instructions are None, skills failed to load silently — the exact
+    regression from missing skills-vendor.
     """
-    instructions = mcp_server._build_skills_instructions()
+    result = mcp_client.initialize_result
+    assert result is not None, "MCP client has no InitializeResult"
+    instructions = result.instructions
     assert instructions is not None, (
         "Server instructions are None — skills were not loaded. " + SKILLS_MISSING_HINT
     )
