@@ -5,6 +5,7 @@ This module provides tools for creating and managing config entry flow-based
 helpers (template, group, utility_meter, etc.) via the Config Entry Flow API.
 """
 
+import asyncio
 import logging
 from enum import StrEnum
 from typing import Annotated, Any, Literal
@@ -269,7 +270,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     )
                 except Exception:
                     try:
-                        await client.abort_options_flow(flow_id)
+                        await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
                     except Exception as abort_err:
                         logger.debug(f"Failed to abort options flow {flow_id} after error: {abort_err}")
                     raise
@@ -300,7 +301,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     result = await _handle_flow_steps(flow_id, flow_result, config_dict)
                 except Exception:
                     try:
-                        await client.abort_config_flow(flow_id)
+                        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
                     except Exception as abort_err:
                         logger.debug(f"Failed to abort config flow {flow_id} after error: {abort_err}")
                     raise
