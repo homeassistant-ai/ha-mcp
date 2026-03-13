@@ -6,6 +6,7 @@ helpers (template, group, utility_meter, etc.) via the Config Entry Flow API.
 """
 
 import logging
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
@@ -38,6 +39,13 @@ SUPPORTED_HELPERS = Literal[
 
 # Keys used to specify a menu selection — stripped before submitting form data.
 _MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
+
+class _FlowType(StrEnum):
+    """HA config flow result type strings."""
+    FORM = "form"
+    MENU = "menu"
+    ABORT = "abort"
+    CREATE_ENTRY = "create_entry"
 
 
 def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -80,17 +88,17 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         for step_num in range(max_steps):
             result_type = current_step.get("type")
 
-            if result_type == "create_entry":
+            if result_type == _FlowType.CREATE_ENTRY:
                 return {"success": True, "entry": current_step}
 
-            elif result_type == "abort":
+            elif result_type == _FlowType.ABORT:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     f"Flow aborted: {current_step.get('reason')}",
                     context={"flow_id": flow_id, "details": current_step},
                 ))
 
-            elif result_type == "menu":
+            elif result_type == _FlowType.MENU:
                 # Extract the menu selection from config.
                 menu_choice = None
                 for key in _MENU_SELECTION_KEYS:
@@ -123,7 +131,7 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     flow_id, {"next_step_id": menu_choice}
                 )
 
-            elif result_type == "form":
+            elif result_type == _FlowType.FORM:
                 # If HA returned validation errors, surface them immediately.
                 if current_step.get("errors"):
                     raise_tool_error(create_error_response(
@@ -203,7 +211,14 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         For menu-based helpers (e.g. group), include the menu selection in config:
         - group: {"group_type": "light", "name": "My Group", "entities": [...]}
-        - template: {"name": "My Template", "state": "{{ ... }}", ...}
+        - template sensor:
+            {"next_step_id": "sensor", "name": "Vacuum Last Clean",
+             "state": "{{ states('sensor.vacuum_last_clean') }}",
+             "unit_of_measurement": "h", "device_class": "duration"}
+        - template binary sensor:
+            {"next_step_id": "binary_sensor", "name": "Window Open",
+             "state": "{{ is_state('binary_sensor.window', 'on') }}",
+             "device_class": "window"}
         """
         try:
             flow_id = None  # Track flow_id for error context
@@ -324,41 +339,113 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
     @log_tool_usage
     async def ha_get_helper_schema(
         helper_type: Annotated[SUPPORTED_HELPERS, Field(description="Helper type")],
+        menu_option: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "For menu-based helpers: the sub-type to inspect (e.g. 'sensor' or "
+                    "'binary_sensor' for template). Omit to see available menu options first."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get configuration schema for a helper type.
 
         Returns the form fields and their types needed to create this helper.
         Use before ha_set_config_entry_helper to understand required config.
 
-        For menu-based helpers (e.g. group), returns the available menu options.
-        Include 'group_type' (or 'next_step_id') in your config when calling
-        ha_set_config_entry_helper to navigate the menu.
+        Two-call workflow for menu-based helpers (template, group):
+
+          # Step 1 — discover sub-types:
+          ha_get_helper_schema("template")
+          → {flow_type: "menu", menu_options: ["sensor", "binary_sensor", ...]}
+
+          # Step 2 — inspect form fields for a sub-type:
+          ha_get_helper_schema("template", menu_option="sensor")
+          → {flow_type: "form", menu_option: "sensor", data_schema: [{name: "state", ...}, ...]}
+
+        For form-based helpers (min_max, utility_meter, etc.), omit menu_option.
         """
-        flow_id = None
+        flow_id = None  # Track flow_id for error context
         try:
-            # Start flow to inspect the schema, then immediately abort to avoid
-            # leaving dangling flows in HA memory.
             flow_result = await client.start_config_flow(helper_type)
             flow_id = flow_result.get("flow_id")
-
             flow_type = flow_result.get("type")
 
-            if flow_type == "form":
+            if not flow_id:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to start config flow — no flow_id returned",
+                    context={"helper_type": helper_type, "details": flow_result},
+                ))
+
+            if menu_option is not None:
+                if flow_type != _FlowType.MENU:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"menu_option is not applicable to '{helper_type}' "
+                        f"(flow type is '{flow_type}', not 'menu')",
+                        suggestions=["Omit menu_option for form-based helpers"],
+                        context={"helper_type": helper_type, "flow_type": flow_type},
+                    ))
+
+                step_result = await client.submit_config_flow_step(
+                    flow_id, {"next_step_id": menu_option}
+                )
+                sub_flow_type = step_result.get("type")
+
+                if sub_flow_type == _FlowType.ABORT:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"menu_option '{menu_option}' is not valid for '{helper_type}': "
+                        f"{step_result.get('reason')}",
+                        suggestions=[f"Valid options: {flow_result.get('menu_options', [])}"],
+                        context={
+                            "helper_type": helper_type,
+                            "menu_option": menu_option,
+                            "details": step_result,
+                        },
+                    ))
+
+                if sub_flow_type != _FlowType.FORM:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.INTERNAL_UNEXPECTED,
+                        f"Unexpected sub-flow type '{sub_flow_type}' after menu selection",
+                        context={
+                            "helper_type": helper_type,
+                            "menu_option": menu_option,
+                            "details": step_result,
+                        },
+                    ))
+
+                return {
+                    "success": True,
+                    "helper_type": helper_type,
+                    "flow_type": _FlowType.FORM,
+                    "menu_option": menu_option,
+                    "step_id": step_result.get("step_id"),
+                    "data_schema": step_result.get("data_schema", []),
+                    "description_placeholders": step_result.get("description_placeholders", {}),
+                }
+
+            # Original behavior: return top-level schema
+            if flow_type == _FlowType.FORM:
                 result: dict[str, Any] = {
                     "success": True,
                     "helper_type": helper_type,
-                    "flow_type": "form",
+                    "flow_type": _FlowType.FORM,
                     "step_id": flow_result.get("step_id"),
                     "data_schema": flow_result.get("data_schema", []),
                     "description_placeholders": flow_result.get(
                         "description_placeholders", {}
                     ),
                 }
-            elif flow_type == "menu":
+            elif flow_type == _FlowType.MENU:
                 result = {
                     "success": True,
                     "helper_type": helper_type,
-                    "flow_type": "menu",
+                    "flow_type": _FlowType.MENU,
                     "step_id": flow_result.get("step_id"),
                     "menu_options": flow_result.get("menu_options", []),
                     "description_placeholders": flow_result.get(
@@ -367,7 +454,8 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "note": (
                         "This helper requires selecting from a menu first. "
                         "Include 'group_type' (or 'next_step_id') in your config "
-                        "when calling ha_set_config_entry_helper."
+                        "when calling ha_set_config_entry_helper. "
+                        "Call ha_get_helper_schema with menu_option=<sub-type> to inspect form fields."
                     ),
                 }
             else:

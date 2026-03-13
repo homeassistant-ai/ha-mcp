@@ -171,7 +171,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             ha_token = payload.get("ha_token")
 
             if ha_token:
-                return ha_token
+                return str(ha_token)
             return None
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")

@@ -385,13 +385,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
         - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
 
-        PREFER BUILT-IN HELPERS OVER TEMPLATE SENSORS:
-        Before creating a template sensor, check if a built-in helper/integration exists:
-        - Use `min_max` integration (type: mean/min/max/sum) instead of template for combining sensors
-        - Use `group` instead of template binary sensor for any/all logic
-        - Use `counter` instead of template with math for counting
-        - Use `input_number` instead of template for storing values
-        - Use `schedule` instead of template with weekday checks
+        TEMPLATE SENSORS AND BINARY SENSORS:
+        Use ha_set_config_entry_helper(helper_type="template", ...) — not this tool.
+        Template helpers are managed via the Config Entry Flow API.
+        Workflow:
+          1. ha_get_helper_schema("template") → see available sub-types
+          2. ha_get_helper_schema("template", menu_option="sensor") → see form fields
+          3. ha_set_config_entry_helper("template", {
+               "next_step_id": "sensor",
+               "name": "My Sensor",
+               "state": "{{ states('sensor.foo') }}",
+             })
 
         For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
