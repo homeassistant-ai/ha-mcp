@@ -136,21 +136,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id=entity_id, start_time=start_timestamp, end_time=end_time
             )
 
-            if not response:
-                raise_tool_error(create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    "No logbook entries found",
-                    context={
-                        "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
-                        "entity_filter": entity_id,
-                        "total_entries": 0,
-                        "returned_entries": 0,
-                        "limit": effective_limit,
-                        "offset": offset_int,
-                        "has_more": False,
-                    },
-                ))
-
             # Get total count before pagination
             total_entries = len(response) if isinstance(response, list) else 1
 

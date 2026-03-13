@@ -257,7 +257,7 @@ async def list_available_addons(
                 pass
 
 
-def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs) -> None:
+def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register add-on management tools with the MCP server.
 

@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
 from mcp.types import Icon
 
-from .config import get_global_settings
+from .config import _PACKAGE_VERSION, get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self,
         client: HomeAssistantClient | None = None,
         server_name: str = "ha-mcp",
-        server_version: str = "0.1.0",
+        server_version: str = _PACKAGE_VERSION,
     ):
         """Initialize the smart MCP server with lazy loading support."""
         # Load settings first (fast operation)
@@ -419,9 +419,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self, query: str, domain_filter: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
         """Bridge method to existing smart search implementation."""
-        return await self.smart_tools.smart_entity_search(
+        return cast(dict[str, Any], await self.smart_tools.smart_entity_search(
             query=query, limit=limit, include_attributes=False
-        )
+        ))
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         """Bridge method to existing entity state implementation."""
@@ -433,7 +433,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         service: str,
         entity_id: str | None = None,
         data: dict | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | dict[str, Any]:
         """Bridge method to existing service call implementation."""
         service_data = data or {}
         if entity_id:
@@ -442,9 +442,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
     async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
         """Bridge method to existing area functionality."""
-        return await self.smart_tools.get_entities_by_area(
+        return cast(dict[str, Any], await self.smart_tools.get_entities_by_area(
             area_query=area_name, group_by_domain=True
-        )
+        ))
 
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""

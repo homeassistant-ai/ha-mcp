@@ -90,7 +90,7 @@ class DeviceControlTools:
                         f"Invalid JSON in parameters: {parameters}",
                         suggestions=[
                             "Parameters should be a valid JSON object",
-                            "Example: {'brightness': 102, 'color_temp': 4000}",
+                            "Example: {'brightness': 102, 'color_temp_kelvin': 4000}",
                         ],
                         context={"entity_id": entity_id, "action": action},
                     ))
@@ -268,12 +268,22 @@ class DeviceControlTools:
         # Add parameters based on domain
         if parameters:
             if domain == "light":
+                # Backward compat: convert deprecated color temp parameters
+                if "color_temp_kelvin" not in parameters:
+                    if "kelvin" in parameters:
+                        parameters["color_temp_kelvin"] = parameters.pop("kelvin")
+                    elif "color_temp" in parameters:
+                        mired_val = parameters.pop("color_temp")
+                        if isinstance(mired_val, (int, float)) and mired_val > 0:
+                            parameters["color_temp_kelvin"] = round(
+                                1_000_000 / mired_val
+                            )
+
                 light_params = [
                     "brightness",
-                    "color_temp",
+                    "color_temp_kelvin",
                     "rgb_color",
                     "effect",
-                    "kelvin",
                 ]
                 for param in light_params:
                     if param in parameters:
@@ -344,8 +354,8 @@ class DeviceControlTools:
             if domain == "light" and action in ["on", "set"]:
                 if "brightness" in parameters:
                     expected["brightness"] = parameters["brightness"]
-                if "color_temp" in parameters:
-                    expected["color_temp"] = parameters["color_temp"]
+                if "color_temp_kelvin" in parameters:
+                    expected["color_temp_kelvin"] = parameters["color_temp_kelvin"]
 
             elif domain == "climate" and action in ["set", "heat", "cool", "auto"]:
                 if "temperature" in parameters:

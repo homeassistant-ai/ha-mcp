@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "6.7.2"
+version = "7.0.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -55,7 +55,8 @@ packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json", "resources/skills-vendor/**/*"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
+mypy_path = "src"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -71,6 +72,7 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = [
     "fastmcp.*",
+    "jq",
 ]
 ignore_missing_imports = true
 

@@ -50,7 +50,7 @@ def _build_service_suggestions(domain: str, service: str, entity_id: str | None)
     ]
 
 
-def register_service_tools(mcp, client, **kwargs):
+def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
     device_tools = kwargs.get("device_tools")
     if not device_tools:
