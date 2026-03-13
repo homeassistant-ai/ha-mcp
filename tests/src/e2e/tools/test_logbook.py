@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
@@ -220,32 +220,26 @@ async def test_logbook_entity_filter(mcp_client):
     """Test logbook filtering by entity_id."""
     logger.info("Testing logbook entity filter")
 
-    # Query for sun.sun which should always exist
-    # Use safe_call_tool to handle ToolError (e.g. no entries found) as a dict
-    raw_data = await safe_call_tool(
-        mcp_client,
+    result = await mcp_client.call_tool(
         "ha_get_logbook",
         {"hours_back": 24, "entity_id": "sun.sun", "limit": 50},
     )
+    raw_data = assert_mcp_success(result, "Logbook entity filter")
     data = get_logbook_data(raw_data)
 
-    # Verify entity filter is recorded in response (should always be present)
-    assert data.get("entity_filter") == "sun.sun", (
-        f"Entity filter should be 'sun.sun', got: {data.get('entity_filter')}"
+    # Verify entity filter is recorded in response
+    assert data["entity_filter"] == "sun.sun", (
+        f"Entity filter should be 'sun.sun', got: {data['entity_filter']}"
     )
 
     # If there are entries, verify they are for the filtered entity
-    if data.get("success"):
-        entries = data.get("entries", [])
-        for entry in entries:
-            if "entity_id" in entry:
-                assert entry["entity_id"] == "sun.sun", (
-                    f"Entry should be for sun.sun, got {entry['entity_id']}"
-                )
-        logger.info(f"Entity filter applied: {len(entries)} entries for sun.sun")
-    else:
-        # No entries case - also acceptable
-        logger.info("No logbook entries for sun.sun in test period (expected in fresh container)")
+    entries = data.get("entries", [])
+    for entry in entries:
+        if "entity_id" in entry:
+            assert entry["entity_id"] == "sun.sun", (
+                f"Entry should be for sun.sun, got {entry['entity_id']}"
+            )
+    logger.info(f"Entity filter applied: {len(entries)} entries for sun.sun")
 
 
 @pytest.mark.asyncio
@@ -297,12 +291,10 @@ async def test_logbook_response_metadata(mcp_client):
 
 @pytest.mark.asyncio
 async def test_logbook_empty_result(mcp_client):
-    """Test logbook with non-existent entity returns appropriate error."""
+    """Test logbook with non-existent entity returns empty success."""
     logger.info("Testing logbook with non-existent entity")
 
-    # Use safe_call_tool to handle ToolError (e.g. no entries found) as a dict
-    raw_data = await safe_call_tool(
-        mcp_client,
+    result = await mcp_client.call_tool(
         "ha_get_logbook",
         {
             "hours_back": 1,
@@ -311,16 +303,15 @@ async def test_logbook_empty_result(mcp_client):
         },
     )
 
-    # Parse result - may be success with no entries or error
+    raw_data = assert_mcp_success(result, "Logbook empty result")
     data = get_logbook_data(raw_data)
 
-    # Either success with empty entries or explicit error is acceptable
-    if data.get("success"):
-        entries = data.get("entries", [])
-        assert len(entries) == 0, "Should have no entries for non-existent entity"
-        logger.info("Got success with empty entries for non-existent entity")
-    else:
-        # Error case is also acceptable
-        logger.info(f"Got error for non-existent entity: {data.get('error')}")
+    # Empty results are a valid success — not an error
+    assert data["success"] is True, "Empty logbook should return success"
+    entries = data.get("entries", [])
+    assert len(entries) == 0, "Should have no entries for non-existent entity"
+    assert data["total_entries"] == 0, "total_entries should be 0"
+    assert data["returned_entries"] == 0, "returned_entries should be 0"
+    assert data["has_more"] is False, "has_more should be False"
 
-    logger.info("Non-existent entity handling verified")
+    logger.info("Empty logbook correctly returns success with no entries")
