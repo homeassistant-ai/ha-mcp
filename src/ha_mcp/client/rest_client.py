@@ -830,91 +830,43 @@ class HomeAssistantClient:
         self, ws_client: Any, message: dict[str, Any]
     ) -> dict[str, Any]:
         """Handle render_template WebSocket command with event-based response."""
-
-        # Generate our own message ID to track the response
-        message_id = ws_client.get_next_message_id()
-
-        # Construct the full message with proper ID
-        full_message = {
-            "id": message_id,
-            "type": "render_template",
-            "template": message.get("template"),
-            "timeout": message.get("timeout", 3),
-            "report_errors": message.get("report_errors", True),
-        }
-
-        # Create futures for both result and event responses
-        result_future = ws_client.register_pending_response(message_id)
-        event_future = ws_client.register_render_template_event(message_id)
-
-        # Use WebSocket client's send helper to transmit the message
-        try:
-            await ws_client.send_json_message(full_message)
-        except Exception as e:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
-            raise e
+        template_timeout = message.get("timeout", 3)
 
         try:
-            # Wait for the initial result response (should be success with null result)
-            result_response = await asyncio.wait_for(
-                result_future, timeout=message.get("timeout", 3) + 2
+            _, event_response = await ws_client.send_command_with_event(
+                "render_template",
+                wait_timeout=template_timeout + 2,
+                template=message.get("template"),
+                timeout=template_timeout,
+                report_errors=message.get("report_errors", True),
             )
-            logger.debug(f"WebSocket render_template result: {result_response}")
+            logger.debug(f"WebSocket render_template event: {event_response}")
 
-            if not result_response.get("success"):
-                ws_client.cancel_render_template_event(message_id)
-                error = result_response.get("error", "Unknown error")
+            # Extract template result from event
+            if "event" in event_response and "result" in event_response["event"]:
+                template_result = event_response["event"]["result"]
+                listeners_info = event_response["event"].get("listeners", {})
+
                 return {
-                    "success": False,
-                    "error": str(error),
+                    "success": True,
+                    "result": template_result,
                     "template": message.get("template"),
+                    "listeners": listeners_info,
                 }
-
-            # Wait for the event with the actual template result
-            try:
-                event_response = await asyncio.wait_for(
-                    event_future, timeout=message.get("timeout", 3) + 1
-                )
-                logger.debug(f"WebSocket render_template event: {event_response}")
-
-                # Extract template result from event
-                if "event" in event_response and "result" in event_response["event"]:
-                    template_result = event_response["event"]["result"]
-                    listeners_info = event_response["event"].get("listeners", {})
-
-                    return {
-                        "success": True,
-                        "result": template_result,
-                        "template": message.get("template"),
-                        "listeners": listeners_info,
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": "Invalid event response format",
-                        "template": message.get("template"),
-                    }
-
-            except TimeoutError:
-                ws_client.cancel_render_template_event(message_id)
+            else:
                 return {
                     "success": False,
-                    "error": "Event timeout - template result not received",
+                    "error": "Invalid event response format",
                     "template": message.get("template"),
                 }
 
         except TimeoutError:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
-                "error": "Command timeout",
+                "error": "Event timeout - template result not received",
                 "template": message.get("template"),
             }
         except Exception as e:
-            ws_client.cancel_pending_response(message_id)
-            ws_client.cancel_render_template_event(message_id)
             return {
                 "success": False,
                 "error": str(e),
