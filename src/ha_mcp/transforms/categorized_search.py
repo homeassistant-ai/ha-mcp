@@ -48,22 +48,34 @@ _DELETE_PATTERNS = ("_remove_", "_delete_")
 
 
 class SearchKeywordsTransform(Transform):
-    """Append BM25 search keywords to tool descriptions.
+    """Adjust BM25 search keywords in tool descriptions.
 
-    A simple Transform that appends extra keywords to specific tools'
-    descriptions so BM25 ranks them higher for common queries.  The
-    original description is fully preserved — keywords are appended
-    after a blank line at the end.
+    Supports two modes per tool:
+    - **keywords** (append): Extra keywords appended after the original
+      description so BM25 ranks the tool higher for common queries.
+    - **overrides** (replace): Completely replaces the description with
+      a narrower one so BM25 ranks the tool *lower* for broad queries.
 
+    The original description is preserved unless an override is applied.
     Only active when added to the transform pipeline (i.e., behind
     the ``enable_tool_search`` toggle).
     """
 
-    def __init__(self, keywords: dict[str, str]) -> None:
-        """Initialize with a mapping of tool name → keywords to append."""
-        self._keywords = keywords
+    def __init__(
+        self,
+        keywords: dict[str, str] | None = None,
+        overrides: dict[str, str] | None = None,
+    ) -> None:
+        """Initialize with optional keyword boosts and description overrides."""
+        self._keywords = keywords or {}
+        self._overrides = overrides or {}
 
     def _enrich(self, tool: Tool) -> Tool:
+        # Overrides take priority — replace the entire description
+        override = self._overrides.get(tool.name)
+        if override is not None:
+            return tool.model_copy(update={"description": override})
+        # Otherwise append keywords if present
         keywords = self._keywords.get(tool.name)
         if not keywords:
             return tool

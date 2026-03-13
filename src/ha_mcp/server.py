@@ -229,10 +229,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "1. Call ha_search_tools(query=\"...\") to find relevant tools\n"
                 "2. Results include name, description, parameters, and "
                 "annotations (readOnlyHint/destructiveHint)\n"
-                "3. Execute using the matching proxy:\n"
-                "   - ha_call_read_tool \u2014 safe, read-only operations\n"
-                "   - ha_call_write_tool \u2014 creates or modifies data\n"
-                "   - ha_call_delete_tool \u2014 removes data permanently\n\n"
+                "3. Execute the discovered tool \u2014 two options:\n"
+                "   a) DIRECT CALL (preferred): Call the tool directly by "
+                "name. All discovered tools are callable without a proxy.\n"
+                "   b) VIA PROXY: For permission-gated execution, use the "
+                "matching proxy:\n"
+                "      - ha_call_read_tool \u2014 safe, read-only operations\n"
+                "      - ha_call_write_tool \u2014 creates or modifies data\n"
+                "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
+                "Once you know a tool\u2019s name, you do NOT need to search "
+                "again \u2014 call it directly.\n\n"
                 "A few critical tools are listed directly (ha_restart, "
                 "ha_backup_create, ha_backup_restore, ha_reload_core, "
                 "ha_get_overview, ha_report_issue). Everything else must "
@@ -295,18 +301,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
         "history, statistics, devices, integrations, services, backups, "
         "todo, camera, blueprints, system, and more.\n\n"
-        "WORKFLOW — search first, then call via the correct proxy:\n"
-        "1. ha_search_tools(query='...') — find tools (this tool)\n"
-        "2. Check the annotations in the results to pick the right proxy:\n"
-        "   - ha_call_read_tool — readOnlyHint tools (safe, no side effects)\n"
-        "   - ha_call_write_tool — destructiveHint tools that create/update\n"
-        "   - ha_call_delete_tool — destructiveHint tools that remove/delete\n"
-        "3. Call the proxy with TWO top-level params:\n"
+        "WORKFLOW:\n"
+        "1. ha_search_tools(query='...') \u2014 find tools (this tool)\n"
+        "2. Execute: call the tool DIRECTLY by name (preferred), or use "
+        "a proxy for permission gating:\n"
+        "   - ha_call_read_tool \u2014 readOnlyHint tools (safe, no side effects)\n"
+        "   - ha_call_write_tool \u2014 destructiveHint tools that create/update\n"
+        "   - ha_call_delete_tool \u2014 destructiveHint tools that remove/delete\n"
+        "Once you know a tool name, call it directly \u2014 no need to search "
+        "again.\n\n"
+        "If using proxies, call with TWO top-level params:\n"
         '   ha_call_read_tool(name="ha_search_entities", arguments={"query": "..."})\n'
-        "   Do NOT nest name/arguments inside the arguments param.\n\n"
-        "IMPORTANT: Call proxy tools SEQUENTIALLY, not in parallel. "
-        "If one parallel MCP call errors, the client cancels all sibling "
-        "calls. Sequential calls prevent cascading failures.\n\n"
+        "   Do NOT nest name/arguments inside the arguments param.\n"
+        "   Call proxy tools SEQUENTIALLY, not in parallel.\n\n"
         "ALWAYS search before assuming a capability is unavailable. "
         "Most tools are discoverable only through this search."
     )
@@ -317,18 +324,59 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
         # s02: "find entities" → ha_search_entities should outrank ha_deep_search
         "ha_search_entities": (
-            "find entities lookup discover lights sensors switches "
-            "covers climate fans media_player"
+            "find entities lookup discover search lights sensors switches "
+            "covers climate fans media_player binary_sensor device_tracker "
+            "person weather automation script helper input_boolean input_number"
         ),
         # s07: "get/read automation" → ha_config_get_automation should outrank set
         "ha_config_get_automation": (
-            "read inspect fetch view existing automation config"
+            "read inspect fetch view existing automation config triggers "
+            "conditions actions get show detail"
         ),
         # s09: "create helper" → ha_config_set_helper should outrank remove_helper
         "ha_config_set_helper": (
             "create new add helper input_boolean input_number input_text "
             "counter timer input_datetime input_select input_button "
             "schedule zone group min_max"
+        ),
+        # Boost tools that compete with ha_deep_search for common queries
+        "ha_config_get_script": (
+            "read inspect fetch view existing script config sequence "
+            "actions get show detail"
+        ),
+        "ha_config_list_helpers": (
+            "list all helpers input_boolean input_number input_text "
+            "counter timer input_datetime input_select"
+        ),
+        "ha_get_entity": (
+            "get entity state attributes details single specific entity_id"
+        ),
+        "ha_get_state": (
+            "get current state value single entity check status"
+        ),
+        "ha_get_states": (
+            "get all states entities bulk overview list"
+        ),
+        "ha_config_set_automation": (
+            "create update modify edit automation triggers conditions actions "
+            "new automation write save"
+        ),
+        "ha_config_set_script": (
+            "create update modify edit script sequence actions "
+            "new script write save"
+        ),
+    }
+
+    # Description overrides that REPLACE the original description for BM25.
+    # Used to narrow overly broad tools so they stop matching generic queries.
+    # Only active behind enable_tool_search via SearchKeywordsTransform.
+    _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {
+        "ha_deep_search": (
+            "Search INSIDE automation, script, and helper YAML configurations. "
+            "Use ONLY when you need to find where a specific service call, "
+            "entity reference, or config field appears within existing "
+            "automation/script/helper definitions. "
+            "NOT for finding entities or discovering tools."
         ),
     }
 
@@ -381,7 +429,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # Original tool docstrings are unchanged.
             from .transforms import SearchKeywordsTransform
 
-            self.mcp.add_transform(SearchKeywordsTransform(self._SEARCH_KEYWORDS))
+            self.mcp.add_transform(SearchKeywordsTransform(
+                keywords=self._SEARCH_KEYWORDS,
+                overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
+            ))
 
             self.mcp.add_transform(
                 CategorizedSearchTransform(
