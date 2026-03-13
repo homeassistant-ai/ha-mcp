@@ -128,8 +128,9 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     f"Flow step {step_num}: menu '{menu_choice}' "
                     f"(step_id={current_step.get('step_id')})"
                 )
-                current_step = await submit_fn(
-                    flow_id, {"next_step_id": menu_choice}
+                current_step = await asyncio.wait_for(
+                    submit_fn(flow_id, {"next_step_id": menu_choice}),
+                    timeout=20.0,
                 )
 
             elif result_type == _FlowType.FORM:
@@ -157,7 +158,10 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     f"Flow step {step_num}: form submit "
                     f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
                 )
-                current_step = await submit_fn(flow_id, form_data)
+                current_step = await asyncio.wait_for(
+                    submit_fn(flow_id, form_data),
+                    timeout=20.0,
+                )
                 # Clear so subsequent steps don't re-submit the same data.
                 remaining_config = {}
 
