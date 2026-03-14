@@ -187,7 +187,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Report this issue if it persists",
     ],
     ErrorCode.COMPONENT_NOT_INSTALLED: [
-        "Run ha_install_mcp_tools() to install the custom component",
+        "Install the required custom component via HACS",
         "Restart Home Assistant after installation",
     ],
 }

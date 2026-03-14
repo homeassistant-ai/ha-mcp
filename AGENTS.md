@@ -598,13 +598,18 @@ results.append(create_error_response(
 ))
 ```
 
-**Special case** — when the error dict needs post-processing before raising, use `raise_error=False` then `raise_tool_error()`:
+**Special case** — only use `raise_error=False` when you need to mutate the error dict before raising (e.g., merging in extra context fields that `exception_to_structured_error` doesn't support). By default, omit it and let the function raise on its own:
 ```python
+# Default — let exception_to_structured_error raise directly:
+except Exception as e:
+    exception_to_structured_error(e, context={"entity_id": entity_id})
+
+# Only use raise_error=False when you need to post-process the dict:
 except Exception as e:
     error_response = exception_to_structured_error(
         e, context={"entity_id": entity_id}, raise_error=False
     )
-    # add any extra context here, then:
+    error_response["extra_field"] = "value"  # mutation that justifies raise_error=False
     raise_tool_error(error_response)
 ```
 
