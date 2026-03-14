@@ -147,6 +147,7 @@ markers = [
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
     "performance: performance measurement and regression tests",
+    "diagnostics: diagnostic and health monitoring tool tests",
 ]
 asyncio_mode = "auto"
 
