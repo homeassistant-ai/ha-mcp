@@ -38,6 +38,10 @@ prompt: >
 teardown: []
 
 verify:
+  questions:
+    - "Which automation references light.bed_light?"
+    - "What does the automation do with light.bed_light?"
+    - "Is this an automation, script, or both?"
   ha_checks:
     - type: automation_exists
       alias: "Bed Light Evening"
