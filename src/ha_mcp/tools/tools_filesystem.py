@@ -20,6 +20,7 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
@@ -55,23 +56,41 @@ def is_filesystem_tools_enabled() -> bool:
     return value in ("true", "1", "yes", "on")
 
 
-async def _check_mcp_tools_available(client: Any) -> tuple[bool, str | None]:
+async def _check_mcp_tools_available(client: Any) -> str | None:
     """Check if the ha_mcp_tools custom component is available.
 
     Returns:
-        Tuple of (is_available, error_message if not available)
+        None if available, or an error message string if not.
     """
     try:
-        # Check if the domain is in the list of services
+        # Check if the domain is in the list of services.
+        # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
         services = await client.get_services()
-        if MCP_TOOLS_DOMAIN in services:
-            return True, None
-        return False, (
+        if isinstance(services, list):
+            is_available = any(
+                isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
+                for s in services
+            )
+        elif isinstance(services, dict):
+            is_available = MCP_TOOLS_DOMAIN in services
+        else:
+            is_available = False
+
+        if is_available:
+            return None
+        return (
             f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
             "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant."
         )
     except Exception as e:
-        return False, f"Failed to check for {MCP_TOOLS_DOMAIN}: {str(e)}"
+        return f"Failed to check for {MCP_TOOLS_DOMAIN}: {str(e)}"
+
+
+async def _assert_mcp_tools_available(client: Any) -> None:
+    """Check if ha_mcp_tools is available and raise ToolError if not."""
+    error_msg = await _check_mcp_tools_available(client)
+    if error_msg is not None:
+        raise_tool_error(create_error_response(ErrorCode.COMPONENT_NOT_INSTALLED, error_msg))
 
 
 def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -145,20 +164,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
@@ -277,20 +283,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
@@ -420,20 +413,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             create_dirs_bool = coerce_bool_param(create_dirs, "create_dirs", default=True)
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -556,20 +536,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}

@@ -4,6 +4,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
@@ -65,8 +66,30 @@ class TestCheckMcpToolsAvailable:
     """Test _check_mcp_tools_available function."""
 
     @pytest.mark.asyncio
-    async def test_available_when_domain_in_services(self):
-        """Returns True when ha_mcp_tools is in the services list."""
+    async def test_available_when_domain_in_services_list_format(self):
+        """Returns True when ha_mcp_tools is in the services list (HA REST API format)."""
+        client = AsyncMock()
+        # HA /api/services returns a list of {"domain": str, "services": {...}}
+        client.get_services.return_value = [
+            {"domain": "homeassistant", "services": {"restart": {}}},
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {
+                    "list_files": {},
+                    "read_file": {},
+                    "write_file": {},
+                    "delete_file": {},
+                },
+            },
+        ]
+
+        error_msg = await _check_mcp_tools_available(client)
+
+        assert error_msg is None
+
+    @pytest.mark.asyncio
+    async def test_available_when_domain_in_services_dict_format(self):
+        """Returns None when ha_mcp_tools is in the services dict (legacy format)."""
         client = AsyncMock()
         client.get_services.return_value = {
             MCP_TOOLS_DOMAIN: {
@@ -78,23 +101,36 @@ class TestCheckMcpToolsAvailable:
             "homeassistant": {"restart": {}},
         }
 
-        is_available, error_msg = await _check_mcp_tools_available(client)
+        error_msg = await _check_mcp_tools_available(client)
 
-        assert is_available is True
         assert error_msg is None
 
     @pytest.mark.asyncio
-    async def test_not_available_when_domain_missing(self):
-        """Returns False when ha_mcp_tools is not in the services list."""
+    async def test_not_available_when_domain_missing_list_format(self):
+        """Returns error message when ha_mcp_tools is not in the services list."""
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {"domain": "homeassistant", "services": {"restart": {}}},
+            {"domain": "light", "services": {"turn_on": {}}},
+        ]
+
+        error_msg = await _check_mcp_tools_available(client)
+
+        assert error_msg is not None
+        assert MCP_TOOLS_DOMAIN in error_msg
+        assert "ha_install_mcp_tools" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_not_available_when_domain_missing_dict_format(self):
+        """Returns error message when ha_mcp_tools is not in the services dict."""
         client = AsyncMock()
         client.get_services.return_value = {
             "homeassistant": {"restart": {}},
             "light": {"turn_on": {}},
         }
 
-        is_available, error_msg = await _check_mcp_tools_available(client)
+        error_msg = await _check_mcp_tools_available(client)
 
-        assert is_available is False
         assert error_msg is not None
         assert MCP_TOOLS_DOMAIN in error_msg
         assert "ha_install_mcp_tools" in error_msg
@@ -105,9 +141,8 @@ class TestCheckMcpToolsAvailable:
         client = AsyncMock()
         client.get_services.side_effect = Exception("Connection failed")
 
-        is_available, error_msg = await _check_mcp_tools_available(client)
+        error_msg = await _check_mcp_tools_available(client)
 
-        assert is_available is False
         assert error_msg is not None
         assert "Connection failed" in error_msg
 
@@ -154,13 +189,13 @@ class TestHaListFilesTool:
     """Test ha_list_files tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_mcp_tools_not_installed(self):
-        """Should return error when ha_mcp_tools is not installed."""
+    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+        """Should raise ToolError when ha_mcp_tools is not installed."""
         from ha_mcp.tools.tools_filesystem import register_filesystem_tools
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {"homeassistant": {}}
+        client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
         # Capture the registered function
@@ -183,10 +218,8 @@ class TestHaListFilesTool:
         if registered_func:
             # Need to unwrap from log_tool_usage decorator
             inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
-            result = await inner_func(path="www/")
-
-            assert result["data"]["success"] is False
-            assert "MCP_TOOLS_NOT_INSTALLED" in result["data"]["error_code"]
+            with pytest.raises(ToolError):
+                await inner_func(path="www/")
 
     @pytest.mark.asyncio
     async def test_calls_service_when_mcp_tools_installed(self):
@@ -195,7 +228,9 @@ class TestHaListFilesTool:
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {MCP_TOOLS_DOMAIN: {"list_files": {}}}
+        client.get_services.return_value = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"list_files": {}}}
+        ]
         client.get_config.return_value = {"time_zone": "UTC"}
         client.call_service.return_value = {
             "success": True,
@@ -236,13 +271,13 @@ class TestHaReadFileTool:
     """Test ha_read_file tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_mcp_tools_not_installed(self):
-        """Should return error when ha_mcp_tools is not installed."""
+    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+        """Should raise ToolError when ha_mcp_tools is not installed."""
         from ha_mcp.tools.tools_filesystem import register_filesystem_tools
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {"homeassistant": {}}
+        client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
         registered_func = None
@@ -262,23 +297,21 @@ class TestHaReadFileTool:
 
         if registered_func:
             inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
-            result = await inner_func(path="configuration.yaml")
-
-            assert result["data"]["success"] is False
-            assert "MCP_TOOLS_NOT_INSTALLED" in result["data"]["error_code"]
+            with pytest.raises(ToolError):
+                await inner_func(path="configuration.yaml")
 
 
 class TestHaWriteFileTool:
     """Test ha_write_file tool behavior."""
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_mcp_tools_not_installed(self):
-        """Should return error when ha_mcp_tools is not installed."""
+    async def test_raises_tool_error_when_mcp_tools_not_installed(self):
+        """Should raise ToolError when ha_mcp_tools is not installed."""
         from ha_mcp.tools.tools_filesystem import register_filesystem_tools
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {"homeassistant": {}}
+        client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
         client.get_config.return_value = {"time_zone": "UTC"}
 
         registered_func = None
@@ -298,10 +331,8 @@ class TestHaWriteFileTool:
 
         if registered_func:
             inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
-            result = await inner_func(path="www/test.css", content=".test { color: red; }")
-
-            assert result["data"]["success"] is False
-            assert "MCP_TOOLS_NOT_INSTALLED" in result["data"]["error_code"]
+            with pytest.raises(ToolError):
+                await inner_func(path="www/test.css", content=".test { color: red; }")
 
     @pytest.mark.asyncio
     async def test_calls_service_with_all_params(self):
@@ -310,7 +341,9 @@ class TestHaWriteFileTool:
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {MCP_TOOLS_DOMAIN: {"write_file": {}}}
+        client.get_services.return_value = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"write_file": {}}}
+        ]
         client.get_config.return_value = {"time_zone": "UTC"}
         client.call_service.return_value = {
             "success": True,
@@ -367,7 +400,9 @@ class TestHaDeleteFileTool:
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {MCP_TOOLS_DOMAIN: {"delete_file": {}}}
+        client.get_services.return_value = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"delete_file": {}}}
+        ]
         client.get_config.return_value = {"time_zone": "UTC"}
 
         registered_func = None
@@ -401,7 +436,9 @@ class TestHaDeleteFileTool:
 
         mcp = MagicMock()
         client = AsyncMock()
-        client.get_services.return_value = {MCP_TOOLS_DOMAIN: {"delete_file": {}}}
+        client.get_services.return_value = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"delete_file": {}}}
+        ]
         client.get_config.return_value = {"time_zone": "UTC"}
         client.call_service.return_value = {
             "success": True,

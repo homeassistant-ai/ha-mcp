@@ -388,7 +388,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # Use factory to capture ref_files in closure
             def _make_skill_handler(
                 s_name: str, s_uri: str, files: list[dict[str, str]],
-            ):
+            ) -> Any:
                 async def handler() -> dict[str, Any]:
                     return {
                         "skill": s_name,

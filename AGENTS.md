@@ -453,6 +453,7 @@ uv run hamcp-test-env --no-interactive   # For automation
 - Always run the **full suite** before declaring tests pass
 - `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
 - Never set `HOMEASSISTANT_URL` manually in your shell before running tests
+- **Always run relevant e2e tests after making changes**, without waiting to be asked. Identify the relevant test file(s) for the area you changed and run them. Do not assume Docker is unavailable or prerequisites are missing — just run them and let pytest report what is skipped and why.
 
 Test token centralized in `tests/test_constants.py`.
 
@@ -597,15 +598,17 @@ results.append(create_error_response(
 ))
 ```
 
-**Special case** — when the error dict needs post-processing before raising (e.g., timezone metadata injection), use `raise_error=False` then `raise_tool_error()`:
+**Special case** — when the error dict needs post-processing before raising, use `raise_error=False` then `raise_tool_error()`:
 ```python
 except Exception as e:
     error_response = exception_to_structured_error(
         e, context={"entity_id": entity_id}, raise_error=False
     )
-    error_with_tz = await add_timezone_metadata(client, error_response)
-    raise_tool_error(error_with_tz)
+    # add any extra context here, then:
+    raise_tool_error(error_response)
 ```
+
+**Never add `add_timezone_metadata` to errors.** Timezone context is only meaningful for successful responses containing timestamps. Errors are read by the LLM to decide next steps — timezone info is irrelevant and adds a pointless network call.
 
 Available `errors.py` helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
 
