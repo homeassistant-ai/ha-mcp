@@ -86,22 +86,6 @@ class TestIsMcpToolsAvailable:
         assert await _is_mcp_tools_available(client) is True
 
     @pytest.mark.asyncio
-    async def test_available_when_domain_in_services_dict_format(self):
-        """Returns True when ha_mcp_tools is in the services dict (legacy format)."""
-        client = AsyncMock()
-        client.get_services.return_value = {
-            MCP_TOOLS_DOMAIN: {
-                "list_files": {},
-                "read_file": {},
-                "write_file": {},
-                "delete_file": {},
-            },
-            "homeassistant": {"restart": {}},
-        }
-
-        assert await _is_mcp_tools_available(client) is True
-
-    @pytest.mark.asyncio
     async def test_not_available_when_domain_missing_list_format(self):
         """Returns False when ha_mcp_tools is not in the services list."""
         client = AsyncMock()
@@ -109,17 +93,6 @@ class TestIsMcpToolsAvailable:
             {"domain": "homeassistant", "services": {"restart": {}}},
             {"domain": "light", "services": {"turn_on": {}}},
         ]
-
-        assert await _is_mcp_tools_available(client) is False
-
-    @pytest.mark.asyncio
-    async def test_not_available_when_domain_missing_dict_format(self):
-        """Returns False when ha_mcp_tools is not in the services dict."""
-        client = AsyncMock()
-        client.get_services.return_value = {
-            "homeassistant": {"restart": {}},
-            "light": {"turn_on": {}},
-        }
 
         assert await _is_mcp_tools_available(client) is False
 

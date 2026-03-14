@@ -63,15 +63,12 @@ async def _is_mcp_tools_available(client: Any) -> bool:
     their own exception_to_structured_error blocks.
     """
     # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
+    # This format has been stable since before HA 0.7 (the first public release).
     services = await client.get_services()
-    if isinstance(services, list):
-        return any(
-            isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
-            for s in services
-        )
-    if isinstance(services, dict):
-        return MCP_TOOLS_DOMAIN in services
-    return False
+    return any(
+        isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
+        for s in services
+    )
 
 
 async def _assert_mcp_tools_available(client: Any) -> None:
