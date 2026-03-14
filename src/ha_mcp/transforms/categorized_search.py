@@ -145,7 +145,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
     def __init__(
         self,
         *,
-        max_results: int = 10,
+        max_results: int = 5,
         always_visible: list[str] | None = None,
         search_tool_name: str = "ha_search_tools",
         search_tool_description: str | None = None,
