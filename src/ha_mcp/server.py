@@ -10,6 +10,7 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -388,7 +389,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # Use factory to capture ref_files in closure
             def _make_skill_handler(
                 s_name: str, s_uri: str, files: list[dict[str, str]],
-            ) -> Any:
+            ) -> Callable[[], Coroutine[Any, Any, dict[str, Any]]]:
                 async def handler() -> dict[str, Any]:
                     return {
                         "skill": s_name,

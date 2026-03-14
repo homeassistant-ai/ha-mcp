@@ -52,7 +52,7 @@ def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     logger.info("MCP tools installer enabled via feature flag")
 
     # Import HACS helpers - we depend on HACS functionality
-    from .tools_hacs import CATEGORY_MAP, _check_hacs_available
+    from .tools_hacs import CATEGORY_MAP, _assert_hacs_available
 
     @mcp.tool(
         annotations={
@@ -98,17 +98,7 @@ def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    error_msg or "HACS is not available",
-                    suggestions=[
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                ))
+            await _assert_hacs_available()
 
             from ..client.websocket_client import get_websocket_client
 

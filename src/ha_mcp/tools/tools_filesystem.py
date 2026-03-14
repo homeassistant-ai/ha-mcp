@@ -191,13 +191,11 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            raise_tool_error(exception_to_structured_error(
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
                 raise_error=False,
-            )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
+            ))
 
     @mcp.tool(
         annotations={
@@ -306,13 +304,11 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            raise_tool_error(exception_to_structured_error(
                 e,
                 context={"tool": "ha_read_file", "path": path},
                 raise_error=False,
-            )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
+            ))
 
     @mcp.tool(
         annotations={
@@ -439,13 +435,11 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            raise_tool_error(exception_to_structured_error(
                 e,
                 context={"tool": "ha_write_file", "path": path},
                 raise_error=False,
-            )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
+            ))
 
     @mcp.tool(
         annotations={
@@ -557,10 +551,8 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            raise_tool_error(exception_to_structured_error(
                 e,
                 context={"tool": "ha_delete_file", "path": path},
                 raise_error=False,
-            )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
+            ))
