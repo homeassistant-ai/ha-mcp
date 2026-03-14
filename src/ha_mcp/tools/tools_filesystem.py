@@ -191,11 +191,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
-                raise_error=False,
-            ))
+            )
 
     @mcp.tool(
         annotations={
@@ -304,11 +303,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_read_file", "path": path},
-                raise_error=False,
-            ))
+            )
 
     @mcp.tool(
         annotations={
@@ -435,11 +433,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_write_file", "path": path},
-                raise_error=False,
-            ))
+            )
 
     @mcp.tool(
         annotations={
@@ -551,8 +548,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_delete_file", "path": path},
-                raise_error=False,
-            ))
+            )

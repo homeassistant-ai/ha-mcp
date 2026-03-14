@@ -119,16 +119,15 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_info"},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check Home Assistant connection",
                     "Restart Home Assistant if HACS was recently installed",
                 ],
-            ))
+            )
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "List HACS Installed"})
     @log_tool_usage
@@ -227,16 +226,15 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_list_installed", "category": category},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                     "Check Home Assistant connection",
                 ],
-            ))
+            )
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "Search HACS Store"})
     @log_tool_usage
@@ -396,16 +394,15 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_search", "query": query, "category": category},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Try a simpler search query",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                 ],
-            ))
+            )
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Repository Info"})
     @log_tool_usage
@@ -502,16 +499,15 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_repository_info", "repository_id": repository_id},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID format (e.g., 'hacs/integration' or 'owner/repo')",
                     "Use ha_hacs_search() to find the correct repository ID",
                 ],
-            ))
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Add HACS Repository"})
     @log_tool_usage
@@ -611,14 +607,13 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_hacs_add_repository",
                     "repository": repository,
                     "category": category,
                 },
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository format: 'owner/repo'",
@@ -626,7 +621,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure category matches repository type",
                     "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
                 ],
-            ))
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Download/Install HACS Repository"})
     @log_tool_usage
@@ -737,18 +732,17 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            raise_tool_error(exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_hacs_download",
                     "repository_id": repository_id,
                     "version": version,
                 },
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID is valid (use ha_hacs_search() to find it)",
                     "Ensure the repository is in HACS (use ha_hacs_add_repository() if needed)",
                     "Check version format (e.g., 'v1.2.3' or '1.2.3')",
                 ],
-            ))
+            )
