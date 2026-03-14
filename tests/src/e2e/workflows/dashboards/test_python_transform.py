@@ -174,7 +174,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
     )
     # Verify error message mentions mutual exclusivity
     error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
-    assert "multiple" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
+    assert "cannot use both" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
 
 
 @pytest.mark.asyncio
