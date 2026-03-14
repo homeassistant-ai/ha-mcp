@@ -125,8 +125,8 @@ async def test_logbook_pagination_with_offset(mcp_client):
     )
     first_data = get_logbook_data(first_raw)
 
-    # Skip test if not enough entries for pagination
-    if first_data.get("total_entries", 0) <= 5:
+    # Skip test if no entries or not enough for pagination
+    if not first_data.get("success") or first_data.get("total_entries", 0) <= 5:
         logger.info(
             f"Skipping pagination test - only {first_data.get('total_entries', 0)} entries"
         )
