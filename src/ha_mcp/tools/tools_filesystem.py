@@ -56,41 +56,37 @@ def is_filesystem_tools_enabled() -> bool:
     return value in ("true", "1", "yes", "on")
 
 
-async def _check_mcp_tools_available(client: Any) -> str | None:
-    """Check if the ha_mcp_tools custom component is available.
+async def _is_mcp_tools_available(client: Any) -> bool:
+    """Return True if the ha_mcp_tools custom component is registered in HA services.
 
-    Returns:
-        None if available, or an error message string if not.
+    Raises if the services API call fails — callers handle API errors via
+    their own exception_to_structured_error blocks.
     """
-    try:
-        # Check if the domain is in the list of services.
-        # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
-        services = await client.get_services()
-        if isinstance(services, list):
-            is_available = any(
-                isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
-                for s in services
-            )
-        elif isinstance(services, dict):
-            is_available = MCP_TOOLS_DOMAIN in services
-        else:
-            is_available = False
-
-        if is_available:
-            return None
-        return (
-            f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
-            "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant."
+    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
+    services = await client.get_services()
+    if isinstance(services, list):
+        return any(
+            isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
+            for s in services
         )
-    except Exception as e:
-        return f"Failed to check for {MCP_TOOLS_DOMAIN}: {str(e)}"
+    if isinstance(services, dict):
+        return MCP_TOOLS_DOMAIN in services
+    return False
 
 
 async def _assert_mcp_tools_available(client: Any) -> None:
-    """Check if ha_mcp_tools is available and raise ToolError if not."""
-    error_msg = await _check_mcp_tools_available(client)
-    if error_msg is not None:
-        raise_tool_error(create_error_response(ErrorCode.COMPONENT_NOT_INSTALLED, error_msg))
+    """Raise ToolError if ha_mcp_tools is not available.
+
+    Must be called within a try block that handles API errors via
+    exception_to_structured_error, so connection failures are classified
+    correctly rather than masked as COMPONENT_NOT_INSTALLED.
+    """
+    if not await _is_mcp_tools_available(client):
+        raise_tool_error(create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
+            "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant.",
+        ))
 
 
 def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

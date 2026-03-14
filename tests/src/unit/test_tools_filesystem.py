@@ -9,7 +9,7 @@ from fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
-    _check_mcp_tools_available,
+    _is_mcp_tools_available,
     is_filesystem_tools_enabled,
 )
 
@@ -62,8 +62,8 @@ class TestFeatureFlag:
             assert is_filesystem_tools_enabled() is True
 
 
-class TestCheckMcpToolsAvailable:
-    """Test _check_mcp_tools_available function."""
+class TestIsMcpToolsAvailable:
+    """Test _is_mcp_tools_available function."""
 
     @pytest.mark.asyncio
     async def test_available_when_domain_in_services_list_format(self):
@@ -83,13 +83,11 @@ class TestCheckMcpToolsAvailable:
             },
         ]
 
-        error_msg = await _check_mcp_tools_available(client)
-
-        assert error_msg is None
+        assert await _is_mcp_tools_available(client) is True
 
     @pytest.mark.asyncio
     async def test_available_when_domain_in_services_dict_format(self):
-        """Returns None when ha_mcp_tools is in the services dict (legacy format)."""
+        """Returns True when ha_mcp_tools is in the services dict (legacy format)."""
         client = AsyncMock()
         client.get_services.return_value = {
             MCP_TOOLS_DOMAIN: {
@@ -101,50 +99,38 @@ class TestCheckMcpToolsAvailable:
             "homeassistant": {"restart": {}},
         }
 
-        error_msg = await _check_mcp_tools_available(client)
-
-        assert error_msg is None
+        assert await _is_mcp_tools_available(client) is True
 
     @pytest.mark.asyncio
     async def test_not_available_when_domain_missing_list_format(self):
-        """Returns error message when ha_mcp_tools is not in the services list."""
+        """Returns False when ha_mcp_tools is not in the services list."""
         client = AsyncMock()
         client.get_services.return_value = [
             {"domain": "homeassistant", "services": {"restart": {}}},
             {"domain": "light", "services": {"turn_on": {}}},
         ]
 
-        error_msg = await _check_mcp_tools_available(client)
-
-        assert error_msg is not None
-        assert MCP_TOOLS_DOMAIN in error_msg
-        assert "ha_install_mcp_tools" in error_msg
+        assert await _is_mcp_tools_available(client) is False
 
     @pytest.mark.asyncio
     async def test_not_available_when_domain_missing_dict_format(self):
-        """Returns error message when ha_mcp_tools is not in the services dict."""
+        """Returns False when ha_mcp_tools is not in the services dict."""
         client = AsyncMock()
         client.get_services.return_value = {
             "homeassistant": {"restart": {}},
             "light": {"turn_on": {}},
         }
 
-        error_msg = await _check_mcp_tools_available(client)
-
-        assert error_msg is not None
-        assert MCP_TOOLS_DOMAIN in error_msg
-        assert "ha_install_mcp_tools" in error_msg
+        assert await _is_mcp_tools_available(client) is False
 
     @pytest.mark.asyncio
-    async def test_error_on_exception(self):
-        """Returns error message when get_services fails."""
+    async def test_propagates_exception_on_api_failure(self):
+        """API errors propagate — callers handle them via exception_to_structured_error."""
         client = AsyncMock()
         client.get_services.side_effect = Exception("Connection failed")
 
-        error_msg = await _check_mcp_tools_available(client)
-
-        assert error_msg is not None
-        assert "Connection failed" in error_msg
+        with pytest.raises(Exception, match="Connection failed"):
+            await _is_mcp_tools_available(client)
 
 
 class TestRegisterFilesystemTools:
