@@ -1,4 +1,5 @@
-"""Unit tests for _parse_skill_instructions() and _build_skills_instructions()."""
+"""Unit tests for _parse_skill_frontmatter(), _build_skill_block(),
+and _build_skills_instructions()."""
 
 from unittest.mock import patch
 
@@ -37,89 +38,97 @@ def server():
             return srv
 
 
-class TestParseSkillInstructions:
-    """Tests for _parse_skill_instructions() frontmatter parsing."""
+class TestParseSkillFrontmatter:
+    """Tests for _parse_skill_frontmatter() YAML parsing."""
 
-    def test_valid_frontmatter_with_triggers(self, server, tmp_path):
-        """Valid SKILL.md with triggers returns formatted block."""
-        skill_md = tmp_path / "SKILL.md"
+    def test_valid_frontmatter(self, server, tmp_path):
+        """Valid SKILL.md returns frontmatter dict."""
+        skill_md = tmp_path / "test-skill" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text(
             "---\nname: test-skill\ndescription: |\n"
-            "  TRIGGER THIS SKILL WHEN:\n"
-            "  - Creating automations\n"
-            "  - Configuring devices\n"
+            "  Best practices for testing.\n"
             "---\n# Body\n"
         )
-        result = server._parse_skill_instructions("test-skill", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is not None
-        assert "### Skill: test-skill" in result
-        assert "skill://test-skill/SKILL.md" in result
-        assert "Creating automations" in result
-
-    def test_valid_frontmatter_without_triggers_returns_none(self, server, tmp_path):
-        """SKILL.md without trigger/symptom sections returns None."""
-        skill_md = tmp_path / "SKILL.md"
-        skill_md.write_text(
-            "---\nname: test-skill\ndescription: |\n"
-            "  This skill helps with testing.\n---\n# Body\n"
-        )
-        result = server._parse_skill_instructions("test-skill", skill_md)
-        assert result is None
+        assert isinstance(result, dict)
+        assert result["name"] == "test-skill"
+        assert "Best practices" in result["description"]
 
     def test_no_frontmatter_delimiters(self, server, tmp_path):
         """File without --- delimiters returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "bad-skill" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text("# No frontmatter here\nJust content.\n")
-        result = server._parse_skill_instructions("bad-skill", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
     def test_invalid_yaml(self, server, tmp_path):
         """Malformed YAML in frontmatter returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "bad-yaml" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text("---\n: invalid: yaml: [unclosed\n---\n# Body\n")
-        result = server._parse_skill_instructions("bad-yaml", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
     def test_non_dict_frontmatter(self, server, tmp_path):
         """Frontmatter that parses to a non-dict (e.g., string) returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "string-fm" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text("---\njust a string\n---\n# Body\n")
-        result = server._parse_skill_instructions("string-fm", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
     def test_missing_description(self, server, tmp_path):
         """Frontmatter without description field returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "no-desc" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text("---\nname: no-desc\nversion: 1\n---\n# Body\n")
-        result = server._parse_skill_instructions("no-desc", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
     def test_empty_description(self, server, tmp_path):
         """Frontmatter with empty description returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "empty" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text('---\nname: empty\ndescription: ""\n---\n# Body\n')
-        result = server._parse_skill_instructions("empty", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
     def test_file_not_readable(self, server, tmp_path):
         """Unreadable file returns None."""
-        skill_md = tmp_path / "SKILL.md"
+        skill_md = tmp_path / "missing" / "SKILL.md"
         # Don't create the file — read_text will raise OSError
-        result = server._parse_skill_instructions("missing", skill_md)
+        result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_symptoms_section(self, server, tmp_path):
-        """SKILL.md with symptoms section returns formatted block."""
-        skill_md = tmp_path / "SKILL.md"
+
+class TestBuildSkillBlock:
+    """Tests for _build_skill_block() instruction formatting."""
+
+    def test_valid_skill_returns_block(self, server, tmp_path):
+        """Valid SKILL.md produces formatted instruction block."""
+        skill_md = tmp_path / "test-skill" / "SKILL.md"
+        skill_md.parent.mkdir()
         skill_md.write_text(
-            "---\nname: ws\ndescription: |\n"
-            "  SYMPTOMS THAT TRIGGER THIS SKILL:\n"
-            "  - Entity not responding\n"
+            "---\nname: test-skill\ndescription: |\n"
+            "  Best practices for testing.\n"
             "---\n# Body\n"
         )
-        result = server._parse_skill_instructions("ws", skill_md)
+        result = server._build_skill_block("test-skill", skill_md)
         assert result is not None
-        assert "Entity not responding" in result
+        assert "### Skill: test-skill" in result
+        assert "skill://test-skill/SKILL.md" in result
+        assert "Best practices for testing." in result
+
+    def test_invalid_frontmatter_returns_none(self, server, tmp_path):
+        """SKILL.md with bad frontmatter returns None."""
+        skill_md = tmp_path / "bad" / "SKILL.md"
+        skill_md.parent.mkdir()
+        skill_md.write_text("# No frontmatter\n")
+        result = server._build_skill_block("bad", skill_md)
+        assert result is None
 
 
 class TestBuildSkillsInstructions:
@@ -140,14 +149,12 @@ class TestBuildSkillsInstructions:
 
     def test_valid_skill_produces_instructions(self, server, tmp_path):
         """Valid skill directory produces instruction text."""
-        # Create a skill directory with a valid SKILL.md (needs trigger sections)
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
             "---\nname: my-skill\n"
             "description: |\n"
-            "  TRIGGER THIS SKILL WHEN:\n"
-            "  - Working on my-skill tasks\n"
+            "  Best practices for my-skill tasks.\n"
             "---\n# Body\n"
         )
 
@@ -168,8 +175,7 @@ class TestBuildSkillsInstructions:
         (skill_dir / "SKILL.md").write_text(
             "---\nname: my-skill\n"
             "description: |\n"
-            "  TRIGGER THIS SKILL WHEN:\n"
-            "  - Working on my-skill tasks\n"
+            "  Best practices for my-skill tasks.\n"
             "---\n# Body\n"
         )
 
