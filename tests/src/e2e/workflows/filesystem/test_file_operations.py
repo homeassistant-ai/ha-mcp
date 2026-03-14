@@ -101,7 +101,8 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
         )
 
         # Check if we got the "not installed" error
-        if data.get("error_code") == "MCP_TOOLS_NOT_INSTALLED":
+        error = data.get("error", {})
+        if isinstance(error, dict) and error.get("code") == "COMPONENT_NOT_INSTALLED":
             return False, "ha_mcp_tools custom component not installed in Home Assistant"
 
         # Check for success
@@ -786,14 +787,15 @@ class TestMcpToolsComponentNotInstalled:
 
                 # Should fail with helpful message about installing component
                 if data.get("success") is False or data.get("data", {}).get("success") is False:
-                    error_msg = data.get("error", "") or data.get("data", {}).get("error", "")
-                    error_code = data.get("error_code", "") or data.get("data", {}).get("error_code", "")
+                    error = data.get("error", {}) or data.get("data", {}).get("error", {})
+                    error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
+                    error_code = error.get("code", "") if isinstance(error, dict) else ""
 
                     # Check for helpful installation guidance
                     assert (
                         "not installed" in error_msg.lower() or
                         "ha_mcp_tools" in error_msg.lower() or
-                        error_code == "MCP_TOOLS_NOT_INSTALLED"
+                        error_code == "COMPONENT_NOT_INSTALLED"
                     ), f"Should provide helpful error: {data}"
 
                     logger.info("Correctly returned helpful error when component not installed")
