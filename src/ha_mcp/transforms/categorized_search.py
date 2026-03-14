@@ -41,6 +41,7 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     "ha_backup_restore",
     "ha_get_overview",
     "ha_report_issue",
+    "ha_search_entities",
 )
 
 # Tool name patterns that indicate delete/remove operations
