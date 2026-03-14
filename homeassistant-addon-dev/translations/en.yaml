@@ -17,4 +17,4 @@ configuration:
     name: Enable skills as tools
     description: >-
       Expose skills via list_resources/read_resource tools for MCP clients
-      that don't support resources natively. Adds 2 extra tools.
+      that don't support resources natively. Adds 3 extra tools.
