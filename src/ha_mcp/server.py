@@ -208,14 +208,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return header + "\n".join(skill_blocks)
 
-    def _parse_skill_instructions(
-        self, skill_name: str, main_file: Path
-    ) -> str | None:
-        """Parse a SKILL.md and return an instruction block for this skill.
+    @staticmethod
+    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
+        """Parse YAML frontmatter from a SKILL.md file.
 
-        Extracts the description field from YAML frontmatter, then pulls out
-        the TRIGGER THIS SKILL WHEN and SYMPTOMS THAT TRIGGER THIS SKILL
-        sections as bullet lists.
+        Returns the frontmatter dict if valid, or None with a logged
+        warning for each failure case.
         """
         try:
             content = main_file.read_text(encoding="utf-8")
@@ -223,7 +221,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Could not read %s", main_file)
             return None
 
-        # Extract YAML frontmatter between --- markers
         parts = content.split("---", 2)
         if len(parts) < 3:
             logger.warning("No valid frontmatter delimiters in %s", main_file)
@@ -239,11 +236,46 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Frontmatter is not a mapping in %s", main_file)
             return None
 
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning("No description in frontmatter for skill %s", skill_name)
+        if not frontmatter.get("description", ""):
+            logger.warning(
+                "No description in frontmatter for %s", main_file.parent.name
+            )
             return None
 
+        return frontmatter
+
+    def _build_skill_block(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Build an instruction block for a single skill.
+
+        Reads the description field from YAML frontmatter and includes it
+        verbatim. The description is designed for LLM consumption and
+        contains its own trigger conditions and symptom indicators.
+        """
+        frontmatter = self._parse_skill_frontmatter(main_file)
+        if not frontmatter:
+            return None
+
+        description = frontmatter["description"]
+        uri = f"skill://{skill_name}/SKILL.md"
+
+        return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
+
+    def _parse_skill_instructions(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Parse a SKILL.md and return a structured instruction block.
+
+        Uses _parse_skill_frontmatter for YAML parsing, then extracts
+        TRIGGER THIS SKILL WHEN and SYMPTOMS THAT TRIGGER THIS SKILL
+        sections as bullet lists.
+        """
+        frontmatter = self._parse_skill_frontmatter(main_file)
+        if not frontmatter:
+            return None
+
+        description = frontmatter["description"]
         uri = f"skill://{skill_name}/SKILL.md"
 
         # Extract trigger and symptom sections from the description
