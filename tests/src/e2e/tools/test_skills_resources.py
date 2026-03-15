@@ -5,6 +5,7 @@ Verifies that:
 - Skills are discoverable via list_resources() when ENABLE_SKILLS=true
 - Skill content can be read via resources/read
 - Skills appear as tools when ENABLE_SKILLS_AS_TOOLS=true
+- Server instructions (bootstrap prompt) include skill guidance
 """
 
 import logging
@@ -12,6 +13,40 @@ import logging
 import pytest
 
 logger = logging.getLogger(__name__)
+
+SKILLS_MISSING_HINT = (
+    "Skills directory not found. Ensure the git submodule at "
+    "src/ha_mcp/resources/skills-vendor/ is initialized "
+    "(git submodule update --init). CI workflows use submodules: true "
+    "in the checkout step to handle this automatically."
+)
+
+
+@pytest.mark.asyncio
+async def test_skills_bootstrap_instructions(mcp_client):
+    """Test that MCP server instructions contain skill guidance (bootstrap prompt).
+
+    Verifies the observable behavior: the instructions field in the MCP
+    InitializeResult contains skill blocks built from SKILL.md frontmatter.
+    If instructions are None, skills failed to load silently — the exact
+    regression from missing skills-vendor.
+    """
+    result = mcp_client.initialize_result
+    assert result is not None, "MCP client has no InitializeResult"
+    instructions = result.instructions
+    assert instructions is not None, (
+        "Server instructions are None — skills were not loaded. " + SKILLS_MISSING_HINT
+    )
+    assert "IMPORTANT" in instructions, (
+        "Server instructions missing IMPORTANT header from skills"
+    )
+    assert "skill://" in instructions, (
+        "Server instructions missing skill:// URIs"
+    )
+    logger.info(
+        f"Server instructions present ({len(instructions)} chars), "
+        f"contains skill guidance"
+    )
 
 
 @pytest.mark.asyncio
@@ -26,7 +61,8 @@ async def test_skills_resources_listed(mcp_client):
     skill_resources = [r for r in resources if str(r.uri).startswith("skill://")]
     assert len(skill_resources) > 0, (
         "No skill:// resources found. "
-        "Expected bundled home-assistant-best-practices skill."
+        "Expected bundled home-assistant-best-practices skill. "
+        + SKILLS_MISSING_HINT
     )
 
     # Verify the main SKILL.md resource exists

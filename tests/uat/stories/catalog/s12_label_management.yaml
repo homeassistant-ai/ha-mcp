@@ -33,6 +33,11 @@ verify:
     - "Does a label called 'Critical' exist with red color?"
     - "Does a label called 'Battery' exist with yellow color?"
     - "How many labels are currently configured?"
+  ha_checks:
+    - type: label_exists
+      name: "Critical"
+    - type: label_exists
+      name: "Battery"
 
 expected:
   tools_should_use:

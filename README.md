@@ -1,3 +1,5 @@
+> ⚠️ **Breaking change in OAuth (beta) mode** — v7.0.0 requires `HOMEASSISTANT_URL` to be set server-side. [See issue #749 for migration instructions.](https://github.com/homeassistant-ai/ha-mcp/issues/749)
+
 <div align="center">
   <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
@@ -127,7 +129,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (98 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (97 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -139,7 +141,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_documentation` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
-| **Zones** | `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone` |
+| **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
 | **Todo Lists** | `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event` |
@@ -237,6 +239,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@knowald](https://github.com/knowald)** — Area resolution via device registry in `ha_get_system_overview` for entities assigned through their parent device.
+- **[@zorrobyte](https://github.com/zorrobyte)** — Per-client WebSocket credentials in OAuth mode, fixing WebSocket tool failures.
+- **[@deanbenson](https://github.com/deanbenson)** — Fixed `ha_deep_search` timeout on large Home Assistant instances with many automations.
+- **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
+- **[@adraguidev](https://github.com/adraguidev)** — Fix menu-based config entry flows for group helpers (#647).
+- **[@transportrefer](https://github.com/transportrefer)** — Integration options inspection (`ha_get_integration` schema support, #689).
 
 ---
 

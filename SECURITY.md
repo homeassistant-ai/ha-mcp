@@ -11,4 +11,9 @@
 
 Use the page at https://github.com/homeassistant-ai/ha-mcp/security/
 
-Will be assesed within 48h. Fix might take 24-48h.
+Reports will be assessed within 48 hours. Fixes may take an additional 24–48 hours.
+
+Reports **must be made in good faith** and accurately reflect the real severity and impact of the vulnerability.  
+Overstated, exaggerated, misleading, or speculative reports will be deprioritized or rejected.
+
+Low-quality or AI-generated submissions that do not demonstrate a real, reproducible security issue may take longer to process or be closed without action.

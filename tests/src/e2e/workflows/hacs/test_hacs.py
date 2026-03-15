@@ -16,8 +16,13 @@ Tests should handle both fully functional and partially disabled states.
 import logging
 
 import pytest
+from fastmcp.exceptions import ToolError
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    parse_mcp_result,
+    safe_call_tool,
+    tool_error_to_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +40,20 @@ def extract_hacs_data(raw_result) -> dict:
     if isinstance(parsed, dict) and "data" in parsed and isinstance(parsed["data"], dict):
         return parsed["data"]
     return parsed
+
+
+async def safe_hacs_call(mcp_client, tool_name: str, params: dict | None = None) -> dict:
+    """Call a HACS tool and extract data, handling ToolError exceptions.
+
+    HACS tools raise ToolError when the tool fails (e.g., HACS not installed,
+    WebSocket command fails). This helper catches ToolError and converts it to
+    a dict so that is_hacs_unavailable() can check whether to skip the test.
+    """
+    try:
+        result = await mcp_client.call_tool(tool_name, params or {})
+        return extract_hacs_data(result)
+    except ToolError as exc:
+        return tool_error_to_result(exc)
 
 
 def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
@@ -88,8 +107,7 @@ class TestHacsInfo:
         """
         logger.info("Testing ha_hacs_info...")
 
-        result = await mcp_client.call_tool("ha_hacs_info", {})
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
 
         logger.info(f"HACS info response: success={data.get('success')}, version={data.get('version')}")
 
@@ -129,8 +147,7 @@ class TestHacsInfo:
         """
         logger.info("Testing HACS info response structure...")
 
-        result = await mcp_client.call_tool("ha_hacs_info", {})
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -167,8 +184,7 @@ class TestHacsListInstalled:
         """
         logger.info("Testing ha_hacs_list_installed without filters...")
 
-        result = await mcp_client.call_tool("ha_hacs_list_installed", {})
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_hacs_list_installed")
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -207,11 +223,9 @@ class TestHacsListInstalled:
         categories = ["integration", "lovelace", "theme"]
 
         for category in categories:
-            result = await mcp_client.call_tool(
-                "ha_hacs_list_installed",
-                {"category": category}
+            data = await safe_hacs_call(
+                mcp_client, "ha_hacs_list_installed", {"category": category}
             )
-            data = extract_hacs_data(result)
 
             if not data.get("success"):
                 unavailable, reason = is_hacs_unavailable(data)
@@ -244,11 +258,7 @@ class TestHacsSearch:
         logger.info("Testing ha_hacs_search basic search...")
 
         # Search for something likely to exist in HACS
-        result = await mcp_client.call_tool(
-            "ha_hacs_search",
-            {"query": "mushroom"}
-        )
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_hacs_search", {"query": "mushroom"})
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -284,11 +294,9 @@ class TestHacsSearch:
         """
         logger.info("Testing ha_hacs_search with category filter...")
 
-        result = await mcp_client.call_tool(
-            "ha_hacs_search",
-            {"query": "card", "category": "lovelace"}
+        data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"query": "card", "category": "lovelace"}
         )
-        data = extract_hacs_data(result)
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -314,11 +322,9 @@ class TestHacsSearch:
         """
         logger.info("Testing ha_hacs_search with max_results...")
 
-        result = await mcp_client.call_tool(
-            "ha_hacs_search",
-            {"query": "integration", "max_results": 5}
+        data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"query": "integration", "max_results": 5}
         )
-        data = extract_hacs_data(result)
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -341,11 +347,9 @@ class TestHacsSearch:
         """
         logger.info("Testing ha_hacs_search with no results...")
 
-        result = await mcp_client.call_tool(
-            "ha_hacs_search",
-            {"query": "xyznonexistent12345abcdef"}
+        data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"query": "xyznonexistent12345abcdef"}
         )
-        data = extract_hacs_data(result)
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -399,11 +403,9 @@ class TestHacsRepositoryInfo:
         logger.info("Testing ha_hacs_repository_info with valid repo...")
 
         # First search for a popular repo
-        search_result = await mcp_client.call_tool(
-            "ha_hacs_search",
-            {"query": "hacs", "max_results": 1}
+        search_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"query": "hacs", "max_results": 1}
         )
-        search_data = extract_hacs_data(search_result)
 
         if not search_data.get("success"):
             unavailable, reason = is_hacs_unavailable(search_data)
@@ -427,11 +429,9 @@ class TestHacsRepositoryInfo:
 
         logger.info(f"Getting info for repository: {identifier}")
 
-        info_result = await mcp_client.call_tool(
-            "ha_hacs_repository_info",
-            {"repository_id": identifier}
+        info_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_repository_info", {"repository_id": identifier}
         )
-        info_data = extract_hacs_data(info_result)
 
         if not info_data.get("success"):
             # Some repos may not have detailed info available
@@ -518,8 +518,7 @@ async def test_hacs_discovery(mcp_client):
     """
     logger.info("Testing basic HACS discovery...")
 
-    result = await mcp_client.call_tool("ha_hacs_info", {})
-    data = extract_hacs_data(result)
+    data = await safe_hacs_call(mcp_client, "ha_hacs_info")
 
     unavailable, reason = is_hacs_unavailable(data)
     if unavailable:
@@ -555,8 +554,7 @@ class TestMcpToolsInstallation:
         This prevents flaky test failures when HACS is rate-limited or temporarily unavailable.
         """
         logger.info("Pre-flight check: verifying HACS availability...")
-        result = await mcp_client.call_tool("ha_hacs_info", {})
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -578,14 +576,12 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_install_mcp_tools (without restart)...")
 
         # Before installation, verify HACS is available and ready
-        result_info = await mcp_client.call_tool("ha_hacs_info", {})
-        info_data = extract_hacs_data(result_info)
+        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
 
-        result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
-        data = extract_hacs_data(result)
+        data = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
 
         logger.info(f"Install result: success={data.get('success')}, message={data.get('message')}")
 
@@ -627,15 +623,13 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_install_mcp_tools idempotency...")
 
         # Before installation, verify HACS is available and ready
-        result_info = await mcp_client.call_tool("ha_hacs_info", {})
-        info_data = extract_hacs_data(result_info)
+        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
 
         # First install
-        result1 = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
-        data1 = extract_hacs_data(result1)
+        data1 = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
 
         if not data1.get("success"):
             unavailable, reason = is_hacs_unavailable(data1)
@@ -647,8 +641,7 @@ class TestMcpToolsInstallation:
             pytest.fail(f"First install failed: {data1.get('error')}")
 
         # Second install should also succeed
-        result2 = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
-        data2 = extract_hacs_data(result2)
+        data2 = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
 
         assert data2.get("success"), f"Second install should succeed: {data2.get('error')}"
         assert data2.get("already_installed"), "Second install should report already_installed"
@@ -664,15 +657,15 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_mcp_tools appears in HACS list...")
 
         # Before installation, verify HACS is available and ready
-        result_info = await mcp_client.call_tool("ha_hacs_info", {})
-        info_data = extract_hacs_data(result_info)
+        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
 
         # First ensure it's installed
-        install_result = await mcp_client.call_tool("ha_install_mcp_tools", {"restart": False})
-        install_data = extract_hacs_data(install_result)
+        install_data = await safe_hacs_call(
+            mcp_client, "ha_install_mcp_tools", {"restart": False}
+        )
 
         if not install_data.get("success"):
             unavailable, reason = is_hacs_unavailable(install_data)
@@ -684,11 +677,9 @@ class TestMcpToolsInstallation:
             pytest.fail(f"Install failed: {install_data.get('error')}")
 
         # Now check HACS list for the integration
-        list_result = await mcp_client.call_tool(
-            "ha_hacs_list_installed",
-            {"category": "integration"}
+        list_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_list_installed", {"category": "integration"}
         )
-        list_data = extract_hacs_data(list_result)
 
         if not list_data.get("success"):
             pytest.fail(f"Failed to list installed: {list_data.get('error')}")

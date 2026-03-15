@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import jq - it's not available on Windows ARM64
 try:
-    import jq  # noqa: F401 - Used to check availability, re-imported in function
+    import jq  # noqa: F401
 
     JQ_AVAILABLE = True
 except ImportError:
@@ -68,9 +68,9 @@ def _get_resources_dir() -> Path:
 
         # For Python 3.9+
         if hasattr(pkg_resources, "files"):
-            resources_dir = pkg_resources.files("ha_mcp") / "resources"
-            if hasattr(resources_dir, "__fspath__"):
-                return Path(str(resources_dir))
+            pkg_resources_dir = pkg_resources.files("ha_mcp") / "resources"
+            if hasattr(pkg_resources_dir, "__fspath__"):
+                return Path(str(pkg_resources_dir))
     except (ImportError, AttributeError):
         # If importlib.resources or its attributes are unavailable, fall back to relative path
         pass
@@ -380,7 +380,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Calculate config size for progressive disclosure hint
             config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
-            result: dict[str, Any] = {
+            result = {
                 "success": True,
                 "action": "get",
                 "url_path": url_path,
@@ -397,7 +397,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "instead of full config replacement."
                 )
 
-            return result
+            return cast(dict[str, Any], result)
         except ToolError:
             raise
         except Exception as e:
@@ -798,7 +798,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ))
 
                 # Fetch current dashboard config
-                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+                get_data = {"type": "lovelace/config", "force": True}
                 if url_path:
                     get_data["url_path"] = url_path
 
@@ -847,7 +847,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     ))
 
                 # Apply jq transformation
-                transformed_config, error = _apply_jq_transform(
+                jq_result, error = _apply_jq_transform(
                     current_config, jq_transform
                 )
                 if error:
@@ -861,9 +861,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         ],
                         context={"action": "jq_transform", "url_path": url_path},
                     ))
+                transformed_config = cast(dict[str, Any], jq_result)
 
                 # Save transformed config
-                save_data: dict[str, Any] = {
+                save_data = {
                     "type": "lovelace/config/save",
                     "config": transformed_config,
                 }
@@ -890,9 +891,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 # Compute new hash for potential chaining
                 # transformed_config is guaranteed to be a dict here (validated above)
-                new_config_hash = _compute_config_hash(
-                    cast(dict[str, Any], transformed_config)
-                )
+                new_config_hash = _compute_config_hash(transformed_config)
 
                 return {
                     "success": True,
@@ -1034,7 +1033,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # For existing dashboards, optionally validate config_hash and warn on large replacement
                 if dashboard_exists:
                     # Fetch current config for validation/comparison
-                    get_data: dict[str, Any] = {
+                    get_data = {
                         "type": "lovelace/config",
                         "force": True,
                     }

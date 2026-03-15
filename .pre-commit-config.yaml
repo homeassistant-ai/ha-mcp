@@ -2,7 +2,7 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.0
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
   - repo: https://github.com/astral-sh/uv-pre-commit
     # renovate: datasource=github-releases depName=astral-sh/uv-pre-commit
@@ -11,6 +11,12 @@ repos:
       - id: uv-lock
   - repo: local
     hooks:
+      - id: mypy
+        name: mypy type check
+        entry: uv run mypy src/
+        language: system
+        pass_filenames: false
+        files: ^(src/|pyproject\.toml)
       - id: unit-tests
         name: unit tests
         entry: uv run pytest tests/src/unit/ -n auto -m "not slow" --tb=short -q

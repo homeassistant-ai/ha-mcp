@@ -463,7 +463,8 @@ async def _call_addon_api(
 
 
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
-    """Register add-on management tools with the MCP server.
+    """
+    Register add-on management tools with the MCP server.
 
     Args:
         mcp: FastMCP server instance

@@ -32,6 +32,11 @@ verify:
     - "Does at least one automation exist that references the vacation mode helper?"
     - "Does the automation have time-based triggers (around 7pm and/or 11pm)?"
     - "Does the automation control light.bed_light?"
+  ha_checks:
+    - type: entity_exists
+      entity_id: input_boolean.vacation_mode
+    - type: automation_exists
+      alias: "Vacation"
 
 expected:
   tools_should_use:

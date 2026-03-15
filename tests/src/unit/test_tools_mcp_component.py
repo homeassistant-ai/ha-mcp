@@ -50,7 +50,7 @@ class TestHaInstallMcpToolsErrorHandling:
     async def test_exception_raises_tool_error(self):
         """Exceptions in ha_install_mcp_tools should raise ToolError, not return a dict."""
         mock_check = AsyncMock(side_effect=RuntimeError("Unexpected HACS failure"))
-        with patch("ha_mcp.tools.tools_hacs._check_hacs_available", mock_check):
+        with patch("ha_mcp.tools.tools_hacs._is_hacs_available", mock_check):
             tool_fn = _register_and_capture(mock_check)
             with pytest.raises(ToolError) as exc_info:
                 await tool_fn(restart=False)
@@ -62,7 +62,7 @@ class TestHaInstallMcpToolsErrorHandling:
     async def test_exception_includes_hacs_suggestions(self):
         """ToolError from ha_install_mcp_tools should include HACS-specific suggestions."""
         mock_check = AsyncMock(side_effect=ConnectionError("Cannot reach HACS"))
-        with patch("ha_mcp.tools.tools_hacs._check_hacs_available", mock_check):
+        with patch("ha_mcp.tools.tools_hacs._is_hacs_available", mock_check):
             tool_fn = _register_and_capture(mock_check)
             with pytest.raises(ToolError) as exc_info:
                 await tool_fn(restart=False)
@@ -77,7 +77,7 @@ class TestHaInstallMcpToolsErrorHandling:
     async def test_exception_preserves_tool_context(self):
         """ToolError should include the tool name and restart parameter in context."""
         mock_check = AsyncMock(side_effect=RuntimeError("Something went wrong"))
-        with patch("ha_mcp.tools.tools_hacs._check_hacs_available", mock_check):
+        with patch("ha_mcp.tools.tools_hacs._is_hacs_available", mock_check):
             tool_fn = _register_and_capture(mock_check)
             with pytest.raises(ToolError) as exc_info:
                 await tool_fn(restart=True)
