@@ -81,8 +81,8 @@ async def test_get_state_light_entity(mcp_client, test_light_entity):
     if state_data["state"] == "on":
         if "brightness" in attrs:
             logger.info(f"Light brightness: {attrs['brightness']}")
-        if "color_temp" in attrs:
-            logger.info(f"Light color_temp: {attrs['color_temp']}")
+        if "color_temp_kelvin" in attrs:
+            logger.info(f"Light color_temp_kelvin: {attrs['color_temp_kelvin']}")
 
 
 @pytest.mark.asyncio

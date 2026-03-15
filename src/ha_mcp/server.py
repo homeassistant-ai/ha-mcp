@@ -10,6 +10,7 @@ Implements lazy initialization pattern for improved startup time:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -17,7 +18,7 @@ import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
 from mcp.types import Icon
 
-from .config import get_global_settings
+from .config import _PACKAGE_VERSION, get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -54,7 +55,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self,
         client: HomeAssistantClient | None = None,
         server_name: str = "ha-mcp",
-        server_version: str = "0.1.0",
+        server_version: str = _PACKAGE_VERSION,
     ):
         """Initialize the smart MCP server with lazy loading support."""
         # Load settings first (fast operation)
@@ -68,6 +69,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._smart_tools: Any = None
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
+        self._skill_tool_names: list[str] = []
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -249,14 +251,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return instructions
 
-    def _build_skill_block(
-        self, skill_name: str, main_file: Path
-    ) -> str | None:
-        """Build an instruction block for a single skill.
+    @staticmethod
+    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
+        """Parse YAML frontmatter from a SKILL.md file.
 
-        Reads the description field from YAML frontmatter and includes it
-        verbatim. The description is designed for LLM consumption and
-        contains its own trigger conditions and symptom indicators.
+        Returns the frontmatter dict if valid, or None with a logged
+        warning for each failure case.
         """
         try:
             content = main_file.read_text(encoding="utf-8")
@@ -264,7 +264,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Could not read %s", main_file)
             return None
 
-        # Extract YAML frontmatter between --- markers
         parts = content.split("---", 2)
         if len(parts) < 3:
             logger.warning("No valid frontmatter delimiters in %s", main_file)
@@ -280,11 +279,28 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Frontmatter is not a mapping in %s", main_file)
             return None
 
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning("No description in frontmatter for skill %s", skill_name)
+        if not frontmatter.get("description", ""):
+            logger.warning(
+                "No description in frontmatter for %s", main_file.parent.name
+            )
             return None
 
+        return frontmatter
+
+    def _build_skill_block(
+        self, skill_name: str, main_file: Path
+    ) -> str | None:
+        """Build an instruction block for a single skill.
+
+        Reads the description field from YAML frontmatter and includes it
+        verbatim. The description is designed for LLM consumption and
+        contains its own trigger conditions and symptom indicators.
+        """
+        frontmatter = self._parse_skill_frontmatter(main_file)
+        if not frontmatter:
+            return None
+
+        description = frontmatter["description"]
         uri = f"skill://{skill_name}/SKILL.md"
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
@@ -505,6 +521,96 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         except Exception:
             logger.exception(
                 "Failed to expose skills as tools (resources still available)"
+            )
+
+        # Phase 4: Register skill guidance tools for clients that don't read
+        # server instructions (e.g., claude.ai). The tool description contains
+        # the trigger conditions so the AI sees them in the tool listing.
+        # Names stored for pinning in search transforms (always-visible).
+        self._register_skill_guidance_tools(skills_dir)
+
+    def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
+        """Register a lightweight guidance tool per skill.
+
+        Clients like claude.ai don't read the MCP server instructions field,
+        so the bootstrap prompt (trigger conditions, symptoms) is invisible.
+        This registers a tool per skill whose description contains the trigger
+        conditions. The tool itself just lists available reference files —
+        actual content is loaded on demand via read_resource.
+        """
+        try:
+            entries = sorted(skills_dir.iterdir())
+        except OSError:
+            logger.warning("Could not read skills directory: %s", skills_dir)
+            return
+
+        for skill_dir in entries:
+            main_file = skill_dir / "SKILL.md"
+            if not skill_dir.is_dir() or not main_file.exists():
+                continue
+
+            frontmatter = self._parse_skill_frontmatter(main_file)
+            if not frontmatter:
+                continue
+
+            description = frontmatter["description"].strip()
+            skill_name = skill_dir.name
+            tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
+            uri = f"skill://{skill_name}/SKILL.md"
+
+            tool_description = (
+                f"CALL THIS FIRST before performing matching actions. "
+                f"{description}\n\n"
+                f"Returns available reference files. Use read_resource with "
+                f"the file URI to load specific guides as needed."
+            )
+
+            # Collect available reference files for the listing.
+            # Filter out symlinks and verify path containment to prevent
+            # traversal via symlinked directories.
+            ref_files = []
+            resolved_root = skill_dir.resolve()
+            try:
+                for f in sorted(skill_dir.rglob("*")):
+                    if not f.is_file() or f.is_symlink():
+                        continue
+                    # Ensure resolved path stays within the skill directory
+                    if not f.resolve().is_relative_to(resolved_root):
+                        continue
+                    rel = f.relative_to(skill_dir)
+                    ref_uri = f"skill://{skill_name}/{rel}"
+                    ref_files.append({"name": str(rel), "uri": ref_uri})
+            except OSError:
+                logger.warning("Error reading skill files in %s", skill_dir)
+
+            # Use factory to capture ref_files in closure
+            def _make_skill_handler(
+                s_name: str, s_uri: str, files: list[dict[str, str]],
+            ) -> Callable[[], Coroutine[Any, Any, dict[str, Any]]]:
+                async def handler() -> dict[str, Any]:
+                    return {
+                        "skill": s_name,
+                        "skill_uri": s_uri,
+                        "how_to_use": (
+                            "Use read_resource with a file URI below to load "
+                            "the specific reference you need. Start with "
+                            "SKILL.md for the decision workflow."
+                        ),
+                        "available_files": files,
+                    }
+                return handler
+
+            self.mcp.tool(
+                name=tool_name,
+                description=tool_description,
+                annotations={"readOnlyHint": True},
+            )(_make_skill_handler(skill_name, uri, ref_files))
+
+            self._skill_tool_names.append(tool_name)
+            logger.info(
+                "Registered skill guidance tool %s (%d reference files)",
+                tool_name,
+                len(ref_files),
             )
 
     # Helper methods required by EnhancedToolsMixin

@@ -353,25 +353,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     },
                 ))
 
-            message = {
-                "type": "config_entries/delete",
-                "entry_id": entry_id,
-            }
-
-            result = await client.send_websocket_message(message)
-
-            if not result.get("success"):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete config entry: {error_msg}",
-                    context={"entry_id": entry_id},
-                ))
-
-            # Get result info
-            require_restart = result.get("result", {}).get("require_restart", False)
+            result = await client.delete_config_entry(entry_id)
+            require_restart = result.get("require_restart", False)
 
             return {
                 "success": True,

@@ -502,45 +502,49 @@ class HomeAssistantClient:
 
             # For new automations, query Home Assistant to get the actual entity_id that was assigned
             actual_entity_id = None
+            entity_not_verified = False
             if operation == "created":
                 try:
-                    # Give Home Assistant a moment to register the entity
-                    import asyncio
+                    # Poll with retries — slower hardware may need more time
+                    for attempt in range(3):
+                        await asyncio.sleep(1 * (attempt + 1))
 
-                    await asyncio.sleep(1)
-
-                    # Get all automations and find the one with our unique_id
-                    states = await self.get_states()
-                    for state in states:
-                        if state.get("entity_id", "").startswith("automation."):
-                            attributes = state.get("attributes", {})
-                            if attributes.get("id") == unique_id:
-                                actual_entity_id = state.get("entity_id")
-                                logger.debug(
-                                    f"Found actual entity_id for unique_id {unique_id}: {actual_entity_id}"
-                                )
-                                break
+                        states = await self.get_states()
+                        for state in states:
+                            if state.get("entity_id", "").startswith(
+                                "automation."
+                            ):
+                                attributes = state.get("attributes", {})
+                                if attributes.get("id") == unique_id:
+                                    actual_entity_id = state.get("entity_id")
+                                    logger.debug(
+                                        f"Found actual entity_id for unique_id {unique_id}: {actual_entity_id}"
+                                    )
+                                    break
+                        if actual_entity_id:
+                            break
 
                     if not actual_entity_id:
-                        # Fallback to predicted entity_id if we can't find it
-                        actual_entity_id = f"automation.{config.get('alias', unique_id).lower().replace(' ', '_').replace('-', '_')}"
+                        entity_not_verified = True
                         logger.warning(
-                            f"Could not find actual entity_id for unique_id {unique_id}, using predicted: {actual_entity_id}"
+                            f"Automation with unique_id {unique_id} was not found in HA state after creation"
                         )
 
                 except Exception as e:
+                    entity_not_verified = True
                     logger.warning(
                         f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
                     )
-                    # Fallback to predicted entity_id
-                    actual_entity_id = f"automation.{config.get('alias', unique_id).lower().replace(' ', '_').replace('-', '_')}"
 
-            return {
+            result: dict[str, Any] = {
                 "unique_id": unique_id,
                 "entity_id": actual_entity_id,
                 "result": response.get("result", "ok"),
                 "operation": operation,
             }
+            if entity_not_verified:
+                result["entity_not_verified"] = True
+            return result
         except Exception as e:
             if "400" in str(e):
                 raise HomeAssistantAPIError(
@@ -764,6 +768,26 @@ class HomeAssistantClient:
                 status_code=404,
             )
         return found
+
+    async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
+        """Delete a config entry via REST API.
+
+        The WebSocket command ``config_entries/delete`` is not supported by
+        Home Assistant.  The REST endpoint ``DELETE /api/config/config_entries/
+        entry/{entry_id}`` is the correct way to remove a config entry.
+
+        Args:
+            entry_id: Config entry ID to delete.
+
+        Returns:
+            Result dict with ``require_restart`` flag.
+
+        Raises:
+            HomeAssistantAPIError: If the entry is not found or the API
+                returns an error status.
+        """
+        logger.debug(f"Deleting config entry: {entry_id}")
+        return await self._request("DELETE", f"/config/config_entries/entry/{entry_id}")
 
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
