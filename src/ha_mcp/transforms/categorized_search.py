@@ -193,6 +193,24 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 self._write_tools.add(tool.name)
         self._cache_built = True
 
+    async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
+        """Serialize search results with ``execute_via`` hints."""
+        proxy_map = {
+            "read": self._call_read_name,
+            "write": self._call_write_name,
+            "delete": self._call_delete_name,
+        }
+        results = []
+        for tool in tools:
+            data = tool.to_mcp_tool().model_dump(mode="json", exclude_none=True)
+            proxy = proxy_map[_categorize_tool(tool)]
+            data["execute_via"] = (
+                f'client.{proxy}(name="{tool.name}", arguments={{...}}) '
+                f'or {proxy}(name="{tool.name}", arguments={{...}})'
+            )
+            results.append(data)
+        return results
+
     def _make_categorized_proxy(
         self,
         proxy_name: str,

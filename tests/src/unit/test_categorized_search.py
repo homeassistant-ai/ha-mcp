@@ -86,6 +86,64 @@ class TestCategorizeTool:
 
 
 # ---------------------------------------------------------------------------
+# CategorizedSearchTransform._render_results (execute_via hints)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderResults:
+    """Tests for _render_results with execute_via hints."""
+
+    @pytest.fixture
+    def transform(self):
+        return CategorizedSearchTransform(max_results=5)
+
+    @pytest.mark.anyio
+    async def test_read_tool_execute_via(self, transform):
+        tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
+        results = await transform._render_results(tools)
+        assert len(results) == 1
+        assert "execute_via" in results[0]
+        assert "ha_call_read_tool" in results[0]["execute_via"]
+        assert "ha_get_state" in results[0]["execute_via"]
+
+    @pytest.mark.anyio
+    async def test_write_tool_execute_via(self, transform):
+        tools = [_make_tool("ha_config_set_automation", destructive=True, description="Set")]
+        results = await transform._render_results(tools)
+        assert "ha_call_write_tool" in results[0]["execute_via"]
+        assert "ha_config_set_automation" in results[0]["execute_via"]
+
+    @pytest.mark.anyio
+    async def test_delete_tool_execute_via(self, transform):
+        tools = [_make_tool("ha_config_remove_area", destructive=True, description="Remove")]
+        results = await transform._render_results(tools)
+        assert "ha_call_delete_tool" in results[0]["execute_via"]
+        assert "ha_config_remove_area" in results[0]["execute_via"]
+
+    @pytest.mark.anyio
+    async def test_preserves_standard_fields(self, transform):
+        """Should preserve name, description, annotations, inputSchema."""
+        tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
+        results = await transform._render_results(tools)
+        assert results[0]["name"] == "ha_get_state"
+        assert "description" in results[0]
+        assert "inputSchema" in results[0]
+
+    @pytest.mark.anyio
+    async def test_multiple_tools(self, transform):
+        tools = [
+            _make_tool("ha_get_state", read_only=True, description="Read"),
+            _make_tool("ha_config_set_helper", destructive=True, description="Write"),
+            _make_tool("ha_config_delete_zone", destructive=True, description="Delete"),
+        ]
+        results = await transform._render_results(tools)
+        assert len(results) == 3
+        assert "ha_call_read_tool" in results[0]["execute_via"]
+        assert "ha_call_write_tool" in results[1]["execute_via"]
+        assert "ha_call_delete_tool" in results[2]["execute_via"]
+
+
+# ---------------------------------------------------------------------------
 # CategorizedSearchTransform.transform_tools
 # ---------------------------------------------------------------------------
 
