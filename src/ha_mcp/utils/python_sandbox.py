@@ -189,6 +189,11 @@ def validate_expression(expr: str) -> tuple[bool, str]:
                         f"Forbidden method: {method_name} (allowed: {', '.join(sorted(SAFE_METHODS))})",
                     )
 
+            # Reject subscript calls, chained calls, and all other non-standard targets
+            # e.g., config['fn']() or config.get('fn')() would bypass Name/Attribute checks
+            else:
+                return False, f"Forbidden call target type: {type(node.func).__name__}"
+
         # Block function definitions (could be used for obfuscation)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             return False, "Forbidden: function/class definitions not allowed"
