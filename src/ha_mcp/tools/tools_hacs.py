@@ -8,8 +8,10 @@ to discover custom integrations, Lovelace cards, themes, and more.
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_int_param
 
@@ -31,29 +33,35 @@ CATEGORY_DISPLAY = {v: k for k, v in CATEGORY_MAP.items()}
 CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
 
 
-async def _check_hacs_available(client: Any) -> tuple[bool, str | None]:
+async def _is_hacs_available() -> bool:
+    """Return True if HACS is installed and responding via WebSocket.
+
+    Raises if the WebSocket connection fails — callers handle API errors via
+    their own exception_to_structured_error blocks.
     """
-    Check if HACS is installed and available via WebSocket.
+    from ..client.websocket_client import get_websocket_client
+    ws_client = await get_websocket_client()
+    response = await ws_client.send_command("hacs/info")
+    return bool(response.get("success"))
 
-    Returns:
-        Tuple of (is_available, error_message)
+
+async def _assert_hacs_available() -> None:
+    """Raise ToolError if HACS is not available.
+
+    Must be called within a try block that handles API errors via
+    exception_to_structured_error, so connection failures are classified
+    correctly rather than masked as COMPONENT_NOT_INSTALLED.
     """
-    try:
-        from ..client.websocket_client import get_websocket_client
-        ws_client = await get_websocket_client()
-
-        # Try to get HACS info to verify it's installed
-        response = await ws_client.send_command("hacs/info")
-
-        if response.get("success"):
-            return True, None
-        else:
-            return False, "HACS is installed but returned an error"
-    except Exception as e:
-        error_str = str(e).lower()
-        if "unknown command" in error_str or "not found" in error_str:
-            return False, "HACS is not installed or not loaded. Please install HACS from https://hacs.xyz/"
-        return False, f"Failed to connect to HACS: {str(e)}"
+    if not await _is_hacs_available():
+        raise_tool_error(create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            "HACS is not installed or not loaded.",
+            suggestions=[
+                "Install HACS from https://hacs.xyz/",
+                "Restart Home Assistant after HACS installation",
+                "Check Home Assistant logs for HACS errors",
+            ],
+        ))
 
 
 def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -82,18 +90,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             # Get HACS info via WebSocket
             from ..client.websocket_client import get_websocket_client
@@ -119,19 +116,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_info"},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check Home Assistant connection",
                     "Restart Home Assistant if HACS was recently installed",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "List HACS Installed"})
     @log_tool_usage
@@ -176,18 +172,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             # Get installed repositories via WebSocket
             from ..client.websocket_client import get_websocket_client
@@ -238,19 +223,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "repositories": installed,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_list_installed", "category": category},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                     "Check Home Assistant connection",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "Search HACS Store"})
     @log_tool_usage
@@ -324,18 +308,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ) or 0
 
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             # Get all repositories via WebSocket
             from ..client.websocket_client import get_websocket_client
@@ -418,19 +391,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "results": limited_matches,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_search", "query": query, "category": category},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Try a simpler search query",
                     "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Repository Info"})
     @log_tool_usage
@@ -461,18 +433,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
@@ -535,19 +496,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,  # Full response for advanced use
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_hacs_repository_info", "repository_id": repository_id},
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID format (e.g., 'hacs/integration' or 'owner/repo')",
                     "Use ha_hacs_search() to find the correct repository ID",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Add HACS Repository"})
     @log_tool_usage
@@ -595,18 +555,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             # Validate repository format
             if "/" not in repository:
@@ -655,15 +604,16 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_hacs_add_repository",
                     "repository": repository,
                     "category": category,
                 },
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository format: 'owner/repo'",
@@ -672,8 +622,6 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Download/Install HACS Repository"})
     @log_tool_usage
@@ -720,18 +668,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if HACS is available
-            is_available, error_msg = await _check_hacs_available(client)
-            if not is_available:
-                return await add_timezone_metadata(client, {
-                    "success": False,
-                    "error": error_msg,
-                    "error_code": "HACS_NOT_AVAILABLE",
-                    "suggestions": [
-                        "Install HACS from https://hacs.xyz/",
-                        "Ensure Home Assistant has been restarted after HACS installation",
-                        "Check Home Assistant logs for HACS errors",
-                    ],
-                })
+            await _assert_hacs_available()
 
             from ..client.websocket_client import get_websocket_client
             ws_client = await get_websocket_client()
@@ -792,15 +729,16 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "data": result,
             })
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_hacs_download",
                     "repository_id": repository_id,
                     "version": version,
                 },
-                raise_error=False,
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "Check repository ID is valid (use ha_hacs_search() to find it)",
@@ -808,5 +746,3 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check version format (e.g., 'v1.2.3' or '1.2.3')",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)

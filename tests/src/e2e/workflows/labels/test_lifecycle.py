@@ -14,6 +14,7 @@ import pytest
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    safe_call_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -366,7 +367,8 @@ class TestLabelValidation:
         """Test updating a label that doesn't exist."""
         logger.info("Testing update of nonexistent label...")
 
-        update_result = await mcp_client.call_tool(
+        update_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_label",
             {
                 "label_id": "nonexistent_label_id_12345",
@@ -374,7 +376,6 @@ class TestLabelValidation:
             },
         )
 
-        update_data = parse_mcp_result(update_result)
         assert not update_data.get("success"), (
             "Updating nonexistent label should fail"
         )
@@ -384,12 +385,12 @@ class TestLabelValidation:
         """Test deleting a label that doesn't exist."""
         logger.info("Testing delete of nonexistent label...")
 
-        delete_result = await mcp_client.call_tool(
+        delete_data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_label",
             {"label_id": "nonexistent_label_id_12345"},
         )
 
-        delete_data = parse_mcp_result(delete_result)
         assert not delete_data.get("success"), (
             "Deleting nonexistent label should fail"
         )
@@ -399,7 +400,8 @@ class TestLabelValidation:
         """Test assigning label to entity that doesn't exist."""
         logger.info("Testing assign to nonexistent entity...")
 
-        assign_result = await mcp_client.call_tool(
+        assign_data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {
                 "entity_id": "light.nonexistent_entity_12345",
@@ -407,7 +409,6 @@ class TestLabelValidation:
             },
         )
 
-        assign_data = parse_mcp_result(assign_result)
         assert not assign_data.get("success"), (
             "Assigning to nonexistent entity should fail"
         )

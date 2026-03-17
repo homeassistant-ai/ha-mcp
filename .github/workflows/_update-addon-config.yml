@@ -1,0 +1,84 @@
+name: Update Add-on Config Version
+
+# Reusable workflow to update homeassistant-addon/config.yaml after Docker images are published.
+# Called from semver-release.yml and hotfix-release.yml to avoid duplication.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to set in config.yaml (without v prefix)'
+        required: true
+        type: string
+      commit_message_prefix:
+        description: 'Prefix for commit message (e.g., "publish version" or "publish hotfix version")'
+        required: false
+        type: string
+        default: 'publish version'
+    secrets:
+      RELEASE_APP_ID:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      RELEASE_TOKEN:
+        required: false
+
+jobs:
+  update-addon-config:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Generate GitHub App token with bypass permissions
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Determine push token
+        id: token
+        run: |
+          if [ -n "$APP_TOKEN" ]; then
+            echo "value=$APP_TOKEN" >> $GITHUB_OUTPUT
+            echo "source=github-app" >> $GITHUB_OUTPUT
+          elif [ -n "$RELEASE_TOKEN" ]; then
+            echo "value=$RELEASE_TOKEN" >> $GITHUB_OUTPUT
+            echo "source=release-pat" >> $GITHUB_OUTPUT
+          else
+            echo "::error::No push token available. Configure RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY or RELEASE_TOKEN secret. GITHUB_TOKEN cannot push to protected branches."
+            exit 1
+          fi
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 1
+          token: ${{ steps.token.outputs.value }}
+
+      - name: Install yq
+        uses: mikefarah/yq@master
+
+      - name: Update config.yaml with release version
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Updating addon config.yaml to version $VERSION (using token: ${{ steps.token.outputs.source }})"
+
+          yq -i ".version = \"$VERSION\"" homeassistant-addon/config.yaml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add homeassistant-addon/config.yaml
+
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to config.yaml, skipping commit"
+          else
+            git commit -m "chore(addon): ${{ inputs.commit_message_prefix }} $VERSION [skip ci]"
+            git push
+            echo "✓ Updated addon config.yaml to $VERSION"
+          fi

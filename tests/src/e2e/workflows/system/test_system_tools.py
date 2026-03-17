@@ -19,7 +19,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +73,21 @@ class TestSystemTools:
         """
         logger.info("Testing restart safety mechanism (no confirmation)...")
 
-        result = await mcp_client.call_tool("ha_restart", {})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_restart", {})
 
         logger.info(f"Restart result (no confirm): {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail without confirmation"
-        assert "not confirmed" in data.get("error", "").lower(), (
-            f"Expected 'not confirmed' error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower(), (
+            f"Expected 'not confirmed' error, got: {error_msg}"
         )
 
         # Should provide suggestions
-        assert "suggestions" in data, "Should provide suggestions"
-        suggestions = data["suggestions"]
+        suggestions = error.get("suggestions", []) if isinstance(error, dict) else []
+        assert suggestions, "Should provide suggestions"
         assert any("confirm" in s.lower() for s in suggestions), (
             "Suggestions should mention confirmation"
         )
@@ -102,15 +103,16 @@ class TestSystemTools:
         """
         logger.info("Testing restart with explicit confirm=False...")
 
-        result = await mcp_client.call_tool("ha_restart", {"confirm": False})
-        data = parse_mcp_result(result)
+        data = await safe_call_tool(mcp_client, "ha_restart", {"confirm": False})
 
         logger.info(f"Restart result (confirm=False): {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail with confirm=False"
-        assert "not confirmed" in data.get("error", "").lower(), (
-            f"Expected 'not confirmed' error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower(), (
+            f"Expected 'not confirmed' error, got: {error_msg}"
         )
 
         logger.info("Restart safety test passed - explicit false confirmation rejected")
@@ -213,20 +215,21 @@ class TestSystemTools:
         """
         logger.info("Testing reload with invalid target...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "invalid_target_xyz"}
+        data = await safe_call_tool(
+            mcp_client, "ha_reload_core", {"target": "invalid_target_xyz"}
         )
-        data = parse_mcp_result(result)
 
         logger.info(f"Reload invalid target result: {data}")
 
         # Should fail with helpful error
         assert data.get("success") is False, "Reload should fail for invalid target"
-        assert "invalid" in data.get("error", "").lower(), (
-            f"Expected 'invalid' in error, got: {data.get('error')}"
+        error = data.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "invalid" in error_msg.lower(), (
+            f"Expected 'invalid' in error, got: {error_msg}"
         )
 
-        # Should provide valid targets
+        # Should provide valid targets (returned at top level in error response)
         assert "valid_targets" in data, "Should provide list of valid targets"
         valid_targets = data["valid_targets"]
         assert "automations" in valid_targets, "Valid targets should include 'automations'"
@@ -310,6 +313,11 @@ class TestSystemTools:
         # Verify components_loaded count is positive
         components_loaded = system_info.get("components_loaded", 0)
         assert components_loaded > 0, "Should have at least some components loaded"
+
+        # Verify notification_count is present (included at all detail levels)
+        assert "notification_count" in data, "Missing 'notification_count' field"
+        assert isinstance(data["notification_count"], int)
+        logger.info(f"Notification count: {data['notification_count']}")
 
         logger.info("Get system overview test completed successfully")
 
@@ -450,3 +458,83 @@ class TestSystemToolsIntegration:
         logger.info("=" * 60)
 
         logger.info("System overview test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_notifications_opt_out(self, mcp_client):
+        """Test that include_notifications=False omits notification data from overview."""
+        logger.info("Testing ha_get_overview with include_notifications=False")
+
+        result = await mcp_client.call_tool(
+            "ha_get_overview",
+            {"detail_level": "minimal", "include_notifications": False},
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("success") is True
+        assert "notification_count" not in data, (
+            "Expected no 'notification_count' when include_notifications=False"
+        )
+        assert "notifications" not in data, (
+            "Expected no 'notifications' when include_notifications=False"
+        )
+        logger.info("Notification opt-out test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_notification_lifecycle(self, mcp_client):
+        """Test that creating and dismissing a notification is reflected in the overview."""
+        logger.info("Testing notification lifecycle via overview")
+
+        # Create a test notification
+        create_result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "persistent_notification",
+                "service": "create",
+                "data": {
+                    "title": "Test Notification",
+                    "message": "E2E test notification",
+                    "notification_id": "e2e_test_overview_notif",
+                },
+            },
+        )
+        parse_mcp_result(create_result)
+
+        # Verify it appears in the overview
+        result = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"},
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("notification_count", 0) > 0, "Expected at least 1 notification"
+        assert "notifications" in data
+
+        found = any(
+            n["notification_id"] == "e2e_test_overview_notif"
+            for n in data["notifications"]
+        )
+        assert found, "Expected to find the test notification in overview"
+
+        # Dismiss the notification
+        await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "persistent_notification",
+                "service": "dismiss",
+                "data": {"notification_id": "e2e_test_overview_notif"},
+            },
+        )
+
+        # Verify it's gone
+        result2 = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"},
+        )
+        data2 = parse_mcp_result(result2)
+
+        if data2.get("notifications"):
+            not_found = all(
+                n["notification_id"] != "e2e_test_overview_notif"
+                for n in data2["notifications"]
+            )
+            assert not_found, "Test notification should be dismissed"
+
+        logger.info("Notification lifecycle test completed successfully")

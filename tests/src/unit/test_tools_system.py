@@ -7,6 +7,7 @@ ha_restart reports failure when a reverse proxy returns 504 during restart.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
@@ -59,12 +60,10 @@ class TestHaRestartErrorHandling:
 
     @pytest.mark.asyncio
     async def test_unrelated_error_still_fails(self):
-        """Errors unrelated to restart should still report failure."""
+        """Errors unrelated to restart should still report failure via ToolError."""
         error = Exception("Something completely unrelated went wrong")
         client = _make_client_that_fails_on_restart(error)
         ha_restart = _register_and_capture_restart(client)
 
-        result = await ha_restart(confirm=True)
-
-        assert result["success"] is False
-        assert "error" in result
+        with pytest.raises(ToolError):
+            await ha_restart(confirm=True)

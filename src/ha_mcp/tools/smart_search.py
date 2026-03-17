@@ -10,6 +10,7 @@ from typing import Any
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
 from ..utils.fuzzy_search import calculate_partial_ratio, create_fuzzy_searcher
+from .helpers import exception_to_structured_error
 
 logger = logging.getLogger(__name__)
 
@@ -135,17 +136,15 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
-            return {
-                "success": False,
-                "query": query,
-                "error": str(e),
-                "matches": [],
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify entity exists with get_all_states",
                     "Try simpler search terms",
                 ],
-            }
+                context={"query": query, "matches": [], "error_source": "smart_entity_search"},
+            )
 
     async def get_entities_by_area(
         self, area_query: str, group_by_domain: bool = True
@@ -332,15 +331,15 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")
-            return {
-                "area_query": area_query,
-                "error": str(e),
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Try common room names: salon, chambre, cuisine",
                     "Use smart_entity_search to find entities first",
                 ],
-            }
+                context={"area_query": area_query},
+            )
 
     async def get_system_overview(
         self,
@@ -375,12 +374,16 @@ class SmartSearchTools:
             entity_registry_task = self.client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
             )
+            device_registry_task = self.client.send_websocket_message(
+                {"type": "config/device_registry/list"}
+            )
 
             results = await asyncio.gather(
                 entities_task,
                 services_task,
                 area_registry_task,
                 entity_registry_task,
+                device_registry_task,
                 return_exceptions=True,
             )
 
@@ -402,11 +405,26 @@ class SmartSearchTools:
             elif isinstance(results[3], dict) and results[3].get("success"):
                 entity_registry = results[3].get("result", [])
 
-            # Build entity_id -> area_id mapping from entity registry
+            # Handle device registry result
+            device_area_map: dict[str, str | None] = {}
+            if isinstance(results[4], Exception):
+                logger.debug(f"Could not fetch device registry: {results[4]}")
+            elif isinstance(results[4], dict) and results[4].get("success"):
+                for device in results[4].get("result", []):
+                    device_id = device.get("id", "")
+                    if device_id:
+                        device_area_map[device_id] = device.get("area_id")
+
+            # Build entity_id -> area_id mapping from entity + device registries
+            # Priority: entity direct area_id > device area_id
             entity_area_map: dict[str, str | None] = {}
             for entry in entity_registry:
                 entity_id = entry.get("entity_id")
                 area_id = entry.get("area_id")
+                if not area_id:
+                    device_id = entry.get("device_id")
+                    if device_id:
+                        area_id = device_area_map.get(device_id)
                 if entity_id:
                     entity_area_map[entity_id] = area_id
 
@@ -418,9 +436,19 @@ class SmartSearchTools:
             if include_entity_id is None:
                 include_entity_id = detail_level == "full"
 
+            # Pre-populate area_stats to include empty areas
+            area_stats: dict[str, dict[str, Any]] = {}
+            for area in area_registry:
+                area_id = area.get("area_id", "")
+                if area_id:
+                    area_stats[area_id] = {
+                        "name": area.get("name", area_id),
+                        "count": 0,
+                        "domains": {},
+                    }
+
             # Analyze entities by domain
             domain_stats: dict[str, dict[str, Any]] = {}
-            area_stats: dict[str, dict[str, Any]] = {}
             device_types: dict[str, int] = {}
 
             for entity in entities:
@@ -455,11 +483,9 @@ class SmartSearchTools:
 
                 domain_stats[domain]["all_entities"].append(entity_data)
 
-                # Area analysis - use entity registry mapping, not state attributes
+                # Area analysis - use entity + device registry mapping
                 area_id = entity_area_map.get(entity_id)
-                if area_id:
-                    if area_id not in area_stats:
-                        area_stats[area_id] = {"count": 0, "domains": {}}
+                if area_id and area_id in area_stats:
                     area_stats[area_id]["count"] += 1
                     if domain not in area_stats[area_id]["domains"]:
                         area_stats[area_id]["domains"][domain] = 0
@@ -566,18 +592,15 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in get_system_overview: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "total_entities": 0,
-                "entity_summary": {},
-                "controllable_devices": {},
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify API token permissions",
                     "Try test_connection first",
                 ],
-            }
+                context={"total_entities": 0, "entity_summary": {}, "controllable_devices": {}},
+            )
 
     async def deep_search(
         self,
@@ -999,19 +1022,15 @@ class SmartSearchTools:
 
         except Exception as e:
             logger.error(f"Error in deep_search: {e}")
-            return {
-                "success": False,
-                "query": query,
-                "error": str(e),
-                "automations": [],
-                "scripts": [],
-                "helpers": [],
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                suggestions=[
                     "Check Home Assistant connection",
                     "Verify automation/script/helper entities exist",
                     "Try simpler search terms",
                 ],
-            }
+                context={"query": query, "automations": [], "scripts": [], "helpers": []},
+            )
 
     def _search_in_dict(
         self, data: dict[str, Any] | list[Any] | Any, query: str

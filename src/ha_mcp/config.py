@@ -2,11 +2,17 @@
 Configuration management for Home Assistant MCP Server.
 """
 
+import importlib.metadata
 import os
 
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
+
+try:
+    _PACKAGE_VERSION = importlib.metadata.version("ha-mcp")
+except importlib.metadata.PackageNotFoundError:
+    _PACKAGE_VERSION = "unknown"
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
@@ -64,7 +70,7 @@ class Settings(BaseSettings):
 
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
-    mcp_server_version: str = Field("0.1.0", alias="MCP_SERVER_VERSION")
+    mcp_server_version: str = Field(default=_PACKAGE_VERSION, alias="MCP_SERVER_VERSION")
 
     # Environment configuration
     environment: str = Field("development", alias="ENVIRONMENT")
@@ -78,6 +84,15 @@ class Settings(BaseSettings):
     # These are token-efficient alternatives to full config replacement.
     # Disable when using clients with programmatic tool use (future).
     enable_dashboard_partial_tools: bool = Field(True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS")
+
+    # Skills configuration
+    # Serve bundled HA best-practice skills as MCP resources (skill:// URIs).
+    # Resources are not auto-injected — clients must explicitly request them.
+    enable_skills: bool = Field(True, alias="ENABLE_SKILLS")
+
+    # Expose skills as tools (list_resources/read_resource) for clients
+    # that don't support MCP resources natively.
+    enable_skills_as_tools: bool = Field(False, alias="ENABLE_SKILLS_AS_TOOLS")
 
     @property
     def env_file_name(self) -> str:

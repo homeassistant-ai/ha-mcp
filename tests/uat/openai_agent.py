@@ -24,6 +24,7 @@ import openai
 
 DEFAULT_API_KEY = "no-key"
 DEFAULT_TIMEOUT = 120
+DEFAULT_MAX_TOKENS = 8192
 MAX_TOOL_LOOP_ITERATIONS = 20
 
 
@@ -74,6 +75,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Limit MCP tools passed to the model (useful for small context windows)",
     )
+    parser.add_argument(
+        "--no-think",
+        action="store_true",
+        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Max output tokens per completion (default: {DEFAULT_MAX_TOKENS})",
+    )
     return parser.parse_args()
 
 
@@ -96,6 +108,7 @@ async def tool_call_loop(
     messages: list[dict],
     tools: list[dict],
     mcp_client,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
     """Run the LLM tool-call loop until a final text response or iteration limit."""
     num_turns = 0
@@ -106,7 +119,7 @@ async def tool_call_loop(
     tokens_output = 0
 
     for _ in range(MAX_TOOL_LOOP_ITERATIONS):
-        kwargs = {"model": model, "messages": messages}
+        kwargs = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if tools:
             kwargs["tools"] = tools
 
@@ -233,8 +246,9 @@ async def run_agent(
         openai_tools = [mcp_tool_to_openai(t) for t in mcp_tools]
         log(f"Loaded {len(openai_tools)} MCP tools")
 
-        messages = [{"role": "user", "content": args.prompt}]
-        result = await tool_call_loop(client, model, messages, openai_tools, mcp_client)
+        prompt = ("/no_think\n\n" + args.prompt) if args.no_think else args.prompt
+        messages = [{"role": "user", "content": prompt}]
+        result = await tool_call_loop(client, model, messages, openai_tools, mcp_client, max_tokens=args.max_tokens)
         result["model"] = model
         return result
 
@@ -255,6 +269,21 @@ def main() -> None:
 
     log(f"Using model: {model}")
     log(f"MCP config: {args.mcp_config}")
+
+    # Warm up: load the model into memory before starting the MCP server.
+    # Ollama loads models lazily — without this, the first chat request hangs
+    # silently for 30-120s while the model is copied into VRAM.
+    try:
+        log("Warming up model (may take a minute if not loaded)...")
+        client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+        )
+        log("Model ready")
+    except Exception as e:
+        log(f"ERROR: Model warmup failed ({type(e).__name__}): {e}")
+        sys.exit(1)
 
     try:
         result = asyncio.run(run_agent(client, model, args))

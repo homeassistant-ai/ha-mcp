@@ -135,7 +135,8 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         },
     )
     # Verify error message mentions import or forbidden
-    assert "import" in result["error"].lower() or "forbidden" in result["error"].lower()
+    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
 
 
 @pytest.mark.asyncio
@@ -153,7 +154,8 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {"url_path": "test-python-hash", "python_transform": "config['views'] = []"},
     )
     # Verify error message mentions config_hash
-    assert "config_hash" in result["error"].lower()
+    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    assert "config_hash" in error_msg.lower()
 
 
 @pytest.mark.asyncio
@@ -171,10 +173,8 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
         },
     )
     # Verify error message mentions mutual exclusivity
-    assert (
-        "multiple" in result["error"].lower()
-        or "mutually exclusive" in result["error"].lower()
-    )
+    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    assert "multiple" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
 
 
 @pytest.mark.asyncio
@@ -304,4 +304,5 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         },
     )
     # Verify error message mentions conflict
-    assert "conflict" in result["error"].lower() or "modified" in result["error"].lower()
+    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()

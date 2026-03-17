@@ -17,6 +17,10 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Update Python dependencies via uv (reads uv.lock)
   - package-ecosystem: "uv"

@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +107,11 @@ class TestLabelCRUD:
         logger.info(f"Deleted label: {delete_data.get('message')}")
 
         # VERIFY DELETION (config operations are synchronous)
-        get_result = await mcp_client.call_tool(
+        get_data = await safe_call_tool(
+            mcp_client,
             "ha_config_get_label",
             {"label_id": label_id},
         )
-        get_data = parse_mcp_result(get_result)
         assert get_data.get("success") is False, (
             f"Deleted label should not be found: {get_data}"
         )
@@ -205,12 +205,12 @@ class TestLabelCRUD:
         """Test getting a non-existent label."""
         logger.info("Testing get non-existent label")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_get_label",
             {"label_id": "nonexistent_label_xyz_12345"},
         )
 
-        data = parse_mcp_result(result)
         assert data.get("success") is False, (
             f"Should fail for non-existent label: {data}"
         )
@@ -220,12 +220,12 @@ class TestLabelCRUD:
         """Test deleting a non-existent label."""
         logger.info("Testing delete non-existent label")
 
-        result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_config_remove_label",
             {"label_id": "nonexistent_label_xyz_12345"},
         )
 
-        data = parse_mcp_result(result)
         # Should return error or handle gracefully
         if data.get("success"):
             logger.info("Delete returned success (idempotent)")
@@ -429,15 +429,14 @@ class TestLabelAssignment:
 
 
         # Try to assign to non-existent entity
-        assign_result = await mcp_client.call_tool(
+        data = await safe_call_tool(
+            mcp_client,
             "ha_set_entity",
             {
                 "entity_id": "light.nonexistent_xyz_12345",
                 "labels": [label_id],
             },
         )
-
-        data = parse_mcp_result(assign_result)
         # Should fail for non-existent entity
         assert data.get("success") is False, (
             f"Should fail for non-existent entity: {data}"

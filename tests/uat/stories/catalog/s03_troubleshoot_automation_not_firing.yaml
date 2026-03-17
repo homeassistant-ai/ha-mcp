@@ -35,8 +35,7 @@ setup:
     args:
       domain: automation
       service: turn_off
-      target:
-        entity_id: automation.morning_bedroom_lights_test
+      entity_id: automation.morning_bedroom_lights_test
 
 prompt: >
   My "Morning Bedroom Lights Test" automation was supposed to turn on the bedroom
@@ -50,6 +49,12 @@ verify:
   questions:
     - "Does automation 'Morning Bedroom Lights Test' exist? What is its current state (enabled/disabled)?"
     - "Are there any traces for this automation?"
+  ha_checks:
+    - type: automation_exists
+      alias: "Morning Bedroom Lights Test"
+    - type: entity_state
+      entity_id: automation.morning_bedroom_lights_test
+      state: "off"
 
 expected:
   tools_should_use:

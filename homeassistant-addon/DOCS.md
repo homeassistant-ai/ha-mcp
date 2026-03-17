@@ -90,7 +90,7 @@ Use the `claude mcp add` command:
 ```bash
 claude mcp add-json home-assistant '{
   "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
-  "transport": "http"
+  "type": "http"
 }'
 ```
 
@@ -322,7 +322,7 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 ### System & Updates
 - `ha_check_config`, `ha_restart`, `ha_reload_core`
 - `ha_get_system_info`, `ha_get_system_health`
-- `ha_get_updates` - List updates or get details for a specific update entity
+- `ha_get_updates` - List updates or get details for a specific update entity (use `include_release_notes=True` for Core pre-update breaking change analysis)
 
 ### Blueprints
 - `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint`

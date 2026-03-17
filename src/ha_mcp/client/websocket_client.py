@@ -8,6 +8,7 @@ This module handles WebSocket connections to Home Assistant for:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -32,7 +33,7 @@ class WebSocketConnectionState:
         self._message_id = 0
         self._pending_requests: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._auth_messages: dict[str, dict[str, Any]] = {}
-        self._render_template_events: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._event_responses: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._event_handlers: dict[
             str, set[Callable[[dict[str, Any]], Awaitable[None]]]
         ] = defaultdict(set)
@@ -63,25 +64,25 @@ class WebSocketConnectionState:
         if future and not future.done():
             future.cancel()
 
-    def register_render_template_event(
+    def register_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]]:
-        """Create and register a future for a render_template follow-up event."""
+        """Create and register a future for a follow-up event."""
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
-        self._render_template_events[message_id] = future
+        self._event_responses[message_id] = future
         return future
 
-    def resolve_render_template_event(
+    def resolve_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]] | None:
-        """Resolve a stored render_template event future."""
-        return self._render_template_events.pop(message_id, None)
+        """Resolve a stored event future."""
+        return self._event_responses.pop(message_id, None)
 
-    def cancel_render_template_event(self, message_id: int) -> None:
-        """Cancel a stored render_template event future."""
-        future = self._render_template_events.pop(message_id, None)
+    def cancel_event_response(self, message_id: int) -> None:
+        """Cancel a stored event future."""
+        future = self._event_responses.pop(message_id, None)
         if future and not future.done():
             future.cancel()
 
@@ -104,10 +105,10 @@ class WebSocketConnectionState:
                 future.cancel()
         self._pending_requests.clear()
 
-        for future in self._render_template_events.values():
+        for future in self._event_responses.values():
             if not future.done():
                 future.cancel()
-        self._render_template_events.clear()
+        self._event_responses.clear()
 
         self._auth_messages.clear()
 
@@ -324,7 +325,7 @@ class HomeAssistantWebSocketClient:
         # Handle events
         if message_type == "event":
             if message_id is not None:
-                render_future = self._state.resolve_render_template_event(message_id)
+                render_future = self._state.resolve_event_response(message_id)
                 if render_future:
                     if not render_future.cancelled():
                         render_future.set_result(data)
@@ -383,15 +384,15 @@ class HomeAssistantWebSocketClient:
         """Cancel and drop a pending response future."""
         self._state.cancel_pending_request(message_id)
 
-    def register_render_template_event(
+    def register_event_response(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]]:
-        """Register a future for a render_template follow-up event."""
-        return self._state.register_render_template_event(message_id)
+        """Register a future for a follow-up event."""
+        return self._state.register_event_response(message_id)
 
-    def cancel_render_template_event(self, message_id: int) -> None:
-        """Cancel and drop a stored render_template event future."""
-        self._state.cancel_render_template_event(message_id)
+    def cancel_event_response(self, message_id: int) -> None:
+        """Cancel and drop a stored event future."""
+        self._state.cancel_event_response(message_id)
 
     async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
         """Send command and wait for response.
@@ -455,6 +456,71 @@ class HomeAssistantWebSocketClient:
         except Exception:
             self.cancel_pending_response(message_id)
             raise
+
+    async def send_command_with_event(
+        self,
+        command_type: str,
+        wait_timeout: float = 10.0,
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Send a command that returns a result followed by an event response.
+
+        Some HA WebSocket commands (e.g. system_health/info, render_template)
+        reply with an immediate result message and then deliver the actual data
+        in a subsequent event message sharing the same message ID.
+
+        Args:
+            command_type: Type of command to send.
+            wait_timeout: Seconds to wait for each response phase.
+            **kwargs: Additional fields merged into the outgoing message.
+
+        Returns:
+            A (result_response, event_response) tuple.
+        """
+        if not self._state.is_ready:
+            raise Exception("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message = {"id": message_id, "type": command_type, **kwargs}
+
+        result_future = self.register_pending_response(message_id)
+        event_future = self.register_event_response(message_id)
+
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self.cancel_pending_response(message_id)
+            self.cancel_event_response(message_id)
+            raise
+
+        try:
+            result_response = await asyncio.wait_for(
+                result_future, timeout=wait_timeout
+            )
+        except TimeoutError:
+            self.cancel_pending_response(message_id)
+            self.cancel_event_response(message_id)
+            raise
+
+        if not result_response.get("success"):
+            self.cancel_event_response(message_id)
+            error = result_response.get("error", {})
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
+            raise Exception(f"Command failed: {error_msg}")
+
+        try:
+            event_response = await asyncio.wait_for(
+                event_future, timeout=wait_timeout
+            )
+        except TimeoutError:
+            self.cancel_event_response(message_id)
+            raise
+
+        return result_response, event_response
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
@@ -553,11 +619,21 @@ class HomeAssistantWebSocketClient:
 
 
 
+MAX_POOL_SIZE = 50
+
+
 class WebSocketManager:
-    """Singleton manager for Home Assistant WebSocket connections."""
+    """Singleton manager for Home Assistant WebSocket connections.
+
+    Maintains a pool of WebSocket connections keyed by (url, token) so that
+    multiple OAuth users can have concurrent connections without interfering
+    with each other.  The pool is bounded to ``MAX_POOL_SIZE`` entries; when
+    this limit is exceeded the least-recently-used connection is evicted.
+    """
 
     _instance = None
-    _client = None
+    _clients: dict[str, HomeAssistantWebSocketClient]
+    _last_used: dict[str, float]
     _current_loop: asyncio.AbstractEventLoop | None = None
     _lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
@@ -566,6 +642,8 @@ class WebSocketManager:
     def __new__(cls) -> "WebSocketManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._clients = {}
+            cls._instance._last_used = {}
             cls._instance._lock = None
             cls._instance._lock_loop = None
             cls._instance._client_factory = HomeAssistantWebSocketClient
@@ -600,8 +678,28 @@ class WebSocketManager:
             self._lock_loop = current_loop
             logger.debug("Created new WebSocketManager lock for current event loop")
 
-    async def get_client(self) -> HomeAssistantWebSocketClient:
-        """Get WebSocket client, creating connection if needed."""
+    @staticmethod
+    def _client_key(url: str, token: str) -> str:
+        """Create a cache key from credentials."""
+        return hashlib.sha256(f"{url.rstrip('/')}:{token}".encode()).hexdigest()
+
+    async def get_client(
+        self,
+        url: str | None = None,
+        token: str | None = None,
+    ) -> HomeAssistantWebSocketClient:
+        """Get WebSocket client, creating connection if needed.
+
+        Maintains a pool of connections keyed by credentials. In OAuth mode,
+        each user gets their own connection. In non-OAuth mode, the global
+        settings are used as the key.
+
+        Args:
+            url: Optional HA URL. If provided with token, uses these
+                 credentials instead of global settings. This is required
+                 for OAuth mode where each request has its own credentials.
+            token: Optional HA token. Must be provided with url.
+        """
         current_loop = asyncio.get_event_loop()
 
         self._ensure_lock()
@@ -610,47 +708,96 @@ class WebSocketManager:
             raise Exception("Lock not initialized")
         async with self._lock:
             if self._current_loop is not None and self._current_loop != current_loop:
-                if self._client:
+                # Event loop changed — disconnect all clients
+                for client in self._clients.values():
                     try:
-                        await self._client.disconnect()
+                        await client.disconnect()
                     except Exception:
                         pass
-                    self._client = None
+                self._clients.clear()
+                self._last_used.clear()
 
             self._current_loop = current_loop
 
-            if self._client and self._client.is_connected:
-                return self._client
+            # Determine credentials to use
+            if url and token:
+                ws_url = url
+                ws_token = token
+            else:
+                settings = get_global_settings()
+                ws_url = settings.homeassistant_url
+                ws_token = settings.homeassistant_token
 
-            settings = get_global_settings()
+            key = self._client_key(ws_url, ws_token)
+
+            # Return existing connected client for these credentials
+            existing = self._clients.get(key)
+            if existing and existing.is_connected:
+                self._last_used[key] = time.monotonic()
+                return existing
+
+            # Remove stale client if present
+            if existing:
+                self._clients.pop(key, None)
+                self._last_used.pop(key, None)
+
             factory = self._client_factory or HomeAssistantWebSocketClient
-            self._client = factory(
-                settings.homeassistant_url, settings.homeassistant_token
-            )
+            client = factory(ws_url, ws_token)
 
-            connected = await self._client.connect()
+            connected = await client.connect()
             if not connected:
                 raise Exception("Failed to connect to Home Assistant WebSocket")
 
-            return self._client
+            self._clients[key] = client
+            self._last_used[key] = time.monotonic()
+
+            # Evict least-recently-used connection if over limit
+            if len(self._clients) > MAX_POOL_SIZE:
+                oldest_key = min(self._last_used, key=lambda k: self._last_used[k])
+                stale = self._clients.pop(oldest_key, None)
+                self._last_used.pop(oldest_key, None)
+                if stale:
+                    try:
+                        await stale.disconnect()
+                    except Exception:
+                        logger.warning(
+                            "Error disconnecting evicted WebSocket client",
+                            exc_info=True,
+                        )
+
+            return client
 
     async def disconnect(self) -> None:
-        """Disconnect WebSocket client."""
+        """Disconnect all WebSocket clients."""
         self._ensure_lock()
 
         if not self._lock:
             raise Exception("Lock not initialized")
         async with self._lock:
-            if self._client:
-                await self._client.disconnect()
-                self._client = None
-                self._current_loop = None
+            for client in self._clients.values():
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.warning(
+                        "Error disconnecting WebSocket client", exc_info=True
+                    )
+            self._clients.clear()
+            self._last_used.clear()
+            self._current_loop = None
 
 
 # Global WebSocket manager instance
 websocket_manager = WebSocketManager()
 
 
-async def get_websocket_client() -> HomeAssistantWebSocketClient:
-    """Get the global WebSocket client instance."""
-    return await websocket_manager.get_client()
+async def get_websocket_client(
+    url: str | None = None,
+    token: str | None = None,
+) -> HomeAssistantWebSocketClient:
+    """Get the global WebSocket client instance.
+
+    Args:
+        url: Optional HA URL for per-client credentials (OAuth mode).
+        token: Optional HA token for per-client credentials (OAuth mode).
+    """
+    return await websocket_manager.get_client(url=url, token=token)

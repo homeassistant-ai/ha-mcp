@@ -7,10 +7,10 @@ import logging
 import pytest
 
 from tests.src.e2e.utilities.assertions import (
-    assert_mcp_failure,
     assert_mcp_success,
     safe_call_tool,
 )
+from tests.src.e2e.utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +65,9 @@ class TestIntegrationManagement:
         )
         data = assert_mcp_success(list_result, "List after enable")
         entry = next(e for e in data["entries"] if e["entry_id"] == entry_id)
-        assert (
-            entry["disabled_by"] is None
-        ), "Integration should not be disabled after re-enable"
+        assert entry["disabled_by"] is None, (
+            "Integration should not be disabled after re-enable"
+        )
 
     async def test_set_integration_enabled_string_bool(self, mcp_client):
         """Test that enabled parameter accepts string booleans."""
@@ -100,20 +100,84 @@ class TestIntegrationManagement:
 
     async def test_delete_config_entry_requires_confirm(self, mcp_client):
         """Test deletion safety check."""
-        result = await mcp_client.call_tool(
-            "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": False}
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": "fake_id", "confirm": False},
         )
-        data = assert_mcp_failure(result, "Delete without confirm")
-        assert "not confirmed" in data.get("error", "").lower()
+        assert not data.get("success"), "Delete without confirm should fail"
+        error = data.get("error", {})
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        assert "not confirmed" in error_msg.lower()
 
     async def test_delete_config_entry_string_confirm(self, mcp_client):
         """Test that confirm parameter accepts string booleans."""
         # Test with string "false" - should fail
-        result = await mcp_client.call_tool(
-            "ha_delete_config_entry", {"entry_id": "fake_id", "confirm": "false"}
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": "fake_id", "confirm": "false"},
         )
-        data = assert_mcp_failure(result, "Delete with string false")
-        assert "not confirmed" in data.get("error", "").lower()
+        assert not data.get("success"), "Delete with string false should fail"
+        error = data.get("error", {})
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        assert "not confirmed" in error_msg.lower()
+
+    async def test_delete_config_entry_create_delete_cycle(self, mcp_client):
+        """Test full create → verify → delete → verify-gone cycle.
+
+        Regression test: ha_delete_config_entry previously used the WebSocket
+        command ``config_entries/delete`` which HA does not support, returning
+        "Unknown command".  The fix switches to the REST API endpoint.
+        """
+        # Create a temporary light group helper
+        config = {
+            "group_type": "light",
+            "name": "test_delete_regression_e2e",
+            "entities": [],
+            "hide_members": False,
+        }
+
+        create_result = await mcp_client.call_tool(
+            "ha_set_config_entry_helper",
+            {"helper_type": "group", "config": config},
+        )
+        data = assert_mcp_success(create_result, "Create light group for delete test")
+        entry_id = data["entry_id"]
+        logger.info(f"Created temporary group helper: {entry_id}")
+
+        # Wait until the entry is registered
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_integration",
+            arguments={"entry_id": entry_id},
+            predicate=lambda d: d.get("success") is True,
+            description="group helper is registered",
+        )
+
+        # Delete the entry
+        delete_result = await mcp_client.call_tool(
+            "ha_delete_config_entry",
+            {"entry_id": entry_id, "confirm": True},
+        )
+        delete_data = assert_mcp_success(delete_result, "Delete config entry")
+        assert delete_data.get("success") is True
+        assert delete_data.get("entry_id") == entry_id
+        logger.info(f"Deleted config entry: {entry_id}")
+
+        # Verify the entry is gone
+        verify_data = await safe_call_tool(
+            mcp_client,
+            "ha_get_integration",
+            {"entry_id": entry_id},
+        )
+        assert not verify_data.get("success", False), (
+            f"Config entry {entry_id} should not exist after deletion"
+        )
 
     async def test_set_integration_enabled_nonexistent(self, mcp_client):
         """Test error handling for non-existent integration."""

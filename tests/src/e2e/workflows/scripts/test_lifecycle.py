@@ -27,6 +27,7 @@ import pytest
 # Import test utilities
 from ...utilities.assertions import (
     MCPAssertions,
+    safe_call_tool,
 )
 
 # Set up logging
@@ -1217,11 +1218,11 @@ async def test_blueprint_script_lifecycle(
 
         # This should reach HA (proving our validation passed) even if HA rejects it
         # If our validation failed, we'd get a different error code
-        create_result = await mcp_client.call_tool(
+        create_parsed = await safe_call_tool(
+            mcp_client,
             "ha_config_set_script",
             {"script_id": "test_blueprint_script_e2e", "config": script_config},
         )
-        create_parsed = enhanced_parse_mcp_result(create_result)
 
         # Check if it was our validation or HA's validation that failed
         if not create_parsed.get("success"):
@@ -1290,11 +1291,11 @@ async def test_blueprint_script_with_empty_sequence(
 
         # The key test: This should pass our validation (not fail with "missing sequence")
         # It will fail HA validation due to missing blueprint inputs, but that's expected
-        create_result = await mcp_client.call_tool(
+        create_parsed = await safe_call_tool(
+            mcp_client,
             "ha_config_set_script",
             {"script_id": "test_blueprint_empty_seq_e2e", "config": script_config},
         )
-        create_parsed = enhanced_parse_mcp_result(create_result)
 
         # If our validation works, it should reach HA (which will reject due to missing inputs)
         if not create_parsed.get("success"):

@@ -56,6 +56,9 @@ DEFAULT_RESULTS_FILE = REPO_ROOT / "local" / "uat-results.jsonl"
 # Add paths for imports
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
+
+from scripts.verify_story import verify_ha_checks  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -290,11 +293,22 @@ async def _run_mcp_steps(
     if not steps:
         return
 
+    import os
+
     import ha_mcp.config
     from ha_mcp.client import HomeAssistantClient
+    from ha_mcp.client.websocket_client import websocket_manager
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
+    # Point global settings at the test HA instance before resetting.
+    # The WebSocket client uses get_global_settings() (reads env vars), not the
+    # HomeAssistantClient base_url, so we must set env vars explicitly.
+    os.environ["HOMEASSISTANT_URL"] = ha_url
+    os.environ["HOMEASSISTANT_TOKEN"] = ha_token
     ha_mcp.config._settings = None
+
+    # Disconnect any cached WebSocket so it reconnects to the test instance.
+    await websocket_manager.disconnect()
 
     client = HomeAssistantClient(base_url=ha_url, token=ha_token)
     server = HomeAssistantSmartMCPServer(client=client)
@@ -329,6 +343,9 @@ def _run_test_prompt(
     model: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    max_tools: int | None = None,
+    no_think: bool = False,
+    max_tokens: int | None = None,
 ) -> tuple[int, dict | None]:
     """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
     scenario = {"test_prompt": prompt.strip()}
@@ -351,6 +368,12 @@ def _run_test_prompt(
         cmd.extend(["--base-url", base_url])
     if api_key:
         cmd.extend(["--api-key", api_key])
+    if max_tools is not None:
+        cmd.extend(["--max-tools", str(max_tools)])
+    if no_think:
+        cmd.append("--no-think")
+    if max_tokens is not None:
+        cmd.extend(["--max-tokens", str(max_tokens)])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -406,6 +429,28 @@ def get_git_info() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Pass/fail determination
+# ---------------------------------------------------------------------------
+def _compute_passed(
+    exit_code: int,
+    tool_calls: int | None,
+    verify_results: list[dict] | None,
+) -> bool:
+    """Determine passed based on tool usage and verification results.
+
+    Rules:
+    - Zero tool calls → fail (agent did nothing useful)
+    - ha_checks present → all checks must pass
+    - No checks → fall back to exit code
+    """
+    if tool_calls == 0:
+        return False
+    if verify_results is not None:
+        return all(r["passed"] for r in verify_results)
+    return exit_code == 0
+
+
+# ---------------------------------------------------------------------------
 # JSONL results
 # ---------------------------------------------------------------------------
 def append_result(
@@ -417,6 +462,8 @@ def append_result(
     branch: str | None,
     bat_summary: dict,
     session_file: str | None = None,
+    exit_code: int = 0,
+    verify_results: list[dict] | None = None,
 ) -> None:
     """Append a single story result as one JSONL line."""
     agent_data = bat_summary.get("agents", {}).get(agent, {})
@@ -432,7 +479,11 @@ def append_result(
         "story": story["id"],
         "category": story["category"],
         "weight": story["weight"],
-        "passed": agent_data.get("all_passed", False),
+        "passed": _compute_passed(
+            exit_code=exit_code,
+            tool_calls=aggregate.get("total_tool_calls"),
+            verify_results=verify_results,
+        ),
         "test_duration_ms": test_phase.get("duration_ms"),
         "total_duration_ms": aggregate.get("total_duration_ms"),
         "tool_calls": aggregate.get("total_tool_calls"),
@@ -451,13 +502,29 @@ def append_result(
     if record["tool_calls"] is None:
         record["tool_calls"] = _extract_tool_calls(session_file, agent)
 
-    # Extract token usage from session file
+    # Extract token usage: from phase summary (openai) or session file (claude/gemini)
     tokens = _extract_tokens(session_file, agent)
+    if tokens is None:
+        ti = test_phase.get("tokens_input")
+        to = test_phase.get("tokens_output")
+        if ti is not None or to is not None:
+            tokens = {"input": ti or 0, "output": to or 0, "cached": 0, "thoughts": 0}
     if tokens:
         record["tokens_input"] = tokens["input"]
         record["tokens_output"] = tokens["output"]
         record["tokens_cached"] = tokens["cached"]
         record["tokens_thoughts"] = tokens["thoughts"]
+        record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens["output"]
+
+    # Include verify_results, agent response, and tool trace only on failure
+    if verify_results is not None and not all(r["passed"] for r in verify_results):
+        record["verify_results"] = verify_results
+        agent_response = test_phase.get("output", "")
+        if agent_response:
+            record["agent_response"] = agent_response
+        tool_trace = test_phase.get("tool_trace")
+        if tool_trace:
+            record["tool_trace"] = tool_trace
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "a") as f:
@@ -525,6 +592,9 @@ async def run_stories(
                     model=args.model,
                     base_url=args.base_url,
                     api_key=args.api_key,
+                    max_tools=args.max_tools,
+                    no_think=args.no_think,
+                    max_tokens=getattr(args, "max_tokens", None),
                 )
 
                 # Detect session file created during this run
@@ -538,10 +608,33 @@ async def run_stories(
                 if not session_file:
                     session_file = _find_latest_session_file(agent, after=run_start)
 
+                # Verify HA state if story has ha_checks
+                verify_results = None
+                ha_checks = (story.get("verify") or {}).get("ha_checks")
+                if ha_checks:
+                    agent_output = (
+                        (summary or {})
+                        .get("agents", {})
+                        .get(agent, {})
+                        .get("test", {})
+                        .get("output", "")
+                    )
+                    log(f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)...")
+                    verify_results = await verify_ha_checks(
+                        ha_url, ha_token, ha_checks, agent_output
+                    )
+                    failed_checks = [r for r in verify_results if not r["passed"]]
+                    if failed_checks:
+                        log(f"[{agent}/{sid}] {len(failed_checks)}/{len(ha_checks)} check(s) FAILED")
+                        for r in failed_checks:
+                            log(f"  FAIL [{r['type']}] {r['detail']}")
+                    else:
+                        log(f"[{agent}/{sid}] All checks passed")
+
                 all_results.append((agent, sid, story, rc, summary, session_file))
 
-                # Append JSONL result
-                if summary:
+                # Append JSONL result (write even without summary if ha_checks ran)
+                if summary or verify_results is not None:
                     append_result(
                         args.results_file,
                         story,
@@ -549,8 +642,10 @@ async def run_stories(
                         sha,
                         describe,
                         args.branch,
-                        summary,
+                        summary or {},
                         session_file,
+                        exit_code=rc,
+                        verify_results=verify_results,
                     )
 
                 if session_file:
@@ -630,6 +725,23 @@ def main() -> None:
         default="no-key",
         help="API key for OpenAI-compatible endpoint (default: no-key)",
     )
+    parser.add_argument(
+        "--max-tools",
+        type=int,
+        default=None,
+        help="Limit MCP tools passed to the openai agent (reduces context size)",
+    )
+    parser.add_argument(
+        "--no-think",
+        action="store_true",
+        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Max output tokens per completion for openai agent (agent default: 8192)",
+    )
     parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
     args = parser.parse_args()
 
@@ -643,9 +755,7 @@ def main() -> None:
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))
     elif args.story_file:
-        story_path = Path(args.story_file)
-        if not story_path.is_absolute():
-            story_path = SCRIPT_DIR / story_path
+        story_path = Path(args.story_file).resolve()
         stories = [story_path]
     else:
         parser.print_help()
@@ -668,7 +778,11 @@ def main() -> None:
             print()
         return
 
-    exit_code = asyncio.run(run_stories(args, filtered))
+    try:
+        exit_code = asyncio.run(run_stories(args, filtered))
+    except KeyboardInterrupt:
+        log("\nInterrupted")
+        sys.exit(130)
     sys.exit(exit_code)
 
 

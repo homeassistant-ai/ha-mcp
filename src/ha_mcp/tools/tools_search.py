@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
-from ..errors import create_entity_not_found_error, create_validation_error
+from ..errors import create_validation_error
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -156,7 +156,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = 0,
         group_by_domain: bool | str = False,
     ) -> dict[str, Any]:
-        """Comprehensive entity search with fuzzy matching, domain/area filtering, and optional grouping.
+        """PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+
+        For searching *inside* automation/script/helper configurations, use ha_deep_search instead.
 
         **Listing Entities by Domain:**
         Use domain_filter with an empty query to list all entities of a specific type:
@@ -492,11 +494,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
+        include_notifications: Annotated[
+            bool | str | None,
+            Field(
+                default=True,
+                description="Include active persistent notifications (default: True). Set False to skip.",
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
         Returns comprehensive system information at the requested detail level,
-        including Home Assistant base_url, version, location, timezone, and entity overview.
+        including Home Assistant base_url, version, location, timezone, entity overview,
+        and active persistent notifications (if any).
         Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
@@ -505,6 +515,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
         include_entity_id_bool = coerce_bool_param(
             include_entity_id, "include_entity_id", default=None
+        )
+        include_notifications_bool = coerce_bool_param(
+            include_notifications, "include_notifications", default=True
         )
 
         result = await smart_tools.get_system_overview(
@@ -544,6 +557,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
 
+        # Include active persistent notifications
+        if include_notifications_bool:
+            result["notification_count"] = 0
+            try:
+                ws_result = await client.send_websocket_message(
+                    {"type": "persistent_notification/get"}
+                )
+                if ws_result.get("success"):
+                    notifications = ws_result.get("result", [])
+                    result["notification_count"] = len(notifications)
+                    if notifications:
+                        result["notifications"] = [
+                            {
+                                "notification_id": n.get("notification_id"),
+                                "title": n.get("title"),
+                                "message": n.get("message"),
+                                "created_at": n.get("created_at"),
+                            }
+                            for n in notifications
+                        ]
+            except Exception as e:
+                logger.debug(f"Failed to fetch notifications for overview: {e}")
+
         return result
 
     @mcp.tool(
@@ -580,12 +616,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Deep search across automation, script, and helper definitions.
+        """Search inside automation, script, and helper *configurations* — not for finding entity IDs.
 
-        Searches not only entity names but also within configuration definitions including
-        triggers, actions, sequences, and other config fields. Perfect for finding automations
-        that use specific services, helpers referenced in scripts, or tracking down where
-        particular entities are being used.
+        Use this when you need to find automations/scripts by what they *do* (e.g., which automations
+        call a specific service, reference a particular entity, or contain a certain action).
+        For finding entity IDs by name, use ha_search_entities instead.
+
+        Searches within configuration definitions including triggers, actions, sequences, and other
+        config fields. Perfect for finding automations that use specific services, helpers referenced
+        in scripts, or tracking down where particular entities are being used.
 
         Args:
             query: Search query (can be partial, with typos)
@@ -649,26 +688,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
         except Exception as e:
-            error_str = str(e).lower()
-            # Check if entity not found
-            if "404" in error_str or "not found" in error_str:
-                error_response = create_entity_not_found_error(
-                    entity_id,
-                    details=str(e),
-                )
-            else:
-                error_response = exception_to_structured_error(
-                    e,
-                    context={"entity_id": entity_id},
-                    raise_error=False,
-                )
-            # Add entity-specific suggestions
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+            error_response = exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
+                raise_error=False,
+                suggestions=[
                     f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
-                ]
+                ],
+            )
             error_with_tz = await add_timezone_metadata(client, error_response)
             raise_tool_error(error_with_tz)
 

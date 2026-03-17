@@ -1,8 +1,9 @@
 """
-Python expression sandbox using AST validation.
+Python expression validation for dashboard transformations.
 
-Provides safe execution of Python expressions for dashboard transformations.
-Blocks imports, file I/O, dangerous builtins, and common sandbox escapes.
+Restricts expressions to a known-safe subset: dict/list operations,
+basic control flow, and whitelisted methods. Not a security boundary —
+callers are already authenticated MCP users with full HA access.
 """
 
 import ast
@@ -188,6 +189,11 @@ def validate_expression(expr: str) -> tuple[bool, str]:
                         False,
                         f"Forbidden method: {method_name} (allowed: {', '.join(sorted(SAFE_METHODS))})",
                     )
+
+            # Reject subscript calls, chained calls, and all other non-standard targets
+            # e.g., config['fn']() or config.get('fn')() would bypass Name/Attribute checks
+            else:
+                return False, f"Forbidden call target type: {type(node.func).__name__}"
 
         # Block function definitions (could be used for obfuscation)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

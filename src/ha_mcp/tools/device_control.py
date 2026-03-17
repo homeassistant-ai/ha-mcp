@@ -9,11 +9,15 @@ import asyncio
 import logging
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_listener import start_websocket_listener
 from ..config import get_global_settings
+from ..errors import ErrorCode, create_error_response
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
+from .helpers import exception_to_structured_error, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -81,28 +85,26 @@ class DeviceControlTools:
 
                     parameters = json.loads(parameters)
                 except json.JSONDecodeError:
-                    return {
-                        "entity_id": entity_id,
-                        "action": action,
-                        "success": False,
-                        "error": f"Invalid JSON in parameters: {parameters}",
-                        "suggestions": [
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_JSON,
+                        f"Invalid JSON in parameters: {parameters}",
+                        suggestions=[
                             "Parameters should be a valid JSON object",
-                            "Example: {'brightness': 102, 'color_temp': 4000}",
+                            "Example: {'brightness': 102, 'color_temp_kelvin': 4000}",
                         ],
-                    }
+                        context={"entity_id": entity_id, "action": action},
+                    ))
             # Parse domain from entity ID
             if "." not in entity_id:
-                return {
-                    "entity_id": entity_id,
-                    "action": action,
-                    "success": False,
-                    "error": f"Invalid entity ID format: {entity_id}",
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_INVALID_ID,
+                    f"Invalid entity ID format: {entity_id}",
+                    suggestions=[
                         "Entity ID must be in format 'domain.entity_name'",
                         "Use smart_entity_search to find correct entity ID",
                     ],
-                }
+                    context={"entity_id": entity_id, "action": action},
+                ))
 
             domain = entity_id.split(".")[0]
             handler = get_domain_handler(domain)
@@ -112,42 +114,39 @@ class DeviceControlTools:
                 try:
                     current_state = await self.client.get_entity_state(entity_id)
                     if not current_state:
-                        return {
-                            "entity_id": entity_id,
-                            "action": action,
-                            "success": False,
-                            "error": f"Entity not found: {entity_id}",
-                            "suggestions": [
+                        raise_tool_error(create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Entity not found: {entity_id}",
+                            suggestions=[
                                 "Use smart_entity_search to find the correct entity",
                                 "Check entity is not disabled in Home Assistant",
                             ],
-                        }
+                            context={"entity_id": entity_id, "action": action},
+                        ))
+                except ToolError:
+                    raise
                 except Exception as e:
-                    return {
-                        "entity_id": entity_id,
-                        "action": action,
-                        "success": False,
-                        "error": f"Cannot verify entity exists: {str(e)}",
-                        "suggestions": [
+                    exception_to_structured_error(
+                        e,
+                        context={"entity_id": entity_id, "action": action},
+                        suggestions=[
                             "Check Home Assistant connection",
                             "Verify entity ID spelling",
                         ],
-                    }
+                    )
 
             # Validate action for domain
             valid_actions = handler.get("valid_actions", ["on", "off", "toggle"])
             if action not in valid_actions:
-                return {
-                    "entity_id": entity_id,
-                    "action": action,
-                    "success": False,
-                    "error": f"Invalid action '{action}' for domain '{domain}'",
-                    "valid_actions": valid_actions,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_INVALID_ACTION,
+                    f"Invalid action '{action}' for domain '{domain}'",
+                    suggestions=[
                         f"Valid actions for {domain}: {', '.join(valid_actions)}",
                         "Use 'toggle' for simple on/off control",
                     ],
-                }
+                    context={"entity_id": entity_id, "action": action, "valid_actions": valid_actions},
+                ))
 
             # Build service call
             service_call = self._build_service_call(
@@ -198,33 +197,32 @@ class DeviceControlTools:
                     },
                 }
 
+            except ToolError:
+                raise
             except Exception as e:
-                return {
-                    "entity_id": entity_id,
-                    "action": action,
-                    "success": False,
-                    "error": f"Service call failed: {str(e)}",
-                    "service_call": service_call,
-                    "suggestions": [
+                exception_to_structured_error(
+                    e,
+                    context={"entity_id": entity_id, "action": action},
+                    suggestions=[
                         "Check if entity supports this action",
                         "Verify Home Assistant connection",
                         "Check Home Assistant logs for details",
                     ],
-                }
+                )
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in control_device_smart: {e}")
-            return {
-                "entity_id": entity_id,
-                "action": action,
-                "success": False,
-                "error": f"Unexpected error: {str(e)}",
-                "suggestions": [
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "action": action},
+                suggestions=[
                     "Check entity ID format",
                     "Verify Home Assistant connection",
                     "Try simpler action like 'toggle'",
                 ],
-            }
+            )
 
     def _build_service_call(
         self,
@@ -270,12 +268,22 @@ class DeviceControlTools:
         # Add parameters based on domain
         if parameters:
             if domain == "light":
+                # Backward compat: convert deprecated color temp parameters
+                if "color_temp_kelvin" not in parameters:
+                    if "kelvin" in parameters:
+                        parameters["color_temp_kelvin"] = parameters.pop("kelvin")
+                    elif "color_temp" in parameters:
+                        mired_val = parameters.pop("color_temp")
+                        if isinstance(mired_val, (int, float)) and mired_val > 0:
+                            parameters["color_temp_kelvin"] = round(
+                                1_000_000 / mired_val
+                            )
+
                 light_params = [
                     "brightness",
-                    "color_temp",
+                    "color_temp_kelvin",
                     "rgb_color",
                     "effect",
-                    "kelvin",
                 ]
                 for param in light_params:
                     if param in parameters:
@@ -346,8 +354,8 @@ class DeviceControlTools:
             if domain == "light" and action in ["on", "set"]:
                 if "brightness" in parameters:
                     expected["brightness"] = parameters["brightness"]
-                if "color_temp" in parameters:
-                    expected["color_temp"] = parameters["color_temp"]
+                if "color_temp_kelvin" in parameters:
+                    expected["color_temp_kelvin"] = parameters["color_temp_kelvin"]
 
             elif domain == "climate" and action in ["set", "heat", "cool", "auto"]:
                 if "temperature" in parameters:
@@ -378,16 +386,16 @@ class DeviceControlTools:
         operation = get_operation_from_memory(operation_id)
 
         if not operation:
-            return {
-                "operation_id": operation_id,
-                "success": False,
-                "error": "Operation not found or expired",
-                "suggestions": [
+            raise_tool_error(create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                "Operation not found or expired",
+                suggestions=[
                     "Operation may have been cleaned up after completion",
                     "Check operation ID spelling",
                     "Use control_device_smart to start new operation",
                 ],
-            }
+                context={"operation_id": operation_id},
+            ))
 
         # Check operation status
         if operation.status.value == "completed":
@@ -479,7 +487,12 @@ class DeviceControlTools:
             Bulk operation results
         """
         if not operations:
-            return {"success": False, "error": "No operations provided", "results": []}
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "No operations provided",
+                suggestions=["Provide a list of device control operations"],
+                context={"results": []},
+            ))
 
         results: list[dict[str, Any]] = []
         operation_ids: list[str] = []
@@ -519,14 +532,14 @@ class DeviceControlTools:
             for i, op in enumerate(operations):
                 entity_id, action, error = validate_operation(op, i)
                 if error:
-                    skipped_operations.append(
-                        {
-                            "index": i,
-                            "operation": op,
-                            "error": error,
-                            "success": False,
-                        }
+                    err_response = create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        error,
+                        context={"index": i},
                     )
+                    err_response["index"] = i
+                    err_response["operation"] = op
+                    skipped_operations.append(err_response)
                 else:
                     # Store (index, original_op, entity_id, action) for execution
                     valid_operations.append((i, op, entity_id, action))  # type: ignore[arg-type]
@@ -551,12 +564,10 @@ class DeviceControlTools:
                     # Process results and extract operation IDs
                     for result in task_results:
                         if isinstance(result, Exception):
-                            results.append(
-                                {
-                                    "success": False,
-                                    "error": f"Exception during execution: {result!s}",
-                                }
-                            )
+                            results.append(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Exception during execution: {result!s}",
+                            ))
                         elif isinstance(result, dict):
                             results.append(result)
                             if "operation_id" in result:
@@ -618,13 +629,15 @@ class DeviceControlTools:
 
             return response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in bulk_device_control: {e}")
-            return {
-                "success": False,
-                "error": f"Bulk operation failed: {e!s}",
-                "results": results,
-            }
+            exception_to_structured_error(
+                e,
+                context={"results": results},
+                suggestions=["Check operation parameters and try again"],
+            )
 
     async def get_bulk_operation_status(
         self, operation_ids: list[str]
@@ -639,7 +652,11 @@ class DeviceControlTools:
             Status summary for all operations
         """
         if not operation_ids:
-            return {"success": False, "error": "No operation IDs provided"}
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "No operation IDs provided",
+                suggestions=["Provide a list of operation IDs from control_device_smart"],
+            ))
 
         # Check all operations
         statuses = []
