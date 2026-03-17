@@ -1,8 +1,9 @@
 """
-Python expression sandbox using AST validation.
+Python expression validation for dashboard transformations.
 
-Provides safe execution of Python expressions for dashboard transformations.
-Blocks imports, file I/O, dangerous builtins, and common sandbox escapes.
+Restricts expressions to a known-safe subset: dict/list operations,
+basic control flow, and whitelisted methods. Not a security boundary —
+callers are already authenticated MCP users with full HA access.
 """
 
 import ast
