@@ -567,6 +567,35 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
+def _register_browser_landing(path: str) -> None:
+    """Register a GET handler so browsers see a friendly page instead of 405."""
+    from starlette.responses import HTMLResponse
+
+    mcp = _get_mcp()
+
+    @mcp.custom_route(path, methods=["GET"])
+    async def _browser_landing(request):  # noqa: ARG001
+        return HTMLResponse(
+            "<!DOCTYPE html>"
+            "<html><head><title>HA-MCP</title></head>"
+            "<body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;"
+            "display:flex;justify-content:center;align-items:center;"
+            "height:100vh;margin:0;background:#f5f5f5'>"
+            "<div style='text-align:center;max-width:600px;padding:2rem'>"
+            "<h1 style='color:#333'>HA-MCP server is up and running</h1>"
+            "<p style='color:#666;font-size:1.1rem;line-height:1.6'>"
+            "To connect, please follow the "
+            "<a href='https://github.com/homeassistant-ai/ha-mcp#-installation'"
+            " style='color:#4a9eff'>setup instructions</a>, "
+            "and paste the URL for this page into your LLM.</p>"
+            "<p style='color:#666;font-size:0.95rem;line-height:1.6'>"
+            "If using Cloudflare and you're unable to connect via your LLM, "
+            "make sure the &ldquo;Block AI training bots&rdquo; setting is set to "
+            "&ldquo;do not block (allow crawlers)&rdquo;.</p>"
+            "</div></body></html>"
+        )
+
+
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
@@ -575,6 +604,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     port, path = _get_http_runtime(default_port)
+    _register_browser_landing(path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, port, path),
@@ -699,6 +729,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     mcp.auth = auth_provider
 
     logger.info("Server created with OAuthProxyClient")
+    _register_browser_landing(path)
 
     tools = await mcp.list_tools()
     logger.info(
