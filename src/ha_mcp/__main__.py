@@ -569,12 +569,13 @@ async def _run_http_with_graceful_shutdown(
 
 def _register_browser_landing(path: str) -> None:
     """Register a GET handler so browsers see a friendly page instead of 405."""
+    from starlette.requests import Request
     from starlette.responses import PlainTextResponse
 
     mcp = _get_mcp()
 
     @mcp.custom_route(path, methods=["GET"])
-    async def _browser_landing(request):  # noqa: ARG001
+    async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
             "HA-MCP server is up and running. To connect, please follow the "
             "setup instructions (https://github.com/homeassistant-ai/ha-mcp#-installation), "
