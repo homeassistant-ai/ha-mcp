@@ -60,27 +60,11 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 | `MCP_PORT` | Server port | `8086` |
 | `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` |
 | `HOMEASSISTANT_TOKEN` | Long-Lived Access Token to connect ha-mcp to your HA ([how to generate](https://www.home-assistant.io/docs/authentication/#your-account-profile)) | None |
-| `OAUTH_ENCRYPTION_KEY` | Persistent token encryption, see below | None |
 
-> **Note:** As of v7.0.0, both `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are
-> required server-side environment variables. The consent form no longer accepts
-> user-supplied credentials (see [#749](https://github.com/homeassistant-ai/ha-mcp/issues/749)).
-
-### Persistent token encryption
-
-Set `OAUTH_ENCRYPTION_KEY` to keep OAuth tokens valid across server restarts.
-Without it, a temporary key is generated on each start and all tokens are
-invalidated when the container restarts.
-
-Generate a stable key once and store it securely:
-```bash
-openssl rand -hex 32
-```
-
-Pass it as an environment variable:
-```bash
--e OAUTH_ENCRYPTION_KEY=your_generated_key_here
-```
+> **Note:** As of v7.0.0, both `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` are required as a server-side environment variable.
+> It is used internally by the ha-mcp server to connect to Home Assistant. The OAuth consent form still requires the user to provide
+> their own Long-Lived Access Token to authenticate via Claude or another MCP client.
+> See [#749](https://github.com/homeassistant-ai/ha-mcp/issues/749) for context.
 
 ### 4. Connect in Claude.ai
 
