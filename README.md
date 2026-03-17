@@ -245,6 +245,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
 - **[@adraguidev](https://github.com/adraguidev)** — Fix menu-based config entry flows for group helpers (#647).
 - **[@transportrefer](https://github.com/transportrefer)** — Integration options inspection (`ha_get_integration` schema support, #689).
+- **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 
 ---
 
