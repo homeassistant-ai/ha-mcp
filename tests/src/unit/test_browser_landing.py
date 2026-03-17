@@ -16,15 +16,16 @@ def mcp_app():
 
 
 @pytest.mark.asyncio
-async def test_get_returns_landing_page(mcp_app):
-    """GET on the MCP path should return 200 with the landing text."""
+async def test_get_returns_405_with_helpful_message(mcp_app):
+    """GET should return 405 with the landing text and Allow header."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=mcp_app), base_url="http://test"
     ) as client:
         resp = await client.get("/mcp")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 405
     assert "HA-MCP server is up and running" in resp.text
+    assert resp.headers["allow"] == "POST, DELETE"
 
 
 @pytest.mark.asyncio
@@ -43,4 +44,3 @@ async def test_post_not_intercepted_by_landing(mcp_app):
     # The MCP handler errors (no lifespan in test), but the key assertion is
     # that POST was NOT intercepted by the landing page route.
     assert "HA-MCP server is up and running" not in resp.text
-    assert resp.status_code != 200 or resp.headers["content-type"] != "text/plain; charset=utf-8"

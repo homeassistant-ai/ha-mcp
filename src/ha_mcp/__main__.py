@@ -568,7 +568,12 @@ async def _run_http_with_graceful_shutdown(
 
 
 def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
-    """Register a GET handler so browsers see a friendly page instead of 405.
+    """Register a GET handler that returns 405 with a helpful message.
+
+    Browsers and misconfigured clients that send GET instead of POST will see
+    a human-readable explanation instead of a bare "Method Not Allowed" error.
+    The 405 status and Allow header are preserved so automated clients still
+    get the correct HTTP semantics.
 
     Args:
         mcp_instance: The FastMCP server to register the route on.
@@ -585,7 +590,9 @@ def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
             "and paste the URL for this page into your LLM. If using Cloudflare "
             "and you're unable to connect via your LLM, make sure the "
             '"Block AI training bots" setting is set to '
-            '"do not block (allow crawlers)".'
+            '"do not block (allow crawlers)".',
+            status_code=405,
+            headers={"Allow": "POST, DELETE"},
         )
 
 
