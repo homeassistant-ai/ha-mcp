@@ -578,7 +578,7 @@ def _register_browser_landing(path: str) -> None:
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
             "HA-MCP server is up and running. To connect, please follow the "
-            "setup instructions (https://github.com/homeassistant-ai/ha-mcp#-installation), "
+            "setup instructions (https://homeassistant-ai.github.io/ha-mcp/), "
             "and paste the URL for this page into your LLM. If using Cloudflare "
             "and you're unable to connect via your LLM, make sure the "
             '"Block AI training bots" setting is set to '
