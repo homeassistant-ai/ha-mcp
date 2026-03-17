@@ -567,14 +567,17 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
-def _register_browser_landing(path: str) -> None:
-    """Register a GET handler so browsers see a friendly page instead of 405."""
+def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
+    """Register a GET handler so browsers see a friendly page instead of 405.
+
+    Args:
+        mcp_instance: The FastMCP server to register the route on.
+        path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+    """
     from starlette.requests import Request
     from starlette.responses import PlainTextResponse
 
-    mcp = _get_mcp()
-
-    @mcp.custom_route(path, methods=["GET"])
+    @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
             "HA-MCP server is up and running. To connect, please follow the "
@@ -594,7 +597,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     port, path = _get_http_runtime(default_port)
-    _register_browser_landing(path)
+    register_browser_landing(_get_mcp(), path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, port, path),
@@ -719,7 +722,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     mcp.auth = auth_provider
 
     logger.info("Server created with OAuthProxyClient")
-    _register_browser_landing(path)
+    register_browser_landing(mcp, path)
 
     tools = await mcp.list_tools()
     logger.info(

@@ -3,18 +3,15 @@
 import httpx
 import pytest
 from fastmcp import FastMCP
-from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+
+from ha_mcp.__main__ import register_browser_landing
 
 
 @pytest.mark.asyncio
 async def test_get_returns_landing_page():
     """GET on the MCP path should return 200 with the landing text."""
     server = FastMCP("test")
-
-    @server.custom_route("/mcp", methods=["GET"])
-    async def _browser_landing(_: Request) -> PlainTextResponse:
-        return PlainTextResponse("HA-MCP server is up and running.")
+    register_browser_landing(server, "/mcp")
 
     app = server.http_app(path="/mcp", stateless_http=True)
     async with httpx.AsyncClient(

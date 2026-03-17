@@ -147,8 +147,13 @@ def main() -> int:
     # Import and run MCP server directly
     try:
         log_info("Importing ha_mcp module...")
-        from ha_mcp.__main__ import _get_timestamped_uvicorn_log_config, mcp
+        from ha_mcp.__main__ import (
+            _get_timestamped_uvicorn_log_config,
+            mcp,
+            register_browser_landing,
+        )
 
+        register_browser_landing(mcp, secret_path)
         log_info("Starting MCP server...")
         mcp.run(
             transport="http",
