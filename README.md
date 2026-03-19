@@ -148,7 +148,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Blueprints** | `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint` |
 | **Device Registry** | `ha_get_device`, `ha_update_device`, `ha_remove_device`, `ha_rename_entity` |
 | **ZHA & Integrations** | `ha_get_zha_devices`, `ha_get_entity_integration_source` |
-| **Add-ons** | `ha_get_addon`, `ha_call_addon_api` |
+| **Add-ons** | `ha_get_addon`, `ha_call_addon_api` (HTTP & WebSocket, direct port access) |
 | **Camera** | `ha_get_camera_image` |
 | **History & Statistics** | `ha_get_history`, `ha_get_statistics` |
 | **Automation Traces** | `ha_get_automation_traces` |
