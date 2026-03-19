@@ -280,6 +280,7 @@ async def _call_addon_api(
     body: dict[str, Any] | str | None = None,
     timeout: int = 30,
     debug: bool = False,
+    port: int | None = None,
 ) -> dict[str, Any]:
     """Call an add-on's web API through Home Assistant's Ingress proxy.
 
@@ -290,6 +291,7 @@ async def _call_addon_api(
         method: HTTP method (GET, POST, PUT, DELETE, PATCH)
         body: Request body for POST/PUT/PATCH
         timeout: Request timeout in seconds (default 30)
+        port: Override port to connect to (e.g., direct access port instead of ingress port)
 
     Returns:
         Dictionary with response data, status code, and content type.
@@ -311,14 +313,15 @@ async def _call_addon_api(
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
 
-    # 3. Verify add-on supports Ingress
-    if not addon.get("ingress"):
+    # 3. Verify add-on supports Ingress (unless using direct port override)
+    if not port and not addon.get("ingress"):
         return create_error_response(
             ErrorCode.VALIDATION_FAILED,
             f"Add-on '{addon_name}' does not support Ingress",
             suggestions=[
                 "Check if this add-on exposes a direct port instead",
                 f"Use ha_get_addon(slug='{slug}') to see port mappings",
+                "Use the 'port' parameter to connect to a direct access port",
             ],
             context={"slug": slug},
         )
@@ -334,28 +337,42 @@ async def _call_addon_api(
             context={"slug": slug, "state": addon.get("state")},
         )
 
-    # 5. Build direct add-on URL using internal Docker network
-    # Add-ons run on the same Docker network (hassio) and can communicate
-    # directly via ip_address:ingress_port, bypassing the Ingress proxy.
+    # 5. Build URL to the add-on container
     addon_ip = addon.get("ip_address", "")
-    ingress_port = addon.get("ingress_port")
-    if not addon_ip or not ingress_port:
-        return create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
-            context={"slug": slug, "ip_address": addon_ip, "ingress_port": ingress_port},
-        )
 
-    url = f"http://{addon_ip}:{ingress_port}/{normalized}"
+    if port:
+        # Direct port access: connect to the add-on's mapped network port
+        # (e.g., 1880 for Node-RED, 6052 for ESPHome) instead of the ingress port.
+        # Requires 'leave_front_door_open' or equivalent setting on the add-on.
+        if not addon_ip:
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing ip_address",
+                context={"slug": slug, "ip_address": addon_ip},
+            )
+        target_port = port
+    else:
+        # Default: use the ingress port for direct container communication
+        ingress_port = addon.get("ingress_port")
+        if not addon_ip or not ingress_port:
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
+                context={"slug": slug, "ip_address": addon_ip, "ingress_port": ingress_port},
+            )
+        target_port = ingress_port
+
+    url = f"http://{addon_ip}:{target_port}/{normalized}"
 
     # 6. Make HTTP request directly to the add-on container
     # Include Ingress headers so the add-on's web server (e.g., Nginx) recognizes
     # this as an authenticated Ingress request and bypasses its own auth layer.
+    # When using a direct port, skip Ingress headers (not needed/recognized).
     ingress_entry = addon.get("ingress_entry", "")
-    headers: dict[str, str] = {
-        "X-Ingress-Path": ingress_entry,
-        "X-Hass-Source": "core.ingress",
-    }
+    headers: dict[str, str] = {}
+    if not port:
+        headers["X-Ingress-Path"] = ingress_entry
+        headers["X-Hass-Source"] = "core.ingress"
 
     # Set content type based on body type
     if isinstance(body, dict):
@@ -454,9 +471,10 @@ async def _call_addon_api(
             }
             result["suggestion"] = (
                 "This add-on is blocking direct connections (likely Nginx IP restriction). "
-                "Review the addon_config.options above for settings that may enable access "
-                "(e.g., authentication toggles, direct port access). The user may need to "
-                "change add-on settings in the HA UI and restart the add-on."
+                "Try using the 'port' parameter to connect to the add-on's direct access port "
+                "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
+                "Example: ha_call_addon_api(slug='...', path='...', port=<direct_port>). "
+                "The user may need to change add-on settings in the HA UI and restart the add-on."
             )
 
     return result
@@ -610,15 +628,31 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=False,
             ),
         ] = False,
+        port: Annotated[
+            int | None,
+            Field(
+                description="Override the connection port to use the add-on's direct access port "
+                "instead of the Ingress port. Use this for add-ons with Nginx IP restrictions "
+                "(common in community add-ons) when 'leave_front_door_open' is enabled. "
+                "Find the port via ha_get_addon(slug='...') in the 'network' or 'ports' field "
+                "(e.g., 1880 for Node-RED, 6052 for ESPHome).",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Call an add-on's web API via its internal Docker network address.
 
         Sends HTTP requests directly to add-on containers, enabling programmatic
         interaction with add-on APIs like Frigate HTTP API, EVCC API, etc.
 
-        **How it works:** Connects to the add-on's Docker IP and ingress port with
-        Ingress headers (X-Ingress-Path, X-Hass-Source) so the add-on recognizes the
-        request as authenticated.
+        **How it works:** By default, connects to the add-on's Docker IP and ingress
+        port with Ingress headers (X-Ingress-Path, X-Hass-Source) so the add-on
+        recognizes the request as authenticated.
+
+        **Direct port access:** Some add-ons (especially community add-ons) have Nginx
+        IP restrictions that block connections to the ingress port. Use the `port`
+        parameter to connect to the add-on's direct access port instead. This requires
+        `leave_front_door_open` (or equivalent) to be enabled in the add-on config.
 
         **Prerequisites:**
         - Add-on must support Ingress and be running
@@ -638,6 +672,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **Examples:**
         - Get Frigate events: ha_call_addon_api(slug="ccab4aaf_frigate", path="/api/events")
         - Get EVCC state: ha_call_addon_api(slug="2790e6a0_evcc", path="/api/state")
+        - Direct port (403 workaround): ha_call_addon_api(slug="...", path="/flows", port=1880)
         - Debug a failing call: ha_call_addon_api(slug="...", path="/api/test", debug=True)
         """
         # Validate HTTP method
@@ -655,6 +690,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             method=method,
             body=body,
             debug=debug,
+            port=port,
         )
         if not result.get("success"):
             raise_tool_error(result)
