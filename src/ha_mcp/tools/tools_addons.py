@@ -7,12 +7,16 @@ and to call add-on web APIs through Home Assistant's Ingress proxy.
 Note: These tools only work with Home Assistant OS or Supervised installations.
 """
 
+import asyncio
 import json
 import logging
+import re
+import time
 from typing import Annotated, Any
 from urllib.parse import unquote
 
 import httpx
+import websockets
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -35,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 # Maximum response size to return from add-on API calls (50 KB)
 _MAX_RESPONSE_SIZE = 50 * 1024
+
+# Maximum number of WebSocket messages to collect
+_MAX_WS_MESSAGES = 1000
+
+# ANSI escape code pattern for stripping terminal colors from addon output
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
 async def _supervisor_api_call(
@@ -270,6 +280,210 @@ async def list_available_addons(
             "query": query,
         },
     }
+
+
+async def _call_addon_ws(
+    client: HomeAssistantClient,
+    slug: str,
+    path: str,
+    body: dict[str, Any] | str | None = None,
+    timeout: int = 60,
+    debug: bool = False,
+    port: int | None = None,
+    wait_for_close: bool = True,
+) -> dict[str, Any]:
+    """Connect to an add-on's WebSocket API and collect messages.
+
+    Args:
+        client: Home Assistant REST client
+        slug: Add-on slug (e.g., "5c53de3b_esphome")
+        path: WebSocket endpoint path (e.g., "/compile", "/validate")
+        body: Message to send after connecting (JSON-encoded if dict, raw if string)
+        timeout: Max seconds to wait for messages (default 60)
+        debug: Include diagnostic info
+        port: Override port (same as HTTP tool)
+        wait_for_close: If True, collect messages until server closes or timeout.
+            If False, return after first batch of messages (up to 2s of silence).
+
+    Returns:
+        Dictionary with collected messages, metadata, and status.
+    """
+    # 1. Sanitize path
+    normalized = unquote(path).lstrip("/")
+    if ".." in normalized.split("/"):
+        return create_validation_error(
+            "Path contains '..' traversal component",
+            parameter="path",
+            details=f"Rejected path: {path}",
+        )
+
+    # 2. Get add-on info
+    addon_response = await get_addon_info(client, slug)
+    if not addon_response.get("success"):
+        return addon_response
+
+    addon = addon_response["addon"]
+    addon_name = addon.get("name", slug)
+
+    # 3. Verify add-on is running
+    if addon.get("state") != "started":
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
+            suggestions=[
+                f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
+            ],
+            context={"slug": slug, "state": addon.get("state")},
+        )
+
+    # 4. Build WebSocket URL
+    addon_ip = addon.get("ip_address", "")
+    if port:
+        if not addon_ip:
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing ip_address",
+                context={"slug": slug},
+            )
+        target_port = port
+    else:
+        ingress_port = addon.get("ingress_port")
+        if not addon_ip or not ingress_port:
+            return create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing network info",
+                context={"slug": slug},
+            )
+        target_port = ingress_port
+
+    ws_url = f"ws://{addon_ip}:{target_port}/{normalized}"
+
+    # 5. Build connection headers
+    headers: dict[str, str] = {}
+    if not port:
+        ingress_entry = addon.get("ingress_entry", "")
+        headers["X-Ingress-Path"] = ingress_entry
+        headers["X-Hass-Source"] = "core.ingress"
+
+    # 6. Connect and exchange messages
+    collected: list[str] = []
+    total_size = 0
+    close_reason = "unknown"
+    start_time = time.monotonic()
+
+    try:
+        async with websockets.connect(
+            ws_url,
+            additional_headers=headers,
+            ping_interval=20,
+            ping_timeout=10,
+            max_size=5 * 1024 * 1024,  # 5MB max per message
+            open_timeout=10,
+            close_timeout=5,
+        ) as ws:
+            # Send initial message if provided
+            if body is not None:
+                if isinstance(body, dict):
+                    await ws.send(json.dumps(body))
+                else:
+                    await ws.send(str(body))
+
+            # Collect responses
+            while True:
+                remaining = timeout - (time.monotonic() - start_time)
+                if remaining <= 0:
+                    close_reason = "timeout"
+                    break
+
+                if len(collected) >= _MAX_WS_MESSAGES:
+                    close_reason = "message_limit"
+                    break
+
+                if total_size >= _MAX_RESPONSE_SIZE:
+                    close_reason = "size_limit"
+                    break
+
+                try:
+                    # If not waiting for close, use a short timeout to detect silence
+                    recv_timeout = remaining if wait_for_close else min(remaining, 2.0)
+                    message = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
+                except TimeoutError:
+                    if wait_for_close:
+                        close_reason = "timeout"
+                    else:
+                        close_reason = "silence"
+                    break
+                except websockets.exceptions.ConnectionClosed:
+                    close_reason = "server_closed"
+                    break
+
+                # Process message (skip binary frames)
+                if isinstance(message, bytes):
+                    continue
+
+                # Strip ANSI escape codes
+                clean = _ANSI_ESCAPE_RE.sub("", message)
+                collected.append(clean)
+                total_size += len(clean)
+
+    except websockets.exceptions.InvalidHandshake as e:
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"WebSocket handshake failed with '{addon_name}': {e!s}",
+            suggestions=[
+                "Check that the add-on supports WebSocket on this path",
+                f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+            ],
+            context={"slug": slug, "path": path},
+        )
+    except TimeoutError:
+        return create_timeout_error(
+            f"WebSocket connection to '{addon_name}'",
+            timeout,
+            details=f"path={path}",
+            context={"slug": slug, "path": path},
+        )
+    except OSError as e:
+        return create_connection_error(
+            f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
+            details="Check that the add-on is running and the port is correct",
+            context={"slug": slug},
+        )
+
+    elapsed = round(time.monotonic() - start_time, 2)
+
+    # 7. Build result
+    # Try to parse each message as JSON; keep as string if not JSON
+    parsed_messages: list[Any] = []
+    for msg in collected:
+        try:
+            parsed_messages.append(json.loads(msg))
+        except (json.JSONDecodeError, ValueError):
+            parsed_messages.append(msg)
+
+    result: dict[str, Any] = {
+        "success": True,
+        "messages": parsed_messages,
+        "message_count": len(parsed_messages),
+        "closed_by": close_reason,
+        "duration_seconds": elapsed,
+        "addon_name": addon_name,
+        "slug": slug,
+    }
+
+    if total_size >= _MAX_RESPONSE_SIZE:
+        result["truncated"] = True
+        result["note"] = f"Collection stopped at {_MAX_RESPONSE_SIZE // 1024}KB size limit."
+
+    if debug:
+        result["_debug"] = {
+            "ws_url": ws_url,
+            "request_headers": dict(headers),
+            "initial_message": body,
+            "total_bytes_collected": total_size,
+        }
+
+    return result
 
 
 async def _call_addon_api(
@@ -698,48 +912,81 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        websocket: Annotated[
+            bool,
+            Field(
+                description="Connect via WebSocket instead of HTTP. Use for add-on endpoints that "
+                "stream output (e.g., ESPHome /compile, /validate, /logs). Sends 'body' as the "
+                "initial WebSocket message, then collects response messages until the server "
+                "closes the connection or timeout is reached. Default: false.",
+                default=False,
+            ),
+        ] = False,
+        wait_for_close: Annotated[
+            bool,
+            Field(
+                description="Only used with websocket=true. If true (default), collect messages "
+                "until the server closes the connection or timeout. If false, return after "
+                "the first batch of messages (stops after 2 seconds of silence). Use false "
+                "for quick commands; true for operations like compile that stream until done.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
-        """Call an add-on's web API via its internal Docker network address.
+        """Call an add-on's web API via HTTP or WebSocket.
 
-        Sends HTTP requests directly to add-on containers, enabling programmatic
-        interaction with add-on APIs like Frigate HTTP API, EVCC API, etc.
+        Sends requests directly to add-on containers, enabling programmatic
+        interaction with add-on APIs like Frigate HTTP API, ESPHome compile, etc.
 
-        **How it works:** By default, connects to the add-on's Docker IP and ingress
+        **HTTP mode (default):** Connects to the add-on's Docker IP and ingress
         port with Ingress headers (X-Ingress-Path, X-Hass-Source) so the add-on
         recognizes the request as authenticated.
+
+        **WebSocket mode (websocket=true):** Upgrades to a WebSocket connection
+        for endpoints that stream output. Sends `body` as the initial message,
+        collects all response messages, and returns them. Use `wait_for_close=false`
+        to return quickly after the first response batch instead of waiting for
+        the server to close the connection.
 
         **Direct port access:** Some add-ons (especially community add-ons) have Nginx
         IP restrictions that block connections to the ingress port. Use the `port`
         parameter to connect to the add-on's direct access port instead. This requires
         `leave_front_door_open` (or equivalent) to be enabled in the add-on config.
+        Works for both HTTP and WebSocket modes.
 
-        **Large responses:** Array responses can be paginated with `offset` and `limit`.
-        For large dict responses, the tool returns the top-level keys and their sizes
-        so you can make more targeted API calls.
+        **Large HTTP responses:** Array responses can be paginated with `offset` and
+        `limit`. For large dict responses, the tool returns the top-level keys and
+        their sizes so you can make more targeted API calls.
 
         **Prerequisites:**
-        - Add-on must support Ingress and be running
+        - Add-on must be running
         - Use ha_get_addon(slug="...") to check Ingress support and discover API paths
-
-        **Important — some add-ons may require configuration changes:**
-        - Community add-ons (slug prefix `a0d7b954_`) often have Nginx IP restrictions
-          that block direct connections. On 401/403 errors, the response automatically
-          includes the add-on's configuration options and port mappings — review these
-          for settings that enable access (e.g., `leave_front_door_open`, auth toggles).
-        - Before calling an unfamiliar add-on, use ha_get_addon(slug="...") to inspect
-          its options, ports, and ingress settings.
-        - The user may need to change add-on settings in the HA UI and restart the add-on.
-        - Use `debug=True` to see the exact URL, headers, and response details when
-          troubleshooting connection issues.
 
         **Examples:**
         - Get Frigate events: ha_call_addon_api(slug="ccab4aaf_frigate", path="/api/events")
-        - Get EVCC state: ha_call_addon_api(slug="2790e6a0_evcc", path="/api/state")
-        - Direct port (403 workaround): ha_call_addon_api(slug="...", path="/flows", port=1880)
-        - Paginate large arrays: ha_call_addon_api(slug="...", path="/flows", offset=0, limit=20)
-        - Debug a failing call: ha_call_addon_api(slug="...", path="/api/test", debug=True)
+        - Direct port: ha_call_addon_api(slug="...", path="/flows", port=1880)
+        - Paginate arrays: ha_call_addon_api(slug="...", path="/flows", offset=0, limit=20)
+        - ESPHome validate: ha_call_addon_api(slug="...", path="/validate", port=6052, websocket=true, body={"type": "spawn", "configuration": "my_device.yaml"})
+        - Quick WS command: ha_call_addon_api(slug="...", path="/events", port=6052, websocket=true, wait_for_close=false)
+        - Debug: ha_call_addon_api(slug="...", path="/api/test", debug=True)
         """
-        # Validate HTTP method
+        # WebSocket mode
+        if websocket:
+            result = await _call_addon_ws(
+                client=client,
+                slug=slug,
+                path=path,
+                body=body,
+                timeout=120 if wait_for_close else 10,
+                debug=debug,
+                port=port,
+                wait_for_close=wait_for_close,
+            )
+            if not result.get("success"):
+                raise_tool_error(result)
+            return result
+
+        # HTTP mode
         valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
         if method.upper() not in valid_methods:
             raise_tool_error(create_validation_error(
