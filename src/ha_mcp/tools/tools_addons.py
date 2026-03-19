@@ -281,6 +281,8 @@ async def _call_addon_api(
     timeout: int = 30,
     debug: bool = False,
     port: int | None = None,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     """Call an add-on's web API through Home Assistant's Ingress proxy.
 
@@ -292,6 +294,8 @@ async def _call_addon_api(
         body: Request body for POST/PUT/PATCH
         timeout: Request timeout in seconds (default 30)
         port: Override port to connect to (e.g., direct access port instead of ingress port)
+        offset: Skip this many items in array responses (default 0)
+        limit: Return at most this many items from array responses
 
     Returns:
         Dictionary with response data, status code, and content type.
@@ -418,19 +422,54 @@ async def _call_addon_api(
     else:
         response_data = response.text
 
+    # 8. Apply offset/limit slicing to array responses
+    pagination_meta: dict[str, Any] | None = None
+    if isinstance(response_data, list) and (offset > 0 or limit is not None):
+        total_items = len(response_data)
+        end = offset + limit if limit is not None else total_items
+        response_data = response_data[offset:end]
+        pagination_meta = {
+            "total_items": total_items,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(response_data),
+        }
+
     # 9. Truncate large responses
     truncated = False
     if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
         response_data = response_data[:_MAX_RESPONSE_SIZE]
         truncated = True
-    elif isinstance(response_data, (dict, list)):
+    elif isinstance(response_data, list):
         serialized = json.dumps(response_data, default=str)
         if len(serialized) > _MAX_RESPONSE_SIZE:
-            # Return a structured message instead of broken truncated JSON
+            total_items = len(response_data)
             response_data = {
                 "error": "RESPONSE_TOO_LARGE",
-                "message": f"The JSON response ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-                "original_size_bytes": len(serialized),
+                "message": f"The JSON array ({len(serialized)} bytes, {total_items} items) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                "total_items": total_items,
+                "hint": "Use offset and limit to paginate. Example: offset=0, limit=20",
+            }
+            truncated = True
+    elif isinstance(response_data, dict):
+        serialized = json.dumps(response_data, default=str)
+        if len(serialized) > _MAX_RESPONSE_SIZE:
+            # Show top-level keys and their approximate sizes to help caller
+            # make more targeted API calls
+            key_info = {}
+            for k, v in response_data.items():
+                v_serialized = json.dumps(v, default=str)
+                if isinstance(v, list):
+                    key_info[k] = f"array[{len(v)}] ({len(v_serialized)} bytes)"
+                elif isinstance(v, dict):
+                    key_info[k] = f"object ({len(v_serialized)} bytes)"
+                else:
+                    key_info[k] = f"{type(v).__name__} ({len(v_serialized)} bytes)"
+            response_data = {
+                "error": "RESPONSE_TOO_LARGE",
+                "message": f"The JSON object ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                "top_level_keys": key_info,
+                "hint": "Use a more specific API path to request individual keys/sections.",
             }
             truncated = True
 
@@ -450,6 +489,9 @@ async def _call_addon_api(
             "request_headers": dict(headers),
             "response_headers": dict(response.headers),
         }
+
+    if pagination_meta:
+        result["pagination"] = pagination_meta
 
     if truncated:
         result["truncated"] = True
@@ -639,6 +681,23 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        offset: Annotated[
+            int,
+            Field(
+                description="Skip this many items when the response is a JSON array. "
+                "Use with 'limit' to paginate through large array responses. Default: 0.",
+                default=0,
+            ),
+        ] = 0,
+        limit: Annotated[
+            int | None,
+            Field(
+                description="Return at most this many items when the response is a JSON array. "
+                "Use with 'offset' to paginate through large responses (e.g., limit=20). "
+                "For large dict responses, use a more specific API path instead.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Call an add-on's web API via its internal Docker network address.
 
@@ -653,6 +712,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         IP restrictions that block connections to the ingress port. Use the `port`
         parameter to connect to the add-on's direct access port instead. This requires
         `leave_front_door_open` (or equivalent) to be enabled in the add-on config.
+
+        **Large responses:** Array responses can be paginated with `offset` and `limit`.
+        For large dict responses, the tool returns the top-level keys and their sizes
+        so you can make more targeted API calls.
 
         **Prerequisites:**
         - Add-on must support Ingress and be running
@@ -673,6 +736,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Get Frigate events: ha_call_addon_api(slug="ccab4aaf_frigate", path="/api/events")
         - Get EVCC state: ha_call_addon_api(slug="2790e6a0_evcc", path="/api/state")
         - Direct port (403 workaround): ha_call_addon_api(slug="...", path="/flows", port=1880)
+        - Paginate large arrays: ha_call_addon_api(slug="...", path="/flows", offset=0, limit=20)
         - Debug a failing call: ha_call_addon_api(slug="...", path="/api/test", debug=True)
         """
         # Validate HTTP method
@@ -691,6 +755,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             body=body,
             debug=debug,
             port=port,
+            offset=offset,
+            limit=limit,
         )
         if not result.get("success"):
             raise_tool_error(result)
