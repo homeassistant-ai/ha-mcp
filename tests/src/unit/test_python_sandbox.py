@@ -129,6 +129,20 @@ class TestBlockedOperations:
         assert valid is False
         assert "method" in error.lower()
 
+    def test_block_subscript_call(self):
+        """Test that calls on subscript results are blocked."""
+        expr = "config['fn']()"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "Subscript" in error
+
+    def test_block_chained_call(self):
+        """Test that calls on method results are blocked."""
+        expr = "config.get('fn')()"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "Call" in error
+
 
 class TestSafeExecute:
     """Test safe execution of expressions."""
