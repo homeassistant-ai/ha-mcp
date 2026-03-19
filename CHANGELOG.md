@@ -3,6 +3,82 @@
 <!-- version list -->
 
 
+## v7.1.0 (2026-03-18)
+
+### Added
+
+- Reactive best-practice warnings on write tool calls
+  ([#695](https://github.com/homeassistant-ai/ha-mcp/pull/695))
+- Add menu_option to ha_get_helper_schema for template helper schema introspection
+  ([#759](https://github.com/homeassistant-ai/ha-mcp/pull/759))
+- Consolidate zone CRUD tools into set/remove pattern
+  ([#643](https://github.com/homeassistant-ai/ha-mcp/pull/643))
+- Config entry flow — fix resource leak, menu flows, schema inspection, upsert
+  ([`d804c1a`](https://github.com/homeassistant-ai/ha-mcp/commit/d804c1a1ebb652fa4adf34d10a5b0f0ea7d44826))
+
+### Changed
+
+- Update contributors list [contributors-updated]
+  ([`69494ed`](https://github.com/homeassistant-ai/ha-mcp/commit/69494edfeda6c70e64874d27989ce30013f77d73))
+- Add breaking change notice for v7.0.0 OAuth HOMEASSISTANT_URL requirement
+  ([`60a6bfc`](https://github.com/homeassistant-ai/ha-mcp/commit/60a6bfc1ef8372a99dba944856da394bee5196e0))
+
+### Fixed
+
+- Ha_mcp_tools availability check always fails due to wrong services format
+  ([#763](https://github.com/homeassistant-ai/ha-mcp/pull/763))
+- Use REST API for ha_delete_config_entry
+  ([#756](https://github.com/homeassistant-ai/ha-mcp/pull/756))
+- Ensure skills are bundled in Docker builds, add guidance tools for claude.ai
+  ([#732](https://github.com/homeassistant-ai/ha-mcp/pull/732))
+- Clarify ha_search_entities vs ha_deep_search descriptions to prevent tool misuse
+  ([#761](https://github.com/homeassistant-ai/ha-mcp/pull/761))
+- Return empty success instead of RESOURCE_NOT_FOUND for empty logbook
+  ([#710](https://github.com/homeassistant-ai/ha-mcp/pull/710))
+- Prevent false success and duplicate creation in ha_config_set_automation
+  ([#708](https://github.com/homeassistant-ai/ha-mcp/pull/708))
+- Use package version for MCP server version instead of hardcoded 0.1.0
+  ([#744](https://github.com/homeassistant-ai/ha-mcp/pull/744))
+- Replace deprecated color_temp/kelvin with color_temp_kelvin for HA 2026.3
+  ([#711](https://github.com/homeassistant-ai/ha-mcp/pull/711))
+- Add blueprint/save step to ha_import_blueprint (#685)
+  ([#751](https://github.com/homeassistant-ai/ha-mcp/pull/751))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Added
+
+- Add summary output to contrib-pr-review skill
+  ([`f063734`](https://github.com/homeassistant-ai/ha-mcp/commit/f06373452701402606cfcbfa8a85fec3a0bc6731))
+
+### Fixed
+
+- Reject non-Name/Attribute call targets in python_sandbox
+  ([#772](https://github.com/homeassistant-ai/ha-mcp/pull/772))
+
+### Chores
+
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.11
+  ([#778](https://github.com/homeassistant-ai/ha-mcp/pull/778))
+- **deps**: Update fastmcp from 3.1.0 to 3.1.1
+  ([#764](https://github.com/homeassistant-ai/ha-mcp/pull/764))
+- **deps**: Bump devalue from 5.6.3 to 5.6.4 in /site
+  ([#754](https://github.com/homeassistant-ai/ha-mcp/pull/754))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.9
+  ([#742](https://github.com/homeassistant-ai/ha-mcp/pull/742))
+- **addon**: Publish version 7.0.0 [skip ci]
+  ([`8917644`](https://github.com/homeassistant-ai/ha-mcp/commit/8917644dc4e8cd5a4b8bf4afdac155a7c20f240d))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([`f84511b`](https://github.com/homeassistant-ai/ha-mcp/commit/f84511b75d4bfe0c212d2162e3de7335f581172f))
+</details>
+
+
 ## v7.0.0 (2026-03-11)
 
 ### Added
