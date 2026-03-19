@@ -325,7 +325,19 @@ async def _call_addon_ws(
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
 
-    # 3. Verify add-on is running
+    # 3. Verify add-on supports Ingress (unless using direct port override)
+    if not port and not addon.get("ingress"):
+        return create_error_response(
+            ErrorCode.VALIDATION_FAILED,
+            f"Add-on '{addon_name}' does not support Ingress",
+            suggestions=[
+                "Use the 'port' parameter for WebSocket connections to this add-on",
+                f"Use ha_get_addon(slug='{slug}') to see available ports",
+            ],
+            context={"slug": slug},
+        )
+
+    # 4. Verify add-on is running
     if addon.get("state") != "started":
         return create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -336,7 +348,7 @@ async def _call_addon_ws(
             context={"slug": slug, "state": addon.get("state")},
         )
 
-    # 4. Build WebSocket URL
+    # 5. Build WebSocket URL
     addon_ip = addon.get("ip_address", "")
     if port:
         if not addon_ip:
@@ -433,6 +445,16 @@ async def _call_addon_ws(
             suggestions=[
                 "Check that the add-on supports WebSocket on this path",
                 f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+            ],
+            context={"slug": slug, "path": path},
+        )
+    except websockets.exceptions.ConnectionClosed as e:
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"WebSocket connection to '{addon_name}' closed unexpectedly: {e!s}",
+            suggestions=[
+                "The add-on may have rejected the connection or restarted",
+                "Try again or check add-on logs for errors",
             ],
             context={"slug": slug, "path": path},
         )
@@ -723,7 +745,7 @@ async def _call_addon_api(
                 "options": addon_options,
                 "ports": addon_ports,
                 "host_network": addon_host_network,
-                "ingress_port": ingress_port,
+                "ingress_port": addon.get("ingress_port"),
             }
             result["suggestion"] = (
                 "This add-on is blocking direct connections (likely Nginx IP restriction). "

@@ -1,11 +1,12 @@
-"""Unit tests for add-on tools (_call_addon_api error paths)."""
+"""Unit tests for add-on tools (_call_addon_api and _call_addon_ws error paths)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import websockets.exceptions
 
-from ha_mcp.tools.tools_addons import _call_addon_api
+from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws
 
 # Standard mock return for a running addon with Ingress support
 _RUNNING_ADDON_INFO = {
@@ -229,3 +230,338 @@ class TestCallAddonApiErrors:
 
         assert result["success"] is False
         assert "connect" in result["error"]["message"].lower() or "connection" in str(result).lower()
+
+
+# Standard mock return for a running addon with Ingress support (for WS tests)
+_RUNNING_ADDON_INFO_WS = {
+    "success": True,
+    "addon": {
+        "name": "Test Addon",
+        "slug": "test_addon",
+        "ingress": True,
+        "state": "started",
+        "ingress_entry": "/api/hassio_ingress/abc123",
+        "ip_address": "172.30.33.99",
+        "ingress_port": 5000,
+    },
+}
+
+
+class TestCallAddonWsErrors:
+    """Tests for _call_addon_ws error paths."""
+
+    @pytest.mark.asyncio
+    async def test_ws_path_traversal_rejected(self):
+        """Paths containing '..' components should be rejected."""
+        client = _make_mock_client()
+        result = await _call_addon_ws(client, "test_addon", "../../etc/passwd")
+
+        assert result["success"] is False
+        assert "traversal" in result["error"]["message"].lower() or ".." in result["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_not_found(self):
+        """Should return error when add-on slug doesn't exist."""
+        client = _make_mock_client()
+        error_response = {
+            "success": False,
+            "error": {"code": "RESOURCE_NOT_FOUND", "message": "Add-on 'fake_addon' not found"},
+        }
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=error_response,
+        ):
+            result = await _call_addon_ws(client, "fake_addon", "/compile")
+
+        assert result["success"] is False
+        assert "not found" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_no_ingress_support(self):
+        """Should return error when add-on doesn't support Ingress and no port override."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "addon": {
+                    "name": "Test Addon",
+                    "slug": "test_addon",
+                    "ingress": False,
+                    "state": "started",
+                },
+            },
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is False
+        assert "ingress" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_no_ingress_with_port_override(self):
+        """Should succeed past Ingress check when port override is provided."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "addon": {
+                    "name": "Test Addon",
+                    "slug": "test_addon",
+                    "ingress": False,
+                    "state": "started",
+                    "ip_address": "172.30.33.99",
+                },
+            },
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            # Simulate a quick connection that closes immediately
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile", port=6052)
+
+        # Should have passed the Ingress check (port override bypasses it)
+        assert result["success"] is True
+        assert result["closed_by"] == "server_closed"
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_not_running(self):
+        """Should return error when add-on is not running."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "addon": {
+                    "name": "Test Addon",
+                    "slug": "test_addon",
+                    "ingress": True,
+                    "state": "stopped",
+                    "ingress_entry": "/api/hassio_ingress/abc123",
+                },
+            },
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is False
+        assert "not running" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_handshake_failure(self):
+        """Should return error when WebSocket handshake fails."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=websockets.exceptions.InvalidHandshake("403 Forbidden"),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is False
+        assert "handshake" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_connection_closed_during_send(self):
+        """Should return error when connection closes during send."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws = AsyncMock()
+            mock_ws.send.side_effect = websockets.exceptions.ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client, "test_addon", "/compile",
+                body={"type": "spawn", "configuration": "test.yaml"},
+            )
+
+        assert result["success"] is False
+        assert "closed unexpectedly" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_connection_error(self):
+        """Should return error when can't connect to add-on WebSocket."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=OSError("Connection refused"),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is False
+        assert "connect" in result["error"]["message"].lower() or "connection" in str(result).lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_collects_messages(self):
+        """Should collect text messages and parse JSON ones."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws = AsyncMock()
+            # Simulate 3 messages then connection close
+            mock_ws.recv.side_effect = [
+                '{"event": "line", "data": "Compiling..."}',
+                '{"event": "line", "data": "Done."}',
+                '{"event": "exit", "code": 0}',
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is True
+        assert result["message_count"] == 3
+        assert result["closed_by"] == "server_closed"
+        # JSON messages should be parsed
+        assert result["messages"][0] == {"event": "line", "data": "Compiling..."}
+        assert result["messages"][2] == {"event": "exit", "code": 0}
+
+    @pytest.mark.asyncio
+    async def test_ws_strips_ansi_codes(self):
+        """Should strip ANSI escape codes from messages."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                "\x1b[32mSUCCESS\x1b[0m Build complete",
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is True
+        assert result["messages"][0] == "SUCCESS Build complete"
+
+    @pytest.mark.asyncio
+    async def test_ws_skips_binary_frames(self):
+        """Should skip binary WebSocket frames."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                b"\x00\x01\x02",  # binary frame, should be skipped
+                "text message",
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is True
+        assert result["message_count"] == 1
+        assert result["messages"][0] == "text message"
+
+    @pytest.mark.asyncio
+    async def test_ws_wait_for_close_false_returns_early(self):
+        """With wait_for_close=False, should return after silence timeout."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value=_RUNNING_ADDON_INFO_WS,
+        ), patch(
+            "ha_mcp.tools.tools_addons.websockets.connect",
+        ) as mock_ws_connect:
+            mock_ws = AsyncMock()
+            # First message arrives, then silence (TimeoutError)
+            mock_ws.recv.side_effect = [
+                "first response",
+                TimeoutError(),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client, "test_addon", "/events",
+                wait_for_close=False, timeout=10,
+            )
+
+        assert result["success"] is True
+        assert result["message_count"] == 1
+        assert result["closed_by"] == "silence"
+
+    @pytest.mark.asyncio
+    async def test_ws_missing_network_info(self):
+        """Should return error when add-on is missing ip_address."""
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_addon_info",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "addon": {
+                    "name": "Test Addon",
+                    "slug": "test_addon",
+                    "ingress": True,
+                    "state": "started",
+                    "ip_address": "",
+                    "ingress_port": None,
+                },
+            },
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/compile")
+
+        assert result["success"] is False
+        assert "network info" in result["error"]["message"].lower() or "ip_address" in str(result).lower()
