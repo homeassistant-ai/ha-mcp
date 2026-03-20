@@ -1,12 +1,72 @@
 """Test Home Assistant add-on startup and logging."""
 
+import importlib.util
 import json
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+
+
+def _load_addon_start():
+    """Import homeassistant-addon/start.py as a module."""
+    spec = importlib.util.spec_from_file_location(
+        "addon_start",
+        Path(__file__).parents[2] / "homeassistant-addon" / "start.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestSecretPathValidation:
+    """Unit tests for secret path validation logic."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_valid_path_accepted(self, tmp_path):
+        secret_file = tmp_path / "secret_path.txt"
+        secret_file.write_text("/private_abc123")
+        result = self.addon.get_or_create_secret_path(tmp_path)
+        assert result == "/private_abc123"
+
+    def test_url_in_file_triggers_regeneration(self, tmp_path):
+        secret_file = tmp_path / "secret_path.txt"
+        secret_file.write_text("https://192.168.1.18:9583/private_abc123")
+        result = self.addon.get_or_create_secret_path(tmp_path)
+        assert result.startswith("/private_")
+        assert "://" not in result
+
+    def test_empty_file_triggers_regeneration(self, tmp_path):
+        secret_file = tmp_path / "secret_path.txt"
+        secret_file.write_text("")
+        result = self.addon.get_or_create_secret_path(tmp_path)
+        assert result.startswith("/private_")
+
+    def test_url_custom_path_triggers_regeneration(self, tmp_path):
+        result = self.addon.get_or_create_secret_path(
+            tmp_path, custom_path="http://attacker.example.com/x"
+        )
+        assert result.startswith("/private_")
+        assert "://" not in result
+
+    def test_valid_custom_path_used(self, tmp_path):
+        result = self.addon.get_or_create_secret_path(
+            tmp_path, custom_path="my_custom_secret"
+        )
+        assert result == "/my_custom_secret"
+
+    def test_is_valid_secret_path(self):
+        assert self.addon._is_valid_secret_path("/private_abc") is True
+        assert self.addon._is_valid_secret_path("/custom") is True
+        assert self.addon._is_valid_secret_path("https://example.com/x") is False
+        assert self.addon._is_valid_secret_path("no-leading-slash") is False
+        assert self.addon._is_valid_secret_path("") is False
 
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"

@@ -71,7 +71,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
             if _is_valid_secret_path(stored_path):
                 log_info("Using existing auto-generated secret path")
                 return stored_path
-            if stored_path:
+            elif stored_path:
                 log_error(f"Stored secret path is invalid ({stored_path!r}), regenerating")
             else:
                 log_error("Stored secret path is empty, regenerating")
