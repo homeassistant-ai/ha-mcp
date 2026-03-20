@@ -677,7 +677,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Person and zone have entity registry entries with unique_id
                 # used as the config store identifier. Tags use their own tag
                 # registry and don't have entity registry entries.
-                config_store_types = {"person", "zone"}
+                config_store_types = {"person", "zone", "schedule"}
 
                 updated_data: dict[str, Any] = {}
 
@@ -832,6 +832,51 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             raise_tool_error(create_error_response(
                                 ErrorCode.SERVICE_CALL_FAILED,
                                 f"Failed to update zone config: {result.get('error', 'Unknown error')}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+                        updated_data = result.get("result", {})
+
+                    elif helper_type == "schedule":
+                        update_msg = {
+                            "type": "schedule/update",
+                            "schedule_id": unique_id,
+                        }
+                        if name is not None:
+                            update_msg["name"] = name
+                        if icon is not None:
+                            update_msg["icon"] = icon
+
+                        # Format day schedule data (same logic as create)
+                        day_params = {
+                            "monday": monday,
+                            "tuesday": tuesday,
+                            "wednesday": wednesday,
+                            "thursday": thursday,
+                            "friday": friday,
+                            "saturday": saturday,
+                            "sunday": sunday,
+                        }
+                        for day_name, day_schedule in day_params.items():
+                            if day_schedule is not None:
+                                formatted_ranges = []
+                                for time_range in day_schedule:
+                                    formatted_range = {}
+                                    for key in ["from", "to"]:
+                                        if key in time_range:
+                                            time_val = time_range[key]
+                                            if time_val.count(":") == 1:
+                                                time_val = f"{time_val}:00"
+                                            formatted_range[key] = time_val
+                                    if "data" in time_range:
+                                        formatted_range["data"] = time_range["data"]
+                                    formatted_ranges.append(formatted_range)
+                                update_msg[day_name] = formatted_ranges
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            raise_tool_error(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to update schedule config: {result.get('error', 'Unknown error')}",
                                 context={"helper_type": helper_type, "entity_id": entity_id},
                             ))
                         updated_data = result.get("result", {})
