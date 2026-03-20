@@ -117,6 +117,7 @@ async def tool_call_loop(
     total_fail = 0
     tokens_input = 0
     tokens_output = 0
+    tokens_first_input: int | None = None
 
     for _ in range(MAX_TOOL_LOOP_ITERATIONS):
         kwargs = {"model": model, "messages": messages, "max_tokens": max_tokens}
@@ -126,10 +127,16 @@ async def tool_call_loop(
         response = client.chat.completions.create(**kwargs)
         num_turns += 1
 
-        # Accumulate token usage
+        # Accumulate running token totals; also capture first-turn prompt size as
+        # idle context baseline.  If a turn's usage is None (some local servers
+        # omit it), tokens_first_input stays None until the first turn that does
+        # report usage — so it reflects "first available" rather than "turn 1".
         if response.usage:
-            tokens_input += response.usage.prompt_tokens or 0
+            prompt_toks = response.usage.prompt_tokens or 0
+            tokens_input += prompt_toks
             tokens_output += response.usage.completion_tokens or 0
+            if tokens_first_input is None:
+                tokens_first_input = prompt_toks
 
         if not response.choices:
             raise RuntimeError(
@@ -150,6 +157,7 @@ async def tool_call_loop(
                     "totalFail": total_fail,
                 },
                 "tokens_input": tokens_input,
+                "tokens_first_input": tokens_first_input,
                 "tokens_output": tokens_output,
                 "cost_usd": 0,
             }
@@ -222,6 +230,7 @@ async def tool_call_loop(
             "totalFail": total_fail,
         },
         "tokens_input": tokens_input,
+        "tokens_first_input": tokens_first_input,
         "tokens_output": tokens_output,
         "cost_usd": 0,
     }

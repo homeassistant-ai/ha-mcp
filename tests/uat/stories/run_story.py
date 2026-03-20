@@ -346,6 +346,7 @@ def _run_test_prompt(
     max_tools: int | None = None,
     no_think: bool = False,
     max_tokens: int | None = None,
+    mcp_env: list[str] | None = None,
 ) -> tuple[int, dict | None]:
     """Run test prompt via run_uat.py for a single agent. Returns (exit_code, parsed_summary)."""
     scenario = {"test_prompt": prompt.strip()}
@@ -374,6 +375,9 @@ def _run_test_prompt(
         cmd.append("--no-think")
     if max_tokens is not None:
         cmd.extend(["--max-tokens", str(max_tokens)])
+    if mcp_env:
+        for pair in mcp_env:
+            cmd.extend(["--mcp-env", pair])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -516,6 +520,11 @@ def append_result(
         record["tokens_thoughts"] = tokens["thoughts"]
         record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens["output"]
 
+    # First-turn input tokens: most direct measure of idle context size (openai agent only)
+    tokens_first_input = test_phase.get("tokens_first_input")
+    if tokens_first_input is not None:
+        record["tokens_first_input"] = tokens_first_input
+
     # Include verify_results, agent response, and tool trace only on failure
     if verify_results is not None and not all(r["passed"] for r in verify_results):
         record["verify_results"] = verify_results
@@ -595,6 +604,7 @@ async def run_stories(
                     max_tools=args.max_tools,
                     no_think=args.no_think,
                     max_tokens=getattr(args, "max_tokens", None),
+                    mcp_env=getattr(args, "mcp_env", None),
                 )
 
                 # Detect session file created during this run
@@ -741,6 +751,12 @@ def main() -> None:
         type=int,
         default=None,
         help="Max output tokens per completion for openai agent (agent default: 8192)",
+    )
+    parser.add_argument(
+        "--mcp-env",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Extra env var for the MCP server (repeatable, e.g. --mcp-env ENABLE_TOOL_SEARCH=true)",
     )
     parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
     args = parser.parse_args()
