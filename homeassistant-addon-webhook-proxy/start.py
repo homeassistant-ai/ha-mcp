@@ -73,7 +73,12 @@ def _supervisor_get(path: str) -> dict | None:
             },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return cast(dict, json.loads(resp.read()).get("data", {}))
+            response_data = json.loads(resp.read())
+            if not isinstance(response_data, dict):
+                log_error(f"Supervisor API GET {path}: unexpected response type {type(response_data)}")
+                return None
+            data = response_data.get("data", {})
+            return data if isinstance(data, dict) else {}
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log_error(f"Supervisor API GET {path}: {e}")
         return None
