@@ -9,6 +9,7 @@ provide their Long-Lived Access Token (LLAT).
 import binascii
 import json
 import logging
+import os
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -205,11 +206,20 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             }
 
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(self._state_file.parent, 0o700)
             tmp_file = self._state_file.with_suffix('.tmp')
             tmp_file.write_text(json.dumps(state, indent=2))
+            os.chmod(tmp_file, 0o600)
             tmp_file.rename(self._state_file)
             logger.debug(f"OAuth state saved to {self._state_file}")
         except Exception as e:
+            # Clean up tmp file if it was written but not renamed
+            try:
+                tmp_file = self._state_file.with_suffix('.tmp')
+                if tmp_file.exists():
+                    tmp_file.unlink()
+            except OSError:
+                pass
             logger.warning(f"Failed to save OAuth state: {e}")
 
     def _load_state(self) -> None:
@@ -238,7 +248,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 f"{len(self.refresh_tokens)} refresh tokens"
             )
         except Exception as e:
-            logger.warning(f"Failed to load OAuth state from {self._state_file}: {e}")
+            logger.error(f"Failed to load OAuth state from {self._state_file}: {e}")
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
