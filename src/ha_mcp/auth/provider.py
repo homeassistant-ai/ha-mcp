@@ -12,6 +12,7 @@ import logging
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -87,6 +88,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         client_registration_options: ClientRegistrationOptions | None = None,
         revocation_options: RevocationOptions | None = None,
         required_scopes: list[str] | None = None,
+        state_dir: str | Path | None = None,
     ):
         """
         Initialize the Home Assistant OAuth provider.
@@ -98,6 +100,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             client_registration_options: Options for client registration
             revocation_options: Options for token revocation
             required_scopes: Scopes required for all requests
+            state_dir: Directory for persisting OAuth state (default: ~/.ha-mcp)
         """
         # Enable DCR by default
         if client_registration_options is None:
@@ -134,6 +137,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Token mapping for revocation
         self._access_to_refresh_map: dict[str, str] = {}
         self._refresh_to_access_map: dict[str, str] = {}
+
+        # Persistent state file
+        self._state_file = Path(state_dir or Path.home() / ".ha-mcp") / "oauth_state.json"
+        self._load_state()
 
         logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
 
@@ -176,6 +183,62 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")
             return None
+
+    def _save_state(self) -> None:
+        """Persist OAuth state to disk for container restart survival."""
+        try:
+            state = {
+                "clients": {
+                    cid: client.model_dump(mode='json')
+                    for cid, client in self.clients.items()
+                },
+                "refresh_tokens": {
+                    tid: {
+                        "token": rt.token,
+                        "client_id": rt.client_id,
+                        "scopes": rt.scopes,
+                        "expires_at": rt.expires_at,
+                    }
+                    for tid, rt in self.refresh_tokens.items()
+                },
+                "refresh_to_access_map": dict(self._refresh_to_access_map),
+            }
+
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file = self._state_file.with_suffix('.tmp')
+            tmp_file.write_text(json.dumps(state, indent=2))
+            tmp_file.rename(self._state_file)
+            logger.debug(f"OAuth state saved to {self._state_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save OAuth state: {e}")
+
+    def _load_state(self) -> None:
+        """Load persisted OAuth state from disk."""
+        if not self._state_file.exists():
+            return
+
+        try:
+            state = json.loads(self._state_file.read_text())
+
+            for cid, client_data in state.get("clients", {}).items():
+                self.clients[cid] = OAuthClientInformationFull.model_validate(client_data)
+
+            for tid, rt_data in state.get("refresh_tokens", {}).items():
+                self.refresh_tokens[tid] = RefreshToken(
+                    token=rt_data["token"],
+                    client_id=rt_data["client_id"],
+                    scopes=rt_data["scopes"],
+                    expires_at=rt_data.get("expires_at"),
+                )
+
+            self._refresh_to_access_map = state.get("refresh_to_access_map", {})
+
+            logger.info(
+                f"OAuth state loaded: {len(self.clients)} clients, "
+                f"{len(self.refresh_tokens)} refresh tokens"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load OAuth state from {self._state_file}: {e}")
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """
@@ -320,6 +383,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             raise ValueError("client_id is required for client registration")
 
         self.clients[client_info.client_id] = client_info
+        self._save_state()
         logger.info(f"Registered OAuth client: {client_info.client_id}")
 
     async def authorize(
@@ -559,13 +623,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             expires_at=refresh_token_expires_at,
         )
 
-        # Map for revocation (refresh token only, access token is stateless)
-        self._refresh_to_access_map[refresh_token_value] = client.client_id or ""
+        # Map refresh token to access token so we can recover HA credentials on refresh
+        self._refresh_to_access_map[refresh_token_value] = access_token_value
 
         # Clean up temporary credentials storage (no longer needed after token issued)
         if client.client_id in self.ha_credentials:
             del self.ha_credentials[client.client_id]
 
+        self._save_state()
         logger.info(f"Issued stateless access token for client {client.client_id}")
 
         return OAuthToken(
@@ -600,7 +665,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        """Exchange refresh token for new access token."""
+        """Exchange refresh token for new stateless access token."""
         # Validate scopes
         original_scopes = set(refresh_token.scopes)
         requested_scopes = set(scopes)
@@ -613,31 +678,29 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         if client.client_id is None:
             raise TokenError("invalid_client", "Client ID is required")
 
-        # Preserve claims from old access token before revoking
+        # Recover HA token from the old stateless access token
         old_access_token_str = self._refresh_to_access_map.get(refresh_token.token)
-        old_claims = {}
-        if old_access_token_str and old_access_token_str in self.access_tokens:
-            old_access_token = self.access_tokens[old_access_token_str]
-            old_claims = old_access_token.claims or {}
+        if not old_access_token_str:
+            raise TokenError(
+                "invalid_grant",
+                "No access token associated with this refresh token.",
+            )
+
+        ha_token = self._decode_credentials(old_access_token_str)
+        if not ha_token:
+            raise TokenError(
+                "invalid_grant",
+                "Cannot recover credentials for token refresh.",
+            )
 
         # Revoke old tokens
         self._revoke_internal(refresh_token_str=refresh_token.token)
 
-        # Issue new tokens
-        new_access_token_value = f"ha_access_{secrets.token_hex(32)}"
+        # Issue new stateless access token with recovered HA credentials
+        new_access_token_value = self._encode_credentials(ha_token)
         new_refresh_token_value = f"ha_refresh_{secrets.token_hex(32)}"
 
-        access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
-
-        # Preserve HA credentials in new access token claims
-        self.access_tokens[new_access_token_value] = AccessToken(
-            token=new_access_token_value,
-            client_id=client.client_id,
-            scopes=scopes,
-            expires_at=access_token_expires_at,
-            claims=old_claims,  # Preserve HA credentials across token refresh
-        )
 
         self.refresh_tokens[new_refresh_token_value] = RefreshToken(
             token=new_refresh_token_value,
@@ -646,8 +709,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             expires_at=refresh_token_expires_at,
         )
 
-        self._access_to_refresh_map[new_access_token_value] = new_refresh_token_value
+        # Map new refresh token to new access token for future refreshes
         self._refresh_to_access_map[new_refresh_token_value] = new_access_token_value
+
+        self._save_state()
 
         return OAuthToken(
             access_token=new_access_token_value,
@@ -716,6 +781,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             self._revoke_internal(access_token_str=token.token)
         elif isinstance(token, RefreshToken):
             self._revoke_internal(refresh_token_str=token.token)
+        self._save_state()
 
     def get_ha_credentials(self, client_id: str) -> HomeAssistantCredentials | None:
         """
