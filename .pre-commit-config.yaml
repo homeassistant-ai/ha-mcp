@@ -13,7 +13,7 @@ repos:
     hooks:
       - id: mypy
         name: mypy type check
-        entry: bash -c "uv run mypy src/ homeassistant-addon/ scripts/ && uv run mypy homeassistant-addon-webhook-proxy/start.py"
+        entry: bash -c "uv run mypy src/ homeassistant-addon/ scripts/; e1=$?; uv run mypy homeassistant-addon-webhook-proxy/start.py; e2=$?; exit $((e1 | e2))"
         language: system
         pass_filenames: false
         files: ^(src/|homeassistant-addon/|homeassistant-addon-webhook-proxy/|scripts/|pyproject\.toml)

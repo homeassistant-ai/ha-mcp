@@ -73,8 +73,7 @@ def _supervisor_get(path: str) -> dict | None:
             },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data: dict = json.loads(resp.read())
-            return cast(dict, data.get("data", {}))
+            return cast(dict, json.loads(resp.read()).get("data", {}))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log_error(f"Supervisor API GET {path}: {e}")
         return None
@@ -430,8 +429,8 @@ def _ha_core_api_quiet(method: str, path: str) -> list | dict | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            quiet_result: list | dict = json.loads(resp.read())
-            return quiet_result
+            result: list | dict = json.loads(resp.read())
+            return result
     except Exception:
         return None
 
@@ -534,7 +533,9 @@ def main() -> int:
             )
             return 1
 
-        assert info is not None  # guaranteed when slug is not None by _discover_addon
+        if info is None:
+            log_error("Internal error: addon discovered without info dict")
+            return 1
         secret_path = _discover_secret_path(slug, info)
         if secret_path is None:
             log_error(
