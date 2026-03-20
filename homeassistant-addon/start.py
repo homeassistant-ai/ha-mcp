@@ -7,9 +7,10 @@ import secrets
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 
-def _log_with_timestamp(level: str, message: str, stream=None) -> None:
+def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
     """Log a message with a timestamp."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"{now} [{level}] {message}", file=stream, flush=True)

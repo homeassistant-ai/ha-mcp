@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -73,7 +73,8 @@ def _supervisor_get(path: str) -> dict | None:
             },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read()).get("data", {})
+            data: dict = json.loads(resp.read())
+            return cast(dict, data.get("data", {}))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log_error(f"Supervisor API GET {path}: {e}")
         return None
@@ -93,7 +94,7 @@ def _supervisor_get_text(path: str) -> str | None:
             },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+            return cast(str, resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         body = ""
         try:
@@ -125,7 +126,8 @@ def _ha_core_api(method: str, path: str, data: dict | None = None) -> dict | lis
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
+            result: dict | list = json.loads(resp.read())
+            return result
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
         log_error(f"HA Core API {method} {path}: {e}")
         return None
@@ -186,6 +188,7 @@ def _discover_addon() -> tuple[str | None, str | None, dict | None]:
         # When the MCP addon uses host_network, the Supervisor's ip_address
         # field returns a Docker bridge IP (172.30.x.x) that's not reachable.
         # Since this proxy addon also uses host_network, use 127.0.0.1 instead.
+        ip: str | None
         if info.get("host_network"):
             ip = "127.0.0.1"
             log_info(f"Addon {slug} uses host_network — using 127.0.0.1")
@@ -208,7 +211,7 @@ def _discover_secret_path(slug: str, info: dict) -> str | None:
     """
     # Check options first
     options = info.get("options", {})
-    secret = options.get("secret_path", "")
+    secret: str = str(options.get("secret_path", ""))
     if secret and secret.strip():
         path = secret.strip()
         if not path.startswith("/"):
@@ -347,6 +350,8 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
                 if attempt < retries:
                     time.sleep(delay)
                 continue
+            if not isinstance(flow, dict):
+                continue
 
             rtype = flow.get("type")
             if rtype in ("abort", "create_entry"):
@@ -356,7 +361,7 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
                 complete = _ha_core_api(
                     "POST", f"/config/config_entries/flow/{flow['flow_id']}", {}
                 )
-                if complete and complete.get("type") == "create_entry":
+                if isinstance(complete, dict) and complete.get("type") == "create_entry":
                     log_info("Config entry created")
                     return True
 
@@ -425,7 +430,8 @@ def _ha_core_api_quiet(method: str, path: str) -> list | dict | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
+            quiet_result: list | dict = json.loads(resp.read())
+            return quiet_result
     except Exception:
         return None
 
@@ -528,6 +534,7 @@ def main() -> int:
             )
             return 1
 
+        assert info is not None  # guaranteed when slug is not None by _discover_addon
         secret_path = _discover_secret_path(slug, info)
         if secret_path is None:
             log_error(

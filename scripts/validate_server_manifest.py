@@ -7,6 +7,7 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import cast
 
 from jsonschema import validate
 
@@ -15,14 +16,14 @@ SCHEMA_URL = "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.s
 
 def fetch_schema(url: str) -> dict:
     """Fetch the JSON schema from the provided URL."""
-    with urllib.request.urlopen(url) as response:  # type: ignore[arg-type]
-        return json.load(response)
+    with urllib.request.urlopen(url) as response:
+        return cast(dict, json.load(response))
 
 
 def load_manifest(path: Path) -> dict:
     """Load a local JSON manifest file."""
     with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        return cast(dict, json.load(handle))
 
 
 def main(argv: list[str] | None = None) -> int:
