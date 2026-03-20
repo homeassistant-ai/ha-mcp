@@ -139,12 +139,11 @@ class TestHomeAssistantOAuthProvider:
     """Tests for HomeAssistantOAuthProvider."""
 
     @pytest.fixture
-    def provider(self, tmp_path, monkeypatch):
+    def provider(self, tmp_path):
         """Create a provider instance for testing."""
-        # Use temporary directory for key file in tests
-        monkeypatch.setenv("HOME", str(tmp_path))
         return HomeAssistantOAuthProvider(
             base_url="http://localhost:8086",
+            state_dir=tmp_path,
         )
 
     def test_provider_initialization(self, provider):
@@ -877,6 +876,119 @@ class TestOAuthStatePersistence:
         )
         assert len(provider.clients) == 0
         assert len(provider.refresh_tokens) == 0
+
+    @pytest.mark.asyncio
+    async def test_corrupt_state_file_does_not_crash(self, tmp_path):
+        """Test that a corrupt state file is handled gracefully."""
+        state_file = tmp_path / "oauth_state.json"
+        state_file.write_text("not valid json {{{")
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        # Should start with empty state, not crash
+        assert len(provider.clients) == 0
+        assert len(provider.refresh_tokens) == 0
+
+    @pytest.mark.asyncio
+    async def test_expired_tokens_pruned_on_load(self, tmp_path):
+        """Test that expired refresh tokens are not loaded from disk."""
+        import json
+
+        state = {
+            "clients": {},
+            "refresh_tokens": {
+                "expired_tok": {
+                    "token": "expired_tok",
+                    "client_id": "client-1",
+                    "scopes": ["homeassistant"],
+                    "expires_at": 1,  # Expired long ago
+                },
+                "valid_tok": {
+                    "token": "valid_tok",
+                    "client_id": "client-1",
+                    "scopes": ["homeassistant"],
+                    "expires_at": int(time.time() + 86400),
+                },
+            },
+            "refresh_to_access_map": {
+                "expired_tok": "old_access",
+                "valid_tok": "valid_access",
+            },
+        }
+        (tmp_path / "oauth_state.json").write_text(json.dumps(state))
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        assert "expired_tok" not in provider.refresh_tokens
+        assert "valid_tok" in provider.refresh_tokens
+        # Expired token's mapping should also be pruned
+        assert "expired_tok" not in provider._refresh_to_access_map
+        assert "valid_tok" in provider._refresh_to_access_map
+
+    @pytest.mark.asyncio
+    async def test_refresh_fails_without_mapping(self, tmp_path):
+        """Test that refresh raises TokenError when mapping is missing."""
+        from mcp.server.auth.provider import RefreshToken, TokenError
+        from mcp.shared.auth import OAuthClientInformationFull
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="test-client",
+            redirect_uris=["http://localhost/cb"],
+        )
+        await provider.register_client(client_info)
+
+        # Create refresh token WITHOUT a mapping entry
+        refresh_token = RefreshToken(
+            token="orphan_refresh",
+            client_id="test-client",
+            scopes=["homeassistant"],
+            expires_at=int(time.time() + 86400),
+        )
+        provider.refresh_tokens["orphan_refresh"] = refresh_token
+
+        with pytest.raises(TokenError, match="No access token associated"):
+            await provider.exchange_refresh_token(
+                client_info, refresh_token, ["homeassistant"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_refresh_fails_with_corrupt_access_token(self, tmp_path):
+        """Test that refresh raises TokenError when stored access token is not decodable."""
+        from mcp.server.auth.provider import RefreshToken, TokenError
+        from mcp.shared.auth import OAuthClientInformationFull
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="test-client",
+            redirect_uris=["http://localhost/cb"],
+        )
+        await provider.register_client(client_info)
+
+        refresh_token = RefreshToken(
+            token="corrupt_refresh",
+            client_id="test-client",
+            scopes=["homeassistant"],
+            expires_at=int(time.time() + 86400),
+        )
+        provider.refresh_tokens["corrupt_refresh"] = refresh_token
+        # Map to a non-decodable string
+        provider._refresh_to_access_map["corrupt_refresh"] = "not_valid_base64_!!!"
+
+        with pytest.raises(TokenError, match="Cannot recover credentials"):
+            await provider.exchange_refresh_token(
+                client_info, refresh_token, ["homeassistant"]
+            )
 
 
 class TestOAuthProxyClient:

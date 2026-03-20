@@ -135,8 +135,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Pending authorization requests (for consent form flow)
         self.pending_authorizations: dict[str, dict[str, Any]] = {}
 
-        # Token mapping for revocation
-        self._access_to_refresh_map: dict[str, str] = {}
+        # Maps refresh token → stateless access token (for recovering HA credentials on refresh)
         self._refresh_to_access_map: dict[str, str] = {}
 
         # Persistent state file
@@ -212,14 +211,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             os.chmod(tmp_file, 0o600)
             tmp_file.rename(self._state_file)
             logger.debug(f"OAuth state saved to {self._state_file}")
-        except Exception as e:
+        except (OSError, TypeError) as e:
             # Clean up tmp file if it was written but not renamed
             try:
                 tmp_file = self._state_file.with_suffix('.tmp')
                 if tmp_file.exists():
                     tmp_file.unlink()
-            except OSError:
-                pass
+            except OSError as cleanup_err:
+                logger.debug(f"Failed to clean up tmp file: {cleanup_err}")
             logger.warning(f"Failed to save OAuth state: {e}")
 
     def _load_state(self) -> None:
@@ -229,25 +228,33 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         try:
             state = json.loads(self._state_file.read_text())
+            now = time.time()
 
             for cid, client_data in state.get("clients", {}).items():
                 self.clients[cid] = OAuthClientInformationFull.model_validate(client_data)
 
             for tid, rt_data in state.get("refresh_tokens", {}).items():
+                expires_at = rt_data.get("expires_at")
+                if expires_at is not None and expires_at < now:
+                    continue  # Skip expired refresh tokens
                 self.refresh_tokens[tid] = RefreshToken(
                     token=rt_data["token"],
                     client_id=rt_data["client_id"],
                     scopes=rt_data["scopes"],
-                    expires_at=rt_data.get("expires_at"),
+                    expires_at=expires_at,
                 )
 
-            self._refresh_to_access_map = state.get("refresh_to_access_map", {})
+            # Only load mappings for refresh tokens that were actually loaded
+            stored_map = state.get("refresh_to_access_map", {})
+            self._refresh_to_access_map = {
+                k: v for k, v in stored_map.items() if k in self.refresh_tokens
+            }
 
             logger.info(
                 f"OAuth state loaded: {len(self.clients)} clients, "
                 f"{len(self.refresh_tokens)} refresh tokens"
             )
-        except Exception as e:
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Failed to load OAuth state from {self._state_file}: {e}")
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
@@ -766,24 +773,11 @@ class HomeAssistantOAuthProvider(OAuthProvider):
     ) -> None:
         """Internal helper to remove tokens and their associations."""
         if access_token_str:
-            if access_token_str in self.access_tokens:
-                del self.access_tokens[access_token_str]
-
-            associated_refresh = self._access_to_refresh_map.pop(access_token_str, None)
-            if associated_refresh:
-                if associated_refresh in self.refresh_tokens:
-                    del self.refresh_tokens[associated_refresh]
-                self._refresh_to_access_map.pop(associated_refresh, None)
+            self.access_tokens.pop(access_token_str, None)
 
         if refresh_token_str:
-            if refresh_token_str in self.refresh_tokens:
-                del self.refresh_tokens[refresh_token_str]
-
-            associated_access = self._refresh_to_access_map.pop(refresh_token_str, None)
-            if associated_access:
-                if associated_access in self.access_tokens:
-                    del self.access_tokens[associated_access]
-                self._access_to_refresh_map.pop(associated_access, None)
+            self.refresh_tokens.pop(refresh_token_str, None)
+            self._refresh_to_access_map.pop(refresh_token_str, None)
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         """Revoke an access or refresh token."""
