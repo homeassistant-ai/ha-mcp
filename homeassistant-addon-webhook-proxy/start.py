@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -98,7 +98,8 @@ def _supervisor_get_text(path: str) -> str | None:
             },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return cast(str, resp.read().decode("utf-8", errors="replace"))
+            text: str = resp.read().decode("utf-8", errors="replace")
+            return text
     except urllib.error.HTTPError as e:
         body = ""
         try:
