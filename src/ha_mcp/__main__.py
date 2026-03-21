@@ -16,6 +16,9 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import PlainTextResponse  # noqa: E402
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -567,6 +570,45 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
+_registered_landing_paths: set[str] = set()
+
+
+def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
+    """Register a GET handler that returns 405 with a helpful message.
+
+    Browsers and misconfigured clients that send GET instead of POST will see
+    a human-readable explanation instead of a bare "Method Not Allowed" error.
+    The 405 status and Allow header are set explicitly by this handler so
+    automated clients still get the correct HTTP semantics.
+
+    Args:
+        mcp_instance: The FastMCP server to register the route on.
+        path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+    """
+    if path in _registered_landing_paths:
+        logger.warning("register_browser_landing: %r already registered, skipping", path)
+        return
+    _registered_landing_paths.add(path)
+
+    # Safe because the MCP streamable-http transport claims only POST and DELETE.
+    # FastMCP registers custom routes at lowest precedence (after the MCP route),
+    # so GET requests fall through here without intercepting MCP traffic.
+    @mcp_instance.custom_route(path, methods=["GET"])
+    async def _browser_landing(_: Request) -> PlainTextResponse:
+        return PlainTextResponse(
+            "HA-MCP server is up and running. To connect, please follow the "
+            "setup instructions (https://homeassistant-ai.github.io/ha-mcp/), "
+            "and paste the URL for this page into your LLM. If using Cloudflare "
+            "and you're unable to connect via your LLM, make sure the "
+            '"Block AI training bots" setting is set to '
+            '"do not block (allow crawlers)".',
+            status_code=405,
+            # DELETE is included per the MCP Streamable HTTP spec (used for
+            # session termination), even though this deployment uses stateless mode.
+            headers={"Allow": "POST, DELETE"},
+        )
+
+
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
@@ -575,6 +617,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     port, path = _get_http_runtime(default_port)
+    register_browser_landing(_get_mcp(), path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, port, path),
@@ -699,6 +742,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     mcp.auth = auth_provider
 
     logger.info("Server created with OAuthProxyClient")
+    register_browser_landing(mcp, path)
 
     tools = await mcp.list_tools()
     logger.info(
