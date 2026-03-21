@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import secrets
 import sys
 from datetime import datetime
@@ -34,6 +35,15 @@ def generate_secret_path() -> str:
     return "/private_" + secrets.token_urlsafe(16)
 
 
+_SECRET_PATH_RE = re.compile(r"^/(?!.*://)\S{7,}$")
+_SECRET_PATH_HINT = "Path must start with '/', contain no '://', and be at least 8 characters."
+
+
+def _is_valid_secret_path(path: str) -> bool:
+    """Return True if path starts with '/', contains no '://', and is at least 8 characters."""
+    return bool(_SECRET_PATH_RE.match(path))
+
+
 def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
     """Get existing secret path or create a new one.
 
@@ -51,18 +61,25 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         path = custom_path.strip()
         if not path.startswith("/"):
             path = "/" + path
-        log_info("Using custom secret path from configuration")
-        # Update stored path for consistency
-        secret_file.write_text(path)
-        return path
+        if not _is_valid_secret_path(path):
+            log_error(f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}")
+        else:
+            log_info("Using custom secret path from configuration")
+            # Update stored path for consistency
+            secret_file.write_text(path)
+            return path
 
     # Check if we have a stored secret path
     if secret_file.exists():
         try:
             stored_path = secret_file.read_text().strip()
-            if stored_path:
+            if _is_valid_secret_path(stored_path):
                 log_info("Using existing auto-generated secret path")
                 return stored_path
+            elif stored_path:
+                log_error(f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}")
+            else:
+                log_error("Stored secret path is empty, regenerating")
         except Exception as e:
             log_error(f"Failed to read stored secret path: {e}")
 
