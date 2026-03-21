@@ -1,0 +1,25 @@
+pre-commit:
+  jobs:
+    - group:
+        parallel: true
+        jobs:
+          - name: ruff
+            glob: "**/*.py"
+            run: uv run ruff check {staged_files} --fix
+            stage_fixed: true
+          - name: uv-lock
+            glob: "pyproject.toml"
+            run: uv lock
+
+    - group:
+        parallel: true
+        jobs:
+          - name: mypy
+            glob: "**/*.py"
+            run: uv run mypy src/ homeassistant-addon/ scripts/ && uv run mypy homeassistant-addon-webhook-proxy/start.py
+          - name: unit-tests
+            glob:
+              - "**/*.py"
+              - "pyproject.toml"
+            root: "tests"
+            run: uv run pytest src/unit/ addon/test_addon_startup.py -n auto -m "not slow" --tb=short -q
