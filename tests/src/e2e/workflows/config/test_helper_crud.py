@@ -1061,6 +1061,79 @@ class TestScheduleCRUD:
         )
         logger.info("Schedule with data cleanup complete")
 
+    async def test_schedule_update_with_data_field(self, mcp_client, cleanup_tracker):
+        """Test updating a schedule preserves the data field on time blocks."""
+        logger.info("Testing schedule update with data field")
+
+        helper_name = "E2E Test Schedule Update"
+
+        # CREATE schedule with initial data
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "schedule",
+                "name": helper_name,
+                "monday": [
+                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                    {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
+                ],
+            },
+        )
+
+        create_data = assert_mcp_success(create_result, "Create schedule for update test")
+        entity_id = get_entity_id_from_response(create_data, "schedule")
+        assert entity_id, f"Missing entity_id: {create_data}"
+        cleanup_tracker.track("schedule", entity_id)
+        logger.info(f"Created schedule for update: {entity_id}")
+
+        # UPDATE schedule — change monday data field values
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "schedule",
+                "name": helper_name,
+                "helper_id": entity_id,
+                "monday": [
+                    {"from": "07:00", "to": "22:00", "data": {"mode": "away"}},
+                    {"from": "22:00", "to": "23:59", "data": {"mode": "comfort"}},
+                ],
+            },
+        )
+
+        update_data = assert_mcp_success(update_result, "Update schedule with data")
+        assert update_data.get("action") == "update", f"Expected update action: {update_data}"
+        logger.info("Schedule update returned success")
+
+        # VERIFY via list that data field was persisted
+        list_result = await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "schedule"},
+        )
+        list_data = assert_mcp_success(list_result, "List schedules after update")
+
+        updated_helper = next(
+            (h for h in list_data.get("helpers", []) if h.get("name") == helper_name),
+            None,
+        )
+        assert updated_helper, "Updated schedule not found in list"
+
+        monday_blocks = updated_helper.get("monday", [])
+        assert len(monday_blocks) == 2, f"Expected 2 Monday blocks, got {len(monday_blocks)}"
+        assert monday_blocks[0].get("data", {}).get("mode") == "away", (
+            f"Expected mode='away' after update, got: {monday_blocks[0].get('data')}"
+        )
+        assert monday_blocks[1].get("data", {}).get("mode") == "comfort", (
+            f"Expected mode='comfort' after update, got: {monday_blocks[1].get('data')}"
+        )
+        logger.info("Schedule update with data field verified via list")
+
+        # DELETE
+        await mcp_client.call_tool(
+            "ha_config_remove_helper",
+            {"helper_type": "schedule", "helper_id": entity_id},
+        )
+        logger.info("Schedule update test cleanup complete")
+
 
 @pytest.mark.asyncio
 @pytest.mark.config

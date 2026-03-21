@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "7.0.0"
+version = "7.1.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -57,6 +57,9 @@ ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json", "res
 [tool.mypy]
 python_version = "3.13"
 mypy_path = "src"
+# /tmp keeps the cache on Linux tmpfs — avoids the slow Windows FS in WSL2.
+# Windows-native contributors can remove this line or override with MYPY_CACHE_DIR.
+cache_dir = "/tmp/.mypy_cache"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -73,6 +76,15 @@ explicit_package_bases = true
 module = [
     "fastmcp.*",
     "jq",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "homeassistant.*",
+    "aiohttp",
+    "voluptuous",
+    "jsonschema",
 ]
 ignore_missing_imports = true
 

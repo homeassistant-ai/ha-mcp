@@ -13,13 +13,13 @@ repos:
     hooks:
       - id: mypy
         name: mypy type check
-        entry: uv run mypy src/
+        entry: bash -c "uv run mypy src/ homeassistant-addon/ scripts/; e1=$?; uv run mypy homeassistant-addon-webhook-proxy/start.py; e2=$?; exit $((e1 | e2))"
         language: system
         pass_filenames: false
-        files: ^(src/|pyproject\.toml)
+        files: ^(src/|homeassistant-addon/|homeassistant-addon-webhook-proxy/|scripts/|pyproject\.toml)
       - id: unit-tests
         name: unit tests
-        entry: uv run pytest tests/src/unit/ -n auto -m "not slow" --tb=short -q
+        entry: uv run pytest tests/src/unit/ tests/addon/test_addon_startup.py -n auto -m "not slow" --tb=short -q
         language: system
         pass_filenames: false
-        files: ^(src/|tests/|pyproject\.toml)
+        files: ^(src/|homeassistant-addon/|homeassistant-addon-webhook-proxy/|scripts/|tests/|pyproject\.toml)

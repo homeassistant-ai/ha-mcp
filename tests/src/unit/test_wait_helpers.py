@@ -53,7 +53,7 @@ class TestWaitForEntityRegistered:
         """Returns False if entity never becomes available."""
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError("not found", status_code=404)
         result = await wait_for_entity_registered(
-            mock_client, "light.test", timeout=0.2, poll_interval=0.05
+            mock_client, "light.test", timeout=0.01, poll_interval=0.001
         )
         assert result is False
 
@@ -61,7 +61,7 @@ class TestWaitForEntityRegistered:
         """Returns False if get_entity_state returns falsy."""
         mock_client.get_entity_state.return_value = None
         result = await wait_for_entity_registered(
-            mock_client, "light.test", timeout=0.2, poll_interval=0.05
+            mock_client, "light.test", timeout=0.01, poll_interval=0.001
         )
         assert result is False
 
@@ -111,7 +111,7 @@ class TestWaitForEntityRemoved:
         """Returns False if entity never gets removed."""
         mock_client.get_entity_state.return_value = {"state": "on"}
         result = await wait_for_entity_removed(
-            mock_client, "light.test", timeout=0.2, poll_interval=0.05
+            mock_client, "light.test", timeout=0.01, poll_interval=0.001
         )
         assert result is False
 
@@ -170,7 +170,7 @@ class TestWaitForStateChange:
         mock_client.get_entity_state.return_value = {"state": "off", "entity_id": "light.test"}
         result = await wait_for_state_change(
             mock_client, "light.test", expected_state="on",
-            timeout=0.2, poll_interval=0.05,
+            timeout=0.01, poll_interval=0.001,
         )
         assert result is None
 

@@ -154,18 +154,30 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
-def write_stdio_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Path:
+def _build_mcp_env(
+    ha_url: str, ha_token: str, extra_env: dict[str, str] | None
+) -> dict[str, str]:
+    env = {"HOMEASSISTANT_URL": ha_url, "HOMEASSISTANT_TOKEN": ha_token}
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+def write_stdio_mcp_config(
+    ha_url: str,
+    ha_token: str,
+    branch: str | None,
+    extra_env: dict[str, str] | None = None,
+) -> Path:
     """Write a temporary Claude MCP config JSON file."""
     cmd = mcp_server_command(branch)
+    env = _build_mcp_env(ha_url, ha_token, extra_env)
     config = {
         "mcpServers": {
             "home-assistant": {
                 "command": cmd[0],
                 "args": cmd[1:],
-                "env": {
-                    "HOMEASSISTANT_URL": ha_url,
-                    "HOMEASSISTANT_TOKEN": ha_token,
-                },
+                "env": env,
             }
         }
     }
@@ -177,21 +189,23 @@ def write_stdio_mcp_config(ha_url: str, ha_token: str, branch: str | None) -> Pa
 
 
 def write_gemini_mcp_config(
-    ha_url: str, ha_token: str, branch: str | None, workdir: Path
+    ha_url: str,
+    ha_token: str,
+    branch: str | None,
+    workdir: Path,
+    extra_env: dict[str, str] | None = None,
 ) -> None:
     """Write .gemini/settings.json in the given workdir."""
     cmd = mcp_server_command(branch)
     gemini_dir = workdir / ".gemini"
     gemini_dir.mkdir(exist_ok=True)
+    env = _build_mcp_env(ha_url, ha_token, extra_env)
     config = {
         "mcpServers": {
             "homeassistant": {
                 "command": cmd[0],
                 "args": cmd[1:],
-                "env": {
-                    "HOMEASSISTANT_URL": ha_url,
-                    "HOMEASSISTANT_TOKEN": ha_token,
-                },
+                "env": env,
             }
         }
     }
@@ -244,6 +258,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         cost_usd = None
         tokens_input = None
         tokens_output = None
+        tokens_first_input = None
         if raw_json and isinstance(raw_json, dict):
             # Claude JSON format
             if "result" in raw_json:
@@ -258,9 +273,10 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             # Gemini stats
             if "stats" in raw_json and isinstance(raw_json["stats"], dict):
                 tool_stats = raw_json["stats"].get("tools")
-            # OpenAI agent token counts (included directly in JSON output)
+            # OpenAI agent token counts and first-input baseline (included directly in JSON output)
             tokens_input = raw_json.get("tokens_input")
             tokens_output = raw_json.get("tokens_output")
+            tokens_first_input = raw_json.get("tokens_first_input")
 
         result: dict = {
             "completed": proc.returncode == 0,
@@ -281,6 +297,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["tokens_input"] = tokens_input
         if tokens_output is not None:
             result["tokens_output"] = tokens_output
+        if tokens_first_input is not None:
+            result["tokens_first_input"] = tokens_first_input
         if raw_json is not None:
             result["raw_json"] = raw_json
         return result
@@ -382,6 +400,7 @@ async def run_agent_scenario(
     max_tools: int | None = None,
     no_think: bool = False,
     max_tokens: int | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict:
     """Run a full scenario (setup/test/teardown) for one agent."""
     results: dict = {"available": True}
@@ -391,10 +410,10 @@ async def run_agent_scenario(
     gemini_workdir: Path | None = None
 
     if agent_name in ("claude", "openai"):
-        stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch)
+        stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
     elif agent_name == "gemini":
         gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
-        write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir)
+        write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir, extra_env)
 
     try:
         for phase in ("setup_prompt", "test_prompt", "teardown_prompt"):
@@ -504,6 +523,9 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
     total_tool_fail = 0
     has_turn_data = False
     has_tool_stats = False
+    # First non-None value across phases: measures the idle context size before
+    # any tool calls happen, regardless of which phase the first LLM call lands in.
+    tokens_first_input: int | None = None
 
     for phase_key in ("setup", "test", "teardown"):
         if phase_key not in agent_data:
@@ -525,6 +547,9 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
                 total_tool_fail += tool_stats.get("totalFail", 0)
             # Claude format might differ - handle if needed
 
+        if tokens_first_input is None and phase.get("tokens_first_input") is not None:
+            tokens_first_input = phase["tokens_first_input"]
+
     return {
         "total_duration_ms": total_duration,
         "total_turns": total_turns if has_turn_data else None,
@@ -533,6 +558,7 @@ def aggregate_agent_stats(agent_data: dict) -> dict:
         "total_tool_calls": total_tool_calls if has_tool_stats else None,
         "total_tool_success": total_tool_success if has_tool_stats else None,
         "total_tool_fail": total_tool_fail if has_tool_stats else None,
+        "tokens_first_input": tokens_first_input,
     }
 
 
@@ -616,6 +642,15 @@ async def run(args: argparse.Namespace) -> dict:
         log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
         log(f"Agents: {', '.join(active_agents)}")
 
+        # Parse --mcp-env pairs into a dict.  The format is KEY=VALUE, but bare
+        # KEY (no =) is also valid and intentionally sets the variable to an empty
+        # string — useful for boolean-presence flags like ENABLE_TOOL_SEARCH=.
+        raw_mcp_env = getattr(args, "mcp_env", None) or []
+        extra_env: dict[str, str] | None = (
+            {k: v for pair in raw_mcp_env for k, _, v in [pair.partition("=")]}
+            if raw_mcp_env else None
+        )
+
         # Run agents sequentially to avoid resource contention
         agent_results = {}
         for name in active_agents:
@@ -632,6 +667,7 @@ async def run(args: argparse.Namespace) -> dict:
                 max_tools=getattr(args, "max_tools", None),
                 no_think=getattr(args, "no_think", False),
                 max_tokens=getattr(args, "max_tokens", None),
+                extra_env=extra_env,
             )
 
         # Add unavailable agents
@@ -713,6 +749,12 @@ Examples:
         "--no-think",
         action="store_true",
         help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+    )
+    parser.add_argument(
+        "--mcp-env",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Extra env var for the MCP server (repeatable, e.g. --mcp-env ENABLE_TOOL_SEARCH=true)",
     )
     parser.add_argument(
         "--max-tokens",
