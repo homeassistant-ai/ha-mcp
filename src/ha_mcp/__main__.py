@@ -573,7 +573,7 @@ async def _run_http_with_graceful_shutdown(
 _registered_landing_paths: set[str] = set()
 
 
-def register_browser_landing(mcp_instance: Any, path: str) -> None:
+def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) -> None:
     """Register a GET handler that returns 405 with a helpful message.
 
     Browsers and misconfigured clients that send GET instead of POST will see
