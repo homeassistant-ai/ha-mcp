@@ -35,7 +35,7 @@ def generate_secret_path() -> str:
 
 
 def _is_valid_secret_path(path: str) -> bool:
-    """Return True if path looks like a valid secret path (not a full URL)."""
+    """Return True if path is non-empty, starts with '/', and does not contain '://'."""
     return bool(path) and path.startswith("/") and "://" not in path
 
 
@@ -57,7 +57,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         if not path.startswith("/"):
             path = "/" + path
         if not _is_valid_secret_path(path):
-            log_error(f"Custom secret path is invalid ({path!r}), using auto-generated path")
+            log_error(f"Custom secret path is invalid ({path!r}), ignoring")
         else:
             log_info("Using custom secret path from configuration")
             # Update stored path for consistency

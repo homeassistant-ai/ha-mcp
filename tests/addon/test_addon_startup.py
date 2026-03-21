@@ -41,6 +41,7 @@ class TestSecretPathValidation:
         result = self.addon.get_or_create_secret_path(tmp_path)
         assert result.startswith("/private_")
         assert "://" not in result
+        assert secret_file.read_text() == result
 
     def test_empty_file_triggers_regeneration(self, tmp_path):
         secret_file = tmp_path / "secret_path.txt"
@@ -61,10 +62,21 @@ class TestSecretPathValidation:
         )
         assert result == "/my_custom_secret"
 
+    def test_no_secret_file_generates_new_path(self, tmp_path):
+        result = self.addon.get_or_create_secret_path(tmp_path)
+        assert result.startswith("/private_")
+        assert (tmp_path / "secret_path.txt").read_text() == result
+
+    def test_whitespace_custom_path_falls_through_to_stored(self, tmp_path):
+        (tmp_path / "secret_path.txt").write_text("/private_stored")
+        result = self.addon.get_or_create_secret_path(tmp_path, custom_path="   ")
+        assert result == "/private_stored"
+
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
         assert self.addon._is_valid_secret_path("/custom") is True
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
+        assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
         assert self.addon._is_valid_secret_path("") is False
 
