@@ -578,7 +578,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for n in notifications
                         ]
             except Exception as e:
-                logger.debug(f"Failed to fetch notifications for overview: {e}")
+                logger.warning(f"Failed to fetch notifications for overview: {e}")
 
         # Include tool discovery hint when search transform is active
         from ..config import get_global_settings
@@ -591,7 +591,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "hint": (
                     "This server uses search-based tool discovery. "
                     "Use ha_search_tools(query='...') to find tools, then "
-                    "execute via ha_call_read_tool, ha_call_write_tool, or "
+                    "execute the discovered tool directly by name (preferred), "
+                    "or via a proxy for permission gating: "
+                    "ha_call_read_tool, ha_call_write_tool, or "
                     "ha_call_delete_tool. Each proxy takes name and arguments "
                     "as separate top-level params. Call proxy tools SEQUENTIALLY "
                     "(not in parallel) to avoid cascading cancellations. "
@@ -655,7 +657,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Args:
             query: Search query (can be partial, with typos)
             search_types: Types to search (list of strings, default: ["automation", "script", "helper"])
-            limit: Maximum total results to return (default: 20)
+            limit: Maximum total results to return (default: 5)
 
         Examples:
             - Find automations using a service: ha_deep_search("light.turn_on")

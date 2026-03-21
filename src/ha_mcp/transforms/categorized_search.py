@@ -13,10 +13,11 @@ Tools are categorized by their existing MCP annotations:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
@@ -161,9 +162,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
             max_results=max_results,
             always_visible=always_visible,
             search_tool_name=search_tool_name,
-            # Use a placeholder call_tool_name — we override transform_tools
-            # so the default call_tool is never surfaced.
-            call_tool_name="_unused_call_tool",
+            # Placeholder call_tool_name — we override transform_tools with
+            # categorized proxies so the base class's single call proxy is
+            # never surfaced to clients.
+            call_tool_name="_base_call_proxy",
             **kwargs,
         )
         self._call_read_name = call_read_name
@@ -176,22 +178,26 @@ class CategorizedSearchTransform(BM25SearchTransform):
         self._write_tools: set[str] = set()
         self._delete_tools: set[str] = set()
         self._cache_built = False
+        self._cache_lock = asyncio.Lock()
 
     async def _rebuild_category_cache(self, ctx: Any) -> None:
         """Rebuild the read/write/delete category sets from the catalog."""
-        catalog = await self.get_tool_catalog(ctx)
-        self._read_tools.clear()
-        self._write_tools.clear()
-        self._delete_tools.clear()
-        for tool in catalog:
-            category = _categorize_tool(tool)
-            if category == "read":
-                self._read_tools.add(tool.name)
-            elif category == "delete":
-                self._delete_tools.add(tool.name)
-            else:
-                self._write_tools.add(tool.name)
-        self._cache_built = True
+        async with self._cache_lock:
+            if self._cache_built:
+                return
+            catalog = await self.get_tool_catalog(ctx)
+            self._read_tools.clear()
+            self._write_tools.clear()
+            self._delete_tools.clear()
+            for tool in catalog:
+                cat = _categorize_tool(tool)
+                if cat == "read":
+                    self._read_tools.add(tool.name)
+                elif cat == "delete":
+                    self._delete_tools.add(tool.name)
+                else:
+                    self._write_tools.add(tool.name)
+            self._cache_built = True
 
     async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
         """Serialize search results with ``execute_via`` hints."""
@@ -214,7 +220,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
     def _make_categorized_proxy(
         self,
         proxy_name: str,
-        category: str,
+        category: Literal["read", "write", "delete"],
         annotations: ToolAnnotations,
         description: str,
     ) -> Tool:

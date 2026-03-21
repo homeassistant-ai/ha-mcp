@@ -241,10 +241,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
                 "Once you know a tool\u2019s name, you do NOT need to search "
                 "again \u2014 call it directly.\n\n"
-                "A few critical tools are listed directly (ha_restart, "
-                "ha_backup_create, ha_backup_restore, ha_reload_core, "
-                "ha_get_overview, ha_report_issue). Everything else must "
-                "be discovered via search.\n\n"
+                f"A few critical tools are listed directly "
+                f"({', '.join(DEFAULT_PINNED_TOOLS)}). Everything else must "
+                f"be discovered via search.\n\n"
                 "DO NOT assume a capability is unavailable because you "
                 "don't see a direct tool for it. ALWAYS search first."
             )
@@ -411,8 +410,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         try:
             from .transforms import CategorizedSearchTransform
         except ImportError:
-            logger.warning(
-                "CategorizedSearchTransform not available, skipping tool search"
+            logger.error(
+                "CategorizedSearchTransform not available but ENABLE_TOOL_SEARCH=true — "
+                "full tool catalog will be exposed. Install fastmcp>=3.1 to fix."
             )
             return
 
