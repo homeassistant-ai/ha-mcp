@@ -1,5 +1,6 @@
 """Test Home Assistant add-on startup and logging."""
 
+import functools
 import importlib.util
 import json
 import subprocess
@@ -11,6 +12,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 
+@functools.cache
 def _load_addon_start():
     """Import homeassistant-addon/start.py as a module."""
     spec = importlib.util.spec_from_file_location(
