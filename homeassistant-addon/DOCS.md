@@ -90,7 +90,7 @@ Use the `claude mcp add` command:
 ```bash
 claude mcp add-json home-assistant '{
   "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
-  "transport": "http"
+  "type": "http"
 }'
 ```
 

@@ -3,6 +3,168 @@
 <!-- version list -->
 
 
+## v7.1.0 (2026-03-18)
+
+### Added
+
+- Reactive best-practice warnings on write tool calls
+  ([#695](https://github.com/homeassistant-ai/ha-mcp/pull/695))
+- Add menu_option to ha_get_helper_schema for template helper schema introspection
+  ([#759](https://github.com/homeassistant-ai/ha-mcp/pull/759))
+- Consolidate zone CRUD tools into set/remove pattern
+  ([#643](https://github.com/homeassistant-ai/ha-mcp/pull/643))
+- Config entry flow — fix resource leak, menu flows, schema inspection, upsert
+  ([`d804c1a`](https://github.com/homeassistant-ai/ha-mcp/commit/d804c1a1ebb652fa4adf34d10a5b0f0ea7d44826))
+
+### Changed
+
+- Update contributors list [contributors-updated]
+  ([`69494ed`](https://github.com/homeassistant-ai/ha-mcp/commit/69494edfeda6c70e64874d27989ce30013f77d73))
+- Add breaking change notice for v7.0.0 OAuth HOMEASSISTANT_URL requirement
+  ([`60a6bfc`](https://github.com/homeassistant-ai/ha-mcp/commit/60a6bfc1ef8372a99dba944856da394bee5196e0))
+
+### Fixed
+
+- Ha_mcp_tools availability check always fails due to wrong services format
+  ([#763](https://github.com/homeassistant-ai/ha-mcp/pull/763))
+- Use REST API for ha_delete_config_entry
+  ([#756](https://github.com/homeassistant-ai/ha-mcp/pull/756))
+- Ensure skills are bundled in Docker builds, add guidance tools for claude.ai
+  ([#732](https://github.com/homeassistant-ai/ha-mcp/pull/732))
+- Clarify ha_search_entities vs ha_deep_search descriptions to prevent tool misuse
+  ([#761](https://github.com/homeassistant-ai/ha-mcp/pull/761))
+- Return empty success instead of RESOURCE_NOT_FOUND for empty logbook
+  ([#710](https://github.com/homeassistant-ai/ha-mcp/pull/710))
+- Prevent false success and duplicate creation in ha_config_set_automation
+  ([#708](https://github.com/homeassistant-ai/ha-mcp/pull/708))
+- Use package version for MCP server version instead of hardcoded 0.1.0
+  ([#744](https://github.com/homeassistant-ai/ha-mcp/pull/744))
+- Replace deprecated color_temp/kelvin with color_temp_kelvin for HA 2026.3
+  ([#711](https://github.com/homeassistant-ai/ha-mcp/pull/711))
+- Add blueprint/save step to ha_import_blueprint (#685)
+  ([#751](https://github.com/homeassistant-ai/ha-mcp/pull/751))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Added
+
+- Add summary output to contrib-pr-review skill
+  ([`f063734`](https://github.com/homeassistant-ai/ha-mcp/commit/f06373452701402606cfcbfa8a85fec3a0bc6731))
+
+### Fixed
+
+- Reject non-Name/Attribute call targets in python_sandbox
+  ([#772](https://github.com/homeassistant-ai/ha-mcp/pull/772))
+
+### Chores
+
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.11
+  ([#778](https://github.com/homeassistant-ai/ha-mcp/pull/778))
+- **deps**: Update fastmcp from 3.1.0 to 3.1.1
+  ([#764](https://github.com/homeassistant-ai/ha-mcp/pull/764))
+- **deps**: Bump devalue from 5.6.3 to 5.6.4 in /site
+  ([#754](https://github.com/homeassistant-ai/ha-mcp/pull/754))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.9
+  ([#742](https://github.com/homeassistant-ai/ha-mcp/pull/742))
+- **addon**: Publish version 7.0.0 [skip ci]
+  ([`8917644`](https://github.com/homeassistant-ai/ha-mcp/commit/8917644dc4e8cd5a4b8bf4afdac155a7c20f240d))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([`f84511b`](https://github.com/homeassistant-ai/ha-mcp/commit/f84511b75d4bfe0c212d2162e3de7335f581172f))
+</details>
+
+
+## v7.0.0 (2026-03-11)
+
+### Added
+
+- Fix SSRF and XSS in OAuth consent form (breaking)
+  ([#748](https://github.com/homeassistant-ai/ha-mcp/pull/748))
+- **uat**: Add ha_checks post-run verification and openai agent improvements
+  ([#713](https://github.com/homeassistant-ai/ha-mcp/pull/713))
+- Add ha_check_update_notes tool for pre-update impact review
+  ([#595](https://github.com/homeassistant-ai/ha-mcp/pull/595))
+- Include persistent notifications in ha_get_overview
+  ([#642](https://github.com/homeassistant-ai/ha-mcp/pull/642))
+- Add Nabu Casa and other generic remote access via webhook proxy
+  ([#554](https://github.com/homeassistant-ai/ha-mcp/pull/554))
+- Serve bundled HA skills as MCP resources
+  ([#679](https://github.com/homeassistant-ai/ha-mcp/pull/679))
+
+### Changed
+
+- Always create PRs as draft, mark ready only on user request
+  ([#723](https://github.com/homeassistant-ai/ha-mcp/pull/723))
+- Restore detailed maintainer descriptions lost in revert
+  ([`01d744a`](https://github.com/homeassistant-ai/ha-mcp/commit/01d744a07114861d0bc908b26ee7c8947cc1633b))
+- Always create PRs as draft, mark ready only on user request
+  ([`63d57ae`](https://github.com/homeassistant-ai/ha-mcp/commit/63d57ae7e4b96335b17fc7aaa5e9dcba3c20c51d))
+- Clarify that the MCP URL appears in the add-on logs, not HA logs
+  ([#714](https://github.com/homeassistant-ai/ha-mcp/pull/714))
+- Add Home Assistant OS add-on to Quick Install section
+  ([#715](https://github.com/homeassistant-ai/ha-mcp/pull/715))
+
+### Fixed
+
+- **types**: Add mypy type checking and fix 47 type errors
+  ([#716](https://github.com/homeassistant-ai/ha-mcp/pull/716))
+- Resolve entity areas through device registry in get_system_overview
+  ([#729](https://github.com/homeassistant-ai/ha-mcp/pull/729))
+- Use per-client credentials for WebSocket in OAuth mode
+  ([#704](https://github.com/homeassistant-ai/ha-mcp/pull/704))
+- Resolve script storage key from entity registry (#463)
+  ([#593](https://github.com/homeassistant-ai/ha-mcp/pull/593))
+- Webhook proxy Dockerfile COPY paths for Supervisor builds
+  ([#725](https://github.com/homeassistant-ai/ha-mcp/pull/725))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Added
+
+- **ci**: Add automatic label classification to issue triage bot
+  ([#745](https://github.com/homeassistant-ai/ha-mcp/pull/745))
+
+### Fixed
+
+- **ci**: Inject GITHUB_TOKEN into HACS config for reliable E2E tests
+  ([#718](https://github.com/homeassistant-ai/ha-mcp/pull/718))
+- **ci**: Fix changelog extraction producing empty release notes
+  ([#707](https://github.com/homeassistant-ai/ha-mcp/pull/707))
+
+### Chores
+
+- **ci**: Group GitHub Actions dependabot updates into a single PR
+  ([#739](https://github.com/homeassistant-ai/ha-mcp/pull/739))
+- **deps**: Update fastmcp from 3.0.2 to 3.1.0
+  ([#717](https://github.com/homeassistant-ai/ha-mcp/pull/717))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.10.7
+  ([#697](https://github.com/homeassistant-ai/ha-mcp/pull/697))
+- **deps**: Bump svgo from 4.0.0 to 4.0.1 in /site
+  ([#703](https://github.com/homeassistant-ai/ha-mcp/pull/703))
+- **addon**: Publish version 6.7.2 [skip ci]
+  ([`0f92d3a`](https://github.com/homeassistant-ai/ha-mcp/commit/0f92d3abf3e916d08330e016b09bac3ebc6f1c40))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 5 updates
+  ([#740](https://github.com/homeassistant-ai/ha-mcp/pull/740))
+- **deps**: Bump actions/upload-artifact from 6 to 7
+  ([#692](https://github.com/homeassistant-ai/ha-mcp/pull/692))
+- **deps**: Bump actions/download-artifact from 7 to 8
+  ([#693](https://github.com/homeassistant-ai/ha-mcp/pull/693))
+- **deps**: Bump renovatebot/github-action from 46.1.2 to 46.1.3
+  ([#691](https://github.com/homeassistant-ai/ha-mcp/pull/691))
+</details>
+
+
 ## v6.7.2 (2026-03-04)
 
 ### Changed

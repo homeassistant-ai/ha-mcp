@@ -56,6 +56,15 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=False,
             ),
         ] = False,
+        include_schema: Annotated[
+            bool | str,
+            Field(
+                description="When entry_id is set, also return the options flow schema "
+                "(available fields and their types). Use before ha_set_config_entry_helper "
+                "to understand what can be updated. Only applies when supports_options=true.",
+                default=False,
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get integration (config entry) information - list all or get a specific one.
@@ -70,6 +79,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - List all integrations: ha_get_integration()
         - Search integrations: ha_get_integration(query="zigbee")
         - Get specific entry: ha_get_integration(entry_id="abc123")
+        - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
         - List template entries with definitions: ha_get_integration(domain="template")
         - List all with options: ha_get_integration(include_options=True)
 
@@ -83,9 +93,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         RETURNS (when getting specific entry):
         - entry: Full config entry details including options/configuration
+        - options_schema: Options flow schema when include_schema=True and supports_options=true
         """
         try:
             include_opts = coerce_bool_param(include_options, "include_options", default=False)
+            include_schema_bool = coerce_bool_param(include_schema, "include_schema", default=False)
             # Auto-enable options when domain filter is set
             if domain is not None:
                 include_opts = True
@@ -94,7 +106,39 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if entry_id is not None:
                 try:
                     result = await client.get_config_entry(entry_id)
-                    return {"success": True, "entry_id": entry_id, "entry": result}
+                    resp: dict[str, Any] = {"success": True, "entry_id": entry_id, "entry": result}
+
+                    # Optionally fetch options flow schema (logically read-only: start+abort)
+                    if include_schema_bool and result.get("supports_options"):
+                        flow_id = None
+                        try:
+                            flow_result = await client.start_options_flow(entry_id)
+                            flow_id = flow_result.get("flow_id")
+                            flow_type = flow_result.get("type")
+                            if flow_type == "form":
+                                resp["options_schema"] = {
+                                    "flow_type": "form",
+                                    "step_id": flow_result.get("step_id"),
+                                    "data_schema": flow_result.get("data_schema", []),
+                                }
+                            elif flow_type == "menu":
+                                resp["options_schema"] = {
+                                    "flow_type": "menu",
+                                    "step_id": flow_result.get("step_id"),
+                                    "menu_options": flow_result.get("menu_options", []),
+                                }
+                        except Exception as schema_err:
+                            logger.debug(f"Failed to fetch options schema for {entry_id}: {schema_err}")
+                        finally:
+                            if flow_id:
+                                try:
+                                    await client.abort_options_flow(flow_id)
+                                except Exception as abort_err:
+                                    logger.debug(f"Failed to abort options flow {flow_id}: {abort_err}")
+
+                    return resp
+                except ToolError:
+                    raise
                 except Exception as e:
                     error_msg = str(e)
                     if "404" in error_msg or "not found" in error_msg.lower():
@@ -309,25 +353,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     },
                 ))
 
-            message = {
-                "type": "config_entries/delete",
-                "entry_id": entry_id,
-            }
-
-            result = await client.send_websocket_message(message)
-
-            if not result.get("success"):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete config entry: {error_msg}",
-                    context={"entry_id": entry_id},
-                ))
-
-            # Get result info
-            require_restart = result.get("result", {}).get("require_restart", False)
+            result = await client.delete_config_entry(entry_id)
+            require_restart = result.get("require_restart", False)
 
             return {
                 "success": True,

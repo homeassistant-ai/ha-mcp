@@ -13,14 +13,19 @@ DOMAIN_HANDLERS = {
         "valid_actions": ["on", "off", "toggle", "set", "adjust"],
         "parameters": [
             "brightness",
-            "color_temp",
+            "color_temp_kelvin",
             "rgb_color",
             "effect",
-            "kelvin",
             "hs_color",
         ],
         "quick_actions": ["toggle", "dim", "brighten"],
-        "state_attributes": ["brightness", "color_temp", "rgb_color"],
+        "state_attributes": [
+            "brightness",
+            "color_temp_kelvin",
+            "min_color_temp_kelvin",
+            "max_color_temp_kelvin",
+            "rgb_color",
+        ],
         "supports_dimming": True,
         "supports_color": True,
     },
@@ -312,8 +317,8 @@ def get_suggested_parameters(domain: str, action: str) -> list[str]:
     # Action-specific parameter suggestions
     action_params = {
         "light": {
-            "set": ["brightness", "color_temp", "rgb_color"],
-            "on": ["brightness", "color_temp"],
+            "set": ["brightness", "color_temp_kelvin", "rgb_color"],
+            "on": ["brightness", "color_temp_kelvin"],
             "adjust": ["brightness"],
         },
         "climate": {

@@ -28,6 +28,13 @@ verify:
   questions:
     - "Do areas 'Kitchen Test', 'Bedroom Test', and 'Garage Test' all exist?"
     - "Were any entities actually moved to these areas? (They should NOT have been moved.)"
+  ha_checks:
+    - type: area_exists
+      name: "Kitchen Test"
+    - type: area_exists
+      name: "Bedroom Test"
+    - type: area_exists
+      name: "Garage Test"
 
 expected:
   tools_should_use:

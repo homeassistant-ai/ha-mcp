@@ -209,6 +209,12 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 
 ## Final Review Summary
 
+### Output to User
+
+After completing all steps, present a short summary of what the PR does and the review findings, then ask: "Should I post this comment to the PR?"
+
+### Draft PR Comment
+
 After completing the analysis, draft a comment for the PR following these guidelines:
 
 **Comment Length:**

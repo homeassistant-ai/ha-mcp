@@ -78,6 +78,9 @@ class ErrorCode(StrEnum):
     RESOURCE_ALREADY_EXISTS = "RESOURCE_ALREADY_EXISTS"
     RESOURCE_LOCKED = "RESOURCE_LOCKED"
 
+    # Component errors
+    COMPONENT_NOT_INSTALLED = "COMPONENT_NOT_INSTALLED"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
@@ -182,6 +185,10 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "An internal error occurred",
         "Check Home Assistant MCP server logs",
         "Report this issue if it persists",
+    ],
+    ErrorCode.COMPONENT_NOT_INSTALLED: [
+        "Install the required custom component via HACS",
+        "Restart Home Assistant after installation",
     ],
 }
 

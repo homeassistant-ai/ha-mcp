@@ -2,7 +2,9 @@
 
 > **Status:** Beta - OAuth provides an alternative to the private URL method. It's fully functional but still being refined.
 
-OAuth authentication allows users to enter their Home Assistant credentials via a consent form instead of pre-configuring them on the server.
+> **Breaking change:** `HOMEASSISTANT_URL` is now a required environment variable in OAuth mode. The consent form no longer accepts a Home Assistant URL for security reasons.
+
+OAuth authentication allows multiple users to authenticate with their own Home Assistant Long-Lived Access Token via a consent form.
 
 ## When to Use OAuth
 
@@ -36,6 +38,7 @@ For production, set up a [persistent Cloudflare Tunnel](https://developers.cloud
 ```bash
 docker run -d --name ha-mcp-oauth \
   -p 8086:8086 \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e MCP_BASE_URL=https://your-tunnel.trycloudflare.com \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
   ha-mcp-oauth
@@ -43,17 +46,21 @@ docker run -d --name ha-mcp-oauth \
 
 **uvx:**
 ```bash
+export HOMEASSISTANT_URL=http://homeassistant.local:8123
 export MCP_BASE_URL=https://your-tunnel.trycloudflare.com
-uvx ha-mcp@latest ha-mcp-oauth
+uvx --from=ha-mcp@latest ha-mcp-oauth
 ```
 
 ### 3. Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `HOMEASSISTANT_URL` | **Required.** URL of the Home Assistant instance | None |
 | `MCP_BASE_URL` | **Required.** Public URL where this server is accessible | None |
 | `MCP_PORT` | Server port | `8086` |
 | `MCP_SECRET_PATH` | MCP endpoint path | `/mcp` |
+
+> **Note:** `HOMEASSISTANT_TOKEN` is NOT required in OAuth mode. Each user provides their own Long-Lived Access Token via the consent form.
 
 ### 4. Connect in Claude.ai
 
@@ -61,7 +68,6 @@ uvx ha-mcp@latest ha-mcp-oauth
 2. Enter URL: `https://your-tunnel.com/mcp`
 3. Click **Add**
 4. In the consent form that opens:
-   - Enter your Home Assistant URL (e.g., `http://homeassistant.local:8123`)
    - Enter your Long-Lived Access Token ([how to generate](https://www.home-assistant.io/docs/authentication/#your-account-profile))
 5. Click **Authorize**
 
@@ -80,17 +86,13 @@ Make sure you're using the correct URL in Claude.ai:
 
 The `/mcp` path is required - this is where the MCP server endpoints are mounted.
 
-### "Invalid credentials" on consent form
-
-Check your Home Assistant URL format:
-- Include protocol: `http://` or `https://`
-- Include port if not default: `:8123`
-- No trailing slash
-- Example: `http://homeassistant.local:8123`
+### "Invalid credentials" after authorizing
 
 Verify your Long-Lived Access Token:
-- Generate fresh token in HA: Profile → Security → Long-lived access tokens
+- Generate a fresh token in HA: Profile → Security → Long-lived access tokens
 - Copy the complete token
+
+Check that `HOMEASSISTANT_URL` is correct and accessible from the server running ha-mcp.
 
 ### Do tokens persist across server restarts?
 

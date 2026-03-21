@@ -20,6 +20,7 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
@@ -55,23 +56,34 @@ def is_filesystem_tools_enabled() -> bool:
     return value in ("true", "1", "yes", "on")
 
 
-async def _check_mcp_tools_available(client: Any) -> tuple[bool, str | None]:
-    """Check if the ha_mcp_tools custom component is available.
+async def _is_mcp_tools_available(client: Any) -> bool:
+    """Return True if the ha_mcp_tools custom component is registered in HA services.
 
-    Returns:
-        Tuple of (is_available, error_message if not available)
+    Raises if the services API call fails — callers handle API errors via
+    their own exception_to_structured_error blocks.
     """
-    try:
-        # Check if the domain is in the list of services
-        services = await client.get_services()
-        if MCP_TOOLS_DOMAIN in services:
-            return True, None
-        return False, (
+    # HA /api/services returns a list of {"domain": str, "services": {...}} objects.
+    # This format has been stable since before HA 0.7 (the first public release).
+    services = await client.get_services()
+    return any(
+        isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
+        for s in services
+    )
+
+
+async def _assert_mcp_tools_available(client: Any) -> None:
+    """Raise ToolError if ha_mcp_tools is not available.
+
+    Must be called within a try block that handles API errors via
+    exception_to_structured_error, so connection failures are classified
+    correctly rather than masked as COMPONENT_NOT_INSTALLED.
+    """
+    if not await _is_mcp_tools_available(client):
+        raise_tool_error(create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
             f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
-            "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant."
-        )
-    except Exception as e:
-        return False, f"Failed to check for {MCP_TOOLS_DOMAIN}: {str(e)}"
+            "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant.",
+        ))
 
 
 def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -145,20 +157,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
@@ -192,13 +191,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
-                raise_error=False,
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
         annotations={
@@ -277,20 +273,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
@@ -320,13 +303,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_read_file", "path": path},
-                raise_error=False,
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
         annotations={
@@ -420,20 +400,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             create_dirs_bool = coerce_bool_param(create_dirs, "create_dirs", default=True)
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -466,13 +433,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_write_file", "path": path},
-                raise_error=False,
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
         annotations={
@@ -556,20 +520,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             # Check if custom component is available
-            is_available, error_msg = await _check_mcp_tools_available(client)
-            if not is_available:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": error_msg,
-                        "error_code": "MCP_TOOLS_NOT_INSTALLED",
-                        "suggestions": [
-                            "Run ha_install_mcp_tools() to install the custom component",
-                            "Restart Home Assistant after installation",
-                        ],
-                    },
-                )
+            await _assert_mcp_tools_available(client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
@@ -597,10 +548,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"tool": "ha_delete_file", "path": path},
-                raise_error=False,
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)

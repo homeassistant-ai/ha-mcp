@@ -191,7 +191,7 @@ class TestServiceDiscovery:
                 )
 
             # Common light.turn_on fields to check
-            expected_fields = ["brightness", "brightness_pct", "color_temp"]
+            expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
             found_fields = [f for f in expected_fields if f in fields]
             logger.info(f"Found expected fields: {found_fields}")
 

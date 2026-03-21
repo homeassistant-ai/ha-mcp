@@ -25,6 +25,48 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _format_schedule_days(
+    monday: list | None,
+    tuesday: list | None,
+    wednesday: list | None,
+    thursday: list | None,
+    friday: list | None,
+    saturday: list | None,
+    sunday: list | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Format schedule day data, ensuring time strings include seconds.
+
+    Returns a dict of day_name -> formatted time ranges, only for days
+    where data was provided (not None).
+    """
+    day_params = {
+        "monday": monday,
+        "tuesday": tuesday,
+        "wednesday": wednesday,
+        "thursday": thursday,
+        "friday": friday,
+        "saturday": saturday,
+        "sunday": sunday,
+    }
+    formatted_days: dict[str, list[dict[str, Any]]] = {}
+    for day_name, day_schedule in day_params.items():
+        if day_schedule is not None:
+            formatted_ranges = []
+            for time_range in day_schedule:
+                formatted_range: dict[str, Any] = {}
+                for key in ["from", "to"]:
+                    if key in time_range:
+                        time_val = time_range[key]
+                        if isinstance(time_val, str) and time_val.count(":") == 1:
+                            time_val = f"{time_val}:00"
+                        formatted_range[key] = time_val
+                if "data" in time_range:
+                    formatted_range["data"] = time_range["data"]
+                formatted_ranges.append(formatted_range)
+            formatted_days[day_name] = formatted_ranges
+    return formatted_days
+
+
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
@@ -385,13 +427,23 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
         - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
 
-        PREFER BUILT-IN HELPERS OVER TEMPLATE SENSORS:
-        Before creating a template sensor, check if a built-in helper/integration exists:
-        - Use `min_max` integration (type: mean/min/max/sum) instead of template for combining sensors
-        - Use `group` instead of template binary sensor for any/all logic
-        - Use `counter` instead of template with math for counting
-        - Use `input_number` instead of template for storing values
-        - Use `schedule` instead of template with weekday checks
+        TEMPLATE SENSORS AND BINARY SENSORS:
+        Use ha_set_config_entry_helper(helper_type="template", ...) — not this tool.
+        Template helpers are managed via the Config Entry Flow API.
+        Before reaching for a template, check if a simpler built-in exists:
+        - min_max instead of template for combining sensors
+        - group instead of template binary sensor for any/all logic
+        - counter instead of template with math for counting
+        - input_number instead of template for storing values
+        - schedule instead of template with weekday checks
+        Workflow:
+          1. ha_get_helper_schema("template") → see available sub-types
+          2. ha_get_helper_schema("template", menu_option="sensor") → see form fields
+          3. ha_set_config_entry_helper("template", {
+               "next_step_id": "sensor",
+               "name": "My Sensor",
+               "state": "{{ states('sensor.foo') }}",
+             })
 
         For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
         """
@@ -542,34 +594,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Schedule parameters: monday-sunday with time ranges
                     # Each day is a list of {"from": "HH:MM:SS", "to": "HH:MM:SS"}
                     # with optional "data" dict for additional attributes
-                    day_params = {
-                        "monday": monday,
-                        "tuesday": tuesday,
-                        "wednesday": wednesday,
-                        "thursday": thursday,
-                        "friday": friday,
-                        "saturday": saturday,
-                        "sunday": sunday,
-                    }
-                    for day_name, day_schedule in day_params.items():
-                        if day_schedule is not None:
-                            # Ensure time format has seconds
-                            formatted_ranges = []
-                            for time_range in day_schedule:
-                                formatted_range = {}
-                                for key in ["from", "to"]:
-                                    if key in time_range:
-                                        time_val = time_range[key]
-                                        # Add seconds if not present
-                                        if time_val.count(":") == 1:
-                                            time_val = f"{time_val}:00"
-                                        formatted_range[key] = time_val
-                                # Pass through the optional 'data' dict
-                                # for additional attributes (e.g. mode, brightness)
-                                if "data" in time_range:
-                                    formatted_range["data"] = time_range["data"]
-                                formatted_ranges.append(formatted_range)
-                            message[day_name] = formatted_ranges
+                    message.update(_format_schedule_days(
+                        monday, tuesday, wednesday, thursday,
+                        friday, saturday, sunday,
+                    ))
 
                 elif helper_type == "zone":
                     # Zone parameters - HA validates required fields (latitude, longitude)
@@ -667,7 +695,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Person and zone have entity registry entries with unique_id
                 # used as the config store identifier. Tags use their own tag
                 # registry and don't have entity registry entries.
-                config_store_types = {"person", "zone"}
+                config_store_types = {"person", "zone", "schedule"}
 
                 updated_data: dict[str, Any] = {}
 
@@ -822,6 +850,30 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             raise_tool_error(create_error_response(
                                 ErrorCode.SERVICE_CALL_FAILED,
                                 f"Failed to update zone config: {result.get('error', 'Unknown error')}",
+                                context={"helper_type": helper_type, "entity_id": entity_id},
+                            ))
+                        updated_data = result.get("result", {})
+
+                    elif helper_type == "schedule":
+                        update_msg = {
+                            "type": "schedule/update",
+                            "schedule_id": unique_id,
+                        }
+                        if name is not None:
+                            update_msg["name"] = name
+                        if icon is not None:
+                            update_msg["icon"] = icon
+
+                        update_msg.update(_format_schedule_days(
+                            monday, tuesday, wednesday, thursday,
+                            friday, saturday, sunday,
+                        ))
+
+                        result = await client.send_websocket_message(update_msg)
+                        if not result.get("success"):
+                            raise_tool_error(create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to update schedule config: {result.get('error', 'Unknown error')}",
                                 context={"helper_type": helper_type, "entity_id": entity_id},
                             ))
                         updated_data = result.get("result", {})

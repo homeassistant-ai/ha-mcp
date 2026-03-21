@@ -13,7 +13,18 @@ import signal  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
-from typing import Any  # noqa: E402
+from collections.abc import Coroutine  # noqa: E402
+from typing import TYPE_CHECKING, Any  # noqa: E402
+
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import PlainTextResponse  # noqa: E402
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from ha_mcp.client.rest_client import HomeAssistantClient
+    from ha_mcp.config import Settings
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +34,17 @@ class OAuthProxyClient:
 
     This class is necessary because tools capture a reference to the client at registration time.
     The proxy allows us to inject different credentials per-request based on OAuth token claims.
+
+    The Home Assistant URL is fixed server-side (HOMEASSISTANT_URL env var).
+    Only the access token varies per-user (from OAuth consent form).
     """
 
-    def __init__(self, auth_provider):
-        self._auth_provider = auth_provider
-        self._oauth_clients = {}
+    def __init__(self, ha_url: str) -> None:
+        self._ha_url = ha_url.rstrip("/")
+        self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def _get_oauth_client(self):
+    def _get_oauth_client(self) -> "HomeAssistantClient":
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
@@ -43,26 +57,25 @@ class OAuthProxyClient:
             logger.warning("No access token in context")
             raise RuntimeError("No OAuth token in request context")
 
-        # Extract HA credentials from token claims
+        # Extract HA token from claims (URL is server-side config)
         claims = token.claims
 
-        if not claims or "ha_url" not in claims or "ha_token" not in claims:
+        if not claims or "ha_token" not in claims:
             logger.error(f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}")
             raise RuntimeError("No Home Assistant credentials in OAuth token claims")
 
-        ha_url = claims["ha_url"]
         ha_token = claims["ha_token"]
 
-        # Hash credentials for cache key to avoid raw tokens appearing in dict keys
-        client_key = hashlib.sha256(f"{ha_url}:{ha_token}".encode()).hexdigest()
+        # Hash token for cache key to avoid raw tokens appearing in dict keys
+        client_key = hashlib.sha256(ha_token.encode()).hexdigest()
 
         with self._lock:
             if client_key not in self._oauth_clients:
                 self._oauth_clients[client_key] = HomeAssistantClient(
-                    base_url=ha_url,
+                    base_url=self._ha_url,
                     token=ha_token,
                 )
-                logger.info(f"Created OAuth client for {ha_url}")
+                logger.info(f"Created OAuth client for {self._ha_url}")
 
             return self._oauth_clients[client_key]
 
@@ -74,7 +87,7 @@ class OAuthProxyClient:
         for client in clients:
             await client.close()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Forward all attribute access to the OAuth client."""
         client = self._get_oauth_client()
         return getattr(client, name)
@@ -217,7 +230,7 @@ For setup instructions, see:
     sys.exit(1)
 
 
-def _validate_standard_credentials(settings) -> None:
+def _validate_standard_credentials(settings: "Settings") -> None:
     """Exit with error if HA credentials are OAuth sentinels in standard (non-OAuth) mode."""
     from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL
 
@@ -264,14 +277,12 @@ def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
     }
 
 
-def _create_server():
+def _create_server() -> "HomeAssistantSmartMCPServer":
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
     try:
-        from ha_mcp.server import (
-            HomeAssistantSmartMCPServer,  # type: ignore[import-not-found]
-        )
+        from ha_mcp.server import HomeAssistantSmartMCPServer
 
         return HomeAssistantSmartMCPServer()
     except ValidationError as e:
@@ -280,10 +291,10 @@ def _create_server():
 
 
 # Lazy server creation - only create when needed
-_server = None
+_server: "HomeAssistantSmartMCPServer | None" = None
 
 
-def _get_mcp():
+def _get_mcp() -> "FastMCP":
     """Get the MCP instance, creating server if needed."""
     global _server
     if _server is None:
@@ -291,7 +302,7 @@ def _get_mcp():
     return _server.mcp
 
 
-def _get_server():
+def _get_server() -> "HomeAssistantSmartMCPServer":
     """Get the server instance, creating if needed."""
     global _server
     if _server is None:
@@ -390,7 +401,7 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
                 pass
 
 
-async def _run_with_shutdown(server_coro) -> None:
+async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
     """Run a server coroutine with graceful shutdown support.
 
     Handles signal-based shutdown, resource cleanup, and task cancellation.
@@ -431,7 +442,7 @@ async def _run_with_shutdown(server_coro) -> None:
         await _cancel_tasks(server_task, shutdown_task)
 
 
-def _run_entrypoint(coro, label: str) -> None:
+def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
     """Run an async entrypoint with standard exception handling."""
     _setup_signal_handlers()
 
@@ -559,6 +570,45 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
+_registered_landing_paths: set[str] = set()
+
+
+def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
+    """Register a GET handler that returns 405 with a helpful message.
+
+    Browsers and misconfigured clients that send GET instead of POST will see
+    a human-readable explanation instead of a bare "Method Not Allowed" error.
+    The 405 status and Allow header are set explicitly by this handler so
+    automated clients still get the correct HTTP semantics.
+
+    Args:
+        mcp_instance: The FastMCP server to register the route on.
+        path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+    """
+    if path in _registered_landing_paths:
+        logger.warning("register_browser_landing: %r already registered, skipping", path)
+        return
+    _registered_landing_paths.add(path)
+
+    # Safe because the MCP streamable-http transport claims only POST and DELETE.
+    # FastMCP registers custom routes at lowest precedence (after the MCP route),
+    # so GET requests fall through here without intercepting MCP traffic.
+    @mcp_instance.custom_route(path, methods=["GET"])
+    async def _browser_landing(_: Request) -> PlainTextResponse:
+        return PlainTextResponse(
+            "HA-MCP server is up and running. To connect, please follow the "
+            "setup instructions (https://homeassistant-ai.github.io/ha-mcp/), "
+            "and paste the URL for this page into your LLM. If using Cloudflare "
+            "and you're unable to connect via your LLM, make sure the "
+            '"Block AI training bots" setting is set to '
+            '"do not block (allow crawlers)".',
+            status_code=405,
+            # DELETE is included per the MCP Streamable HTTP spec (used for
+            # session termination), even though this deployment uses stateless mode.
+            headers={"Allow": "POST, DELETE"},
+        )
+
+
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
@@ -567,6 +617,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     port, path = _get_http_runtime(default_port)
+    register_browser_landing(_get_mcp(), path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, port, path),
@@ -603,18 +654,19 @@ def main_sse() -> None:
 def main_oauth() -> None:
     """Run server with OAuth 2.1 authentication over HTTP.
 
-    This mode enables zero-config authentication for MCP clients like Claude.ai.
-    Users authenticate via a consent form where they enter their Home Assistant
-    URL and Long-Lived Access Token.
+    This mode enables per-user authentication for MCP clients like Claude.ai.
+    Users authenticate via a consent form where they provide their
+    Long-Lived Access Token.
 
     Environment:
+    - HOMEASSISTANT_URL (required): URL of the Home Assistant instance
     - MCP_BASE_URL (required): Public URL where this server is accessible (e.g., https://your-tunnel.com)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
 
-    Note: HOMEASSISTANT_URL and HOMEASSISTANT_TOKEN are NOT required in this mode.
-    They are collected via the OAuth consent form.
+    Note: HOMEASSISTANT_TOKEN is NOT required in this mode.
+    Per-user tokens are collected via the OAuth consent form.
     """
     # Configure logging for OAuth mode
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -626,21 +678,45 @@ def main_oauth() -> None:
 
     port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")
+    ha_url = os.getenv("HOMEASSISTANT_URL")
 
+    missing = []
     if not base_url:
-        logger.error("MCP_BASE_URL environment variable is required for OAuth mode")
-        logger.error(
-            "Example: export MCP_BASE_URL=https://your-tunnel.trycloudflare.com"
+        missing.append("  - MCP_BASE_URL (e.g., https://your-tunnel.trycloudflare.com)")
+    if not ha_url:
+        missing.append("  - HOMEASSISTANT_URL (e.g., http://homeassistant.local:8123)")
+
+    if missing:
+        missing_vars = "\n".join(missing)
+        print(
+            f"""
+==============================================================================
+                    Home Assistant MCP Server - Configuration Error
+==============================================================================
+
+Missing required environment variables for OAuth mode:
+{missing_vars}
+
+For setup instructions, see:
+  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md
+
+==============================================================================
+""",
+            file=sys.stderr,
         )
         sys.exit(1)
 
-    _run_entrypoint(_run_oauth_server(base_url, port, path), "OAuth server")
+    # Type narrowing: ha_url and base_url are guaranteed non-None after the check above
+    assert ha_url is not None
+    assert base_url is not None
+    _run_entrypoint(_run_oauth_server(ha_url, base_url, port, path), "OAuth server")
 
 
-async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
+async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) -> None:
     """Run the OAuth-authenticated MCP server.
 
     Args:
+        ha_url: Home Assistant instance URL (server-side config)
         base_url: Public URL where this server is accessible (required)
         port: Port to listen on
         path: MCP endpoint path
@@ -654,16 +730,19 @@ async def _run_oauth_server(base_url: str, port: int, path: str) -> None:
         service_documentation_url="https://github.com/homeassistant-ai/ha-mcp",
     )
 
-    # In OAuth mode, credentials come from the OAuth consent form per-request.
-    # The proxy client extracts them from token claims on each tool invocation.
-    proxy_client = OAuthProxyClient(auth_provider)
+    # In OAuth mode, the HA URL is fixed server-side. Per-user tokens come
+    # from the OAuth consent form and are extracted from token claims.
+    proxy_client = OAuthProxyClient(ha_url)
 
     global _server
-    _server = HomeAssistantSmartMCPServer(client=proxy_client)
+    _server = HomeAssistantSmartMCPServer(
+        client=proxy_client,  # type: ignore[arg-type]  # OAuthProxyClient forwards all HomeAssistantClient attrs via __getattr__
+    )
     mcp = _server.mcp
     mcp.auth = auth_provider
 
     logger.info("Server created with OAuthProxyClient")
+    register_browser_landing(mcp, path)
 
     tools = await mcp.list_tools()
     logger.info(
