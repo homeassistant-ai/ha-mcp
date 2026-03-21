@@ -520,8 +520,9 @@ def append_result(
         record["tokens_thoughts"] = tokens["thoughts"]
         record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens["output"]
 
-    # First-turn input tokens: most direct measure of idle context size (openai agent only)
-    tokens_first_input = test_phase.get("tokens_first_input")
+    # First-turn input tokens: most direct measure of idle context size (openai agent only).
+    # Comes from aggregate (not test_phase) since make_phase_summary doesn't propagate it.
+    tokens_first_input = aggregate.get("tokens_first_input")
     if tokens_first_input is not None:
         record["tokens_first_input"] = tokens_first_input
 
