@@ -305,7 +305,7 @@ class TestDefaultPinnedTools:
 
 
 def _prepopulate_cache(transform, tools):
-    """Pre-populate category cache from a list of Tools to avoid mocking get_tool_catalog."""
+    """Pre-populate category cache and mock get_tool_catalog so rebuild is a no-op."""
     for tool in tools:
         cat = _categorize_tool(tool)
         if cat == "read":
@@ -314,8 +314,9 @@ def _prepopulate_cache(transform, tools):
             transform._delete_tools.add(tool.name)
         else:
             transform._write_tools.add(tool.name)
-    # Set a non-empty hash so _rebuild_category_cache is a no-op
-    transform._last_catalog_hash = "prepopulated"
+    # Set the real hash AND mock get_tool_catalog so the hash check can proceed
+    transform._last_catalog_hash = CategorizedSearchTransform._catalog_hash(tools)
+    transform.get_tool_catalog = AsyncMock(return_value=tools)
 
 
 def _make_ctx(call_tool_return: Any = "tool_result"):
