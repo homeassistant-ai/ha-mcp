@@ -451,6 +451,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "refs/heads/current/source/_integrations"
         )
 
+        def _sanitize_slug(value: str) -> str:
+            """Sanitize a URI path segment to prevent path traversal."""
+            value = value.lower().strip()
+            if "/" in value or "\\" in value or ".." in value:
+                raise ValueError(
+                    f"Invalid slug: {value!r} — "
+                    "must be a simple name without path separators"
+                )
+            return value
+
         @self.mcp.resource(
             "ha://docs/cards/{card_type}",
             name="card-documentation",
@@ -464,9 +474,17 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             mime_type="text/markdown",
         )
         async def get_card_documentation(card_type: str) -> str:
+            card_type = _sanitize_slug(card_type)
+            url = f"{card_docs_base}/{card_type}.markdown"
             async with httpx.AsyncClient(timeout=10.0) as client:
-                url = f"{card_docs_base}/{card_type}.markdown"
                 response = await client.get(url)
+                if response.status_code == 404:
+                    raise ValueError(
+                        f"No documentation found for card type '{card_type}'. "
+                        "Check the card types list at "
+                        "skill://home-assistant-best-practices/references/"
+                        "dashboard-cards.md"
+                    )
                 response.raise_for_status()
                 return response.text
 
@@ -481,10 +499,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             mime_type="text/markdown",
         )
         async def get_domain_documentation(domain: str) -> str:
-            domain = domain.lower().strip()
+            domain = _sanitize_slug(domain)
+            url = f"{domain_docs_base}/{domain}.markdown"
             async with httpx.AsyncClient(timeout=30.0) as client:
-                url = f"{domain_docs_base}/{domain}.markdown"
                 response = await client.get(url)
+                if response.status_code == 404:
+                    raise ValueError(
+                        f"No documentation found for domain '{domain}'. "
+                        "Common domains: light, climate, switch, sensor, "
+                        "automation, script, media_player, cover, fan, lock"
+                    )
                 response.raise_for_status()
                 return response.text
 
