@@ -16,6 +16,9 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import PlainTextResponse  # noqa: E402
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -567,21 +570,29 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
+_registered_landing_paths: set[str] = set()
+
+
 def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
     """Register a GET handler that returns 405 with a helpful message.
 
     Browsers and misconfigured clients that send GET instead of POST will see
     a human-readable explanation instead of a bare "Method Not Allowed" error.
-    The 405 status and Allow header are preserved so automated clients still
-    get the correct HTTP semantics.
+    The 405 status and Allow header are set explicitly by this handler so
+    automated clients still get the correct HTTP semantics.
 
     Args:
         mcp_instance: The FastMCP server to register the route on.
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
     """
-    from starlette.requests import Request
-    from starlette.responses import PlainTextResponse
+    if path in _registered_landing_paths:
+        logger.warning("register_browser_landing: %r already registered, skipping", path)
+        return
+    _registered_landing_paths.add(path)
 
+    # Safe because the MCP streamable-http transport claims only POST and DELETE.
+    # FastMCP registers custom routes at lowest precedence (after the MCP route),
+    # so GET requests fall through here without intercepting MCP traffic.
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
@@ -592,6 +603,8 @@ def register_browser_landing(mcp_instance: "FastMCP", path: str) -> None:
             '"Block AI training bots" setting is set to '
             '"do not block (allow crawlers)".',
             status_code=405,
+            # DELETE is included per the MCP Streamable HTTP spec (used for
+            # session termination), even though this deployment uses stateless mode.
             headers={"Allow": "POST, DELETE"},
         )
 
