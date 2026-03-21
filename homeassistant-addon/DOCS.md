@@ -334,7 +334,7 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 ### Utility
 - `ha_get_logbook` - Historical events
 - `ha_eval_template` - Evaluate Jinja2 templates
-- Domain documentation available via `ha://docs/domains/{domain}` MCP resources
+- Domain documentation available via the `ha_get_skill_home_assistant_best_practices` skill
 - `ha_get_integration` - List or get integration info
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.

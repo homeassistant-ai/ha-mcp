@@ -231,8 +231,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
 
-        For comprehensive automation documentation, use read_resource("ha://docs/domains/automation")
-        or ha_get_skill_home_assistant_best_practices.
+        For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             config_result = await client.get_automation_config(identifier)
@@ -271,7 +270,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Check Home Assistant connection",
-                    "Use read_resource('ha://docs/domains/automation') or ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_home_assistant_best_practices for help",
                 ],
             )
 
@@ -414,7 +413,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
         For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: read_resource("ha://docs/domains/automation") or ha_get_skill_home_assistant_best_practices
+        - Use: ha_get_skill_home_assistant_best_practices
         - Or visit: https://www.home-assistant.io/docs/automation/
 
         TROUBLESHOOTING:
@@ -525,7 +524,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search_entities(domain_filter='automation') to find automations",
-                "Use read_resource('ha://docs/domains/automation') or ha_get_skill_home_assistant_best_practices for help",
+                "Use ha_get_skill_home_assistant_best_practices for help",
             ]
             if bp_warnings:
                 suggestions.append(

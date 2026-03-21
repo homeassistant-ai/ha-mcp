@@ -138,9 +138,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
-        # Register documentation resource URI templates
-        self._register_doc_resources()
-
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -194,7 +191,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "Use the read_resource tool with the skill's URI to load it. "
                 "If your client supports MCP resources natively (resources/read), "
                 "you can set ENABLE_SKILLS_AS_TOOLS=false to reduce the tool count "
-                "— resources and ha://docs/ templates are always available."
+                "— skill resources are always available."
             )
         else:
             access_method = (
@@ -211,11 +208,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "that match your current task before proceeding. "
             "Do NOT load all reference files upfront "
             "\u2014 only the ones the table directs you to.\n\n"
-            f"How to access: {access_method}\n\n"
-            "Documentation resources: This server also provides "
-            "ha://docs/cards/{card_type} and ha://docs/domains/{domain} "
-            "resource templates for fetching official HA documentation "
-            "on demand.\n"
+            f"How to access: {access_method}\n"
         )
 
         return header + "\n".join(skill_blocks)
@@ -425,94 +418,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 tool_name,
                 len(ref_files),
             )
-
-    def _register_doc_resources(self) -> None:
-        """Register documentation resource URI templates.
-
-        Provides ha://docs/ resources for fetching HA documentation from GitHub.
-        These replace the former ha_get_card_documentation and ha_get_domain_docs
-        tools — documentation is read-only reference data, not a tool action.
-
-        Resources registered:
-        - ha://docs/cards/{card_type} — card documentation (e.g., light, thermostat)
-        - ha://docs/domains/{domain} — integration/domain documentation
-
-        When ENABLE_SKILLS_AS_TOOLS is true, ResourcesAsTools exposes these
-        as tool operations automatically.
-        """
-        import httpx
-
-        card_docs_base = (
-            "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
-            "refs/heads/current/source/_dashboards"
-        )
-        domain_docs_base = (
-            "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
-            "refs/heads/current/source/_integrations"
-        )
-
-        def _sanitize_slug(value: str) -> str:
-            """Sanitize a URI path segment to prevent path traversal."""
-            value = value.lower().strip()
-            if "/" in value or "\\" in value or ".." in value:
-                raise ValueError(
-                    f"Invalid slug: {value!r} — "
-                    "must be a simple name without path separators"
-                )
-            return value
-
-        @self.mcp.resource(
-            "ha://docs/cards/{card_type}",
-            name="card-documentation",
-            description=(
-                "Official Home Assistant card documentation fetched from GitHub. "
-                "Use card type names like 'light', 'thermostat', 'entity', 'tile', "
-                "'grid', 'button', etc. For a full list of card types, see the "
-                "home-assistant-best-practices skill reference: "
-                "skill://home-assistant-best-practices/references/dashboard-cards.md"
-            ),
-            mime_type="text/markdown",
-        )
-        async def get_card_documentation(card_type: str) -> str:
-            card_type = _sanitize_slug(card_type)
-            url = f"{card_docs_base}/{card_type}.markdown"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-                if response.status_code == 404:
-                    raise ValueError(
-                        f"No documentation found for card type '{card_type}'. "
-                        "Check the card types list at "
-                        "skill://home-assistant-best-practices/references/"
-                        "dashboard-cards.md"
-                    )
-                response.raise_for_status()
-                return response.text
-
-        @self.mcp.resource(
-            "ha://docs/domains/{domain}",
-            name="domain-documentation",
-            description=(
-                "Official Home Assistant integration/domain documentation "
-                "fetched from GitHub. Use domain names like 'light', 'climate', "
-                "'switch', 'automation', 'script', 'sensor', etc."
-            ),
-            mime_type="text/markdown",
-        )
-        async def get_domain_documentation(domain: str) -> str:
-            domain = _sanitize_slug(domain)
-            url = f"{domain_docs_base}/{domain}.markdown"
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url)
-                if response.status_code == 404:
-                    raise ValueError(
-                        f"No documentation found for domain '{domain}'. "
-                        "Common domains: light, climate, switch, sensor, "
-                        "automation, script, media_player, cover, fan, lock"
-                    )
-                response.raise_for_status()
-                return response.text
-
-        logger.info("Registered documentation resource templates (ha://docs/)")
 
     # Helper methods required by EnhancedToolsMixin
 

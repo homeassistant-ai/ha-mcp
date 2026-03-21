@@ -17,5 +17,3 @@ expected:
     - ha_config_get_dashboard
     - ha_dashboard_find_card
     - ha_config_set_dashboard
-  resources_should_use:
-    - ha://docs/cards/history-graph

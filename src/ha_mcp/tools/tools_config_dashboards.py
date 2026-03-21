@@ -522,10 +522,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         If unsure about entity IDs, ALWAYS use one of these tools first.
 
-        DASHBOARD DOCUMENTATION (via MCP resources / skills):
+        DASHBOARD DOCUMENTATION (via MCP skills):
         - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
         - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
-        - ha://docs/cards/{card_type} — official card docs (e.g., read_resource("ha://docs/cards/tile"))
+        - ha_get_skill_home_assistant_best_practices — guidance on card types and configuration
 
         EXAMPLES:
 
