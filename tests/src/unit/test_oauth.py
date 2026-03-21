@@ -1,5 +1,6 @@
 """Unit tests for OAuth 2.1 authentication."""
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -989,6 +990,183 @@ class TestOAuthStatePersistence:
             await provider.exchange_refresh_token(
                 client_info, refresh_token, ["homeassistant"]
             )
+
+    @pytest.mark.asyncio
+    async def test_chained_refresh_across_restart(self, tmp_path):
+        """Test that tokens issued post-load also persist correctly (refresh2 → refresh3)."""
+        from mcp.server.auth.provider import AuthorizationCode
+        from mcp.shared.auth import OAuthClientInformationFull
+        from pydantic import AnyHttpUrl
+
+        # Provider 1: register, exchange code, get first refresh token
+        provider1 = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="chain-client",
+            redirect_uris=["http://localhost/cb"],
+            scope="homeassistant",
+        )
+        await provider1.register_client(client_info)
+        provider1.ha_credentials["chain-client"] = HomeAssistantCredentials(
+            ha_token="chain_ha_token",
+        )
+        auth_code = AuthorizationCode(
+            code="chain-code",
+            client_id="chain-client",
+            redirect_uri=AnyHttpUrl("http://localhost/cb"),
+            redirect_uri_provided_explicitly=True,
+            scopes=["homeassistant"],
+            expires_at=time.time() + 300,
+            code_challenge="test_challenge",
+        )
+        provider1.auth_codes["chain-code"] = auth_code
+        token1 = await provider1.exchange_authorization_code(client_info, auth_code)
+
+        # First refresh (still on provider1)
+        refresh1_obj = await provider1.load_refresh_token(client_info, token1.refresh_token)
+        token2 = await provider1.exchange_refresh_token(
+            client_info, refresh1_obj, ["homeassistant"]
+        )
+
+        # Restart
+        provider2 = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info2 = OAuthClientInformationFull(
+            client_id="chain-client",
+            redirect_uris=["http://localhost/cb"],
+            scope="homeassistant",
+        )
+
+        # Second refresh across restart (refresh2 → refresh3)
+        refresh2_obj = await provider2.load_refresh_token(client_info2, token2.refresh_token)
+        assert refresh2_obj is not None, "Post-load refresh token should be restored"
+        token3 = await provider2.exchange_refresh_token(
+            client_info2, refresh2_obj, ["homeassistant"]
+        )
+        access = await provider2.load_access_token(token3.access_token)
+        assert access is not None
+        assert access.claims["ha_token"] == "chain_ha_token"
+
+    @pytest.mark.asyncio
+    async def test_access_token_revocation_does_not_cascade_to_refresh(self, tmp_path):
+        """Revoking a stateless access token must NOT invalidate the paired refresh token."""
+        from mcp.server.auth.provider import AuthorizationCode
+        from mcp.shared.auth import OAuthClientInformationFull
+        from pydantic import AnyHttpUrl
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="revoke-client",
+            redirect_uris=["http://localhost/cb"],
+            scope="homeassistant",
+        )
+        await provider.register_client(client_info)
+        provider.ha_credentials["revoke-client"] = HomeAssistantCredentials(
+            ha_token="revoke_ha_token",
+        )
+        auth_code = AuthorizationCode(
+            code="revoke-code",
+            client_id="revoke-client",
+            redirect_uri=AnyHttpUrl("http://localhost/cb"),
+            redirect_uri_provided_explicitly=True,
+            scopes=["homeassistant"],
+            expires_at=time.time() + 300,
+            code_challenge="challenge",
+        )
+        provider.auth_codes["revoke-code"] = auth_code
+        token_resp = await provider.exchange_authorization_code(client_info, auth_code)
+
+        # Revoke the access token
+        access_token_obj = await provider.load_access_token(token_resp.access_token)
+        assert access_token_obj is not None
+        await provider.revoke_token(access_token_obj)
+
+        # Paired refresh token should still be valid
+        assert token_resp.refresh_token in provider.refresh_tokens
+
+    @pytest.mark.asyncio
+    async def test_save_state_failure_is_nonfatal(self, tmp_path):
+        """Persistence failure must not propagate — returned tokens should still work."""
+        from mcp.server.auth.provider import AuthorizationCode
+        from mcp.shared.auth import OAuthClientInformationFull
+        from pydantic import AnyHttpUrl
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="fail-client",
+            redirect_uris=["http://localhost/cb"],
+            scope="homeassistant",
+        )
+        await provider.register_client(client_info)
+        provider.ha_credentials["fail-client"] = HomeAssistantCredentials(
+            ha_token="fail_ha_token",
+        )
+        auth_code = AuthorizationCode(
+            code="fail-code",
+            client_id="fail-client",
+            redirect_uri=AnyHttpUrl("http://localhost/cb"),
+            redirect_uri_provided_explicitly=True,
+            scopes=["homeassistant"],
+            expires_at=time.time() + 300,
+            code_challenge="challenge",
+        )
+        provider.auth_codes["fail-code"] = auth_code
+
+        # Patch Path.write_text inside _save_state to simulate read-only filesystem.
+        # _save_state catches the error internally — it must not propagate.
+        with patch("pathlib.Path.write_text", side_effect=OSError("read-only fs")):
+            token_resp = await provider.exchange_authorization_code(client_info, auth_code)
+
+        # Token should still be valid despite persistence failure
+        access = await provider.load_access_token(token_resp.access_token)
+        assert access is not None
+        assert access.claims["ha_token"] == "fail_ha_token"
+
+    @pytest.mark.asyncio
+    async def test_ha_credentials_not_in_saved_state(self, tmp_path):
+        """ha_credentials must never appear in the state file."""
+        from mcp.server.auth.provider import AuthorizationCode
+        from mcp.shared.auth import OAuthClientInformationFull
+        from pydantic import AnyHttpUrl
+
+        provider = HomeAssistantOAuthProvider(
+            base_url="http://localhost:8086",
+            state_dir=tmp_path,
+        )
+        client_info = OAuthClientInformationFull(
+            client_id="secret-client",
+            redirect_uris=["http://localhost/cb"],
+            scope="homeassistant",
+        )
+        await provider.register_client(client_info)
+        provider.ha_credentials["secret-client"] = HomeAssistantCredentials(
+            ha_token="secret_ha_token",
+        )
+        auth_code = AuthorizationCode(
+            code="secret-code",
+            client_id="secret-client",
+            redirect_uri=AnyHttpUrl("http://localhost/cb"),
+            redirect_uri_provided_explicitly=True,
+            scopes=["homeassistant"],
+            expires_at=time.time() + 300,
+            code_challenge="challenge",
+        )
+        provider.auth_codes["secret-code"] = auth_code
+        await provider.exchange_authorization_code(client_info, auth_code)
+
+        # Read the state file and verify no ha_credentials key
+        state = json.loads((tmp_path / "oauth_state.json").read_text())
+        assert "ha_credentials" not in state
 
 
 class TestOAuthProxyClient:

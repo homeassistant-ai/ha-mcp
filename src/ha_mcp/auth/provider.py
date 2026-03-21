@@ -7,10 +7,12 @@ provide their Long-Lived Access Token (LLAT).
 """
 
 import binascii
+import errno
 import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from pathlib import Path
@@ -101,7 +103,11 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             client_registration_options: Options for client registration
             revocation_options: Options for token revocation
             required_scopes: Scopes required for all requests
-            state_dir: Directory for persisting OAuth state (default: ~/.ha-mcp)
+            state_dir: Directory for persisting OAuth state; writes
+                ``oauth_state.json`` inside it. Defaults to ``~/.ha-mcp``.
+                Note: the state file contains HA access tokens in
+                base64-encoded form. The 0o600 permissions are the security
+                boundary. Treat this file like a credential file.
         """
         # Enable DCR by default
         if client_registration_options is None:
@@ -185,7 +191,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             return None
 
     def _save_state(self) -> None:
-        """Persist OAuth state to disk for container restart survival."""
+        """Persist OAuth state to disk for container restart survival.
+
+        Note: ``ha_credentials`` is intentionally not persisted — HA tokens
+        are recoverable from the stateless access tokens stored in
+        ``_refresh_to_access_map``.
+        """
+        tmp_fd = None
+        tmp_path = None
         try:
             state = {
                 "clients": {
@@ -204,40 +217,71 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 "refresh_to_access_map": dict(self._refresh_to_access_map),
             }
 
+            created = not self._state_file.parent.exists()
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
-            os.chmod(self._state_file.parent, 0o700)
-            tmp_file = self._state_file.with_suffix('.tmp')
-            tmp_file.write_text(json.dumps(state, indent=2))
-            os.chmod(tmp_file, 0o600)
-            tmp_file.rename(self._state_file)
+            if created:
+                os.chmod(self._state_file.parent, 0o700)
+
+            # Use a unique tmp file to avoid conflicts if two processes
+            # write concurrently. Source and destination must be on the
+            # same filesystem for rename to be atomic.
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                dir=self._state_file.parent, suffix='.tmp'
+            )
+            tmp_path = Path(tmp_name)
+            tmp_path.write_text(json.dumps(state, indent=2))
+            os.close(tmp_fd)
+            tmp_fd = None  # Mark as closed
+            os.chmod(tmp_path, 0o600)
+            tmp_path.replace(self._state_file)
+            tmp_path = None  # Mark as renamed (no cleanup needed)
             logger.debug(f"OAuth state saved to {self._state_file}")
-        except (OSError, TypeError) as e:
+        except (OSError, TypeError, ValueError) as e:
             # Clean up tmp file if it was written but not renamed
-            try:
-                tmp_file = self._state_file.with_suffix('.tmp')
-                if tmp_file.exists():
-                    tmp_file.unlink()
-            except OSError as cleanup_err:
-                logger.debug(f"Failed to clean up tmp file: {cleanup_err}")
-            logger.warning(f"Failed to save OAuth state: {e}")
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except OSError:
+                    pass
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except OSError as cleanup_err:
+                    logger.debug(f"Failed to clean up tmp file: {cleanup_err}")
+            logger.error(
+                "Failed to save OAuth state to %s — active sessions will "
+                "not survive restart: %s",
+                self._state_file, e,
+            )
 
     def _load_state(self) -> None:
         """Load persisted OAuth state from disk."""
-        if not self._state_file.exists():
+        try:
+            text = self._state_file.read_text()
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                return  # Normal first-start, no prior state
+            logger.error("Cannot read OAuth state file %s: %s", self._state_file, e)
             return
 
         try:
-            state = json.loads(self._state_file.read_text())
+            state = json.loads(text)
             now = time.time()
 
-            for cid, client_data in state.get("clients", {}).items():
-                self.clients[cid] = OAuthClientInformationFull.model_validate(client_data)
+            # Build into local dicts first; assign atomically only if
+            # everything succeeds — avoids inconsistent in-memory state
+            # if validation fails partway through.
+            new_clients = {
+                cid: OAuthClientInformationFull.model_validate(client_data)
+                for cid, client_data in state.get("clients", {}).items()
+            }
 
+            new_tokens = {}
             for tid, rt_data in state.get("refresh_tokens", {}).items():
                 expires_at = rt_data.get("expires_at")
                 if expires_at is not None and expires_at < now:
                     continue  # Skip expired refresh tokens
-                self.refresh_tokens[tid] = RefreshToken(
+                new_tokens[tid] = RefreshToken(
                     token=rt_data["token"],
                     client_id=rt_data["client_id"],
                     scopes=rt_data["scopes"],
@@ -246,15 +290,20 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
             # Only load mappings for refresh tokens that were actually loaded
             stored_map = state.get("refresh_to_access_map", {})
-            self._refresh_to_access_map = {
-                k: v for k, v in stored_map.items() if k in self.refresh_tokens
+            new_map = {
+                k: v for k, v in stored_map.items() if k in new_tokens
             }
+
+            # Commit atomically
+            self.clients, self.refresh_tokens, self._refresh_to_access_map = (
+                new_clients, new_tokens, new_map
+            )
 
             logger.info(
                 f"OAuth state loaded: {len(self.clients)} clients, "
                 f"{len(self.refresh_tokens)} refresh tokens"
             )
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Failed to load OAuth state from {self._state_file}: {e}")
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
@@ -773,6 +822,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
     ) -> None:
         """Internal helper to remove tokens and their associations."""
         if access_token_str:
+            # Stateless access tokens are not stored in self.access_tokens,
+            # so there is no server-side cascade to revoke. The paired
+            # refresh token is only revoked when revoke_token() is called
+            # with a RefreshToken argument directly.
             self.access_tokens.pop(access_token_str, None)
 
         if refresh_token_str:
