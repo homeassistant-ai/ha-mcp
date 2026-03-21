@@ -335,12 +335,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
 
         search_tool = self._make_search_tool()
         # Always set readOnlyHint and override description if provided
-        search_tool = Tool.from_function(
-            fn=search_tool.fn,
-            name=search_tool.name,
-            description=self._search_tool_description or search_tool.description,
-            annotations=ToolAnnotations(readOnlyHint=True),
-        )
+        search_tool = search_tool.model_copy(update={
+            "description": self._search_tool_description or search_tool.description,
+            "annotations": ToolAnnotations(readOnlyHint=True),
+        })
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
