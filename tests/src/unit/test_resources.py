@@ -119,7 +119,7 @@ class TestPyprojectPackageData:
 
         content = pyproject_path.read_text()
 
-        # Verify package-data includes resource patterns
-        assert "resources/" in content, (
-            "pyproject.toml should include resources/ in package-data"
+        # Verify package-data includes skills-vendor pattern
+        assert "resources/skills-vendor/**/*" in content, (
+            "pyproject.toml should include 'resources/skills-vendor/**/*' in package-data"
         )
