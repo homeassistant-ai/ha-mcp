@@ -242,7 +242,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 try:
                     os.close(tmp_fd)
                 except OSError:
-                    pass
+                    pass  # Best-effort cleanup; fd may already be closed
             if tmp_path is not None:
                 try:
                     tmp_path.unlink()

@@ -895,7 +895,6 @@ class TestOAuthStatePersistence:
     @pytest.mark.asyncio
     async def test_expired_tokens_pruned_on_load(self, tmp_path):
         """Test that expired refresh tokens are not loaded from disk."""
-        import json
 
         state = {
             "clients": {},
