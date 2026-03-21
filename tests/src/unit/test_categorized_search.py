@@ -394,8 +394,8 @@ class TestCategorizedCallDispatch:
         with pytest.raises(ToolError) as exc_info:
             await fn("ha_config_set_automation", {}, ctx)
         error = json.loads(str(exc_info.value))
-        assert error["error_code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "ha_call_write_tool" in error["message"]
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "ha_call_write_tool" in error["error"]["message"]
         ctx.fastmcp.call_tool.assert_not_called()
 
     @pytest.mark.anyio
@@ -406,8 +406,8 @@ class TestCategorizedCallDispatch:
         with pytest.raises(ToolError) as exc_info:
             await fn("ha_get_state", {}, ctx)
         error = json.loads(str(exc_info.value))
-        assert error["error_code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "ha_call_read_tool" in error["message"]
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "ha_call_read_tool" in error["error"]["message"]
 
     @pytest.mark.anyio
     async def test_wrong_category_rejected_delete_via_read(self, transform):
@@ -417,7 +417,7 @@ class TestCategorizedCallDispatch:
         with pytest.raises(ToolError) as exc_info:
             await fn("ha_config_remove_area", {}, ctx)
         error = json.loads(str(exc_info.value))
-        assert "ha_call_delete_tool" in error["message"]
+        assert "ha_call_delete_tool" in error["error"]["message"]
 
     @pytest.mark.anyio
     async def test_unknown_tool_returns_not_found(self, transform):
@@ -427,8 +427,8 @@ class TestCategorizedCallDispatch:
         with pytest.raises(ToolError) as exc_info:
             await fn("ha_nonexistent_tool", {}, ctx)
         error = json.loads(str(exc_info.value))
-        assert error["error_code"] == "RESOURCE_NOT_FOUND"
-        assert "ha_nonexistent_tool" in error["message"]
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "ha_nonexistent_tool" in error["error"]["message"]
 
     @pytest.mark.anyio
     async def test_none_arguments_defaults_to_empty(self, transform):
@@ -502,8 +502,8 @@ class TestDoubleUnwrap:
                 ctx,
             )
         error = json.loads(str(exc_info.value))
-        assert error["error_code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "ha_call_write_tool" in error["message"]
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "ha_call_write_tool" in error["error"]["message"]
         ctx.fastmcp.call_tool.assert_not_called()
 
     @pytest.mark.anyio
