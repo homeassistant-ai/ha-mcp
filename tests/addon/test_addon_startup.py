@@ -74,7 +74,9 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/custom") is True
+        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
+        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False    # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
