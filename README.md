@@ -138,7 +138,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_documentation` |
+| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard` + dashboard skill references |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
@@ -154,7 +154,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Automation Traces** | `ha_get_automation_traces` |
 | **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates` |
 | **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
-| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_get_integration` |
+| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_integration` + `ha://docs/` resources |
 
 </details>
 
@@ -173,7 +173,7 @@ Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
-| `ENABLE_SKILLS_AS_TOOLS` | `false` | Also expose skills via `list_resources`/`read_resource` tools for clients that don't support MCP resources natively. |
+| `ENABLE_SKILLS_AS_TOOLS` | `true` | Expose skills and doc resources via `list_resources`/`read_resource` tools. Resource-capable clients can set to `false` to reduce tool count. |
 
 Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
 
