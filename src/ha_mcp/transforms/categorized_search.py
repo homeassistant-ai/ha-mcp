@@ -14,6 +14,7 @@ Tools are categorized by their existing MCP annotations:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import Sequence
@@ -95,30 +96,35 @@ class SearchKeywordsTransform(Transform):
         tool = await call_next(name, version=version)
         return self._enrich(tool) if tool else None
 
-# Proxy tool descriptions (shared between transform_tools and get_tool)
-_READ_PROXY_DESC = (
-    "Execute a read-only tool discovered via ha_search_tools. "
-    "Safe — does not modify any data or state.\n"
+# Proxy description suffix (shared across all proxies)
+_PROXY_PARAMS_SUFFIX = (
     "Params: name (str) = tool name, arguments (dict) = tool parameters. "
     "These are separate top-level params, not nested.\n"
     "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
 )
-_WRITE_PROXY_DESC = (
-    "Execute a write tool discovered via ha_search_tools. "
-    "Creates or updates data. Use for any tool that modifies "
-    "state but does not delete/remove resources.\n"
-    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
-    "These are separate top-level params, not nested.\n"
-    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
-)
-_DELETE_PROXY_DESC = (
-    "Execute a delete/remove tool discovered via ha_search_tools. "
-    "Permanently removes data. Use for tools that delete or "
-    "remove resources (areas, automations, devices, etc.).\n"
-    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
-    "These are separate top-level params, not nested.\n"
-    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
-)
+
+
+def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
+    """Build proxy descriptions that reference the configured search tool name."""
+    return {
+        "read": (
+            f"Execute a read-only tool discovered via {search_tool_name}. "
+            f"Safe — does not modify any data or state.\n"
+            f"{_PROXY_PARAMS_SUFFIX}"
+        ),
+        "write": (
+            f"Execute a write tool discovered via {search_tool_name}. "
+            f"Creates or updates data. Use for any tool that modifies "
+            f"state but does not delete/remove resources.\n"
+            f"{_PROXY_PARAMS_SUFFIX}"
+        ),
+        "delete": (
+            f"Execute a delete/remove tool discovered via {search_tool_name}. "
+            f"Permanently removes data. Use for tools that delete or "
+            f"remove resources (areas, automations, devices, etc.).\n"
+            f"{_PROXY_PARAMS_SUFFIX}"
+        ),
+    }
 
 
 def _categorize_tool(tool: Tool) -> str:
@@ -172,32 +178,49 @@ class CategorizedSearchTransform(BM25SearchTransform):
         self._call_write_name = call_write_name
         self._call_delete_name = call_delete_name
         self._search_tool_description = search_tool_description
+        self._proxy_descs = _build_proxy_descriptions(search_tool_name)
 
-        # Category caches built lazily from the tool catalog
+        # Category caches rebuilt when the catalog hash changes,
+        # matching BM25SearchTransform's staleness detection pattern.
         self._read_tools: set[str] = set()
         self._write_tools: set[str] = set()
         self._delete_tools: set[str] = set()
-        self._cache_built = False
+        self._last_catalog_hash: str = ""
         self._cache_lock = asyncio.Lock()
 
+    @staticmethod
+    def _catalog_hash(tools: Sequence[Tool]) -> str:
+        """Hash tool names + categories for staleness detection."""
+        key = "|".join(
+            sorted(f"{t.name}:{_categorize_tool(t)}" for t in tools)
+        )
+        return hashlib.sha256(key.encode()).hexdigest()
+
     async def _rebuild_category_cache(self, ctx: Any) -> None:
-        """Rebuild the read/write/delete category sets from the catalog."""
+        """Rebuild the read/write/delete category sets if catalog changed."""
+        catalog = await self.get_tool_catalog(ctx)
+        current_hash = self._catalog_hash(catalog)
+        if current_hash == self._last_catalog_hash:
+            return
         async with self._cache_lock:
-            if self._cache_built:
+            # Double-check after acquiring lock
+            if current_hash == self._last_catalog_hash:
                 return
-            catalog = await self.get_tool_catalog(ctx)
-            self._read_tools.clear()
-            self._write_tools.clear()
-            self._delete_tools.clear()
+            read: set[str] = set()
+            write: set[str] = set()
+            delete: set[str] = set()
             for tool in catalog:
                 cat = _categorize_tool(tool)
                 if cat == "read":
-                    self._read_tools.add(tool.name)
+                    read.add(tool.name)
                 elif cat == "delete":
-                    self._delete_tools.add(tool.name)
+                    delete.add(tool.name)
                 else:
-                    self._write_tools.add(tool.name)
-            self._cache_built = True
+                    write.add(tool.name)
+            self._read_tools = read
+            self._write_tools = write
+            self._delete_tools = delete
+            self._last_catalog_hash = current_hash
 
     async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
         """Serialize search results with ``execute_via`` hints."""
@@ -234,9 +257,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
             ] = None,
             ctx: Context = None,  # type: ignore[assignment]
         ) -> Any:
-            # Lazily build category cache if not already populated
-            if not transform._cache_built:
-                await transform._rebuild_category_cache(ctx)
+            # Rebuild category cache if catalog has changed
+            await transform._rebuild_category_cache(ctx)
 
             # Determine which category set to check
             if category == "read":
@@ -324,21 +346,21 @@ class CategorizedSearchTransform(BM25SearchTransform):
             proxy_name=self._call_read_name,
             category="read",
             annotations=ToolAnnotations(readOnlyHint=True),
-            description=_READ_PROXY_DESC,
+            description=self._proxy_descs["read"],
         )
 
         call_write = self._make_categorized_proxy(
             proxy_name=self._call_write_name,
             category="write",
             annotations=ToolAnnotations(destructiveHint=True),
-            description=_WRITE_PROXY_DESC,
+            description=self._proxy_descs["write"],
         )
 
         call_delete = self._make_categorized_proxy(
             proxy_name=self._call_delete_name,
             category="delete",
             annotations=ToolAnnotations(destructiveHint=True),
-            description=_DELETE_PROXY_DESC,
+            description=self._proxy_descs["delete"],
         )
 
         return [*pinned, search_tool, call_read, call_write, call_delete]
@@ -356,18 +378,18 @@ class CategorizedSearchTransform(BM25SearchTransform):
             return self._make_categorized_proxy(
                 self._call_read_name, "read",
                 ToolAnnotations(readOnlyHint=True),
-                _READ_PROXY_DESC,
+                self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
                 self._call_write_name, "write",
                 ToolAnnotations(destructiveHint=True),
-                _WRITE_PROXY_DESC,
+                self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
                 self._call_delete_name, "delete",
                 ToolAnnotations(destructiveHint=True),
-                _DELETE_PROXY_DESC,
+                self._proxy_descs["delete"],
             )
         return await super().get_tool(name, call_next, version=version)

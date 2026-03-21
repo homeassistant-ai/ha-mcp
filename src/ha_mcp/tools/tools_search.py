@@ -10,7 +10,9 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
+from ..config import get_global_settings
 from ..errors import create_validation_error
+from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -581,12 +583,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 logger.warning(f"Failed to fetch notifications for overview: {e}")
 
         # Include tool discovery hint when search transform is active
-        from ..config import get_global_settings
-
         settings = get_global_settings()
         if settings.enable_tool_search:
-            from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
-
             result["tool_discovery"] = {
                 "hint": (
                     "This server uses search-based tool discovery. "
