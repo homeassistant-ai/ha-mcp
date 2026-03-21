@@ -22,6 +22,7 @@ configuration:
     name: Enable tool search
     description: >-
       Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~2-3K tokens. Tools are found via
+      idle context from ~46K to ~5K tokens. Use this if using an LLM without
+      deferred tools or with smaller context windows. Tools are found via
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
