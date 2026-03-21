@@ -1,14 +1,19 @@
 """Unit tests for package resource files.
 
-These tests verify that resource files (dashboard_guide.md, card_types.json)
-are properly accessible within the package - addressing issue #225 where
-the files were not included in the PyPI distribution.
+These tests verify that bundled skill reference files are properly
+accessible within the package. Dashboard guide, card types, and domain
+docs content has moved to skill reference files (skills repo v1.2.0).
 """
 
-import json
 from pathlib import Path
 
 import pytest
+
+
+def _get_resources_dir() -> Path:
+    """Get the resources directory from the ha_mcp package."""
+    import ha_mcp
+    return Path(ha_mcp.__file__).parent / "resources"
 
 
 class TestResourcesAccessibility:
@@ -16,64 +21,74 @@ class TestResourcesAccessibility:
 
     def test_resources_directory_exists(self):
         """The resources directory should exist in the ha_mcp package."""
-        from ha_mcp.tools.tools_config_dashboards import _get_resources_dir
-
         resources_dir = _get_resources_dir()
         assert resources_dir.exists(), f"Resources directory not found: {resources_dir}"
         assert resources_dir.is_dir(), f"Resources path is not a directory: {resources_dir}"
 
-    def test_dashboard_guide_exists(self):
-        """The dashboard_guide.md file should exist and be readable."""
-        from ha_mcp.tools.tools_config_dashboards import _get_resources_dir
+    def test_skills_vendor_directory_exists(self):
+        """The skills-vendor submodule directory should exist."""
+        skills_dir = _get_resources_dir() / "skills-vendor" / "skills"
+        assert skills_dir.exists(), f"Skills directory not found: {skills_dir}"
+        assert skills_dir.is_dir(), f"Skills path is not a directory: {skills_dir}"
 
-        resources_dir = _get_resources_dir()
-        guide_path = resources_dir / "dashboard_guide.md"
-
-        assert guide_path.exists(), f"dashboard_guide.md not found: {guide_path}"
-        assert guide_path.is_file(), f"dashboard_guide.md is not a file: {guide_path}"
-
-        # Verify file is readable and has content
-        content = guide_path.read_text()
-        assert len(content) > 0, "dashboard_guide.md is empty"
-        assert "dashboard" in content.lower(), "dashboard_guide.md doesn't appear to contain dashboard content"
-
-    def test_card_types_exists(self):
-        """The card_types.json file should exist and be readable."""
-        from ha_mcp.tools.tools_config_dashboards import _get_resources_dir
-
-        resources_dir = _get_resources_dir()
-        types_path = resources_dir / "card_types.json"
-
-        assert types_path.exists(), f"card_types.json not found: {types_path}"
-        assert types_path.is_file(), f"card_types.json is not a file: {types_path}"
-
-        # Verify file is valid JSON with expected structure
-        content = types_path.read_text()
-        data = json.loads(content)
-
-        assert "card_types" in data, "card_types.json missing 'card_types' key"
-        assert "total_count" in data, "card_types.json missing 'total_count' key"
-        assert isinstance(data["card_types"], list), "card_types should be a list"
-        assert len(data["card_types"]) > 0, "card_types list is empty"
-
-    def test_card_types_structure(self):
-        """The card_types.json should have valid structure for all entries."""
-        from ha_mcp.tools.tools_config_dashboards import _get_resources_dir
-
-        resources_dir = _get_resources_dir()
-        types_path = resources_dir / "card_types.json"
-        data = json.loads(types_path.read_text())
-
-        # Verify total_count matches actual list length
-        assert data["total_count"] == len(data["card_types"]), (
-            f"total_count ({data['total_count']}) doesn't match "
-            f"actual card_types length ({len(data['card_types'])})"
+    def test_best_practices_skill_exists(self):
+        """The home-assistant-best-practices skill should exist with SKILL.md."""
+        skill_dir = (
+            _get_resources_dir()
+            / "skills-vendor"
+            / "skills"
+            / "home-assistant-best-practices"
         )
+        assert skill_dir.exists(), f"Best practices skill not found: {skill_dir}"
 
-        # Verify all card types are non-empty strings
-        for card_type in data["card_types"]:
-            assert isinstance(card_type, str), f"Card type should be string: {card_type}"
-            assert len(card_type) > 0, "Card type should not be empty string"
+        skill_md = skill_dir / "SKILL.md"
+        assert skill_md.exists(), f"SKILL.md not found: {skill_md}"
+
+        content = skill_md.read_text()
+        assert len(content) > 0, "SKILL.md is empty"
+        assert "---" in content, "SKILL.md should have YAML frontmatter"
+
+    def test_dashboard_guide_reference_exists(self):
+        """The dashboard-guide.md reference file should exist in the skill."""
+        ref = (
+            _get_resources_dir()
+            / "skills-vendor"
+            / "skills"
+            / "home-assistant-best-practices"
+            / "references"
+            / "dashboard-guide.md"
+        )
+        assert ref.exists(), f"dashboard-guide.md reference not found: {ref}"
+        content = ref.read_text()
+        assert "dashboard" in content.lower(), "dashboard-guide.md should contain dashboard content"
+
+    def test_dashboard_cards_reference_exists(self):
+        """The dashboard-cards.md reference file should exist in the skill."""
+        ref = (
+            _get_resources_dir()
+            / "skills-vendor"
+            / "skills"
+            / "home-assistant-best-practices"
+            / "references"
+            / "dashboard-cards.md"
+        )
+        assert ref.exists(), f"dashboard-cards.md reference not found: {ref}"
+        content = ref.read_text()
+        assert "card" in content.lower(), "dashboard-cards.md should contain card content"
+
+    def test_domain_docs_reference_exists(self):
+        """The domain-docs.md reference file should exist in the skill."""
+        ref = (
+            _get_resources_dir()
+            / "skills-vendor"
+            / "skills"
+            / "home-assistant-best-practices"
+            / "references"
+            / "domain-docs.md"
+        )
+        assert ref.exists(), f"domain-docs.md reference not found: {ref}"
+        content = ref.read_text()
+        assert len(content) > 0, "domain-docs.md is empty"
 
 
 class TestPyprojectPackageData:
@@ -105,9 +120,6 @@ class TestPyprojectPackageData:
         content = pyproject_path.read_text()
 
         # Verify package-data includes resource patterns
-        assert "resources/*.md" in content, (
-            "pyproject.toml should include 'resources/*.md' in package-data"
-        )
-        assert "resources/*.json" in content, (
-            "pyproject.toml should include 'resources/*.json' in package-data"
+        assert "resources/" in content, (
+            "pyproject.toml should include resources/ in package-data"
         )

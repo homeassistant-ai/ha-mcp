@@ -5,7 +5,6 @@ This module provides general-purpose utility tools including logbook access,
 template evaluation, and domain documentation retrieval.
 """
 
-import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
