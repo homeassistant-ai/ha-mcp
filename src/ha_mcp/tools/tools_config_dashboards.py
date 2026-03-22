@@ -48,9 +48,9 @@ def _get_resources_dir() -> Path:
 
         # For Python 3.9+
         if hasattr(pkg_resources, "files"):
-            resources_dir = pkg_resources.files("ha_mcp") / "resources"
-            if hasattr(resources_dir, "__fspath__"):
-                return Path(str(resources_dir))
+            pkg_resources_dir = pkg_resources.files("ha_mcp") / "resources"
+            if hasattr(pkg_resources_dir, "__fspath__"):
+                return Path(str(pkg_resources_dir))
     except (ImportError, AttributeError):
         # If importlib.resources or its attributes are unavailable, fall back to relative path
         pass
@@ -319,7 +319,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Calculate config size for progressive disclosure hint
             config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
-            result: dict[str, Any] = {
+            result = {
                 "success": True,
                 "action": "get",
                 "url_path": url_path,
@@ -815,7 +815,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # For existing dashboards, optionally validate config_hash and warn on large replacement
                 if dashboard_exists:
                     # Fetch current config for validation/comparison
-                    get_data: dict[str, Any] = {
+                    get_data = {
                         "type": "lovelace/config",
                         "force": True,
                     }
