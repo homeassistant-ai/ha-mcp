@@ -18,3 +18,11 @@ configuration:
     description: >-
       Expose skills via list_resources/read_resource tools for MCP clients
       that don't support resources natively. Adds 3 extra tools.
+  enable_tool_search:
+    name: Enable tool search
+    description: >-
+      Replace the full tool catalog with search-based discovery. Reduces
+      idle context from ~46K to ~5K tokens. Use this if using an LLM without
+      deferred tools or with smaller context windows. Tools are found via
+      ha_search_tools and executed via categorized proxies (read/write/delete).
+      Requires restart to take effect.
