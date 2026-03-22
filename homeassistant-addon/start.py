@@ -169,12 +169,16 @@ def main() -> int:
     # Import and register browser landing before server start
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
+        _StatelessSessionLogFilter,
         _get_timestamped_uvicorn_log_config,
         mcp,
         register_browser_landing,
     )
 
     register_browser_landing(mcp, secret_path)
+    logging.getLogger("mcp.server.streamable_http").addFilter(
+        _StatelessSessionLogFilter()
+    )
 
     try:
         log_info("Starting MCP server...")

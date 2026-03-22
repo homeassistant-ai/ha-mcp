@@ -53,7 +53,8 @@ cloudflared tunnel --url http://localhost:8086
    - **Name:** Home Assistant
    - **URL:** `https://your-tunnel.com/__your-secret-path__` (include your secret path)
 5. Click **Add**
-6. You're connected!
+6. You may see a message: *"Couldn't reach the MCP server"* — **this is normal** and can be safely ignored. Claude.ai shows this during its initial connection handshake, but the server connects successfully afterward.
+7. If you see a **"Configure"** button on the connector, click it — if tools are listed, you're connected and ready to go!
 
 ## Environment Variables
 

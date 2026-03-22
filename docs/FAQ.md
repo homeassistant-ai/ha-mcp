@@ -46,6 +46,20 @@ The demo environment resets weekly. Your changes won't persist.
 
 ## Troubleshooting
 
+### Claude.ai says "Couldn't reach the MCP server"
+
+**This is normal.** Claude.ai shows this error during its initial connection handshake, but the server connects successfully afterward. To verify you're actually connected:
+
+1. Look for a **"Configure"** button on the connector — click it
+2. If you see tools listed, you're connected and ready to go
+3. You can also check your server logs — successful requests (HTTP 200) after the initial error confirm the connection is working
+
+This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
+
+### "Terminating session: None" in server logs
+
+**This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates a temporary session that is cleaned up immediately after. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — it does not mean your connection was dropped.
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.
