@@ -769,6 +769,26 @@ class HomeAssistantClient:
             )
         return found
 
+    async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
+        """Delete a config entry via REST API.
+
+        The WebSocket command ``config_entries/delete`` is not supported by
+        Home Assistant.  The REST endpoint ``DELETE /api/config/config_entries/
+        entry/{entry_id}`` is the correct way to remove a config entry.
+
+        Args:
+            entry_id: Config entry ID to delete.
+
+        Returns:
+            Result dict with ``require_restart`` flag.
+
+        Raises:
+            HomeAssistantAPIError: If the entry is not found or the API
+                returns an error status.
+        """
+        logger.debug(f"Deleting config entry: {entry_id}")
+        return await self._request("DELETE", f"/config/config_entries/entry/{entry_id}")
+
     async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Send message via WebSocket and wait for response.
 

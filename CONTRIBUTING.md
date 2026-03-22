@@ -6,7 +6,7 @@ Thank you for your interest in contributing!
 
 1. **Fork and clone** the repository
 2. **Install**: `uv sync --group dev`
-3. **Install hooks**: `uv run pre-commit install`
+3. **Install hooks**: `uv run lefthook install`
 4. **Test**: `uv run pytest tests/src/e2e/ -v` (requires Docker)
 5. **Make changes** and commit
 6. **Open Pull Request**
@@ -21,7 +21,7 @@ See **[tests/README.md](tests/README.md)**.
 ```bash
 cp .env.example .env    # Edit with your HA details
 uv sync --group dev
-uv run pre-commit install  # Install pre-commit hooks
+uv run lefthook install    # Install git hooks
 ```
 
 **Code quality:**
@@ -31,7 +31,17 @@ uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
 ```
 
-On every commit, a `pre-commit` hook runs `ruff check --fix` to auto-fix and catch lint violations. The **Ruff Lint** CI job also enforces this on pull requests.
+On every commit, hooks run `ruff check --fix` (lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). The **Ruff Lint** CI job also enforces this on pull requests.
+
+## 🔄 Migrating from pre-commit to lefthook
+
+If you had pre-commit installed from a previous checkout:
+
+```bash
+uv run pre-commit uninstall
+uv sync --group dev
+uv run lefthook install --reset-hooks-path
+```
 
 ## 📋 Guidelines
 

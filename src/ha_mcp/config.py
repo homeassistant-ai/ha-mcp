@@ -15,7 +15,7 @@ except importlib.metadata.PackageNotFoundError:
     _PACKAGE_VERSION = "unknown"
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 project_root = Path(__file__).parent.parent.parent
@@ -93,6 +93,23 @@ class Settings(BaseSettings):
     # Expose skills as tools (list_resources/read_resource) for clients
     # that don't support MCP resources natively.
     enable_skills_as_tools: bool = Field(False, alias="ENABLE_SKILLS_AS_TOOLS")
+
+    # Tool search transform — replaces the full tool catalog with a unified
+    # BM25 search tool and categorized call proxies (read/write/delete).
+    # Dramatically reduces idle context token usage for LLMs.
+    enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
+
+    @model_validator(mode="after")
+    def _skills_dependency(self) -> "Settings":
+        """Auto-enable skills (resources) when skills-as-tools is on.
+
+        skills_as_tools wraps ResourcesAsTools which requires skills to be
+        registered as MCP resources first. Without this, enabling
+        skills_as_tools alone would produce empty list_resources results.
+        """
+        if self.enable_skills_as_tools and not self.enable_skills:
+            self.enable_skills = True
+        return self
 
     @property
     def env_file_name(self) -> str:

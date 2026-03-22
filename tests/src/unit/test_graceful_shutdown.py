@@ -376,7 +376,10 @@ class TestMainEntryPoint:
         main_module._shutdown_in_progress = False
         main_module._shutdown_event = None
 
-        with patch.object(main_module, "_check_stdin_available", return_value=True), patch.object(main_module, "_setup_signal_handlers", side_effect=mock_setup), patch.object(main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock), pytest.raises(SystemExit):
+        with patch.dict(os.environ, {
+            "HOMEASSISTANT_URL": "http://test.local:8123",
+            "HOMEASSISTANT_TOKEN": "test_token",
+        }), patch.object(main_module, "_check_stdin_available", return_value=True), patch.object(main_module, "_setup_signal_handlers", side_effect=mock_setup), patch.object(main_module, "_run_with_graceful_shutdown", new_callable=AsyncMock), pytest.raises(SystemExit):
             main_module.main()
 
         assert setup_called, "Signal handlers were not set up"
