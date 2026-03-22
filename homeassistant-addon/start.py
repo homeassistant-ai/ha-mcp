@@ -169,7 +169,7 @@ def main() -> int:
     # Import and register browser landing before server start
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
-        _StatelessSessionLogFilter,
+        StatelessSessionLogFilter,
         _get_timestamped_uvicorn_log_config,
         mcp,
         register_browser_landing,
@@ -177,7 +177,7 @@ def main() -> int:
 
     register_browser_landing(mcp, secret_path)
     logging.getLogger("mcp.server.streamable_http").addFilter(
-        _StatelessSessionLogFilter()
+        StatelessSessionLogFilter()
     )
 
     try:

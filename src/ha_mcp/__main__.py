@@ -325,7 +325,7 @@ mcp = _DeferredMCP()
 _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-class _StatelessSessionLogFilter(logging.Filter):
+class StatelessSessionLogFilter(logging.Filter):
     """Annotate 'Terminating session: None' messages to reduce user confusion.
 
     In stateless HTTP mode every request creates and tears down a temporary
@@ -350,7 +350,7 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
         force=force,
     )
     logging.getLogger("mcp.server.streamable_http").addFilter(
-        _StatelessSessionLogFilter()
+        StatelessSessionLogFilter()
     )
 
 
