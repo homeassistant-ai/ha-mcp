@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
@@ -20,6 +20,7 @@ from mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
+from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
     from .client.rest_client import HomeAssistantClient
@@ -138,6 +139,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
+        # Apply tool search transform (must come after all tools and
+        # ResourcesAsTools are registered so it can wrap everything)
+        self._apply_tool_search()
+
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -188,10 +193,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Build the access method instruction based on config
         if self.settings.enable_skills_as_tools:
             access_method = (
-                "Use the read_resource tool with the skill's URI to load it. "
-                "If your client supports MCP resources natively (resources/read), "
-                "you can set ENABLE_SKILLS_AS_TOOLS=false to reduce the tool count "
-                "— skill resources are always available."
+                "Read the skill via MCP resources (resources/read with the "
+                "skill:// URI) — if you can read these instructions, you "
+                "should be able to access resources as well. If for any "
+                "reason you cannot access MCP resources, use the "
+                "list_resources and read_resource tools as a fallback. "
+                "If you can access resources normally, do not waste "
+                "time or tokens on those tools."
             )
         else:
             access_method = (
@@ -211,7 +219,36 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             f"How to access: {access_method}\n"
         )
 
-        return header + "\n".join(skill_blocks)
+        instructions = header + "\n".join(skill_blocks)
+
+        # Append tool search instructions when enabled
+        if self.settings.enable_tool_search:
+            instructions += (
+                "\n\n## Tool Discovery\n"
+                "This server uses search-based tool discovery. Most tools "
+                "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
+                "WORKFLOW:\n"
+                "1. Call ha_search_tools(query=\"...\") to find relevant tools\n"
+                "2. Results include name, description, parameters, and "
+                "annotations (readOnlyHint/destructiveHint)\n"
+                "3. Execute the discovered tool \u2014 two options:\n"
+                "   a) DIRECT CALL (preferred): Call the tool directly by "
+                "name. All discovered tools are callable without a proxy.\n"
+                "   b) VIA PROXY: For permission-gated execution, use the "
+                "matching proxy:\n"
+                "      - ha_call_read_tool \u2014 safe, read-only operations\n"
+                "      - ha_call_write_tool \u2014 creates or modifies data\n"
+                "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
+                "Once you know a tool\u2019s name, you do NOT need to search "
+                "again \u2014 call it directly.\n\n"
+                f"A few critical tools are listed directly "
+                f"({', '.join(DEFAULT_PINNED_TOOLS)}). Everything else must "
+                f"be discovered via search.\n\n"
+                "DO NOT assume a capability is unavailable because you "
+                "don't see a direct tool for it. ALWAYS search first."
+            )
+
+        return instructions
 
     @staticmethod
     def _parse_skill_frontmatter(main_file: Path) -> dict | None:
@@ -267,7 +304,164 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
+    # Tools pinned outside the search transform for individual permission gating.
+    # These are always visible in list_tools() regardless of search transform.
+    _PINNED_TOOLS: ClassVar[list[str]] = list(DEFAULT_PINNED_TOOLS)
 
+    # Description for the unified search tool
+    _SEARCH_TOOL_DESCRIPTION = (
+        "Search ALL Home Assistant tools by keyword. Returns matching tools "
+        "with descriptions, parameters, and annotations (read/write/delete). "
+        "Categories: entities, states, automations, scripts, dashboards, "
+        "helpers, HACS, calendar, zones, labels, groups, areas, floors, "
+        "history, statistics, devices, integrations, services, backups, "
+        "todo, camera, blueprints, system, and more.\n\n"
+        "WORKFLOW:\n"
+        "1. ha_search_tools(query='...') \u2014 find tools (this tool)\n"
+        "2. Execute: call the tool DIRECTLY by name (preferred), or use "
+        "a proxy for permission gating:\n"
+        "   - ha_call_read_tool \u2014 readOnlyHint tools (safe, no side effects)\n"
+        "   - ha_call_write_tool \u2014 destructiveHint tools that create/update\n"
+        "   - ha_call_delete_tool \u2014 destructiveHint tools that remove/delete\n"
+        "Once you know a tool name, call it directly \u2014 no need to search "
+        "again.\n\n"
+        "If using proxies, call with TWO top-level params:\n"
+        '   ha_call_read_tool(name="ha_search_entities", arguments={"query": "..."})\n'
+        "   Do NOT nest name/arguments inside the arguments param.\n"
+        "   Call proxy tools SEQUENTIALLY, not in parallel.\n\n"
+        "ALWAYS search before assuming a capability is unavailable. "
+        "Most tools are discoverable only through this search."
+    )
+
+    # Extra keywords appended to tool descriptions for BM25 ranking.
+    # Only active behind enable_tool_search — the original docstrings
+    # are unchanged; these keywords are appended by SearchKeywordsTransform.
+    _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
+        # s02: "find entities" → ha_search_entities should outrank ha_deep_search
+        "ha_search_entities": (
+            "find entities lookup discover search lights sensors switches "
+            "covers climate fans media_player binary_sensor device_tracker "
+            "person weather automation script helper input_boolean input_number"
+        ),
+        # s07: "get/read automation" → ha_config_get_automation should outrank set
+        "ha_config_get_automation": (
+            "read inspect fetch view existing automation config triggers "
+            "conditions actions get show detail"
+        ),
+        # s09: "create helper" → ha_config_set_helper should outrank remove_helper
+        "ha_config_set_helper": (
+            "create new add helper input_boolean input_number input_text "
+            "counter timer input_datetime input_select input_button "
+            "schedule zone group min_max"
+        ),
+        # Boost tools that compete with ha_deep_search for common queries
+        "ha_config_get_script": (
+            "read inspect fetch view existing script config sequence "
+            "actions get show detail"
+        ),
+        "ha_config_list_helpers": (
+            "list all helpers input_boolean input_number input_text "
+            "counter timer input_datetime input_select"
+        ),
+        "ha_get_entity": (
+            "get entity state attributes details single specific entity_id"
+        ),
+        "ha_get_state": (
+            "get current state value single entity check status"
+        ),
+        "ha_get_states": (
+            "get all states entities bulk overview list"
+        ),
+        "ha_config_set_automation": (
+            "create update modify edit automation triggers conditions actions "
+            "new automation write save"
+        ),
+        "ha_config_set_script": (
+            "create update modify edit script sequence actions "
+            "new script write save"
+        ),
+    }
+
+    # Description overrides that REPLACE the original description for BM25.
+    # Used to narrow overly broad tools so they stop matching generic queries.
+    # Only active behind enable_tool_search via SearchKeywordsTransform.
+    _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {
+        "ha_deep_search": (
+            "Search INSIDE automation, script, and helper YAML configurations. "
+            "Use ONLY when you need to find where a specific service call, "
+            "entity reference, or config field appears within existing "
+            "automation/script/helper definitions. "
+            "NOT for finding entities or discovering tools."
+        ),
+    }
+
+    def _apply_tool_search(self) -> None:
+        """Apply the CategorizedSearchTransform if enabled.
+
+        Replaces the full tool catalog with a unified BM25 search tool and
+        three categorized call proxies (read/write/delete). Pinned tools
+        remain directly visible in list_tools() for individual permission
+        gating. ResourcesAsTools (list_resources/read_resource) are also
+        pinned when enabled.
+        """
+        if not self.settings.enable_tool_search:
+            return
+
+        try:
+            from .transforms import CategorizedSearchTransform
+        except ImportError:
+            logger.error(
+                "CategorizedSearchTransform not available but ENABLE_TOOL_SEARCH=true — "
+                "full tool catalog will be exposed. Install fastmcp>=3.1 to fix."
+            )
+            return
+
+        # Build the always_visible list
+        pinned = list(self._PINNED_TOOLS)
+
+        # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
+        if self.settings.enable_skills_as_tools:
+            pinned.extend(["list_resources", "read_resource"])
+            # Forward-compatible: pin skill guidance tools registered by #732
+            pinned.extend(getattr(self, "_skill_tool_names", []))
+
+        # When skills-as-tools is enabled, the client likely doesn't support
+        # resources or server instructions — add skills hint to the search
+        # tool description (the one place the LLM is guaranteed to see).
+        description = self._SEARCH_TOOL_DESCRIPTION
+        if self.settings.enable_skills_as_tools:
+            description += (
+                "\n\nThis server also provides best-practice skills via "
+                "skill:// resources. If your client supports MCP resources, "
+                "prefer reading them directly. Otherwise, call "
+                "list_resources and read_resource (directly, no proxy "
+                "needed) to access the relevant SKILL.md before creating "
+                "automations or configuring devices."
+            )
+
+        try:
+            # Enrich tool descriptions for BM25 ranking (innermost transform).
+            # Added first so the search transform indexes enriched descriptions.
+            # Original tool docstrings are unchanged.
+            from .transforms import SearchKeywordsTransform
+
+            self.mcp.add_transform(SearchKeywordsTransform(
+                keywords=self._SEARCH_KEYWORDS,
+                overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
+            ))
+
+            self.mcp.add_transform(
+                CategorizedSearchTransform(
+                    max_results=5,
+                    always_visible=pinned,
+                    search_tool_description=description,
+                )
+            )
+            logger.info(
+                "Tool search transform applied (%d pinned tools)", len(pinned)
+            )
+        except Exception:
+            logger.exception("Failed to apply tool search transform")
 
     def _register_skills(self) -> None:
         """Register bundled HA best-practice skills as MCP resources.
