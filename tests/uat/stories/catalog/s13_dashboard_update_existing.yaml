@@ -15,5 +15,7 @@ prompt: >
 expected:
   tools_should_use:
     - ha_config_get_dashboard
+    - ha_get_skill_home_assistant_best_practices
+    - read_resource
     - ha_dashboard_find_card
     - ha_config_set_dashboard
