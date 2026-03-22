@@ -193,6 +193,23 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
 
+### enable_tool_search
+
+**Default:** `false`
+
+Replaces the full tool catalog (~80 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+
+**When to enable:**
+- Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
+- Models with **limited context windows** (≤200K) or deployments where context cost is a concern
+- MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
+
+**When to leave disabled (default):**
+- Claude Sonnet/Opus or other clients with deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost
+- When you need direct tool access without the search step
+
+Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml

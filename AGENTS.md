@@ -14,7 +14,7 @@ This repository uses a worktree-based development workflow.
 
 **Directory Structure:**
 ```
-/home/julien/github/ha-mcp/           # Main repository (checkout master here)
+<repo-root>/                           # Main repository (checkout master here)
 ├── AGENTS.md                          # This file (canonical source)
 ├── CLAUDE.md -> AGENTS.md             # Symlink for convenience
 ├── worktree/                          # Git worktrees (gitignored)
@@ -40,7 +40,7 @@ This repository uses a worktree-based development workflow.
 
 ```bash
 # Correct - worktrees go in worktree/ subdirectory
-cd /home/julien/github/ha-mcp
+cd <repo-root>
 git worktree add worktree/issue-42 -b issue-42
 git worktree add worktree/feat-new-feature -b feat/new-feature
 

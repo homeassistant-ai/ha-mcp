@@ -10,7 +10,9 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
+from ..config import get_global_settings
 from ..errors import create_validation_error
+from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -507,7 +509,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, entity overview,
         and active persistent notifications (if any).
-        Use 'standard' (default) for most queries. Optionally customize entity fields and limits.
+        Default is 'minimal' — use this unless you specifically need all entities.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -578,7 +580,31 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for n in notifications
                         ]
             except Exception as e:
-                logger.debug(f"Failed to fetch notifications for overview: {e}")
+                logger.warning(f"Failed to fetch notifications for overview: {e}")
+
+        # Include tool discovery hint when search transform is active
+        settings = get_global_settings()
+        if settings.enable_tool_search:
+            result["tool_discovery"] = {
+                "hint": (
+                    "This server uses search-based tool discovery. "
+                    "Use ha_search_tools(query='...') to find tools, then "
+                    "execute the discovered tool directly by name (preferred), "
+                    "or via a proxy for permission gating: "
+                    "ha_call_read_tool, ha_call_write_tool, or "
+                    "ha_call_delete_tool. Each proxy takes name and arguments "
+                    "as separate top-level params. Call proxy tools SEQUENTIALLY "
+                    "(not in parallel) to avoid cascading cancellations. "
+                    "Do NOT assume a capability is unavailable without searching first."
+                ),
+                "pinned_tools": sorted([
+                    *DEFAULT_PINNED_TOOLS,
+                    "ha_search_tools",
+                    "ha_call_read_tool",
+                    "ha_call_write_tool",
+                    "ha_call_delete_tool",
+                ]),
+            }
 
         return result
 
@@ -629,7 +655,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Args:
             query: Search query (can be partial, with typos)
             search_types: Types to search (list of strings, default: ["automation", "script", "helper"])
-            limit: Maximum total results to return (default: 20)
+            limit: Maximum total results to return (default: 5)
 
         Examples:
             - Find automations using a service: ha_deep_search("light.turn_on")
@@ -683,7 +709,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
-        """Get detailed state information for a Home Assistant entity with timezone metadata."""
+        """Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.)."""
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)

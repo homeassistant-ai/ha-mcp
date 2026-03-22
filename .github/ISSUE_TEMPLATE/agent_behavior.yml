@@ -2,9 +2,6 @@ name: "🤖 AI Agent Behavior Feedback"
 description: "Report AI agent inefficiency, wrong tool usage, or suggest workflow improvements"
 title: "[AGENT] "
 labels: ["agent-behavior"]
-assignees:
-  - julienld
-
 body:
   - type: markdown
     attributes:
