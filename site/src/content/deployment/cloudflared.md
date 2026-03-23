@@ -85,7 +85,7 @@ Cloudflare's "Block AI training bots" feature blocks requests from AI/LLM client
 5. Under **"Block AI training bots"**, open the dropdown
 6. Select **"do not block (allow crawlers)"**
 
-![Cloudflare AI Crawlers Setting](https://github.com/user-attachments/assets/3b949eff-951f-40d7-a460-17dfbfea045f)
+![Cloudflare AI Crawlers Setting](/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
 
 ## Security
 

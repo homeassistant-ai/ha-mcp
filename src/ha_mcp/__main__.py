@@ -629,7 +629,7 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         '6. Select "do not block (allow crawlers)"\n'
         "\n"
         "Screenshot of the setting:\n"
-        "https://github.com/user-attachments/assets/3b949eff-951f-40d7-a460-17dfbfea045f\n"
+        "https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg\n"
     )
 
     # Safe because the MCP streamable-http transport claims only POST and DELETE.
