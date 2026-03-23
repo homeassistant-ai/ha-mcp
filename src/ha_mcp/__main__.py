@@ -612,7 +612,7 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
     _landing_message = (
         "HA-MCP server is up and running!\n"
         "\n"
-        "To connect, paste this URL into your LLM client.\n"
+        "To connect, copy the URL from your address bar and paste it into your LLM.\n"
         "Setup instructions: https://homeassistant-ai.github.io/ha-mcp/\n"
         "\n"
         "--- Cloudflare Users ---\n"
