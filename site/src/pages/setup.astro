@@ -438,7 +438,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
 
         <!-- Configuration -->
-        <div class="mb-6">
+        <div class="mb-6" id="config-section">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Client Configuration</h3>
             <button id="copy-btn" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors">
@@ -1202,6 +1202,14 @@ cloudflared tunnel run ha-mcp</code></pre>
       instructions.push(proxyInstr);
     }
 
+    // Verify by visiting URL in browser (for all HTTP-based setups)
+    if (!isLocal) {
+      instructions.push(`<div class="instruction-block border-green-700/50 bg-green-900/10">
+        <h4 class="instruction-title text-green-300">✅ Verify Your Server</h4>
+        <p class="text-slate-300 text-sm">Visit your MCP server URL directly in your browser. If the server is running correctly, you'll see a message confirming <strong>"HA-MCP server is up and running"</strong> along with setup guidance. If you don't see this message, double-check your server URL, deployment, and proxy settings above.</p>
+      </div>`);
+    }
+
     // mcp-proxy instructions for stdio-only clients
     if (needsMcpProxy) {
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
@@ -1436,44 +1444,89 @@ mcpServers:
         }
       }
     } else if (state.client.configFormat === 'ui') {
+      // UI-based clients get formatted instruction blocks instead of a code box
+      let uiSteps = '';
       if (state.client.id === 'chatgpt') {
-        config = `1. Open ChatGPT → Settings → Connectors
-2. Click Advanced settings → Enable Developer mode
-3. Create custom connector:
-   - Name: Home Assistant
-   - URL: {{MCP_SERVER_URL}}
-   - Auth: None`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ ChatGPT Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open ChatGPT → <strong>Settings</strong> → <strong>Connectors</strong></li>
+            <li>Click <strong>Advanced settings</strong> → Enable <strong>Developer mode</strong></li>
+            <li>Create custom connector:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+                <li>Auth: None</li>
+              </ul>
+            </li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'claude-ai') {
-        config = `1. Open Claude.ai → Settings → Connectors
-2. Click Add Connector
-3. Enter:
-   - Name: Home Assistant
-   - URL: {{MCP_SERVER_URL}}
-4. You may see "Couldn't reach the MCP server" — this is normal and can be safely ignored
-5. If you see a "Configure" button on the connector, click it — if tools are listed, you're connected
-6. You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Claude.ai Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open Claude.ai → <strong>Settings</strong> → <strong>Connectors</strong></li>
+            <li>Click <strong>Add Connector</strong></li>
+            <li>Enter:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+              </ul>
+            </li>
+            <li>You may see <em>"Couldn't reach the MCP server"</em> — <strong>this is normal</strong> and can be safely ignored</li>
+            <li>If you see a <strong>"Configure"</strong> button on the connector, click it — if tools are listed, you're connected</li>
+            <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'raycast') {
-        config = `1. Open Raycast → Settings → Extensions → AI
-2. Scroll to Model Context Protocol
-3. Click Add Server:
-   - Name: Home Assistant
-   - Command: uvx
-   - Arguments: ha-mcp@latest
-4. Add environment variables:
-   - HOMEASSISTANT_URL: {{HOMEASSISTANT_URL}}
-   - HOMEASSISTANT_TOKEN: {{HOMEASSISTANT_TOKEN}}`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Raycast Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open Raycast → <strong>Settings</strong> → <strong>Extensions</strong> → <strong>AI</strong></li>
+            <li>Scroll to <strong>Model Context Protocol</strong></li>
+            <li>Click <strong>Add Server</strong>:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>Command: <code class="bg-slate-800 px-1 rounded">uvx</code></li>
+                <li>Arguments: <code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code></li>
+              </ul>
+            </li>
+            <li>Add environment variables:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>: {{HOMEASSISTANT_URL}}</li>
+                <li><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>: {{HOMEASSISTANT_TOKEN}}</li>
+              </ul>
+            </li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'open-webui') {
-        config = `1. Open Admin Settings → External Tools
-2. Click + (Add Server)
-3. Set Type: MCP (Streamable HTTP)
-4. Enter:
-   - Server URL: {{MCP_SERVER_URL}}
-   - Auth: (configure if needed)
-5. Click Save`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Open WebUI Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open <strong>Admin Settings</strong> → <strong>External Tools</strong></li>
+            <li>Click <strong>+ (Add Server)</strong></li>
+            <li>Set Type: <strong>MCP (Streamable HTTP)</strong></li>
+            <li>Enter:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Server URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+                <li>Auth: (configure if needed)</li>
+              </ul>
+            </li>
+            <li>Click <strong>Save</strong></li>
+          </ol>
+        </div>`;
       }
+      instructions.push(uiSteps);
     }
 
-    configEl.textContent = config;
+    // Show/hide config code box depending on whether it's a UI-based client
+    const configSection = document.getElementById('config-section');
+    if (state.client.configFormat === 'ui') {
+      configSection.classList.add('hidden');
+    } else {
+      configSection.classList.remove('hidden');
+      configEl.textContent = config;
+    }
 
     // Hints
     hints = [];
