@@ -1220,8 +1220,6 @@ cloudflared tunnel run ha-mcp</code></pre>
       instructions.push(mcpProxyInstr);
     }
 
-    instructionsEl.innerHTML = instructions.join('');
-
     // Generate client config
     const isStdio = isLocal;
     const isDocker = state.platform?.id === 'docker';
@@ -1518,6 +1516,9 @@ mcpServers:
       }
       instructions.push(uiSteps);
     }
+
+    // Render all instructions (including UI client steps added during config generation)
+    instructionsEl.innerHTML = instructions.join('');
 
     // Show/hide config code box depending on whether it's a UI-based client
     const configSection = document.getElementById('config-section');
