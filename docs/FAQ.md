@@ -60,6 +60,23 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates a temporary session that is cleaned up immediately after. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — it does not mean your connection was dropped.
 
+### Cloudflare: LLM can't connect ("Block AI training bots")
+
+If you're using Cloudflare and your LLM client can't connect to the MCP server (but visiting the URL in your browser works), Cloudflare's **"Block AI training bots"** setting is almost certainly the cause. This is the most common connection issue for Cloudflare users.
+
+To disable it:
+
+1. Log in to [Cloudflare](https://dash.cloudflare.com)
+2. In the left sidebar, click **Domains**, then click **Overview**
+3. Click on the domain you use for connecting to Home Assistant
+4. On the right side of the page, find **"Control AI Crawlers"**
+5. Under **"Block AI training bots"**, open the dropdown
+6. Select **"do not block (allow crawlers)"**
+
+![Cloudflare AI Crawlers Setting](https://github.com/user-attachments/assets/3b949eff-951f-40d7-a460-17dfbfea045f)
+
+See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.

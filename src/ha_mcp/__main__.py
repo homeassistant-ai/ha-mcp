@@ -609,18 +609,35 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         return
     _registered_landing_paths.add(path)
 
+    _landing_message = (
+        "HA-MCP server is up and running!\n"
+        "\n"
+        "To connect, paste this URL into your LLM client.\n"
+        "Setup instructions: https://homeassistant-ai.github.io/ha-mcp/\n"
+        "\n"
+        "--- Cloudflare Users ---\n"
+        "\n"
+        'If your LLM cannot connect, Cloudflare\'s "Block AI training bots"\n'
+        "setting is the most common cause. To disable it:\n"
+        "\n"
+        "1. Log in to Cloudflare (https://dash.cloudflare.com)\n"
+        "2. In the left sidebar, click Domains, then click Overview\n"
+        "3. Click on the domain you use for connecting to Home Assistant\n"
+        '4. On the right side, find "Control AI Crawlers"\n'
+        '5. Under "Block AI training bots", open the dropdown\n'
+        '6. Select "do not block (allow crawlers)"\n'
+        "\n"
+        "Screenshot of the setting:\n"
+        "https://github.com/user-attachments/assets/3b949eff-951f-40d7-a460-17dfbfea045f\n"
+    )
+
     # Safe because the MCP streamable-http transport claims only POST and DELETE.
     # FastMCP registers custom routes at lowest precedence (after the MCP route),
     # so GET requests fall through here without intercepting MCP traffic.
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
-            "HA-MCP server is up and running. To connect, please follow the "
-            "setup instructions (https://homeassistant-ai.github.io/ha-mcp/), "
-            "and paste the URL for this page into your LLM. If using Cloudflare "
-            "and you're unable to connect via your LLM, make sure the "
-            '"Block AI training bots" setting is set to '
-            '"do not block (allow crawlers)".',
+            _landing_message,
             status_code=405,
             # DELETE is included per the MCP Streamable HTTP spec (used for
             # session termination), even though this deployment uses stateless mode.
