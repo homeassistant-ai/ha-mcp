@@ -52,7 +52,8 @@ The demo environment resets weekly. Your changes won't persist.
 
 1. Look for a **"Configure"** button on the connector — click it
 2. If you see tools listed, you're connected and ready to go
-3. You can also check your server logs — successful requests (HTTP 200) after the initial error confirm the connection is working
+3. You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection — this is the easiest way to confirm it's truly connected
+4. You can also check your server logs — successful requests (HTTP 200) after the initial error confirm the connection is working
 
 This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
 
