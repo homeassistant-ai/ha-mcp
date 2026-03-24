@@ -637,9 +637,9 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         "https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg\n"
     )
 
-    # Safe because the MCP streamable-http transport claims only POST and DELETE.
-    # FastMCP registers custom routes at lowest precedence (after the MCP route),
-    # so GET requests fall through here without intercepting MCP traffic.
+    # Safe because FastMCP registers the MCP route with methods=["POST", "DELETE"]
+    # in stateless mode, so Starlette rejects GET requests before the MCP handler runs.
+    # Custom routes are registered at lowest precedence (after the MCP route).
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
