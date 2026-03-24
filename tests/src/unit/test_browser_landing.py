@@ -34,6 +34,7 @@ async def test_get_returns_405_with_helpful_message(mcp_app):
     assert resp.status_code == 405
     assert "HA-MCP server is up and running" in resp.text
     assert "Block AI training bots" in resp.text
+    assert '"do not block (allow crawlers)"' in resp.text
     assert "dash.cloudflare.com" in resp.text
     assert resp.headers["allow"] == "POST, DELETE"
 
