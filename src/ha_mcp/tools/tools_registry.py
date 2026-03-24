@@ -9,6 +9,7 @@ This module provides tools for:
 Important: Device renaming does NOT cascade to entities - they are independent registries.
 """
 
+import json
 import logging
 import re
 from typing import Annotated, Any
@@ -465,14 +466,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         name=new_device_name,
                     )
                 except ToolError as te:
-                    import json as _json
-
                     try:
-                        error_data = _json.loads(str(te))
+                        error_data = json.loads(str(te))
                         device_error = error_data.get("error", {}).get(
                             "message", str(te)
                         )
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         device_error = str(te)
                     results["device_rename"] = {"success": False, "error": device_error}
                     return {

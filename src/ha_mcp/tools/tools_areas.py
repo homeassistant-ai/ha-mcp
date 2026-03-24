@@ -166,8 +166,9 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         For floors: provide name to create, floor_id to update.
         Areas organize entities by physical location; floors organize areas into vertical levels.
         """
-        operation = "create"
         registry = "area" if type == "area" else "floor"
+        id_for_update = floor_id if type == "floor" else area_id
+        operation = "update" if id_for_update else "create"
         try:
             # Parse aliases if provided as string
             try:
