@@ -5,7 +5,7 @@ Comprehensive tests for Home Assistant area and floor management via MCP tools.
 
 This test suite validates:
 - Area creation, listing, updating, and deletion
-- Floor creation, listing, updating, and deletion
+- Floor creation, listing, updating, and deletion (via type='floor' parameter)
 - Area-to-floor assignments
 - Aliases and icon management
 """
@@ -221,21 +221,22 @@ class TestAreaLifecycle:
 
 @pytest.mark.floor
 class TestFloorLifecycle:
-    """Test complete floor management workflows."""
+    """Test complete floor management workflows via ha_config_*_area(type='floor')."""
 
     async def test_floor_create_list_delete(self, mcp_client, cleanup_tracker):
         """
         Test: Create floor -> List floors -> Delete floor
 
-        Validates basic floor CRUD operations.
+        Validates basic floor CRUD operations using consolidated area tools with type='floor'.
         """
         floor_name = generate_unique_name("test_floor")
         logger.info(f"Testing floor lifecycle: {floor_name}")
 
         # 1. CREATE: Basic floor
         create_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "name": floor_name,
                 "level": 1,
                 "icon": "mdi:home-floor-1",
@@ -251,7 +252,9 @@ class TestFloorLifecycle:
         logger.info(f"Created floor: {floor_name} (ID: {floor_id})")
 
         # 2. LIST: Verify floor exists in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool(
+            "ha_config_list_areas", {"type": "floor"}
+        )
 
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list floors: {list_data}"
@@ -272,8 +275,8 @@ class TestFloorLifecycle:
 
         # 3. DELETE: Remove the floor
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_floor",
-            {"floor_id": floor_id},
+            "ha_config_remove_area",
+            {"type": "floor", "floor_id": floor_id},
         )
 
         delete_data = parse_mcp_result(delete_result)
@@ -281,7 +284,9 @@ class TestFloorLifecycle:
         logger.info(f"Deleted floor: {floor_id}")
 
         # 4. VERIFY: Floor no longer in list
-        verify_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        verify_result = await mcp_client.call_tool(
+            "ha_config_list_areas", {"type": "floor"}
+        )
         verify_data = parse_mcp_result(verify_result)
 
         floors_after = verify_data.get("floors", [])
@@ -304,8 +309,9 @@ class TestFloorLifecycle:
 
         # 1. CREATE: Initial floor
         create_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "name": floor_name,
                 "level": 0,
                 "icon": "mdi:home-floor-g",
@@ -321,8 +327,9 @@ class TestFloorLifecycle:
 
         # 2. UPDATE: Change name, level, and icon
         update_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "floor_id": floor_id,
                 "name": new_name,
                 "level": 2,
@@ -335,7 +342,9 @@ class TestFloorLifecycle:
         logger.info(f"Updated floor: {floor_id}")
 
         # 3. VERIFY: Check changes in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool(
+            "ha_config_list_areas", {"type": "floor"}
+        )
         list_data = parse_mcp_result(list_result)
 
         floors = list_data.get("floors", [])
@@ -358,8 +367,8 @@ class TestFloorLifecycle:
 
         # 4. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_floor",
-            {"floor_id": floor_id},
+            "ha_config_remove_area",
+            {"type": "floor", "floor_id": floor_id},
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to delete floor: {delete_data}"
@@ -377,8 +386,9 @@ class TestFloorLifecycle:
 
         # 1. CREATE: Floor with aliases
         create_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "name": floor_name,
                 "level": 0,
                 "aliases": aliases,
@@ -394,7 +404,9 @@ class TestFloorLifecycle:
         logger.info(f"Created floor with aliases: {floor_id}")
 
         # 2. VERIFY: Check aliases in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool(
+            "ha_config_list_areas", {"type": "floor"}
+        )
         list_data = parse_mcp_result(list_result)
 
         floors = list_data.get("floors", [])
@@ -406,13 +418,15 @@ class TestFloorLifecycle:
         assert found_floor is not None, f"Floor not found: {floor_id}"
         floor_aliases = found_floor.get("aliases", [])
         for alias in aliases:
-            assert alias in floor_aliases, f"Alias '{alias}' not found in {floor_aliases}"
+            assert alias in floor_aliases, (
+                f"Alias '{alias}' not found in {floor_aliases}"
+            )
         logger.info(f"Verified aliases: {floor_aliases}")
 
         # 3. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_floor",
-            {"floor_id": floor_id},
+            "ha_config_remove_area",
+            {"type": "floor", "floor_id": floor_id},
         )
         delete_data = parse_mcp_result(delete_result)
         assert delete_data.get("success"), f"Failed to delete floor: {delete_data}"
@@ -436,8 +450,9 @@ class TestAreaFloorIntegration:
 
         # 1. CREATE: Floor first
         floor_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "name": floor_name,
                 "level": 1,
             },
@@ -514,7 +529,9 @@ class TestAreaFloorIntegration:
 
         # 6. CLEANUP: Delete area first, then floor
         await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
-        await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": floor_id})
+        await mcp_client.call_tool(
+            "ha_config_remove_area", {"type": "floor", "floor_id": floor_id}
+        )
         logger.info("Cleanup completed")
 
     @pytest.mark.slow
@@ -529,8 +546,9 @@ class TestAreaFloorIntegration:
 
         # 1. CREATE: Floor
         floor_result = await mcp_client.call_tool(
-            "ha_config_set_floor",
+            "ha_config_set_area",
             {
+                "type": "floor",
                 "name": floor_name,
                 "level": 0,
             },
@@ -561,13 +579,14 @@ class TestAreaFloorIntegration:
             )
 
             area_data = parse_mcp_result(area_result)
-            assert area_data.get("success"), f"Failed to create area {name}: {area_data}"
+            assert area_data.get("success"), (
+                f"Failed to create area {name}: {area_data}"
+            )
 
             area_id = area_data.get("area_id")
             area_ids.append(area_id)
             cleanup_tracker.track("area", area_id)
             logger.info(f"Created area: {name} (ID: {area_id})")
-
 
         # 3. VERIFY: All areas on floor
         list_result = await mcp_client.call_tool("ha_config_list_areas", {})
@@ -583,14 +602,18 @@ class TestAreaFloorIntegration:
 
         # 4. CLEANUP: Delete areas first, then floor
         for area_id in area_ids:
-            delete_result = await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+            delete_result = await mcp_client.call_tool(
+                "ha_config_remove_area", {"area_id": area_id}
+            )
             delete_data = parse_mcp_result(delete_result)
             if not delete_data.get("success"):
                 logger.error(f"Failed to delete area {area_id}: {delete_data}")
             else:
                 logger.info(f"Deleted area: {area_id}")
 
-        floor_delete_result = await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": floor_id})
+        floor_delete_result = await mcp_client.call_tool(
+            "ha_config_remove_area", {"type": "floor", "floor_id": floor_id}
+        )
         floor_delete_data = parse_mcp_result(floor_delete_result)
         if not floor_delete_data.get("success"):
             logger.error(f"Failed to delete floor {floor_id}: {floor_delete_data}")
@@ -630,7 +653,7 @@ async def test_floor_list_empty_or_populated(mcp_client):
     """
     logger.info("Testing ha_list_floors functionality")
 
-    list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+    list_result = await mcp_client.call_tool("ha_config_list_areas", {"type": "floor"})
     list_data = parse_mcp_result(list_result)
 
     assert list_data.get("success"), f"Failed to list floors: {list_data}"

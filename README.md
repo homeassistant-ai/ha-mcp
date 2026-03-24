@@ -129,17 +129,17 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (96 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (91 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
 | **Search & Discovery** | `ha_search_entities`, `ha_deep_search`, `ha_get_overview`, `ha_get_state` |
-| **Service & Device Control** | `ha_call_service`, `ha_bulk_control`, `ha_get_operation_status`, `ha_get_bulk_status`, `ha_list_services` |
+| **Service & Device Control** | `ha_call_service`, `ha_bulk_control`, `ha_get_operation_status`, `ha_list_services` |
 | **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
 | **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_documentation` |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
+| **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
