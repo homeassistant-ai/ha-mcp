@@ -52,14 +52,14 @@ The demo environment resets weekly. Your changes won't persist.
 
 1. Look for a **"Configure"** button on the connector — click it
 2. If you see tools listed, you're connected and ready to go
-3. You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection — this is the easiest way to confirm it's truly connected
-4. You can also check your server logs — successful requests (HTTP 200) after the initial error confirm the connection is working
+
+You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection — this is the easiest way to confirm it's truly connected. Checking your server logs for successful requests (HTTP 200) after the initial error also confirms the connection is working.
 
 This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
 
 ### "Terminating session: None" in server logs
 
-**This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates a temporary session that is cleaned up immediately after. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — it does not mean your connection was dropped.
+**This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — the connection stays active.
 
 ### Cloudflare: LLM can't connect ("Block AI training bots")
 

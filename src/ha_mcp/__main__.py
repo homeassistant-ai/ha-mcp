@@ -326,10 +326,14 @@ _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class StatelessSessionLogFilter(logging.Filter):
-    """Annotate 'Terminating session: None' messages to reduce user confusion.
+    """Downgrade 'Terminating session: None' to DEBUG to reduce user confusion.
 
     In stateless HTTP mode every request creates and tears down a temporary
     session, producing an INFO log that looks alarming but is routine.
+    This filter lowers the level to DEBUG so the message only appears with
+    verbose logging enabled.
+
+    # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -337,7 +341,8 @@ class StatelessSessionLogFilter(logging.Filter):
             record.name == "mcp.server.streamable_http"
             and "Terminating session: None" in record.getMessage()
         ):
-            record.msg = f"{record.msg} (Normal — stateless mode)"
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
         return True
 
 
