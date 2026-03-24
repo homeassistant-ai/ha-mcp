@@ -160,6 +160,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = 0,
         group_by_domain: bool | str = False,
+        exact_match: Annotated[
+            bool | str,
+            Field(
+                default=True,
+                description=(
+                    "Use exact substring matching (default: True). "
+                    "Set to False for fuzzy matching when the query may contain "
+                    "typos or approximate terms."
+                ),
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
 
@@ -185,6 +196,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         group_by_domain_bool = (
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
             or False
+        )
+        exact_match_bool = (
+            coerce_bool_param(exact_match, "exact_match", default=True) or False
         )
 
         try:
@@ -351,35 +365,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     domain_list_data["by_domain"] = {domain_filter: results}
                 return await add_timezone_metadata(client, domain_list_data)
 
-            # Graceful degradation with fallback search methods
-            # 1. Try fuzzy search (primary method)
-            # 2. If that fails, try exact match
-            # 3. If that fails, return partial results with warning
-            # 4. Only error if all methods fail
+            # Search strategy depends on exact_match setting:
+            # - exact_match=True: use exact substring matching directly
+            # - exact_match=False: try fuzzy first, fall back to exact, then partial
 
             result: dict[str, Any] | None = None
             warning: str | None = None
-            search_type = "fuzzy_search"
+            search_type = "exact_match" if exact_match_bool else "fuzzy_search"
 
-            # Step 1: Try fuzzy search
-            try:
-                result = await smart_tools.smart_entity_search(
-                    query, limit, offset=offset, domain_filter=domain_filter
-                )
-                search_type = "fuzzy_search"
-            except asyncio.CancelledError:
-                raise
-            except Exception as fuzzy_error:
-                logger.warning(
-                    f"Fuzzy search failed, trying exact match: {fuzzy_error}"
-                )
-
-                # Step 2: Try exact match fallback
+            if exact_match_bool:
+                # Exact match mode: skip fuzzy, go straight to substring matching
                 try:
                     result = await _exact_match_search(
                         client, query, domain_filter, limit, offset
                     )
-                    warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
                 except asyncio.CancelledError:
                     raise
@@ -387,8 +386,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     logger.warning(
                         f"Exact match failed, trying partial results: {exact_error}"
                     )
-
-                    # Step 3: Try partial results fallback
                     try:
                         result = await _partial_results_search(
                             client, query, domain_filter, limit, offset
@@ -398,9 +395,46 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     except asyncio.CancelledError:
                         raise
                     except Exception as partial_error:
-                        # Step 4: All methods failed - raise to outer exception handler
                         logger.error(f"All search methods failed: {partial_error}")
                         raise Exception("All search methods failed") from partial_error
+            else:
+                # Fuzzy mode: graceful degradation chain
+                try:
+                    result = await smart_tools.smart_entity_search(
+                        query, limit, offset=offset, domain_filter=domain_filter
+                    )
+                    search_type = "fuzzy_search"
+                except asyncio.CancelledError:
+                    raise
+                except Exception as fuzzy_error:
+                    logger.warning(
+                        f"Fuzzy search failed, trying exact match: {fuzzy_error}"
+                    )
+                    try:
+                        result = await _exact_match_search(
+                            client, query, domain_filter, limit, offset
+                        )
+                        warning = "Fuzzy search unavailable, using exact match"
+                        search_type = "exact_match"
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exact_error:
+                        logger.warning(
+                            f"Exact match failed, trying partial results: {exact_error}"
+                        )
+                        try:
+                            result = await _partial_results_search(
+                                client, query, domain_filter, limit, offset
+                            )
+                            warning = "Search degraded, returning partial results"
+                            search_type = "partial_listing"
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as partial_error:
+                            logger.error(f"All search methods failed: {partial_error}")
+                            raise Exception(
+                                "All search methods failed"
+                            ) from partial_error
 
             # Convert 'matches' to 'results' for backward compatibility
             if "matches" in result:
