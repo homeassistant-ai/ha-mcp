@@ -801,20 +801,14 @@ class SmartSearchTools:
                         if config
                         else 0
                     )
-
-                    # In exact_match mode, override fuzzy name_score with substring check
-                    if exact_match:
-                        name_exact = (
-                            100
-                            if query_lower in entity_id.lower()
-                            or query_lower in friendly_name.lower()
-                            else 0
-                        )
-                        total_score = max(name_exact, config_match_score)
-                        threshold = 100
-                    else:
-                        total_score = max(name_score, config_match_score)
-                        threshold = self.settings.fuzzy_threshold
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
 
                     if total_score >= threshold:
                         results["automations"].append(
@@ -822,11 +816,7 @@ class SmartSearchTools:
                                 "entity_id": entity_id,
                                 "friendly_name": friendly_name,
                                 "score": total_score,
-                                "match_in_name": (
-                                    name_exact >= 100
-                                    if exact_match
-                                    else name_score >= self.settings.fuzzy_threshold
-                                ),
+                                "match_in_name": match_in_name,
                                 "match_in_config": config_match_score >= threshold,
                                 "config": config if config else None,
                             }
@@ -949,19 +939,14 @@ class SmartSearchTools:
                         if script_config
                         else 0
                     )
-
-                    if exact_match:
-                        name_exact = (
-                            100
-                            if query_lower in entity_id.lower()
-                            or query_lower in friendly_name.lower()
-                            else 0
-                        )
-                        total_score = max(name_exact, config_match_score)
-                        threshold = 100
-                    else:
-                        total_score = max(name_score, config_match_score)
-                        threshold = self.settings.fuzzy_threshold
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
 
                     if total_score >= threshold:
                         results["scripts"].append(
@@ -970,11 +955,7 @@ class SmartSearchTools:
                                 "script_id": script_id,
                                 "friendly_name": friendly_name,
                                 "score": total_score,
-                                "match_in_name": (
-                                    name_exact >= 100
-                                    if exact_match
-                                    else name_score >= self.settings.fuzzy_threshold
-                                ),
+                                "match_in_name": match_in_name,
                                 "match_in_config": config_match_score >= threshold,
                                 "config": script_config if script_config else None,
                             }
@@ -1020,23 +1001,16 @@ class SmartSearchTools:
                                 config_match_score = self._search_in_dict(
                                     helper, query_lower, exact_match
                                 )
-
-                                if exact_match:
-                                    name_exact_score = (
-                                        100
-                                        if query_lower in entity_id.lower()
-                                        or query_lower in name.lower()
-                                        else 0
+                                total_score, threshold, match_in_name = (
+                                    self._score_deep_match(
+                                        entity_id,
+                                        name,
+                                        name_match_score,
+                                        config_match_score,
+                                        query_lower,
+                                        exact_match,
                                     )
-                                    total_score = max(
-                                        name_exact_score, config_match_score
-                                    )
-                                    threshold = 100
-                                else:
-                                    total_score = max(
-                                        name_match_score, config_match_score
-                                    )
-                                    threshold = self.settings.fuzzy_threshold
+                                )
 
                                 if total_score >= threshold:
                                     helper_results.append(
@@ -1045,12 +1019,7 @@ class SmartSearchTools:
                                             "helper_type": helper_type,
                                             "name": name,
                                             "score": total_score,
-                                            "match_in_name": (
-                                                name_exact_score >= 100
-                                                if exact_match
-                                                else name_match_score
-                                                >= self.settings.fuzzy_threshold
-                                            ),
+                                            "match_in_name": match_in_name,
                                             "match_in_config": config_match_score
                                             >= threshold,
                                             "config": helper,
@@ -1227,6 +1196,33 @@ class SmartSearchTools:
                     "helpers": [],
                 },
             )
+
+    def _score_deep_match(
+        self,
+        entity_id: str,
+        friendly_name: str,
+        fuzzy_name_score: int,
+        config_match_score: int,
+        query_lower: str,
+        exact_match: bool,
+    ) -> tuple[int, int, bool]:
+        """Compute total score, threshold, and match_in_name for a deep search result.
+
+        Returns (total_score, threshold, match_in_name).
+        """
+        if exact_match:
+            name_exact = (
+                100
+                if query_lower in entity_id.lower()
+                or query_lower in friendly_name.lower()
+                else 0
+            )
+            total_score = max(name_exact, config_match_score)
+            return total_score, 100, name_exact >= 100
+        else:
+            total_score = max(fuzzy_name_score, config_match_score)
+            threshold = self.settings.fuzzy_threshold
+            return total_score, threshold, fuzzy_name_score >= threshold
 
     def _search_in_dict(
         self,
