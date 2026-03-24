@@ -197,9 +197,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
             or False
         )
-        exact_match_bool = (
-            coerce_bool_param(exact_match, "exact_match", default=True) or False
-        )
+        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
@@ -728,9 +726,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         include_config_bool = (
             coerce_bool_param(include_config, "include_config", default=False) or False
         )
-        exact_match_bool = (
-            coerce_bool_param(exact_match, "exact_match", default=True) or False
-        )
+        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
         try:
             result = await smart_tools.deep_search(
                 query,

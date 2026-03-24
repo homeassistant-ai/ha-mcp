@@ -1133,7 +1133,8 @@ class SmartSearchTools:
                             logger.debug(f"Dashboard search failed: {dash_result}")
 
                 except Exception as e:
-                    logger.debug(f"Dashboard search error: {e}")
+                    logger.error(f"Dashboard search error: {e}")
+                    raise
 
             # Merge all results with their category, sort by score, and paginate
             tagged_results: list[tuple[str, dict[str, Any]]] = []

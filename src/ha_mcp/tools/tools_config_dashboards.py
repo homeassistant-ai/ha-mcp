@@ -157,9 +157,12 @@ def _find_cards_in_config(
         if not isinstance(view, dict):
             continue
 
-        # Search view-level badges (only when filtering by entity_id,
-        # since badges don't have card_type or heading)
-        if entity_id is not None and card_type is None and heading is None:
+        # Search view-level badges when filtering by entity_id or card_type="badge"
+        if (
+            entity_id is not None
+            and heading is None
+            and (card_type is None or card_type == "badge")
+        ):
             badges = view.get("badges", [])
             for badge_idx, badge in enumerate(badges):
                 if _badge_matches(badge, entity_id):

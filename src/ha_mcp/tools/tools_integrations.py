@@ -120,8 +120,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             include_schema_bool = coerce_bool_param(
                 include_schema, "include_schema", default=False
             )
-            exact_match_bool = (
-                coerce_bool_param(exact_match, "exact_match", default=True) or False
+            exact_match_bool = coerce_bool_param(
+                exact_match, "exact_match", default=True
             )
             # Auto-enable options when domain filter is set
             if domain is not None:
@@ -245,8 +245,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 query_lower = query.strip().lower()
 
                 for entry in formatted_entries:
-                    domain_lower = entry["domain"].lower()
-                    title_lower = entry["title"].lower()
+                    domain_lower = (entry.get("domain") or "").lower()
+                    title_lower = (entry.get("title") or "").lower()
 
                     # Check for exact substring matches first (highest priority)
                     if query_lower in domain_lower or query_lower in title_lower:
