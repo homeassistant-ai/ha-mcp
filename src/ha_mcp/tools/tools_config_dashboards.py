@@ -141,10 +141,11 @@ def _find_cards_in_config(
     heading: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Find cards and badges in a dashboard config matching the search criteria.
+    Find cards, badges, and header cards in a dashboard config matching the search criteria.
 
-    Returns a list of matches with location info and card/badge config.
-    Searches both cards (in sections and flat views) and view-level badges.
+    Returns a list of matches with location info and card/badge/header config.
+    Searches cards (in sections and flat views), view-level badges, and
+    sections-view header cards (views[n].header.card).
     """
     matches: list[dict[str, Any]] = []
 
@@ -176,6 +177,25 @@ def _find_cards_in_config(
                             "card_config": badge_config,
                         }
                     )
+
+        # Search sections-view header card (views[n].header.card)
+        # The header accepts a card (typically Markdown) that can contain entity refs
+        header = view.get("header", {})
+        if isinstance(header, dict):
+            header_card = header.get("card")
+            if isinstance(header_card, dict) and _card_matches(
+                header_card, entity_id, card_type, heading
+            ):
+                matches.append(
+                    {
+                        "view_index": view_idx,
+                        "section_index": None,
+                        "card_index": None,
+                        "jq_path": f".views[{view_idx}].header.card",
+                        "card_type": header_card.get("type"),
+                        "card_config": header_card,
+                    }
+                )
 
         view_type = view.get("type", "masonry")
 
@@ -1362,13 +1382,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ] = False,
     ) -> dict[str, Any]:
         """
-        Find cards and badges in a dashboard by entity_id, type, or heading text.
+        Find cards, badges, and header cards in a dashboard by entity_id, type, or heading text.
 
-        Returns card/badge locations (view_index, section_index, card_index/badge_index)
+        Returns card/badge/header locations (view_index, section_index, card_index/badge_index)
         and path for use with ha_config_set_dashboard(python_transform=...).
 
-        Also searches view-level badges (views[n].badges) when entity_id is provided.
-        Badges are the chip row at the top of a view — they reference entities and are
+        Also searches view-level badges (views[n].badges) and sections-view header cards
+        (views[n].header.card). Badges are the chip row at the top of a view, and header
+        cards are Markdown cards in the view header — both reference entities and are
         often missed during entity rename operations.
 
         Use this tool BEFORE targeted updates to find exact card positions without
