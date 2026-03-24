@@ -488,7 +488,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise
         except Exception as e:
             registry = "area" if type == "area" else "floor"
-            item_id = area_id if type == "area" else floor_id
+            item_id = (area_id if type == "area" else floor_id) or "unknown"
             logger.error(f"Error removing {registry} {item_id!r}: {e}")
             exception_to_structured_error(
                 e,
