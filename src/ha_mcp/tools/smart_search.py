@@ -4,6 +4,7 @@ Smart search tools for Home Assistant MCP server.
 
 import asyncio
 import logging
+import random
 import time
 from typing import Any
 
@@ -387,9 +388,20 @@ class SmartSearchTools:
                 return_exceptions=True,
             )
 
-            # Process results, handling any exceptions gracefully
-            entities = results[0] if not isinstance(results[0], Exception) else []
-            services = results[1] if not isinstance(results[1], Exception) else []
+            # Entities are mandatory — surface connection/auth errors immediately.
+            # Services failure is logged at warning (affects total count and service catalog).
+            # Registry failures are logged at debug (area enrichment only).
+            if isinstance(results[0], Exception):
+                raise results[0]
+
+            entities = results[0]
+            partial_warnings: list[str] = []
+            if isinstance(results[1], Exception):
+                logger.warning(f"Could not fetch services: {results[1]}")
+                partial_warnings.append(f"Services unavailable: {results[1]}")
+                services = []
+            else:
+                services = results[1]
 
             # Handle area registry result
             area_registry: list[dict[str, Any]] = []
@@ -537,8 +549,6 @@ class SmartSearchTools:
             }
 
             # Prepare domain stats with entity filtering and truncation info
-            import random
-
             formatted_domain_stats = {}
             for domain, stats in sorted_domains:
                 all_entities = stats["all_entities"]
@@ -569,7 +579,7 @@ class SmartSearchTools:
                 }
 
             # Build base response
-            base_response = {
+            base_response: dict[str, Any] = {
                 "success": True,
                 "system_summary": {
                     "total_entities": len(entities),
@@ -581,6 +591,10 @@ class SmartSearchTools:
                 "area_analysis": area_stats,  # Now included in all detail levels
                 "ai_insights": ai_insights,
             }
+
+            if partial_warnings:
+                base_response["partial"] = True
+                base_response["warnings"] = partial_warnings
 
             # Add level-specific fields
             if detail_level == "full":

@@ -18,10 +18,7 @@ production-level functionality and compatibility.
 import ast
 import json
 import logging
-import sys
 from typing import Any
-
-import pytest
 
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
@@ -729,78 +726,3 @@ class TestJqTransformAndFindCard:
                 {"dashboard_id": "test-find-type"},
             )
 
-    async def test_find_card_with_jq_transform(self, mcp_client):
-        """Test workflow: find card -> jq_transform."""
-        logger.info("Starting find_card + jq_transform workflow test")
-        mcp = MCPAssertions(mcp_client)
-
-        # Setup
-        await mcp.call_tool_success(
-            "ha_config_set_dashboard",
-            {
-                "url_path": "test-workflow",
-                "title": "Workflow Test",
-                "config": {
-                    "views": [
-                        {
-                            "cards": [
-                                {
-                                    "type": "tile",
-                                    "entity": "light.living_room",
-                                    "icon": "mdi:lamp",
-                                },
-                                {
-                                    "type": "tile",
-                                    "entity": "light.bedroom",
-                                    "icon": "mdi:bed",
-                                },
-                            ]
-                        }
-                    ]
-                },
-            },
-        )
-
-        try:
-            # Find card
-            find_result = await mcp.call_tool_success(
-                "ha_dashboard_find_card",
-                {
-                    "url_path": "test-workflow",
-                    "entity_id": "light.bedroom",
-                },
-            )
-            assert find_result["match_count"] == 1
-
-            match = find_result["matches"][0]
-            jq_path = match["jq_path"]
-            config_hash = find_result["config_hash"]
-
-            # Update using jq_path
-            update_result = await mcp.call_tool_success(
-                "ha_config_set_dashboard",
-                {
-                    "url_path": "test-workflow",
-                    "config_hash": config_hash,
-                    "jq_transform": f'{jq_path}.icon = "mdi:lightbulb"',
-                },
-            )
-            assert update_result["success"] is True
-
-            # Verify
-            verify_result = await mcp.call_tool_success(
-                "ha_config_get_dashboard",
-                {"url_path": "test-workflow"},
-            )
-            assert (
-                verify_result["config"]["views"][0]["cards"][1]["icon"]
-                == "mdi:lightbulb"
-            )
-
-            logger.info("find_card + jq_transform workflow test passed")
-
-        finally:
-            await mcp.call_tool_success(
-                "ha_config_delete_dashboard",
-                {"dashboard_id": "test-workflow"},
-            )

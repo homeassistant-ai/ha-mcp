@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # Examples: "tools_config_automations,tools_config_scripts,tools_traces"
     enabled_tool_modules: str = Field("all", alias="ENABLED_TOOL_MODULES")
 
-    # Dashboard partial update tools (jq_transform, find_card)
+    # Dashboard partial update tools (python_transform, find_card)
     # These are token-efficient alternatives to full config replacement.
     # Disable when using clients with programmatic tool use (future).
     enable_dashboard_partial_tools: bool = Field(True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS")
