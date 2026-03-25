@@ -310,18 +310,38 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Pass a single operation_id string to check one operation, or a list of IDs
         to check multiple operations at once (bulk status).
 
+        The timeout_seconds parameter applies to single-operation checks only.
+        Bulk checks poll each operation individually with a short internal timeout.
+
         Use this to track operations initiated by ha_bulk_control or ha_call_service.
         For current entity states, use ha_get_state instead.
         """
-        if isinstance(operation_id, list):
-            result = await device_tools.get_bulk_operation_status(
-                operation_ids=operation_id
+        try:
+            if isinstance(operation_id, list):
+                result = await device_tools.get_bulk_operation_status(
+                    operation_ids=operation_id
+                )
+                return cast(dict[str, Any], result)
+            result = await device_tools.get_device_operation_status(
+                operation_id=operation_id, timeout_seconds=timeout_seconds
             )
             return cast(dict[str, Any], result)
-        result = await device_tools.get_device_operation_status(
-            operation_id=operation_id, timeout_seconds=timeout_seconds
-        )
-        return cast(dict[str, Any], result)
+        except ToolError:
+            raise
+        except Exception as e:
+            op_context = (
+                {"operation_ids": operation_id}
+                if isinstance(operation_id, list)
+                else {"operation_id": operation_id}
+            )
+            exception_to_structured_error(
+                e,
+                context=op_context,
+                suggestions=[
+                    "Verify the operation ID(s) are valid",
+                    "Use ha_get_state() to check current entity states instead",
+                ],
+            )
 
     @mcp.tool(annotations={"destructiveHint": True, "title": "Bulk Control"})
     @log_tool_usage

@@ -69,10 +69,16 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(items)} {registry}(s)",
                 }
             else:
+                error = result.get("error", f"Failed to list {registry}s")
+                error_msg = (
+                    error.get("message", str(error))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        result.get("error", f"Failed to list {registry}s"),
+                        error_msg,
                     )
                 )
 

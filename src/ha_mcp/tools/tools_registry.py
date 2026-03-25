@@ -440,6 +440,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if ent.get("entity_id") == entity_id:
                             device_id = ent.get("device_id")
                             break
+                else:
+                    logger.warning(
+                        f"Could not query entity registry to find device for {entity_id}. "
+                        "Device rename will be skipped."
+                    )
 
             # Step 1: Rename the entity
             entity_rename_result = await _rename_entity_internal(
