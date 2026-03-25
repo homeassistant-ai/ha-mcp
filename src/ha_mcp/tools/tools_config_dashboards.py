@@ -26,25 +26,6 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
-# Try to import jq - it's not available on Windows ARM64
-try:
-    import jq  # noqa: F401
-
-    JQ_AVAILABLE = True
-except ImportError:
-    JQ_AVAILABLE = False
-    logger.warning(
-        "jq library not available - jq_transform features will be disabled. "
-        "This is expected on Windows ARM64 where jq cannot be compiled."
-    )
-
-# Error message when jq_transform is used without jq available
-_JQ_UNAVAILABLE_ERROR = (
-    "jq_transform is not available - jq library could not be imported. "
-    "This is a known limitation on Windows ARM64 where jq cannot be compiled. "
-    "Please use the 'config' parameter for full config replacement instead, "
-    "or use ha-mcp on Windows x64, Linux, or macOS where jq is supported."
-)
 
 
 def _compute_config_hash(config: dict[str, Any]) -> str:
