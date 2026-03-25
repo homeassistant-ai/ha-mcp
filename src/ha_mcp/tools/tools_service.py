@@ -329,11 +329,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            op_context = (
-                {"operation_ids": operation_id}
-                if isinstance(operation_id, list)
-                else {"operation_id": operation_id}
-            )
+            op_context: dict[str, Any] = {"operation_id": operation_id}
             exception_to_structured_error(
                 e,
                 context=op_context,
