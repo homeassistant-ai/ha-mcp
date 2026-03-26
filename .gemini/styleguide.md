@@ -94,11 +94,41 @@ return create_error_response(
 Flag HIGH severity if errors use plain exceptions or dict returns instead of structured errors from `errors.py`.
 
 
+## MCP Tool Docstrings
+
+Tool docstrings are the **primary interface between the LLM and the tool**. In MCP, the LLM reads the tool description to decide when and how to call it — a vague or inaccurate docstring leads to missed discovery, wrong usage, and incorrect calls. Treat them as first-class API contracts.
+
+**Flag MEDIUM severity when a new or modified tool has a docstring that:**
+- Does not start with an action verb (`"""Returns...` → should be `"""Get...`)
+- Is missing or a single line for non-trivial tools
+- Uses inaccurate HA vocabulary (wrong domain names, service names, entity ID format)
+- Fails to mention related tools the user would naturally need next (e.g. a create tool that doesn't reference the corresponding get/list tool)
+- Embeds extensive documentation that should be deferred to `ha_get_domain_docs()` instead
+
+**Good docstring checklist:**
+- Starts with action verb + one-sentence summary of what the tool does
+- Includes 2-5 concrete examples showing `ha_tool(param)` calls with realistic values
+- For tools with multiple modes (list vs get), shows both clearly
+- Mentions gotchas or non-obvious limitations (e.g. YAML-defined zones won't appear in storage-based APIs)
+- Points to the next natural step in the workflow (e.g. after `ha_search_entities`, call `ha_get_state`)
+- Defers complex schemas to `ha_get_domain_docs('<domain>')` rather than embedding them
+
+**Required HA vocabulary (flag if wrong):**
+- Entity IDs: `domain.slug` format — `light.living_room`, not `living-room` or `/light/living_room`
+- Domains: `light`, `switch`, `climate`, `automation`, `script`, `input_boolean`, `input_number`, `sensor`, etc.
+- Services: `turn_on`, `turn_off`, `toggle`, `set_temperature` — not `activate`, `enable`, `switch`
+- Hierarchy: areas (rooms) → devices (hardware) → entities (controllable units)
+- Config entries = integrations; helpers = `input_*` domain entities created via UI
+
+**Discoverability — flag MEDIUM if missing on workflow-entry tools:**
+- Search/list tools should hint at the follow-up tool for details
+- Create tools should mention the corresponding get/list tool to verify the result
+- Complex-schema tools (`ha_config_set_automation`, etc.) must point to `ha_get_domain_docs()`
+
 ## Code Conventions
 
-1. **Tool descriptions**: Use action verbs, keep concise
-2. **Async/await**: Use consistently for I/O operations
-3. **Type hints**: Required for all function signatures
+1. **Async/await**: Use consistently for I/O operations
+2. **Type hints**: Required for all function signatures
 
 ## Documentation Standards
 
