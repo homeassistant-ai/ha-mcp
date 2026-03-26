@@ -129,3 +129,133 @@ class TestFormatDetailedTrace:
         result2 = _format_detailed_trace("auto.2", "2",
             {"trace": {"trigger/0": trace_data["trace"]["trigger/1"]}})
         assert result2["trigger"]["platform"] == "changed_variables_key"
+
+    def test_variable_deduplication_identical_steps(self):
+        """Variables duplicated across steps should only appear at the first occurrence.
+
+        Reproduces issue #683: blueprint automations with 200+ steps can have
+        identical variables at every step, causing 100KB+ of duplication.
+        """
+        shared_vars = {
+            "foo": "bar",
+            "mqtt_data": {"topic": "frigate/events", "payload": "large_payload_here"},
+            "blueprint_input": {"camera": "camera.front", "notify_device": "phone"},
+        }
+
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "changed_variables": {"trigger": {"platform": "mqtt"}},
+                }],
+                # 5 action steps with identical variables
+                **{
+                    f"action/{i}": [{
+                        "path": f"action/{i}",
+                        "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
+                        "result": {"executed": True},
+                        "variables": shared_vars.copy(),
+                    }]
+                    for i in range(5)
+                },
+            },
+        }
+
+        result = _format_detailed_trace("automation.test_dedup", "run_dedup", trace_data)
+
+        actions = result["action_trace"]
+        assert len(actions) == 5
+
+        # First action should have variables
+        assert "variables" in actions[0]
+        assert actions[0]["variables"]["foo"] == "bar"
+
+        # Subsequent actions with identical variables should NOT have them
+        for action in actions[1:]:
+            assert "variables" not in action, (
+                f"Step {action['path']} has duplicated variables that should have been deduplicated"
+            )
+
+    def test_variable_deduplication_changed_variables_included(self):
+        """Variables should appear at steps where they actually changed."""
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "changed_variables": {"trigger": {"platform": "state"}},
+                }],
+                "action/0": [{
+                    "path": "action/0",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "variables": {"counter": 1, "status": "running"},
+                }],
+                "action/1": [{
+                    "path": "action/1",
+                    "timestamp": "2026-01-01T00:00:02Z",
+                    "variables": {"counter": 1, "status": "running"},  # Same
+                }],
+                "action/2": [{
+                    "path": "action/2",
+                    "timestamp": "2026-01-01T00:00:03Z",
+                    "variables": {"counter": 2, "status": "running"},  # Changed!
+                }],
+                "action/3": [{
+                    "path": "action/3",
+                    "timestamp": "2026-01-01T00:00:04Z",
+                    "variables": {"counter": 2, "status": "running"},  # Same as action/2
+                }],
+            },
+        }
+
+        result = _format_detailed_trace("automation.test_changed", "run_changed", trace_data)
+
+        actions = result["action_trace"]
+        assert len(actions) == 4
+
+        # action/0: first occurrence, variables included
+        assert "variables" in actions[0]
+        assert actions[0]["variables"]["counter"] == 1
+
+        # action/1: same as action/0, no variables
+        assert "variables" not in actions[1]
+
+        # action/2: counter changed, variables included
+        assert "variables" in actions[2]
+        assert actions[2]["variables"]["counter"] == 2
+
+        # action/3: same as action/2, no variables
+        assert "variables" not in actions[3]
+
+    def test_variable_deduplication_trigger_vars_still_skipped(self):
+        """Variables containing 'trigger' key should still be skipped (shown in trigger section)."""
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "changed_variables": {"trigger": {"platform": "state"}},
+                }],
+                "action/0": [{
+                    "path": "action/0",
+                    "variables": {"trigger": {"platform": "state"}, "other": "data"},
+                }],
+                "action/1": [{
+                    "path": "action/1",
+                    "variables": {"useful_var": "value"},
+                }],
+            },
+        }
+
+        result = _format_detailed_trace("automation.test_trigger_skip", "run_1", trace_data)
+
+        actions = result["action_trace"]
+
+        # action/0 has trigger in variables -> skipped entirely
+        assert "variables" not in actions[0]
+
+        # action/1 has useful variables -> included
+        assert "variables" in actions[1]
+        assert actions[1]["variables"]["useful_var"] == "value"

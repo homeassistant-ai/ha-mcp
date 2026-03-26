@@ -5,6 +5,7 @@ This module provides tools for retrieving execution traces from Home Assistant
 to help debug automation and script issues.
 """
 
+import json
 import logging
 from typing import Annotated, Any
 
@@ -494,9 +495,15 @@ def _format_detailed_trace(
             condition_results.append(cond_result)
         result["condition_results"] = condition_results
 
-    # Extract action trace
+    # Extract action trace with variable deduplication.
+    # Home Assistant includes the full variable context at every trace step,
+    # but variables rarely change between steps. For complex automations with
+    # hundreds of steps (e.g., blueprint choose actions), this can produce
+    # 100KB+ of duplicated data. We only include variables at steps where
+    # they actually changed from the previous step.
     if actions:
         action_results = []
+        last_vars_fingerprint: str | None = None
         for action in actions:
             action_info: dict[str, Any] = {
                 "path": action.get("path"),
@@ -515,14 +522,21 @@ def _format_detailed_trace(
             if "error" in action:
                 action_info["error"] = action["error"]
 
-            # Extract variables if they contain useful debugging info
+            # Extract variables only when they changed from the previous step.
             # Check both 'variables' and 'changed_variables'
             variables = action.get("variables") or action.get("changed_variables", {})
             if variables and "trigger" not in variables:  # Skip trigger vars (already shown)
-                # Only include non-empty variable sets
                 useful_vars = {k: v for k, v in variables.items() if v is not None}
                 if useful_vars:
-                    action_info["variables"] = useful_vars
+                    # Compare with previous step using JSON fingerprint
+                    try:
+                        fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
+                    except (TypeError, ValueError):
+                        fingerprint = str(useful_vars)
+
+                    if fingerprint != last_vars_fingerprint:
+                        action_info["variables"] = useful_vars
+                        last_vars_fingerprint = fingerprint
 
             # Add child execution info (for nested scripts/automations)
             if "child_id" in action:

@@ -19,6 +19,23 @@ from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_p
 
 logger = logging.getLogger(__name__)
 
+# Fields to keep in compact logbook mode (strips attribute dictionaries
+# and other bulky fields that can cause context exhaustion — see #683)
+COMPACT_LOGBOOK_FIELDS = {"when", "entity_id", "state", "name", "message", "domain", "context_id"}
+
+
+def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
+    """Strip logbook entries to essential fields only.
+
+    Returns entries with only the fields in COMPACT_LOGBOOK_FIELDS,
+    filtering out any non-dict entries.
+    """
+    return [
+        {k: v for k, v in entry.items() if k in COMPACT_LOGBOOK_FIELDS}
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+
 
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant utility tools."""
@@ -42,6 +59,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         end_time: str | None = None,
         limit: int | str | None = None,
         offset: int | str = 0,
+        compact: bool | str = True,
     ) -> dict[str, Any]:
         """
         Get Home Assistant logbook entries for the specified time period.
@@ -54,6 +72,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - end_time: Optional end time in ISO format (defaults to now)
         - limit: Maximum number of entries to return (default: 50, max: 500)
         - offset: Number of entries to skip for pagination (default: 0)
+        - compact: Return only essential fields per entry (default: True).
+          When True, each entry contains only: when, entity_id, state, name, message, domain, context_id.
+          Set to False to include full attribute dictionaries and all fields.
 
         **Pagination:**
         When the logbook has more entries than the limit, use offset to get
@@ -70,9 +91,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Example:**
         - First page: ha_get_logbook(hours_back=24, limit=50, offset=0)
         - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
+        - Full details: ha_get_logbook(hours_back=1, compact=False)
         """
 
         # Coerce parameters with string handling for AI tools
+        compact_bool = coerce_bool_param(compact, "compact", default=True)
+        if compact_bool is None:
+            compact_bool = True
+
         try:
             hours_back_int = coerce_int_param(
                 hours_back,
@@ -147,6 +173,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 paginated_entries = response
                 has_more = False
 
+            # In compact mode, strip entries to essential fields only.
+            # This prevents full attribute dictionaries from exhausting
+            # the LLM context window during debugging workflows.
+            if compact_bool and isinstance(paginated_entries, list):
+                paginated_entries = _compact_logbook_entries(paginated_entries)
+
             logbook_data = {
                 "success": True,
                 "entries": paginated_entries,
@@ -176,6 +208,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     param_parts.append(f"entity_id={entity_id}")
                 if end_time:
                     param_parts.append(f"end_time={end_time}")
+                if not compact_bool:
+                    param_parts.append("compact=False")
 
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
