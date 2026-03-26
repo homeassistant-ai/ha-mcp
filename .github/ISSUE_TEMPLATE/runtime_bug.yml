@@ -2,9 +2,6 @@ name: "🐛 Runtime Bug"
 description: "Report a bug that occurs while ha-mcp is running (errors, crashes, incorrect behavior)"
 title: "[BUG] "
 labels: ["bug"]
-assignees:
-  - julienld
-
 body:
   - type: markdown
     attributes:

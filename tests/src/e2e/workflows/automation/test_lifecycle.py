@@ -1003,3 +1003,135 @@ async def test_automation_with_choose_block(mcp_client):
     assert_mcp_success(delete_result)
 
     logger.info("✅ Choose block normalization test completed successfully")
+
+
+@pytest.mark.automation
+async def test_duplicate_automation_prevention(mcp_client, cleanup_tracker):
+    """
+    Test: Creating automation with existing 'id' in config but no identifier is rejected.
+
+    Validates fix for issue #698 — when an agent retrieves an automation config
+    (which contains an 'id' field) and passes it back to ha_config_set_automation
+    without an identifier, the tool should reject the request instead of silently
+    creating a duplicate.
+    """
+    logger.info("Testing duplicate automation prevention...")
+
+    # First create a real automation so we have a valid config with an 'id' field
+    create_result = await safe_call_tool(
+        mcp_client,
+        "ha_config_set_automation",
+        {
+            "config": {
+                "alias": "Duplicate Prevention Test E2E",
+                "description": "E2E test - safe to delete",
+                "trigger": [{"platform": "time", "at": "06:00:00"}],
+                "action": [
+                    {
+                        "service": "persistent_notification.create",
+                        "data": {"message": "test"},
+                    }
+                ],
+            }
+        },
+    )
+    assert create_result.get("success"), f"Initial creation failed: {create_result}"
+    automation_entity = create_result.get("entity_id")
+    unique_id = create_result.get("unique_id")
+    assert automation_entity, "No entity_id returned"
+    assert unique_id, "No unique_id returned"
+    cleanup_tracker.track("automation", automation_entity)
+    logger.info(f"Created test automation: {automation_entity} (id={unique_id})")
+
+    # Now retrieve the automation config — it will contain the 'id' field
+    config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
+    assert config is not None, "Could not retrieve created automation"
+    assert "id" in config, f"Retrieved config should contain 'id' field: {config.keys()}"
+
+    # Attempt to create a new automation using this config WITHOUT passing identifier.
+    # This should be rejected because the config contains an existing 'id'.
+    logger.info("Attempting to create automation with existing 'id' in config (no identifier)...")
+    duplicate_result = await safe_call_tool(
+        mcp_client,
+        "ha_config_set_automation",
+        {"config": config},
+    )
+
+    assert not duplicate_result.get("success"), (
+        f"Should have rejected config with existing 'id' but got success: {duplicate_result}"
+    )
+
+    # Verify the error mentions the 'id' field and provides guidance
+    error = duplicate_result.get("error", {})
+    error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
+    assert "id" in error_msg.lower(), (
+        f"Error should mention 'id' field: {error_msg}"
+    )
+    logger.info(f"Correctly rejected with error: {error_msg}")
+
+    # Clean up
+    delete_result = await mcp_client.call_tool(
+        "ha_config_remove_automation",
+        {"identifier": automation_entity},
+    )
+    assert_mcp_success(delete_result, "duplicate prevention test cleanup")
+    logger.info("Duplicate automation prevention test passed")
+
+
+@pytest.mark.automation
+async def test_automation_creation_returns_verified_entity(
+    mcp_client, cleanup_tracker, test_data_factory
+):
+    """
+    Test: Successful automation creation returns a verified entity_id.
+
+    Validates fix for issue #610 — after creating an automation, the tool should
+    return a real entity_id that was confirmed via state polling, not a predicted one.
+    The entity_id must be queryable immediately after creation returns.
+    """
+    logger.info("Testing automation creation returns verified entity...")
+
+    config = test_data_factory.automation_config(
+        "Verified Entity",
+        trigger=[{"platform": "time", "at": "06:00:00"}],
+        action=[
+            {
+                "service": "persistent_notification.create",
+                "data": {"message": "verified entity test"},
+            }
+        ],
+    )
+
+    create_result = await safe_call_tool(
+        mcp_client,
+        "ha_config_set_automation",
+        {"config": config},
+    )
+    assert create_result.get("success"), f"Automation creation failed: {create_result}"
+
+    entity_id = create_result.get("entity_id")
+    assert entity_id, "No entity_id returned from creation"
+    assert entity_id.startswith("automation."), f"Invalid entity_id format: {entity_id}"
+    cleanup_tracker.track("automation", entity_id)
+
+    # The returned entity_id should be immediately queryable since it was verified
+    logger.info(f"Verifying returned entity_id {entity_id} is queryable...")
+    state_result = await safe_call_tool(
+        mcp_client,
+        "ha_get_state",
+        {"entity_id": entity_id},
+    )
+    # ha_get_state nests entity data under 'data' key
+    state_data = state_result.get("data", state_result)
+    assert state_data.get("entity_id") == entity_id, (
+        f"Returned entity_id {entity_id} is not queryable: {state_result}"
+    )
+    logger.info(f"Entity {entity_id} is queryable - verified, not predicted")
+
+    # Clean up
+    delete_result = await mcp_client.call_tool(
+        "ha_config_remove_automation",
+        {"identifier": entity_id},
+    )
+    assert_mcp_success(delete_result, "verified entity test cleanup")
+    logger.info("Automation creation verified entity test passed")

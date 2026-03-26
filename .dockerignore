@@ -49,7 +49,7 @@ docs/
 
 # CI/CD
 .github/
-.pre-commit-config.yaml
+lefthook.yml
 
 # Docker
 docker-compose*.yml

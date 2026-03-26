@@ -248,18 +248,75 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     suggestions=suggestions,
                 ))
 
-            # Extract import result
+            # Extract import result (blueprint/import only validates, does not save)
             result_data = response.get("result", {})
+            suggested_filename = result_data.get("suggested_filename", "")
+            raw_data = result_data.get("raw_data", "")
+            blueprint_meta = result_data.get("blueprint", {}).get("metadata", {})
+            domain = blueprint_meta.get("domain", "automation")
+
+            if not suggested_filename or not raw_data:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Blueprint validated but no filename or YAML data was returned",
+                    context={"url": url},
+                    suggestions=[
+                        "This may indicate an incompatible blueprint format",
+                        "Try a different blueprint URL",
+                    ],
+                ))
+
+            # Ensure the path has a .yaml extension — HA's blueprint/import returns
+            # suggested_filename without the extension (e.g. "user/blueprint_name")
+            if not suggested_filename.endswith((".yaml", ".yml")):
+                suggested_filename = suggested_filename + ".yaml"
+
+            # Save the blueprint to disk (blueprint/import only validates)
+            save_response = await client.send_websocket_message(
+                {
+                    "type": "blueprint/save",
+                    "domain": domain,
+                    "path": suggested_filename,
+                    "yaml": raw_data,
+                    "source_url": url,
+                }
+            )
+
+            if not save_response.get("success"):
+                error = save_response.get("error", {})
+                save_error = (
+                    error.get("message", str(error))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
+
+                suggestions = [
+                    "The blueprint was validated but could not be saved to disk",
+                    "Use ha_get_blueprint() to check if it already exists",
+                ]
+
+                if "already exists" in save_error.lower():
+                    suggestions.insert(0, "A blueprint with this path already exists")
+
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    save_error,
+                    context={"url": url, "path": suggested_filename},
+                    suggestions=suggestions,
+                ))
+
+            save_result = save_response.get("result") or {}
 
             return {
                 "success": True,
                 "url": url,
                 "imported_blueprint": {
-                    "path": result_data.get("suggested_filename") or result_data.get("path"),
-                    "domain": result_data.get("blueprint", {}).get("domain", "automation"),
-                    "name": result_data.get("blueprint", {}).get("name"),
-                    "description": result_data.get("blueprint", {}).get("description"),
+                    "path": suggested_filename,
+                    "domain": domain,
+                    "name": blueprint_meta.get("name"),
+                    "description": blueprint_meta.get("description"),
                 },
+                "overrides_existing": save_result.get("overrides_existing", False),
                 "message": "Blueprint imported successfully. Use ha_get_blueprint() to see all installed blueprints.",
             }
 
