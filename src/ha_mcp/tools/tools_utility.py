@@ -96,8 +96,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Coerce parameters with string handling for AI tools
         compact_bool = coerce_bool_param(compact, "compact", default=True)
-        if compact_bool is None:
-            compact_bool = True
 
         try:
             hours_back_int = coerce_int_param(

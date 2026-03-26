@@ -259,3 +259,120 @@ class TestFormatDetailedTrace:
         # action/1 has useful variables -> included
         assert "variables" in actions[1]
         assert actions[1]["variables"]["useful_var"] == "value"
+
+    def test_deduplicate_false_preserves_all_variables(self):
+        """When deduplicate=False, all steps should retain their full variables."""
+        shared_vars = {
+            "foo": "bar",
+            "mqtt_data": {"topic": "frigate/events", "payload": "large_payload_here"},
+        }
+
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "changed_variables": {"trigger": {"platform": "mqtt"}},
+                }],
+                **{
+                    f"action/{i}": [{
+                        "path": f"action/{i}",
+                        "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
+                        "result": {"executed": True},
+                        "variables": shared_vars.copy(),
+                    }]
+                    for i in range(5)
+                },
+            },
+        }
+
+        result = _format_detailed_trace(
+            "automation.test_no_dedup", "run_no_dedup", trace_data, deduplicate=False
+        )
+
+        actions = result["action_trace"]
+        assert len(actions) == 5
+
+        # Every action step should have its variables preserved
+        for action in actions:
+            assert "variables" in action, (
+                f"Step {action['path']} should have variables when deduplicate=False"
+            )
+            assert action["variables"]["foo"] == "bar"
+
+    def test_detailed_includes_logbook_entries(self):
+        """When detailed=True, logbook_entries from the trace should be included."""
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "changed_variables": {"trigger": {"platform": "state"}},
+                }],
+                "action/0": [{
+                    "path": "action/0",
+                    "result": {"executed": True},
+                }],
+            },
+            "logbook_entries": [
+                {"when": "2026-01-01T00:00:01Z", "entity_id": "light.test", "state": "on"},
+                {"when": "2026-01-01T00:00:02Z", "entity_id": "light.test", "state": "off"},
+            ],
+            "context": {"id": "ctx_123", "parent_id": None, "user_id": None},
+        }
+
+        # Default mode: no logbook entries
+        result_default = _format_detailed_trace("automation.test", "run_1", trace_data)
+        assert "logbook_entries" not in result_default
+        assert "context" not in result_default
+
+        # Detailed mode: logbook entries and context included
+        result_detailed = _format_detailed_trace(
+            "automation.test", "run_1", trace_data, detailed=True
+        )
+        assert "logbook_entries" in result_detailed
+        assert len(result_detailed["logbook_entries"]) == 2
+        assert "context" in result_detailed
+        assert result_detailed["context"]["id"] == "ctx_123"
+
+    def test_script_paths_matched_as_actions(self):
+        """Script-style paths (numeric, sequence/) should be captured as actions."""
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [{
+                    "path": "trigger/0",
+                    "changed_variables": {"trigger": {"platform": "event"}},
+                }],
+                "0": [{
+                    "path": "0",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "result": {"executed": True},
+                }],
+                "1": [{
+                    "path": "1",
+                    "timestamp": "2026-01-01T00:00:02Z",
+                    "result": {"executed": True},
+                }],
+                "0/repeat/sequence/0": [{
+                    "path": "0/repeat/sequence/0",
+                    "timestamp": "2026-01-01T00:00:03Z",
+                    "result": {"executed": True},
+                }],
+                "sequence/0": [{
+                    "path": "sequence/0",
+                    "timestamp": "2026-01-01T00:00:04Z",
+                    "result": {"executed": True},
+                }],
+            },
+        }
+
+        result = _format_detailed_trace("script.test_paths", "run_1", trace_data)
+
+        actions = result["action_trace"]
+        paths = [a["path"] for a in actions]
+        assert "0" in paths
+        assert "1" in paths
+        assert "0/repeat/sequence/0" in paths
+        assert "sequence/0" in paths
