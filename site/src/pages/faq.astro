@@ -137,6 +137,22 @@ const withBase = (path: string) => {
       <h2 class="text-2xl font-semibold text-white mb-6">Troubleshooting</h2>
 
       <div class="space-y-6">
+        <div class="faq-item" id="oauth-v7-migration">
+          <h3 class="text-lg font-medium text-white mb-2">OAuth stopped working after upgrading to v7.0.0</h3>
+          <p class="text-slate-300 mb-3">v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> as a server-side environment variable before starting ha-mcp.</p>
+          <pre class="code-block"><code># Docker
+docker run -d -p 8086:8086 \
+  -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+  -e MCP_BASE_URL=https://your-mcp-server.example.com \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
+
+# uvx
+HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+MCP_BASE_URL=https://your-mcp-server.example.com \
+uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank">full migration guide</a> for details.</p>
+        </div>
+
         <div class="faq-item" id="ssl-certificates">
           <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
           <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>

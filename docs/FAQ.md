@@ -46,6 +46,10 @@ The demo environment resets weekly. Your changes won't persist.
 
 ## Troubleshooting
 
+### OAuth stopped working after upgrading to v7.0.0
+
+v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set `HOMEASSISTANT_URL` as a server-side environment variable before starting ha-mcp. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.
+
 ### Claude.ai says "Couldn't reach the MCP server"
 
 **This is normal.** Claude.ai shows this error during its initial connection handshake, but the server connects successfully afterward. To verify you're actually connected:
