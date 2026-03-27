@@ -158,6 +158,21 @@ https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 
 **Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
 
+#### ⚠️ Disable "Block AI Training Bots"
+
+> **This is the most common connection issue for Cloudflare users.** If your LLM client can't connect but visiting the URL in your browser works, this setting is almost certainly the cause.
+
+Cloudflare's "Block AI training bots" feature blocks requests from AI/LLM clients by default. You must disable it:
+
+1. Log in to [Cloudflare](https://dash.cloudflare.com)
+2. In the left sidebar, click **Domains**, then click **Overview**
+3. Click on the domain you use for connecting to Home Assistant
+4. On the right side of the page, find **"Control AI Crawlers"**
+5. Under **"Block AI training bots"**, open the dropdown
+6. Select **"do not block (allow crawlers)"**
+
+![Cloudflare AI Crawlers Setting](https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
+
 See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md) for advanced configuration.
 
 </details>

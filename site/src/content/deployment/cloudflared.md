@@ -72,6 +72,21 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
+## Disable "Block AI Training Bots"
+
+> **This is the most common connection issue for Cloudflare users.** If your LLM client can't connect but visiting the URL in your browser works, this setting is almost certainly the cause.
+
+Cloudflare's "Block AI training bots" feature blocks requests from AI/LLM clients by default. You must disable it for your MCP connection to work:
+
+1. Log in to [Cloudflare](https://dash.cloudflare.com)
+2. In the left sidebar, click **Domains**, then click **Overview**
+3. Click on the domain you use for connecting to Home Assistant
+4. On the right side of the page, find **"Control AI Crawlers"**
+5. Under **"Block AI training bots"**, open the dropdown
+6. Select **"do not block (allow crawlers)"**
+
+![Cloudflare AI Crawlers Setting](/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
+
 ## Security
 
 - Traffic is encrypted end-to-end
