@@ -1,6 +1,6 @@
 # OAuth Authentication for ha-mcp (Beta)
 
-> **Status:** Beta - OAuth provides an alternative to the private URL method. It's fully functional but still being refined.
+> **Status:** Beta — OAuth provides an alternative to the private URL method. Fully functional but still being refined.
 
 OAuth authentication lets multiple users authenticate with their own Home Assistant Long-Lived Access Token via a consent form.
 

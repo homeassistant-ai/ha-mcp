@@ -182,7 +182,7 @@ uvx --refresh ha-mcp@latest
 uvx ha-mcp@latest --version
 ```
 
-The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest) (currently 6.x). If you see version 3.x or older, the cache needs clearing.
+The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
 
 ---
 
