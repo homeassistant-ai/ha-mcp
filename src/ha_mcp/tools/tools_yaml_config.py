@@ -8,7 +8,9 @@ only in YAML and have no REST/WebSocket API equivalent.
 **Dependency:** Requires the ha_mcp_tools custom component to be installed.
 The tools will gracefully fail with installation instructions if the component is not available.
 
-Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
+Feature Flags:
+  - HAMCP_ENABLE_FILESYSTEM_TOOLS=true (filesystem access prerequisite)
+  - ENABLE_YAML_CONFIG_EDITING=true (this tool's dedicated toggle)
 """
 
 import logging
@@ -17,10 +19,10 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .tools_filesystem import (
-    FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
     is_filesystem_tools_enabled,
@@ -33,14 +35,23 @@ logger = logging.getLogger(__name__)
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
 
-    This function only registers tools if the filesystem feature flag is enabled.
-    Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable.
+    Requires both HAMCP_ENABLE_FILESYSTEM_TOOLS=true (filesystem access)
+    and ENABLE_YAML_CONFIG_EDITING=true (dedicated toggle).
     """
     if not is_filesystem_tools_enabled():
-        logger.debug("YAML config tools disabled (set %s=true to enable)", FEATURE_FLAG)
+        logger.debug(
+            "YAML config tools disabled (HAMCP_ENABLE_FILESYSTEM_TOOLS not set)"
+        )
         return
 
-    logger.info("YAML config editing tools enabled via feature flag")
+    settings = get_global_settings()
+    if not settings.enable_yaml_config_editing:
+        logger.debug(
+            "YAML config tools disabled (set ENABLE_YAML_CONFIG_EDITING=true to enable)"
+        )
+        return
+
+    logger.info("YAML config editing tools enabled")
 
     @mcp.tool(
         annotations={

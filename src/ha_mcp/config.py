@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     # Home Assistant connection
     # In OAuth mode, these are optional and provided per-request
     homeassistant_url: str = Field(default=OAUTH_MODE_URL, alias="HOMEASSISTANT_URL")
-    homeassistant_token: str = Field(default=OAUTH_MODE_TOKEN, alias="HOMEASSISTANT_TOKEN")
+    homeassistant_token: str = Field(
+        default=OAUTH_MODE_TOKEN, alias="HOMEASSISTANT_TOKEN"
+    )
 
     # Server configuration
     timeout: int = Field(30, alias="HA_TIMEOUT")
@@ -70,7 +72,9 @@ class Settings(BaseSettings):
 
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
-    mcp_server_version: str = Field(default=_PACKAGE_VERSION, alias="MCP_SERVER_VERSION")
+    mcp_server_version: str = Field(
+        default=_PACKAGE_VERSION, alias="MCP_SERVER_VERSION"
+    )
 
     # Environment configuration
     environment: str = Field("development", alias="ENVIRONMENT")
@@ -83,7 +87,9 @@ class Settings(BaseSettings):
     # Dashboard partial update tools (python_transform, find_card)
     # These are token-efficient alternatives to full config replacement.
     # Disable when using clients with programmatic tool use (future).
-    enable_dashboard_partial_tools: bool = Field(True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS")
+    enable_dashboard_partial_tools: bool = Field(
+        True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS"
+    )
 
     # Skills configuration
     # Serve bundled HA best-practice skills as MCP resources (skill:// URIs).
@@ -98,6 +104,12 @@ class Settings(BaseSettings):
     # BM25 search tool and categorized call proxies (read/write/delete).
     # Dramatically reduces idle context token usage for LLMs.
     enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
+
+    # Managed YAML config editing — allows ha_config_set_yaml to add,
+    # replace, or remove top-level keys in configuration.yaml and package
+    # files. Requires HAMCP_ENABLE_FILESYSTEM_TOOLS=true as well.
+    # Disabled by default; only for YAML-only features with no UI/API path.
+    enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
