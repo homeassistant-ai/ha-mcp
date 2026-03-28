@@ -5,6 +5,7 @@ Tests for ha_get_logs tool - log access with multiple sources and pagination.
 import logging
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
@@ -395,20 +396,14 @@ async def test_logs_invalid_source(mcp_client):
     """Test that invalid source returns validation error."""
     logger.info("Testing invalid source parameter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "invalid_source"},
-    )
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_get_logs",
+            {"source": "invalid_source"},
+        )
 
-    data = parse_mcp_result(result)
-
-    # Should be an error response
-    assert data.get("success") is not True, "Invalid source should fail"
-    error = data.get("error", {})
-    if isinstance(error, dict):
-        assert "invalid" in error.get("message", "").lower() or "source" in error.get("message", "").lower()
-
-    logger.info("Invalid source correctly returns error")
+    assert "invalid" in str(exc_info.value).lower() or "source" in str(exc_info.value).lower()
+    logger.info("Invalid source correctly raises ToolError")
 
 
 @pytest.mark.asyncio
@@ -416,16 +411,14 @@ async def test_logs_invalid_level(mcp_client):
     """Test that invalid level returns validation error."""
     logger.info("Testing invalid level parameter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "system", "level": "INVALID"},
-    )
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_get_logs",
+            {"source": "system", "level": "INVALID"},
+        )
 
-    data = parse_mcp_result(result)
-
-    assert data.get("success") is not True, "Invalid level should fail"
-
-    logger.info("Invalid level correctly returns error")
+    assert "invalid" in str(exc_info.value).lower() or "level" in str(exc_info.value).lower()
+    logger.info("Invalid level correctly raises ToolError")
 
 
 @pytest.mark.asyncio
@@ -433,16 +426,14 @@ async def test_logs_supervisor_missing_slug(mcp_client):
     """Test that supervisor source without slug returns validation error."""
     logger.info("Testing supervisor source without slug")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "supervisor"},
-    )
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_get_logs",
+            {"source": "supervisor"},
+        )
 
-    data = parse_mcp_result(result)
-
-    assert data.get("success") is not True, "Supervisor without slug should fail"
-
-    logger.info("Supervisor without slug correctly returns error")
+    assert "slug" in str(exc_info.value).lower()
+    logger.info("Supervisor without slug correctly raises ToolError")
 
 
 @pytest.mark.asyncio

@@ -321,6 +321,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 min_value=1,
                 max_value=MAX_LOGBOOK_LIMIT,
             )
+            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -411,6 +412,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 min_value=1,
                 max_value=MAX_LOGBOOK_LIMIT,
             )
+            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -483,6 +485,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 min_value=1,
                 max_value=MAX_LOGBOOK_LIMIT,
             )
+            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
