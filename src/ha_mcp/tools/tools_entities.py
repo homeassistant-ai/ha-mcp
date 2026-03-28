@@ -111,10 +111,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 enabled_bool = coerce_bool_param(enabled, "enabled")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
-                )
+                ))
             message["disabled_by"] = None if enabled_bool else "user"
             updates_made.append("enabled" if enabled_bool else "disabled")
 
@@ -122,10 +122,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 hidden_bool = coerce_bool_param(hidden, "hidden")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
-                )
+                ))
             message["hidden_by"] = "user" if hidden_bool else None
             updates_made.append("hidden" if hidden_bool else "visible")
 
@@ -474,22 +474,26 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # "disable" them is via their domain services (automation.turn_off /
             # script.turn_off) which simply prevent them from running while
             # keeping them visible and manageable.
-            if enabled is not None and not is_bulk:
+            if enabled is not None:
                 try:
                     _enabled_check = coerce_bool_param(enabled, "enabled")
                 except ValueError:
-                    _enabled_check = None  # will be caught later by existing validation
+                    _enabled_check = None  # will be caught by _update_single_entity
 
                 if _enabled_check is False:
-                    _domain = entity_ids[0].split(".")[0] if "." in entity_ids[0] else ""
-                    if _domain in ("automation", "script"):
+                    blocked = [
+                        eid for eid in entity_ids
+                        if eid.split(".")[0] in ("automation", "script")
+                    ]
+                    if blocked:
+                        _domain = blocked[0].split(".")[0]
                         _service_hint = f"{_domain}.turn_off"
                         raise_tool_error(create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
                             f"This removes the entity from the state machine and hides it from the UI "
                             f"until it is re-enabled AND the {_domain}s are reloaded. "
-                            f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{entity_ids[0]}') instead "
+                            f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
                             f"to disable it without removing it.",
                             suggestions=[
                                 f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",

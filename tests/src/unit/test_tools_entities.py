@@ -1146,9 +1146,34 @@ class TestHaSetEntityRegistryDisableGuardrail:
     @pytest.mark.asyncio
     async def test_disable_automation_string_false_blocked(self, set_entity_tool, mock_client):
         """enabled='false' (string) on automation entity should also be blocked."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(entity_id="automation.morning", enabled="false")
 
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_string_capital_false_blocked(self, set_entity_tool, mock_client):
+        """enabled='False' (capital F, common from Python agents) should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.evening", enabled="False")
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_single_element_list_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on single-element list ['automation.test'] should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id=["automation.test"], enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
