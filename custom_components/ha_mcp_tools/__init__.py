@@ -10,7 +10,6 @@ import fnmatch
 import logging
 import os
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,6 @@ from .const import (
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
-    BLOCKED_YAML_KEYS,
     DOMAIN,
 )
 
@@ -529,15 +527,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 ),
             }
 
-        # Validate yaml_path against whitelist
-        if yaml_path in BLOCKED_YAML_KEYS:
-            return {
-                "success": False,
-                "error": (
-                    f"Key '{yaml_path}' is blocked for safety. "
-                    f"Blocked keys: {', '.join(sorted(BLOCKED_YAML_KEYS))}"
-                ),
-            }
+        # Validate yaml_path against allowlist
         if yaml_path not in ALLOWED_YAML_KEYS:
             return {
                 "success": False,
@@ -561,6 +551,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return {
                     "success": False,
                     "error": f"Invalid YAML content: {err}",
+                }
+            if parsed_content is None:
+                return {
+                    "success": False,
+                    "error": "Content parsed as null/empty. Provide non-empty YAML.",
                 }
 
         target_file = config_dir / normalized
@@ -596,7 +591,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 data = {}
                 raw_content = ""
 
-            # Create backup before editing
+            # Create backup before editing (from already-read content, not disk)
             if do_backup and raw_content:
                 backup_dir = config_dir / "www" / "yaml_backups"
                 await hass.async_add_executor_job(
@@ -606,7 +601,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 safe_name = normalized.replace(os.sep, "_")
                 backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
                 await hass.async_add_executor_job(
-                    shutil.copy2, str(target_file), str(backup_file)
+                    backup_file.write_text, raw_content
                 )
                 backup_path_str = str(backup_file.relative_to(config_dir))
                 _LOGGER.info("Backup created: %s", backup_path_str)
@@ -615,7 +610,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if action == "add":
                 if yaml_path in data:
                     existing = data[yaml_path]
-                    # Merge: list extends list, dict merges dict, else replace
+                    # Merge: list extends list, dict merges dict
                     if isinstance(existing, list) and isinstance(parsed_content, list):
                         data[yaml_path] = existing + parsed_content
                     elif isinstance(existing, dict) and isinstance(
@@ -623,7 +618,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     ):
                         existing.update(parsed_content)
                     else:
-                        data[yaml_path] = parsed_content
+                        return {
+                            "success": False,
+                            "error": (
+                                f"Type mismatch for key '{yaml_path}': "
+                                f"existing is {type(existing).__name__}, "
+                                f"new content is {type(parsed_content).__name__}. "
+                                "Use action='replace' to overwrite."
+                            ),
+                        }
                 else:
                     data[yaml_path] = parsed_content
             elif action == "replace":
@@ -659,8 +662,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     target_file.parent.mkdir, parents=True, exist_ok=True
                 )
 
-            # Write the file
-            await hass.async_add_executor_job(target_file.write_text, new_content)
+            # Atomic write: write to temp file, then rename into place
+            def _atomic_write() -> None:
+                tmp_file = target_file.with_suffix(".tmp")
+                tmp_file.write_text(new_content)
+                os.replace(str(tmp_file), str(target_file))
+
+            await hass.async_add_executor_job(_atomic_write)
 
             stat = target_file.stat()
             modified_dt = datetime.fromtimestamp(stat.st_mtime)
@@ -682,6 +690,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
             if backup_path_str:
                 result["backup_path"] = backup_path_str
+
+            # Run HA config check to verify the file is loadable
+            try:
+                check_result = await hass.services.async_call(
+                    "homeassistant",
+                    "check_config",
+                    {},
+                    blocking=True,
+                    return_response=True,
+                )
+                if isinstance(check_result, dict):
+                    errors = check_result.get("errors")
+                    if errors:
+                        result["config_check"] = "errors"
+                        result["config_check_errors"] = errors
+                        _LOGGER.warning(
+                            "Config check found errors after editing %s: %s",
+                            rel_path,
+                            errors,
+                        )
+                    else:
+                        result["config_check"] = "ok"
+            except Exception as check_err:
+                result["config_check"] = "unavailable"
+                result["config_check_error"] = str(check_err)
+                _LOGGER.debug("Config check unavailable: %s", check_err)
 
             return result
 

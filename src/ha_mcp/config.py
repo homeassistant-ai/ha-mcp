@@ -107,8 +107,7 @@ class Settings(BaseSettings):
 
     # Managed YAML config editing — allows ha_config_set_yaml to add,
     # replace, or remove top-level keys in configuration.yaml and package
-    # files. Requires HAMCP_ENABLE_FILESYSTEM_TOOLS=true as well.
-    # Disabled by default; only for YAML-only features with no UI/API path.
+    # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
     @model_validator(mode="after")

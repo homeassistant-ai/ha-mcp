@@ -8,9 +8,7 @@ only in YAML and have no REST/WebSocket API equivalent.
 **Dependency:** Requires the ha_mcp_tools custom component to be installed.
 The tools will gracefully fail with installation instructions if the component is not available.
 
-Feature Flags:
-  - HAMCP_ENABLE_FILESYSTEM_TOOLS=true (filesystem access prerequisite)
-  - ENABLE_YAML_CONFIG_EDITING=true (this tool's dedicated toggle)
+Feature Flag: Set ENABLE_YAML_CONFIG_EDITING=true to enable.
 """
 
 import logging
@@ -25,7 +23,6 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
-    is_filesystem_tools_enabled,
 )
 from .util_helpers import add_timezone_metadata, coerce_bool_param
 
@@ -35,15 +32,8 @@ logger = logging.getLogger(__name__)
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
 
-    Requires both HAMCP_ENABLE_FILESYSTEM_TOOLS=true (filesystem access)
-    and ENABLE_YAML_CONFIG_EDITING=true (dedicated toggle).
+    Requires ENABLE_YAML_CONFIG_EDITING=true.
     """
-    if not is_filesystem_tools_enabled():
-        logger.debug(
-            "YAML config tools disabled (HAMCP_ENABLE_FILESYSTEM_TOOLS not set)"
-        )
-        return
-
     settings = get_global_settings()
     if not settings.enable_yaml_config_editing:
         logger.debug(
@@ -185,15 +175,16 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if isinstance(result, dict):
+                if not result.get("success", True):
+                    raise_tool_error(result)
                 return await add_timezone_metadata(client, result)
 
-            return await add_timezone_metadata(
-                client,
-                {
-                    "success": False,
-                    "error": "Unexpected response format from service",
-                    "file": file,
-                },
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from YAML config service",
+                    context={"file": file},
+                )
             )
 
         except ToolError:

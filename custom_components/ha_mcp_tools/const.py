@@ -11,20 +11,14 @@ ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # Also allows packages/*.yaml via pattern matching
 
 # Top-level YAML keys allowed for editing.
-# These are YAML-only features that typically lack a full UI/API path.
+# ONLY keys that have no UI/API alternative belong here.
+# Keys manageable via ha_config_set_helper (input_*, counter, timer, schedule)
+# or ha_config_set_automation/script/scene are intentionally excluded.
 ALLOWED_YAML_KEYS = frozenset(
     {
         "template",
         "sensor",
         "binary_sensor",
-        "input_boolean",
-        "input_number",
-        "input_text",
-        "input_select",
-        "input_datetime",
-        "input_button",
-        "counter",
-        "timer",
         "command_line",
         "rest",
         "mqtt",
@@ -37,27 +31,5 @@ ALLOWED_YAML_KEYS = frozenset(
         "notify",
         "group",
         "utility_meter",
-        "schedule",
-    }
-)
-
-# Top-level keys explicitly blocked from editing — core HA config.
-BLOCKED_YAML_KEYS = frozenset(
-    {
-        "homeassistant",
-        "default_config",
-        "http",
-        "api",
-        "auth",
-        "cloud",
-        "frontend",
-        "recorder",
-        "logger",
-        "history",
-        "logbook",
-        "system_log",
-        "automation",
-        "script",
-        "scene",
     }
 )
