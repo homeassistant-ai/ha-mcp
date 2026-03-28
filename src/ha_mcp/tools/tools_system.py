@@ -386,7 +386,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "issues": repairs_list,
                             "count": len(repairs_list),
                         }
-                except (TimeoutError, OSError) as e:
+                except Exception as e:
                     logger.warning("Failed to fetch repairs: %s", e)
                     result["repairs"]["error"] = f"Repairs data not available: {e}"
 
@@ -422,7 +422,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "devices": zha_devices,
                             "count": len(zha_devices),
                         }
-                except (TimeoutError, OSError) as e:
+                except Exception as e:
                     logger.warning("Failed to fetch ZHA network data: %s", e)
                     result["zha_network"]["error"] = f"ZHA integration not available or error: {e}"
 

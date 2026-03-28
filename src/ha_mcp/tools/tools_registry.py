@@ -649,7 +649,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "lqi": zha_dev.get("lqi"),
                                     "rssi": zha_dev.get("rssi"),
                                 }
-                    except (TimeoutError, OSError) as e:
+                    except Exception as e:
                         logger.warning(
                             "Could not fetch ZHA radio metrics for device %s: %s",
                             device_info.get("device_id"),

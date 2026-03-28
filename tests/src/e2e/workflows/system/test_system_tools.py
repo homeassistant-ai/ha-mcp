@@ -18,7 +18,6 @@ We verify the safety mechanisms work but do not actually restart HA during tests
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
@@ -439,17 +438,17 @@ class TestSystemTools:
         """
         logger.info("Testing get system health with zha_network include...")
 
-        try:
-            result = await mcp_client.call_tool(
-                "ha_get_system_health", {"include": "zha_network"}
-            )
-        except ToolError:
-            pytest.skip("system_health not available in test environment")
-
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "zha_network"}
+        )
         data = parse_mcp_result(result)
 
         if not data.get("success"):
-            pytest.skip("system_health not available in test environment")
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with ZHA failed: {error_msg}")
 
         assert "health_info" in data, "Missing 'health_info' field"
         assert "zha_network" in data, "Missing 'zha_network' when include='zha_network'"
@@ -468,17 +467,17 @@ class TestSystemTools:
         """
         logger.info("Testing system health with combined include...")
 
-        try:
-            result = await mcp_client.call_tool(
-                "ha_get_system_health", {"include": "repairs,zha_network"}
-            )
-        except ToolError:
-            pytest.skip("system_health not available in test environment")
-
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs,zha_network"}
+        )
         data = parse_mcp_result(result)
 
         if not data.get("success"):
-            pytest.skip("system_health not available in test environment")
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with combined include failed: {error_msg}")
 
         assert "repairs" in data, "Combined include should have repairs"
         assert "zha_network" in data, "Combined include should have zha_network"
