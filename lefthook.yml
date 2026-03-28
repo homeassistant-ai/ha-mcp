@@ -7,6 +7,9 @@ pre-commit:
             glob: "**/*.py"
             run: uv run ruff check {staged_files} --fix
             stage_fixed: true
+          - name: ast-grep
+            glob: "src/ha_mcp/tools/**/*.py"
+            run: uv run ast-grep scan
           - name: uv-lock
             glob: "pyproject.toml"
             run: uv lock

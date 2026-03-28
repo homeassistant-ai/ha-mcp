@@ -111,10 +111,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 enabled_bool = coerce_bool_param(enabled, "enabled")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
-                )
+                ))
             message["disabled_by"] = None if enabled_bool else "user"
             updates_made.append("enabled" if enabled_bool else "disabled")
 
@@ -122,10 +122,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 hidden_bool = coerce_bool_param(hidden, "hidden")
             except ValueError as e:
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
-                )
+                ))
             message["hidden_by"] = "user" if hidden_bool else None
             updates_made.append("hidden" if hidden_bool else "visible")
 

@@ -41,6 +41,21 @@ wheels = [
 ]
 
 [[package]]
+name = "ast-grep-cli"
+version = "0.42.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/8a/75cef006b52db1f5edb61d2ecab317dd09126ad257a39d472e63b18ab01a/ast_grep_cli-0.42.0.tar.gz", hash = "sha256:7faf73e6ebe79715fd489aef2732b35ece5236bb2c3f0e3cd94e4dd18e96d11b", size = 230580, upload-time = "2026-03-16T03:37:33.759Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/cf/9d52955e34e1c10418304e26217ec1c84ed67df22f3d3b7c62204eadb758/ast_grep_cli-0.42.0-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:37aad4ca0808c36b3554fa6a4ebbe14ace84df44831eb86c0f9715424a26789c", size = 14580679, upload-time = "2026-03-16T03:37:20.177Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/1d/73c1570e8e8f3cb69de9bc549dd20ed978d60a61fb42da373fa89a79183b/ast_grep_cli-0.42.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:8c117d2c12e38a678cd8209494406ad0e964b98475b1782931746bbb4d2402b1", size = 7301696, upload-time = "2026-03-16T03:37:30.088Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/cb/3f5012c808cf62303193cdcf7cd6040925e0e972bd0ebd2f680a89e301b7/ast_grep_cli-0.42.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:3b52201f45dd12cdd09dbea7fe7c60f612edaf7d45d3263fbe4d99d200cf039c", size = 7150900, upload-time = "2026-03-16T03:37:25.922Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/2d/69cda2832dc8d17f7420d91c360c01268514d1cf5066d8c6fcd88b1087dc/ast_grep_cli-0.42.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4e947bb772d16d0349a99702ed2a7b9293b6e18b7e3765eb6bb48e5685e5d716", size = 7452756, upload-time = "2026-03-16T03:37:32.373Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/37/895fc08d4868c347a1acb92712a3e29046879b850f23363ac952ee7ecfca/ast_grep_cli-0.42.0-py3-none-win32.whl", hash = "sha256:fb209f69ef45355246f85b92d149b209e5dea1d317c4c20dd9b5f3a581c7d7fa", size = 7027830, upload-time = "2026-03-16T03:37:27.812Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/88/4f914f4bbb6361f0ed4d0071ecaead77a00381eec0f54c299806517ec194/ast_grep_cli-0.42.0-py3-none-win_amd64.whl", hash = "sha256:bd2f3f58286614bd4084582ddecc0b6c77a520906ff3574727bb65d3a667debc", size = 7485091, upload-time = "2026-03-16T03:37:23.858Z" },
+    { url = "https://files.pythonhosted.org/packages/51/33/e3fab3601c08fa16b957a2ed0853d66aeb7d28e4fa6f87cb5bd4f4280a92/ast_grep_cli-0.42.0-py3-none-win_arm64.whl", hash = "sha256:d6276d4f34e9b0fe8ea97bb57673a5152982e52057b81c5808dde47e77ba4983", size = 7193475, upload-time = "2026-03-16T03:37:35.591Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "25.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -402,6 +417,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "ast-grep-cli" },
     { name = "build" },
     { name = "docker" },
     { name = "lefthook" },
@@ -430,6 +446,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "ast-grep-cli", specifier = ">=0.42.0" },
     { name = "build", specifier = ">=1.2.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "lefthook", specifier = ">=1.10.0" },
