@@ -1,5 +1,5 @@
 """
-Tests for ha_get_logbook tool - logbook entries with pagination.
+Tests for ha_get_logs tool - logbook entries with pagination.
 """
 
 import logging
@@ -25,7 +25,7 @@ async def test_logbook_basic(mcp_client):
     logger.info("Testing basic logbook retrieval")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 1},
     )
 
@@ -56,7 +56,7 @@ async def test_logbook_with_custom_limit(mcp_client):
     logger.info("Testing logbook with custom limit")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 1, "limit": 10},
     )
 
@@ -78,7 +78,7 @@ async def test_logbook_limit_capped_at_maximum(mcp_client):
     logger.info("Testing logbook limit cap at maximum")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 1, "limit": 1000},  # Request more than maximum
     )
 
@@ -99,7 +99,7 @@ async def test_logbook_minimum_limit(mcp_client):
     logger.info("Testing logbook minimum limit")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 1, "limit": 0},  # Request zero
     )
 
@@ -120,7 +120,7 @@ async def test_logbook_pagination_with_offset(mcp_client):
     # Get first page (use safe_call_tool to handle empty logbook in fresh containers)
     first_raw = await safe_call_tool(
         mcp_client,
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 24, "limit": 5, "offset": 0},
     )
     first_data = get_logbook_data(first_raw)
@@ -135,7 +135,7 @@ async def test_logbook_pagination_with_offset(mcp_client):
     # Get second page
     second_raw = await safe_call_tool(
         mcp_client,
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 24, "limit": 5, "offset": 5},
     )
     second_data = get_logbook_data(second_raw)
@@ -170,7 +170,7 @@ async def test_logbook_negative_offset(mcp_client):
     # so the clamped value appears in both success and error responses
     raw_data = await safe_call_tool(
         mcp_client,
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 1, "limit": 10, "offset": -5},
     )
     data = get_logbook_data(raw_data)
@@ -190,7 +190,7 @@ async def test_logbook_has_more_indicator(mcp_client):
     # and RESOURCE_NOT_FOUND error responses (fresh containers may have no entries)
     raw_data = await safe_call_tool(
         mcp_client,
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 24, "limit": 2, "offset": 0},
     )
     data = get_logbook_data(raw_data)
@@ -221,7 +221,7 @@ async def test_logbook_entity_filter(mcp_client):
     logger.info("Testing logbook entity filter")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 24, "entity_id": "sun.sun", "limit": 50},
     )
     raw_data = assert_mcp_success(result, "Logbook entity filter")
@@ -250,7 +250,7 @@ async def test_logbook_response_metadata(mcp_client):
     # Use safe_call_tool — fresh CI containers may have no logbook entries
     raw_data = await safe_call_tool(
         mcp_client,
-        "ha_get_logbook",
+        "ha_get_logs",
         {"hours_back": 2, "limit": 10},
     )
     data = get_logbook_data(raw_data)
@@ -295,7 +295,7 @@ async def test_logbook_empty_result(mcp_client):
     logger.info("Testing logbook with non-existent entity")
 
     result = await mcp_client.call_tool(
-        "ha_get_logbook",
+        "ha_get_logs",
         {
             "hours_back": 1,
             "entity_id": "sensor.nonexistent_entity_xyz_12345",

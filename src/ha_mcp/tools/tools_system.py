@@ -123,19 +123,21 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         confirm_bool = coerce_bool_param(confirm, "confirm", default=False) or False
 
         if not confirm_bool:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Restart not confirmed",
-                details=(
-                    "You must set confirm=True to restart Home Assistant. "
-                    "This is a safety measure to prevent accidental restarts."
-                ),
-                suggestions=[
-                    "Run ha_check_config() first to validate configuration",
-                    "Call ha_restart(confirm=True) to proceed with restart",
-                    "Consider using ha_reload_core() for config-only changes",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Restart not confirmed",
+                    details=(
+                        "You must set confirm=True to restart Home Assistant. "
+                        "This is a safety measure to prevent accidental restarts."
+                    ),
+                    suggestions=[
+                        "Run ha_check_config() first to validate configuration",
+                        "Call ha_restart(confirm=True) to proceed with restart",
+                        "Consider using ha_reload_core() for config-only changes",
+                    ],
+                )
+            )
 
         restart_initiated = False
         try:
@@ -143,15 +145,17 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             config_result = await client.check_config()
             if config_result.get("result") != "valid":
                 errors = config_result.get("errors") or []
-                raise_tool_error(create_error_response(
-                    ErrorCode.CONFIG_INVALID,
-                    "Configuration is invalid - restart aborted",
-                    details=(
-                        "Home Assistant configuration has errors. "
-                        "Fix the errors before restarting."
-                    ),
-                    context={"config_errors": errors},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.CONFIG_INVALID,
+                        "Configuration is invalid - restart aborted",
+                        details=(
+                            "Home Assistant configuration has errors. "
+                            "Fix the errors before restarting."
+                        ),
+                        context={"config_errors": errors},
+                    )
+                )
 
             # Call the restart service - mark as initiated before the call
             # as the connection may be closed before we get a response
@@ -177,8 +181,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Connection errors after restart initiated are expected
             # (HA closes connections during restart)
             if restart_initiated and any(
-                pattern in error_msg.lower()
-                for pattern in ("connect", "closed", "504")
+                pattern in error_msg.lower() for pattern in ("connect", "closed", "504")
             ):
                 return {
                     "success": True,
@@ -245,12 +248,17 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         target = target.lower().strip()
 
         if target not in RELOAD_TARGETS:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid reload target: {target}",
-                context={"target": target, "valid_targets": list(RELOAD_TARGETS.keys())},
-                suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid reload target: {target}",
+                    context={
+                        "target": target,
+                        "valid_targets": list(RELOAD_TARGETS.keys()),
+                    },
+                    suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
+                )
+            )
 
         try:
             if target == "all":
@@ -284,11 +292,13 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 service_info = RELOAD_TARGETS[target]
                 if service_info is None:
                     # This shouldn't happen as we check for "all" above
-                    raise_tool_error(create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Invalid target configuration for: {target}",
-                        context={"target": target},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"Invalid target configuration for: {target}",
+                            context={"target": target},
+                        )
+                    )
                 domain, service = service_info
                 await client.call_service(domain, service, {})
 
@@ -313,13 +323,26 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health"})
     @log_tool_usage
-    async def ha_get_system_health() -> dict[str, Any]:
+    async def ha_get_system_health(
+        include: str | None = None,
+    ) -> dict[str, Any]:
         """
         Get Home Assistant system health information.
 
         Returns health check results from integrations, system resources, and connectivity.
         Available information varies by installation type and loaded integrations.
+
+        **Parameters:**
+        - include: Optional comma-separated list of additional data to include.
+          - "repairs": Repair items from Settings > System > Repairs
+          - "zha_network": ZHA Zigbee devices with LQI/RSSI radio signal metrics
+          - Example: include="repairs,zha_network"
         """
+        # Parse include parameter into a set of requested sections
+        includes: set[str] = set()
+        if include:
+            includes = {s.strip().lower() for s in include.split(",") if s.strip()}
+
         ws_client = None
 
         try:
@@ -328,10 +351,13 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 client.base_url, client.token
             )
             if error or ws_client is None:
-                raise_tool_error(error or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket",
-                ))
+                raise_tool_error(
+                    error
+                    or create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Failed to connect to Home Assistant WebSocket",
+                    )
+                )
 
             # system_health/info returns a result + follow-up event
             try:
@@ -339,24 +365,73 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "system_health/info", wait_timeout=10.0
                 )
             except TimeoutError:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Timeout waiting for system health data",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Timeout waiting for system health data",
+                    )
+                )
             except Exception as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(e),
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(e),
+                    )
+                )
 
             health_info = event_response.get("event", {})
+            component_count = len(health_info) if isinstance(health_info, dict) else 0
 
-            return {
+            result: dict[str, Any] = {
                 "success": True,
                 "health_info": health_info,
-                "component_count": len(health_info) if isinstance(health_info, dict) else 0,
-                "message": f"Retrieved health info for {len(health_info) if isinstance(health_info, dict) else 0} components",
+                "component_count": component_count,
+                "message": f"Retrieved health info for {component_count} components",
             }
+
+            # Fetch repairs if requested
+            if "repairs" in includes:
+                try:
+                    repairs_msg = {"type": "repairs/list_issues"}
+                    repairs_result = await ws_client.send_command(repairs_msg)
+                    if repairs_result.get("success"):
+                        repairs_list = repairs_result.get("result", {}).get(
+                            "issues", []
+                        )
+                    else:
+                        repairs_list = []
+                    result["repairs"] = {
+                        "issues": repairs_list,
+                        "count": len(repairs_list),
+                    }
+                except Exception as e:
+                    result["repairs"] = {
+                        "error": f"Repairs data not available: {e}",
+                        "issues": [],
+                        "count": 0,
+                    }
+
+            # Fetch ZHA network data if requested
+            if "zha_network" in includes:
+                try:
+                    zha_msg = {"type": "zha/devices"}
+                    zha_result = await ws_client.send_command(zha_msg)
+                    if zha_result.get("success"):
+                        zha_devices = zha_result.get("result", [])
+                    else:
+                        zha_devices = []
+                    result["zha_network"] = {
+                        "devices": zha_devices,
+                        "count": len(zha_devices),
+                    }
+                except Exception as e:
+                    result["zha_network"] = {
+                        "error": f"ZHA integration not available or error: {e}",
+                        "devices": [],
+                        "count": 0,
+                    }
+
+            return result
 
         except ToolError:
             raise

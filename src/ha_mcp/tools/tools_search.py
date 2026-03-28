@@ -623,6 +623,28 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except Exception as e:
                 logger.warning(f"Failed to fetch notifications for overview: {e}")
 
+        # Include active repair issues
+        result["repair_count"] = 0
+        try:
+            repairs_result = await client.send_websocket_message(
+                {"type": "repairs/list_issues"}
+            )
+            if repairs_result.get("success"):
+                issues = repairs_result.get("result", {}).get("issues", [])
+                result["repair_count"] = len(issues)
+                if issues:
+                    result["repairs"] = [
+                        {
+                            "issue_id": r.get("issue_id"),
+                            "domain": r.get("domain"),
+                            "severity": r.get("severity"),
+                            "translation_key": r.get("translation_key"),
+                        }
+                        for r in issues
+                    ]
+        except Exception as e:
+            logger.warning(f"Failed to fetch repairs for overview: {e}")
+
         # Include tool discovery hint when search transform is active
         settings = get_global_settings()
         if settings.enable_tool_search:

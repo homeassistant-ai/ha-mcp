@@ -42,38 +42,47 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Validate entity_id format
             entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
             if not re.match(entity_pattern, entity_id):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid entity_id format: {entity_id}",
-                    suggestions=[
-                        "Use format: domain.object_id (lowercase letters, numbers, underscores only)",
-                    ],
-                    context={"entity_id": entity_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid entity_id format: {entity_id}",
+                        suggestions=[
+                            "Use format: domain.object_id (lowercase letters, numbers, underscores only)",
+                        ],
+                        context={"entity_id": entity_id},
+                    )
+                )
 
             if not re.match(entity_pattern, new_entity_id):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid new_entity_id format: {new_entity_id}",
-                    suggestions=[
-                        "Use format: domain.object_id (lowercase letters, numbers, underscores only)",
-                    ],
-                    context={"new_entity_id": new_entity_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid new_entity_id format: {new_entity_id}",
+                        suggestions=[
+                            "Use format: domain.object_id (lowercase letters, numbers, underscores only)",
+                        ],
+                        context={"new_entity_id": new_entity_id},
+                    )
+                )
 
             # Extract and validate domains match
             current_domain = entity_id.split(".")[0]
             new_domain = new_entity_id.split(".")[0]
 
             if current_domain != new_domain:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
-                    suggestions=[
-                        f"New entity_id must start with '{current_domain}.'",
-                    ],
-                    context={"entity_id": entity_id, "new_entity_id": new_entity_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
+                        suggestions=[
+                            f"New entity_id must start with '{current_domain}.'",
+                        ],
+                        context={
+                            "entity_id": entity_id,
+                            "new_entity_id": new_entity_id,
+                        },
+                    )
+                )
 
             # Step 1: Get current voice exposure settings BEFORE rename
             old_exposure: dict[str, bool] = {}
@@ -124,16 +133,18 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if isinstance(error, dict)
                     else str(error)
                 )
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to rename entity: {error_msg}",
-                    suggestions=[
-                        "Verify the entity exists using ha_search_entities()",
-                        "Check that the new entity_id doesn't already exist",
-                        "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
-                    ],
-                    context={"entity_id": entity_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to rename entity: {error_msg}",
+                        suggestions=[
+                            "Verify the entity exists using ha_search_entities()",
+                            "Check that the new entity_id doesn't already exist",
+                            "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
+                        ],
+                        context={"entity_id": entity_id},
+                    )
+                )
 
             entity_entry = result.get("result", {}).get("entity_entry", {})
 
@@ -265,14 +276,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 updates_made.append(f"labels={labels}")
 
             if not updates_made:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No updates specified",
-                    suggestions=[
-                        "Provide at least one of: name, area_id, disabled_by, or labels",
-                    ],
-                    context={"device_id": device_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "No updates specified",
+                        suggestions=[
+                            "Provide at least one of: name, area_id, disabled_by, or labels",
+                        ],
+                        context={"device_id": device_id},
+                    )
+                )
 
             logger.info(f"Updating device {device_id}: {', '.join(updates_made)}")
             result = await client.send_websocket_message(message)
@@ -301,15 +314,17 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if isinstance(error, dict)
                     else str(error)
                 )
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to update device: {error_msg}",
-                    suggestions=[
-                        "Verify the device_id exists using ha_get_device()",
-                        "Check that area_id exists if specified",
-                    ],
-                    context={"device_id": device_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to update device: {error_msg}",
+                        suggestions=[
+                            "Verify the device_id exists using ha_get_device()",
+                            "Check that area_id exists if specified",
+                        ],
+                        context={"device_id": device_id},
+                    )
+                )
 
         except ToolError:
             raise
@@ -479,10 +494,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             list_result = await client.send_websocket_message(list_message)
 
             if not list_result.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
+                    )
+                )
 
             all_devices = list_result.get("result", [])
 
@@ -515,14 +532,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if entity_id and not device_id:
                 device_id = entity_to_device.get(entity_id)
                 if not device_id:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Entity '{entity_id}' not found or has no associated device",
-                        suggestions=[
-                            "Use ha_search_entities() to find valid entity IDs",
-                        ],
-                        context={"entity_id": entity_id},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Entity '{entity_id}' not found or has no associated device",
+                            suggestions=[
+                                "Use ha_search_entities() to find valid entity IDs",
+                            ],
+                            context={"entity_id": entity_id},
+                        )
+                    )
 
             # Helper function to extract integration info from a device
             def get_device_info(device: dict[str, Any]) -> dict[str, Any]:
@@ -604,14 +623,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     (d for d in all_devices if d.get("id") == device_id), None
                 )
                 if not device:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Device not found: {device_id}",
-                        suggestions=[
-                            "Use ha_get_device() to find valid device IDs",
-                        ],
-                        context={"device_id": device_id},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Device not found: {device_id}",
+                            suggestions=[
+                                "Use ha_get_device() to find valid device IDs",
+                            ],
+                            context={"device_id": device_id},
+                        )
+                    )
 
                 device_info = get_device_info(device)
                 device_info["entities"] = device_to_entities.get(device_id, [])
@@ -626,6 +647,26 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 device_info["config_entries"] = device.get("config_entries", [])
                 device_info["connections"] = device.get("connections", [])
                 device_info["identifiers"] = device.get("identifiers", [])
+
+                # Enrich ZHA devices with radio metrics (LQI/RSSI)
+                if device_info.get("integration_type") == "zha" and device_info.get(
+                    "ieee_address"
+                ):
+                    try:
+                        zha_msg: dict[str, Any] = {"type": "zha/devices"}
+                        zha_result = await client.send_websocket_message(zha_msg)
+                        if zha_result.get("success"):
+                            zha_devices = zha_result.get("result", [])
+                            target_ieee = device_info["ieee_address"]
+                            for zha_dev in zha_devices:
+                                if zha_dev.get("ieee") == target_ieee:
+                                    device_info["radio_metrics"] = {
+                                        "lqi": zha_dev.get("lqi"),
+                                        "rssi": zha_dev.get("rssi"),
+                                    }
+                                    break
+                    except Exception:
+                        pass  # Don't fail device lookup if ZHA radio metrics unavailable
 
                 entities = device_info.get("entities", [])
                 return {
@@ -659,20 +700,23 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if integration_lower:
                     # Match integration
                     if (
-                        integration_lower == "zigbee2mqtt"
-                        and device_info["integration_type"] != "zigbee2mqtt"
-                    ) or (
-                        integration_lower == "zha"
-                        and device_info["integration_type"] != "zha"
-                    ) or (
-                        integration_lower not in ["zigbee2mqtt", "zha"]
-                        and integration_lower not in device_info.get("integration_sources", [])
+                        (
+                            integration_lower == "zigbee2mqtt"
+                            and device_info["integration_type"] != "zigbee2mqtt"
+                        )
+                        or (
+                            integration_lower == "zha"
+                            and device_info["integration_type"] != "zha"
+                        )
+                        or (
+                            integration_lower not in ["zigbee2mqtt", "zha"]
+                            and integration_lower
+                            not in device_info.get("integration_sources", [])
+                        )
                     ):
                         continue
 
-                device_info["entities"] = device_to_entities.get(
-                    device.get("id"), []
-                )
+                device_info["entities"] = device_to_entities.get(device.get("id"), [])
                 matched_devices.append(device_info)
 
             # Build result
@@ -801,10 +845,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_labels = parse_string_list_param(labels, "labels")
             except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid labels parameter: {e}",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid labels parameter: {e}",
+                    )
+                )
 
         # Delegate to internal implementation
         return await _update_device_internal(
@@ -853,38 +899,45 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             list_result = await client.send_websocket_message(list_message)
 
             if not list_result.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to access device registry: {list_result.get('error', 'Unknown error')}",
+                    )
+                )
 
             devices = list_result.get("result", [])
             device = next((d for d in devices if d.get("id") == device_id), None)
 
             if not device:
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Device not found: {device_id}",
-                    suggestions=[
-                        "Use ha_get_device() to find valid device IDs",
-                    ],
-                    context={"device_id": device_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Device not found: {device_id}",
+                        suggestions=[
+                            "Use ha_get_device() to find valid device IDs",
+                        ],
+                        context={"device_id": device_id},
+                    )
+                )
 
             config_entries = device.get("config_entries", [])
 
             if not config_entries:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Device has no config entries - cannot be removed via this method",
-                    suggestions=[
-                        "This device may be managed by an integration directly. Try disabling it instead.",
-                    ],
-                    context={
-                        "device_id": device_id,
-                        "device_name": device.get("name_by_user") or device.get("name"),
-                    },
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Device has no config entries - cannot be removed via this method",
+                        suggestions=[
+                            "This device may be managed by an integration directly. Try disabling it instead.",
+                        ],
+                        context={
+                            "device_id": device_id,
+                            "device_name": device.get("name_by_user")
+                            or device.get("name"),
+                        },
+                    )
+                )
 
             # Remove device from each config entry
             removal_results = []
@@ -930,14 +983,19 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": "Device partially removed - some config entries could not be removed",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to remove device from any config entries",
-                    suggestions=[
-                        "Device may be actively managed by its integration. Try disabling it instead.",
-                    ],
-                    context={"device_id": device_id, "removal_results": removal_results},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Failed to remove device from any config entries",
+                        suggestions=[
+                            "Device may be actively managed by its integration. Try disabling it instead.",
+                        ],
+                        context={
+                            "device_id": device_id,
+                            "removal_results": removal_results,
+                        },
+                    )
+                )
 
         except ToolError:
             raise
@@ -1022,7 +1080,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             should_preserve_exposure = coerce_bool_param(
                 preserve_voice_exposure, "preserve_voice_exposure", default=True
             )
-            assert should_preserve_exposure is not None  # default=True guarantees non-None
+            assert (
+                should_preserve_exposure is not None
+            )  # default=True guarantees non-None
 
             results: dict[str, Any] = {
                 "entity_rename": None,
@@ -1065,9 +1125,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except ToolError as te:
                     # Entity was renamed but device rename failed - report partial success
                     import json as _json
+
                     try:
                         error_data = _json.loads(str(te))
-                        device_error = error_data.get("error", {}).get("message", str(te))
+                        device_error = error_data.get("error", {}).get(
+                            "message", str(te)
+                        )
                     except Exception:
                         device_error = str(te)
                     results["device_rename"] = {"success": False, "error": device_error}

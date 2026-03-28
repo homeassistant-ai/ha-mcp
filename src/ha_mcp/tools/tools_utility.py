@@ -1,7 +1,7 @@
 """
 Utility tools for Home Assistant MCP server.
 
-This module provides general-purpose utility tools including logbook access,
+This module provides general-purpose utility tools including log access,
 template evaluation, and domain documentation retrieval.
 """
 
@@ -24,51 +24,138 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # Default and maximum limits for logbook entries
     DEFAULT_LOGBOOK_LIMIT = 50
     MAX_LOGBOOK_LIMIT = 500
+    # Default limit for non-logbook log sources
+    DEFAULT_LOG_LIMIT = 100
+    VALID_SOURCES = ("logbook", "system", "error_log", "supervisor")
+    VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
 
     @mcp.tool(
         tags={"History & Statistics"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Logbook Entries"
+            "title": "Get Logs",
         }
     )
     @log_tool_usage
-    async def ha_get_logbook(
+    async def ha_get_logs(
+        source: str = "logbook",
+        # Shared parameters
+        limit: int | str | None = None,
+        search: str | None = None,
+        # Logbook-specific (ignored for other sources)
+        hours_back: int | str = 1,
+        entity_id: str | None = None,
+        end_time: str | None = None,
+        offset: int | str = 0,
+        # System/error_log-specific
+        level: str | None = None,
+        # Supervisor-specific
+        slug: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get Home Assistant logs from various sources.
+
+        **Sources:**
+        - "logbook" (default): Entity state change history with pagination
+        - "system": Structured system log entries (errors, warnings) via system_log/list
+        - "error_log": Raw home-assistant.log text
+        - "supervisor": Add-on container logs (requires slug parameter)
+
+        **Shared params:** limit, search (keyword filter)
+        **Logbook params:** hours_back, entity_id, end_time, offset
+        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
+        **Supervisor params:** slug (add-on slug, e.g. "core_mosquitto")
+        """
+
+        # Validate source
+        if source not in VALID_SOURCES:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid source '{source}'. Must be one of: {', '.join(VALID_SOURCES)}",
+                    suggestions=[
+                        f"Use source='{s}' for {s} logs" for s in VALID_SOURCES
+                    ],
+                )
+            )
+
+        # Validate level if provided
+        if level is not None:
+            level_upper = level.strip().upper()
+            if level_upper not in VALID_LOG_LEVELS:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid level '{level}'. Must be one of: {', '.join(VALID_LOG_LEVELS)}",
+                        suggestions=["Use level='ERROR' to see only errors"],
+                    )
+                )
+            level = level_upper
+
+        # --- source="logbook" ---
+        if source == "logbook":
+            return await _get_logbook(
+                hours_back=hours_back,
+                entity_id=entity_id,
+                end_time=end_time,
+                limit=limit,
+                offset=offset,
+            )
+
+        # --- source="system" ---
+        if source == "system":
+            return await _get_system_log(
+                limit=limit,
+                search=search,
+                level=level,
+            )
+
+        # --- source="error_log" ---
+        if source == "error_log":
+            return await _get_error_log(
+                limit=limit,
+                search=search,
+                level=level,
+            )
+
+        # --- source="supervisor" ---
+        if source == "supervisor":
+            if not slug:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "The 'slug' parameter is required for source='supervisor'",
+                        suggestions=[
+                            "Provide the add-on slug, e.g. slug='core_mosquitto'",
+                            "Use ha_list_addons() to find available add-on slugs",
+                        ],
+                    )
+                )
+            return await _get_supervisor_log(
+                slug=slug,
+                limit=limit,
+                search=search,
+            )
+
+        # Unreachable (validated above), but satisfy type checker
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Unhandled source '{source}'",
+            )
+        )
+
+    # ---- Logbook source (original ha_get_logbook logic) ----
+
+    async def _get_logbook(
         hours_back: int | str = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
         limit: int | str | None = None,
         offset: int | str = 0,
     ) -> dict[str, Any]:
-        """
-        Get Home Assistant logbook entries for the specified time period.
-
-        Returns paginated logbook entries to prevent excessively large responses.
-
-        **Parameters:**
-        - hours_back: Number of hours to look back (default: 1)
-        - entity_id: Optional entity ID to filter entries
-        - end_time: Optional end time in ISO format (defaults to now)
-        - limit: Maximum number of entries to return (default: 50, max: 500)
-        - offset: Number of entries to skip for pagination (default: 0)
-
-        **Pagination:**
-        When the logbook has more entries than the limit, use offset to get
-        additional pages. The response includes `has_more` to indicate if
-        more entries are available.
-
-        **IMPORTANT - Pagination Stability:**
-        Pagination is performed client-side on the full result set returned
-        by Home Assistant. If new logbook entries are created between page
-        requests, results may shift and items could be missed or duplicated
-        across pages. For best results, use consistent time ranges (start/end)
-        and retrieve pages in quick succession.
-
-        **Example:**
-        - First page: ha_get_logbook(hours_back=24, limit=50, offset=0)
-        - Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)
-        """
+        """Fetch logbook entries with pagination (original ha_get_logbook logic)."""
 
         # Coerce parameters with string handling for AI tools
         try:
@@ -81,11 +168,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if hours_back_int is None:
                 hours_back_int = 1
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                suggestions=["Provide hours_back as an integer (e.g., 24)"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide hours_back as an integer (e.g., 24)"],
+                )
+            )
 
         try:
             effective_limit = coerce_int_param(
@@ -98,11 +187,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if effective_limit is None:
                 effective_limit = DEFAULT_LOGBOOK_LIMIT
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                suggestions=["Provide limit as an integer (e.g., 50)"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide limit as an integer (e.g., 50)"],
+                )
+            )
 
         try:
             offset_int = coerce_int_param(
@@ -114,11 +205,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if offset_int is None:
                 offset_int = 0
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                suggestions=["Provide offset as an integer (e.g., 0)"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide offset as an integer (e.g., 0)"],
+                )
+            )
 
         # Calculate start time
         if end_time:
@@ -147,6 +240,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             logbook_data = {
                 "success": True,
+                "source": "logbook",
                 "entries": paginated_entries,
                 "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 "start_time": start_timestamp,
@@ -178,7 +272,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
                     f"Showing entries {offset_int + 1}-{offset_int + len(paginated_entries)} of {total_entries}. "
-                    f"To get the next page, use: ha_get_logbook({param_str})"
+                    f"To get the next page, use: ha_get_logs({param_str})"
                 )
 
             return await add_timezone_metadata(client, logbook_data)
@@ -209,6 +303,279 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 },
                 suggestions=suggestions,
+            )
+
+    # ---- System log source ----
+
+    async def _get_system_log(
+        limit: int | str | None = None,
+        search: str | None = None,
+        level: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch structured system log entries via system_log/list."""
+        try:
+            effective_limit = coerce_int_param(
+                limit,
+                param_name="limit",
+                default=DEFAULT_LOGBOOK_LIMIT,
+                min_value=1,
+                max_value=MAX_LOGBOOK_LIMIT,
+            )
+            if effective_limit is None:
+                effective_limit = DEFAULT_LOGBOOK_LIMIT
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide limit as an integer (e.g., 50)"],
+                )
+            )
+
+        try:
+            result = await client.send_websocket_message({"type": "system_log/list"})
+
+            if not result.get("success"):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to retrieve system log"),
+                        suggestions=["Check Home Assistant connection"],
+                    )
+                )
+
+            entries = result.get("result", [])
+            if not isinstance(entries, list):
+                entries = []
+
+            # Apply filters
+            filters_applied: dict[str, str] = {}
+
+            if level:
+                entries = [
+                    e for e in entries if str(e.get("level", "")).upper() == level
+                ]
+                filters_applied["level"] = level
+
+            if search:
+                search_lower = search.lower()
+                entries = [
+                    e
+                    for e in entries
+                    if search_lower in str(e.get("message", "")).lower()
+                    or search_lower in str(e.get("name", "")).lower()
+                ]
+                filters_applied["search"] = search
+
+            total_entries = len(entries)
+
+            # Apply limit
+            entries = entries[:effective_limit]
+
+            data: dict[str, Any] = {
+                "success": True,
+                "source": "system",
+                "entries": entries,
+                "total_entries": total_entries,
+                "returned_entries": len(entries),
+                "limit": effective_limit,
+            }
+            if filters_applied:
+                data["filters_applied"] = filters_applied
+
+            return data
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"source": "system"},
+                suggestions=[
+                    "Check Home Assistant WebSocket connection",
+                    "Verify system_log integration is enabled",
+                ],
+            )
+
+    # ---- Error log source ----
+
+    async def _get_error_log(
+        limit: int | str | None = None,
+        search: str | None = None,
+        level: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch raw error log text from home-assistant.log."""
+        try:
+            effective_limit = coerce_int_param(
+                limit,
+                param_name="limit",
+                default=DEFAULT_LOG_LIMIT,
+                min_value=1,
+                max_value=MAX_LOGBOOK_LIMIT,
+            )
+            if effective_limit is None:
+                effective_limit = DEFAULT_LOG_LIMIT
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide limit as an integer (e.g., 100)"],
+                )
+            )
+
+        try:
+            raw_log = await client.get_error_log()
+            lines = raw_log.splitlines() if raw_log else []
+
+            # Apply filters
+            filters_applied: dict[str, str] = {}
+
+            if level:
+                lines = [ln for ln in lines if level in ln]
+                filters_applied["level"] = level
+
+            if search:
+                search_lower = search.lower()
+                lines = [ln for ln in lines if search_lower in ln.lower()]
+                filters_applied["search"] = search
+
+            total_lines = len(lines)
+
+            # Return the LAST N lines (most recent)
+            lines = lines[-effective_limit:]
+
+            data: dict[str, Any] = {
+                "success": True,
+                "source": "error_log",
+                "log": "\n".join(lines),
+                "total_lines": total_lines,
+                "returned_lines": len(lines),
+                "limit": effective_limit,
+                "note": "Returned the most recent log lines matching filters",
+            }
+            if filters_applied:
+                data["filters_applied"] = filters_applied
+
+            return data
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"source": "error_log"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "The error log may be empty if no errors have occurred",
+                ],
+            )
+
+    # ---- Supervisor log source ----
+
+    async def _get_supervisor_log(
+        slug: str,
+        limit: int | str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch add-on container logs via the Supervisor API."""
+        try:
+            effective_limit = coerce_int_param(
+                limit,
+                param_name="limit",
+                default=DEFAULT_LOG_LIMIT,
+                min_value=1,
+                max_value=MAX_LOGBOOK_LIMIT,
+            )
+            if effective_limit is None:
+                effective_limit = DEFAULT_LOG_LIMIT
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=["Provide limit as an integer (e.g., 100)"],
+                )
+            )
+
+        try:
+            result = await client.send_websocket_message(
+                {
+                    "type": "supervisor/api",
+                    "endpoint": f"/addons/{slug}/logs",
+                    "method": "get",
+                }
+            )
+
+            if not result.get("success"):
+                error_msg = str(result.get("error", ""))
+                suggestions = [
+                    f"Verify add-on slug '{slug}' is correct",
+                    "Use ha_list_addons() to find available add-on slugs",
+                ]
+                if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
+                    suggestions.insert(
+                        0,
+                        "Supervisor API not available - requires HA OS or Supervised install",
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get(
+                            "error", f"Failed to retrieve logs for add-on '{slug}'"
+                        ),
+                        context={"slug": slug},
+                        suggestions=suggestions,
+                    )
+                )
+
+            # Result may be a string (log text) or dict with result key
+            log_text = result.get("result", "")
+            if isinstance(log_text, dict):
+                log_text = log_text.get("data", str(log_text))
+            if not isinstance(log_text, str):
+                log_text = str(log_text)
+
+            lines = log_text.splitlines() if log_text else []
+
+            # Apply filters
+            filters_applied: dict[str, str] = {}
+
+            if search:
+                search_lower = search.lower()
+                lines = [ln for ln in lines if search_lower in ln.lower()]
+                filters_applied["search"] = search
+
+            total_lines = len(lines)
+
+            # Return the LAST N lines (most recent)
+            lines = lines[-effective_limit:]
+
+            data: dict[str, Any] = {
+                "success": True,
+                "source": "supervisor",
+                "slug": slug,
+                "log": "\n".join(lines),
+                "total_lines": total_lines,
+                "returned_lines": len(lines),
+                "limit": effective_limit,
+            }
+            if filters_applied:
+                data["filters_applied"] = filters_applied
+
+            return data
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"source": "supervisor", "slug": slug},
+                suggestions=[
+                    f"Verify add-on slug '{slug}' is correct",
+                    "Use ha_list_addons() to find available add-on slugs",
+                    "Ensure Supervisor is available (HA OS or Supervised install)",
+                ],
             )
 
     @mcp.tool(
@@ -399,18 +766,22 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
             else:
                 error_info = result.get("error", "Unknown error occurred")
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(error_info) if not isinstance(error_info, str) else error_info,
-                    context={"template": template, "request_id": request_id},
-                    suggestions=[
-                        "Check template syntax - ensure proper Jinja2 formatting",
-                        "Verify entity_ids exist using ha_get_state()",
-                        "Use default values: {{ states('sensor.temp') | float(0) }}",
-                        "Check for typos in function names and entity references",
-                        "Test simpler templates first to isolate issues",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(error_info)
+                        if not isinstance(error_info, str)
+                        else error_info,
+                        context={"template": template, "request_id": request_id},
+                        suggestions=[
+                            "Check template syntax - ensure proper Jinja2 formatting",
+                            "Verify entity_ids exist using ha_get_state()",
+                            "Use default values: {{ states('sensor.temp') | float(0) }}",
+                            "Check for typos in function names and entity references",
+                            "Test simpler templates first to isolate issues",
+                        ],
+                    )
+                )
 
         except ToolError:
             raise
@@ -441,4 +812,3 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"template": template},
                 suggestions=suggestions,
             )
-
