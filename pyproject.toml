@@ -51,7 +51,7 @@ package-dir = {"" = "src", "tests" = "tests"}
 packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
-ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json", "resources/skills-vendor/**/*"]
+ha_mcp = ["py.typed", "_pypi_marker", "resources/skills-vendor/**/*"]
 
 [tool.mypy]
 python_version = "3.13"

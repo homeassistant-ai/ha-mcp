@@ -129,7 +129,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
-        For detailed helper documentation, use: ha_get_domain_docs("input_number"), etc.
+        For detailed helper documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Use the websocket list endpoint for the helper type
@@ -445,7 +445,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                "state": "{{ states('sensor.foo') }}",
              })
 
-        For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
+        For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Parse JSON list parameters if provided as strings

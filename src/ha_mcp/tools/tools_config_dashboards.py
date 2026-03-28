@@ -9,10 +9,8 @@ import hashlib
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Annotated, Any, cast
 
-import httpx
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -28,35 +26,6 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
-# Card documentation base URL
-CARD_DOCS_BASE_URL = (
-    "https://raw.githubusercontent.com/home-assistant/home-assistant.io/"
-    "refs/heads/current/source/_dashboards"
-)
-
-
-def _get_resources_dir() -> Path:
-    """Get resources directory path, works for both dev and installed package."""
-    # Try to find resources directory relative to this file
-    resources_dir = Path(__file__).parent.parent / "resources"
-    if resources_dir.exists():
-        return resources_dir
-
-    # Fallback: try to find in package data (for installed packages)
-    try:
-        import importlib.resources as pkg_resources
-
-        # For Python 3.9+
-        if hasattr(pkg_resources, "files"):
-            pkg_resources_dir = pkg_resources.files("ha_mcp") / "resources"
-            if hasattr(pkg_resources_dir, "__fspath__"):
-                return Path(str(pkg_resources_dir))
-    except (ImportError, AttributeError):
-        # If importlib.resources or its attributes are unavailable, fall back to relative path
-        pass
-
-    # Last resort: return the relative path and let it fail with clear error
-    return resources_dir
 
 
 def _compute_config_hash(config: dict[str, Any]) -> str:
@@ -543,10 +512,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         If unsure about entity IDs, ALWAYS use one of these tools first.
 
-        DASHBOARD DOCUMENTATION:
-        - ha_get_dashboard_guide() - Complete guide (structure, views, cards, features, pitfalls)
-        - ha_get_card_documentation() - List all 41 available card types
-        - ha_get_card_documentation(card_type) - Card-specific docs (e.g., "tile", "grid")
+        DASHBOARD DOCUMENTATION (via MCP skills):
+        - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
+        - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
+        - ha_get_skill_home_assistant_best_practices — guidance on card types and configuration
 
         EXAMPLES:
 
@@ -1162,162 +1131,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Cannot delete YAML-mode or default dashboard",
                 ],
-            )
-
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "tags": ["dashboard", "docs", "guide"],
-            "title": "Get Dashboard Guide",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_dashboard_guide() -> dict[str, Any]:
-        """
-        Get comprehensive guide for designing Home Assistant dashboards.
-
-        Covers:
-        - Part 1: Dashboard structure, views, sections, navigation
-        - Part 2: Built-in cards (tile, grid, button), features, actions
-        - Part 3: Custom cards (JavaScript modules, registration)
-        - Part 4: CSS styling (themes, card-mod patterns)
-        - Part 5: HACS integration (finding/installing community cards)
-        - Part 6: Complete examples and workflows
-        - Part 7: Visual iteration with Playwright/browser MCP for screenshots
-
-        Use this guide before designing dashboards to understand
-        all available options, from built-in cards to custom resources.
-
-        Related tools:
-        - ha_create_dashboard_resource: Host inline JS/CSS
-        - ha_hacs_search / ha_hacs_download: Community cards
-
-        EXAMPLES:
-        - Get full guide: ha_get_dashboard_guide()
-        """
-        try:
-            resources_dir = _get_resources_dir()
-            guide_path = resources_dir / "dashboard_guide.md"
-            guide_content = guide_path.read_text()
-            return {
-                "success": True,
-                "action": "get_guide",
-                "guide": guide_content,
-                "format": "markdown",
-            }
-        except Exception as e:
-            logger.error(f"Error reading dashboard guide: {e}")
-            exception_to_structured_error(
-                e,
-                context={"action": "get_guide"},
-                suggestions=[
-                    "Ensure dashboard_guide.md exists in resources directory",
-                    f"Attempted path: {resources_dir / 'dashboard_guide.md' if 'resources_dir' in locals() else 'unknown'}",
-                ],
-            )
-
-    @mcp.tool(
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "tags": ["dashboard", "docs"],
-            "title": "Get Card Documentation",
-        }
-    )
-    @log_tool_usage
-    async def ha_get_card_documentation(
-        card_type: Annotated[
-            str | None,
-            Field(
-                description="Card type name (e.g., 'light', 'thermostat', 'entity'). "
-                "Omit to list all 41 available card types."
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        List all card types or fetch documentation for a specific card type.
-
-        When called without card_type: returns the list of all 41 available card types.
-        When called with card_type: fetches official HA documentation for that card.
-
-        EXAMPLES:
-        - List all card types: ha_get_card_documentation()
-        - Get light card docs: ha_get_card_documentation("light")
-        - Get thermostat card docs: ha_get_card_documentation("thermostat")
-        - Get entity card docs: ha_get_card_documentation("entity")
-        """
-        try:
-            resources_dir = _get_resources_dir()
-            types_path = resources_dir / "card_types.json"
-            card_types_data = json.loads(types_path.read_text())
-
-            # No card_type provided: return list of all types
-            if card_type is None:
-                return {
-                    "success": True,
-                    "action": "get_card_types",
-                    "card_types": card_types_data["card_types"],
-                    "total_count": card_types_data["total_count"],
-                    "documentation_base_url": card_types_data["documentation_base_url"],
-                }
-
-            # Validate card type exists
-            if card_type not in card_types_data["card_types"]:
-                available = ", ".join(card_types_data["card_types"][:10])
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Unknown card type '{card_type}'",
-                        suggestions=[
-                            f"Available types include: {available}...",
-                            "Use ha_get_card_documentation() to see full list of 41 card types",
-                        ],
-                        context={
-                            "action": "get_card_documentation",
-                            "card_type": card_type,
-                        },
-                    )
-                )
-
-            # Fetch documentation from GitHub (doc_url initialized here for exception handlers)
-            doc_url = f"{CARD_DOCS_BASE_URL}/{card_type}.markdown"
-
-            async with httpx.AsyncClient(timeout=10.0) as http_client:
-                response = await http_client.get(doc_url)
-                response.raise_for_status()
-                return {
-                    "success": True,
-                    "action": "get_card_documentation",
-                    "card_type": card_type,
-                    "documentation": response.text,
-                    "format": "markdown",
-                    "source_url": doc_url,
-                }
-        except ToolError:
-            raise
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to fetch card docs for {card_type}: {e}")
-            exception_to_structured_error(
-                e,
-                context={
-                    "action": "get_card_documentation",
-                    "card_type": card_type,
-                    "source_url": doc_url,
-                },
-                suggestions=[
-                    f"Failed to fetch documentation (HTTP {e.response.status_code})",
-                    "Check network connectivity",
-                ],
-            )
-        except Exception as e:
-            logger.error(f"Error fetching card docs for {card_type}: {e}")
-            exception_to_structured_error(
-                e,
-                context={
-                    "action": "get_card_documentation",
-                    "card_type": card_type,
-                },
             )
 
     # =========================================================================

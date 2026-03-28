@@ -78,7 +78,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Get script: ha_config_get_script("morning_routine")
         - Get script: ha_config_get_script("backup_script")
 
-        For detailed script configuration help, use: ha_get_domain_docs("script")
+        For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             config_result = await client.get_script_config(script_id)
@@ -97,7 +97,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check Home Assistant connection",
-                    "Use ha_get_domain_docs('script') for configuration help",
+                    "Use ha_get_skill_home_assistant_best_practices for help",
                 ],
             )
 
@@ -232,7 +232,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
         - Use native action variables instead of complex template calculations
 
-        For detailed script configuration help, use: ha_get_domain_docs("script")
+        For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
 
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.
@@ -306,7 +306,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
                 "Use ha_search_entities(domain_filter='script') to find scripts",
-                "Use ha_get_domain_docs('script') for configuration help",
+                "Use ha_get_skill_home_assistant_best_practices for help",
             ]
             if bp_warnings:
                 suggestions.append(
@@ -380,6 +380,6 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check if script is being used by automations",
-                    "Use ha_get_domain_docs('script') for configuration help",
+                    "Use ha_get_skill_home_assistant_best_practices for help",
                 ],
             )

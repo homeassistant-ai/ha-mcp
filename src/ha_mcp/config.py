@@ -90,9 +90,11 @@ class Settings(BaseSettings):
     # Resources are not auto-injected — clients must explicitly request them.
     enable_skills: bool = Field(True, alias="ENABLE_SKILLS")
 
-    # Expose skills as tools (list_resources/read_resource) for clients
-    # that don't support MCP resources natively.
-    enable_skills_as_tools: bool = Field(False, alias="ENABLE_SKILLS_AS_TOOLS")
+    # Expose skills and doc resources as tools (list_resources/read_resource)
+    # for clients that don't support MCP resources natively.
+    # Defaults to True so all clients can access documentation and skills.
+    # Resource-capable clients can set to False to reduce tool count.
+    enable_skills_as_tools: bool = Field(True, alias="ENABLE_SKILLS_AS_TOOLS")
 
     # Tool search transform — replaces the full tool catalog with a unified
     # BM25 search tool and categorized call proxies (read/write/delete).
