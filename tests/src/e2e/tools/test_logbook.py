@@ -7,7 +7,7 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ..utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
