@@ -317,13 +317,23 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         For current entity states, use ha_get_state instead.
         """
         try:
-            if isinstance(operation_id, list):
+            # Handle JSON string coercion (MCP clients may send '["op1","op2"]')
+            resolved_id: str | list[str] = operation_id
+            if isinstance(operation_id, str):
+                try:
+                    parsed = parse_json_param(operation_id, "operation_id")
+                    if isinstance(parsed, list):
+                        resolved_id = [str(item) for item in parsed]
+                except ValueError:
+                    pass  # Plain string — treat as single operation ID
+
+            if isinstance(resolved_id, list):
                 result = await device_tools.get_bulk_operation_status(
-                    operation_ids=operation_id
+                    operation_ids=resolved_id
                 )
                 return cast(dict[str, Any], result)
             result = await device_tools.get_device_operation_status(
-                operation_id=operation_id, timeout_seconds=timeout_seconds
+                operation_id=resolved_id, timeout_seconds=timeout_seconds
             )
             return cast(dict[str, Any], result)
         except ToolError:

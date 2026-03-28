@@ -131,12 +131,12 @@ class TestRenameConsolidationEdgeCases:
             {"helper_type": "input_boolean", "helper_id": new_name},
         )
 
-    async def test_rename_with_empty_device_name_skips_device(
+    async def test_rename_with_empty_device_name_treated_as_entity_only(
         self, mcp_client, cleanup_tracker
     ):
         """
         Test: Calling ha_rename_entity with new_device_name="" (empty string)
-        should skip device rename since empty string is falsy.
+        should be treated as entity-only rename (empty string normalized to None).
         """
         original_name = "test_empty_devname"
         new_name = "test_empty_devname_new"
@@ -156,7 +156,7 @@ class TestRenameConsolidationEdgeCases:
 
         await asyncio.sleep(1.0)
 
-        # Rename with empty new_device_name
+        # Rename with empty new_device_name — should be treated as None
         rename_data = await safe_call_tool(
             mcp_client,
             "ha_rename_entity",
@@ -169,15 +169,12 @@ class TestRenameConsolidationEdgeCases:
 
         assert rename_data.get("success"), f"Rename failed: {rename_data}"
 
-        # With empty string device name, should still enter the combined path
-        # but device rename should show as not changed
-        if "results" in rename_data:
-            device_result = rename_data.get("results", {}).get("device_rename")
-            if device_result:
-                # Either skipped or not changed is acceptable
-                logger.info(f"Device rename result with empty name: {device_result}")
+        # Empty string is normalized to None, so should get simple format
+        assert "results" not in rename_data, (
+            f"Empty device name should produce simple format (no 'results'): {rename_data.keys()}"
+        )
 
-        logger.info("Rename with empty device name completed successfully")
+        logger.info("Empty device name correctly treated as entity-only rename")
 
         # Cleanup
         await safe_call_tool(

@@ -63,7 +63,7 @@ Custom agent workflows are located in `.claude/agents/`:
 
 ## Project Overview
 
-**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 80+ tools for entity control, automations, device management, and more.
+**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 87+ tools for entity control, automations, device management, and more.
 
 - **Repo**: `homeassistant-ai/ha-mcp`
 - **Package**: `ha-mcp` on PyPI
@@ -421,7 +421,7 @@ Balance improvement against regression risk. Consider:
 ### Setup
 ```bash
 uv sync --group dev        # Install with dev dependencies
-uv run ha-mcp              # Run MCP server (80+ tools)
+uv run ha-mcp              # Run MCP server (87+ tools)
 cp .env.example .env       # Configure HA connection
 ```
 
@@ -484,7 +484,7 @@ src/ha_mcp/
 │   ├── rest_client.py       # HTTP REST API client
 │   ├── websocket_client.py  # Real-time state monitoring
 │   └── websocket_listener.py
-├── tools/             # 28 modules, 80+ tools
+├── tools/             # 28 modules, 87+ tools
 │   ├── registry.py          # Lazy auto-discovery
 │   ├── smart_search.py      # Fuzzy entity search
 │   ├── device_control.py    # WebSocket-verified control

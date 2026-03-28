@@ -40,7 +40,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_config_list_areas
+    - ha_config_list_areas_or_floors
     - ha_search_entities
   description: >
     Agent should use area listing and entity search to build a comprehensive

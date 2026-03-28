@@ -40,7 +40,7 @@ class TestEntityManagement:
 
         # Create a test area
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {"name": "E2E Test Room", "icon": "mdi:room"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
@@ -63,7 +63,7 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
-        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool("ha_config_remove_area_or_floor", {"area_id": area_id})
 
     async def test_set_entity_clear_area(self, mcp_client, cleanup_tracker):
         """Test clearing area assignment using empty string."""
@@ -84,7 +84,7 @@ class TestEntityManagement:
 
         # Create and assign to area
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {"name": "E2E Clear Area Room", "icon": "mdi:room"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
@@ -111,7 +111,7 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
-        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool("ha_config_remove_area_or_floor", {"area_id": area_id})
 
     async def test_set_entity_name_and_icon(self, mcp_client, cleanup_tracker):
         """Test updating entity name and icon."""
@@ -343,7 +343,7 @@ class TestEntityManagement:
 
         # Create a test area
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {"name": "E2E Get Entity Room", "icon": "mdi:room"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
@@ -414,7 +414,7 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
-        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool("ha_config_remove_area_or_floor", {"area_id": area_id})
 
     async def test_get_entity_multiple(self, mcp_client, cleanup_tracker):
         """Test ha_get_entity with multiple entities returns list response."""

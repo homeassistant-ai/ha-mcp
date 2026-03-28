@@ -44,7 +44,7 @@ class TestAreaLifecycle:
 
         # 1. CREATE: Basic area
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "name": area_name,
                 "icon": "mdi:sofa",
@@ -60,7 +60,7 @@ class TestAreaLifecycle:
         logger.info(f"Created area: {area_name} (ID: {area_id})")
 
         # 2. LIST: Verify area exists in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
 
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list areas: {list_data}"
@@ -78,7 +78,7 @@ class TestAreaLifecycle:
 
         # 3. DELETE: Remove the area
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"area_id": area_id},
         )
 
@@ -87,7 +87,7 @@ class TestAreaLifecycle:
         logger.info(f"Deleted area: {area_id}")
 
         # 4. VERIFY: Area no longer in list
-        verify_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        verify_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         verify_data = parse_mcp_result(verify_result)
 
         areas_after = verify_data.get("areas", [])
@@ -110,7 +110,7 @@ class TestAreaLifecycle:
 
         # 1. CREATE: Initial area
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "name": area_name,
                 "icon": "mdi:sofa",
@@ -126,7 +126,7 @@ class TestAreaLifecycle:
 
         # 2. UPDATE: Change name and icon
         update_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "area_id": area_id,
                 "name": new_name,
@@ -139,7 +139,7 @@ class TestAreaLifecycle:
         logger.info(f"Updated area: {area_id}")
 
         # 3. VERIFY: Check changes in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         list_data = parse_mcp_result(list_result)
 
         areas = list_data.get("areas", [])
@@ -159,7 +159,7 @@ class TestAreaLifecycle:
 
         # 4. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"area_id": area_id},
         )
         delete_data = parse_mcp_result(delete_result)
@@ -178,7 +178,7 @@ class TestAreaLifecycle:
 
         # 1. CREATE: Area with aliases
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "name": area_name,
                 "aliases": aliases,
@@ -194,7 +194,7 @@ class TestAreaLifecycle:
         logger.info(f"Created area with aliases: {area_id}")
 
         # 2. VERIFY: Check aliases in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         list_data = parse_mcp_result(list_result)
 
         areas = list_data.get("areas", [])
@@ -211,7 +211,7 @@ class TestAreaLifecycle:
 
         # 3. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"area_id": area_id},
         )
         delete_data = parse_mcp_result(delete_result)
@@ -234,7 +234,7 @@ class TestFloorLifecycle:
 
         # 1. CREATE: Basic floor
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -253,7 +253,7 @@ class TestFloorLifecycle:
 
         # 2. LIST: Verify floor exists in list
         list_result = await mcp_client.call_tool(
-            "ha_config_list_areas", {"type": "floor"}
+            "ha_config_list_areas_or_floors", {"type": "floor"}
         )
 
         list_data = parse_mcp_result(list_result)
@@ -275,7 +275,7 @@ class TestFloorLifecycle:
 
         # 3. DELETE: Remove the floor
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor", "floor_id": floor_id},
         )
 
@@ -285,7 +285,7 @@ class TestFloorLifecycle:
 
         # 4. VERIFY: Floor no longer in list
         verify_result = await mcp_client.call_tool(
-            "ha_config_list_areas", {"type": "floor"}
+            "ha_config_list_areas_or_floors", {"type": "floor"}
         )
         verify_data = parse_mcp_result(verify_result)
 
@@ -309,7 +309,7 @@ class TestFloorLifecycle:
 
         # 1. CREATE: Initial floor
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -327,7 +327,7 @@ class TestFloorLifecycle:
 
         # 2. UPDATE: Change name, level, and icon
         update_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "floor_id": floor_id,
@@ -343,7 +343,7 @@ class TestFloorLifecycle:
 
         # 3. VERIFY: Check changes in list
         list_result = await mcp_client.call_tool(
-            "ha_config_list_areas", {"type": "floor"}
+            "ha_config_list_areas_or_floors", {"type": "floor"}
         )
         list_data = parse_mcp_result(list_result)
 
@@ -367,7 +367,7 @@ class TestFloorLifecycle:
 
         # 4. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor", "floor_id": floor_id},
         )
         delete_data = parse_mcp_result(delete_result)
@@ -386,7 +386,7 @@ class TestFloorLifecycle:
 
         # 1. CREATE: Floor with aliases
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -405,7 +405,7 @@ class TestFloorLifecycle:
 
         # 2. VERIFY: Check aliases in list
         list_result = await mcp_client.call_tool(
-            "ha_config_list_areas", {"type": "floor"}
+            "ha_config_list_areas_or_floors", {"type": "floor"}
         )
         list_data = parse_mcp_result(list_result)
 
@@ -425,7 +425,7 @@ class TestFloorLifecycle:
 
         # 3. CLEANUP
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor", "floor_id": floor_id},
         )
         delete_data = parse_mcp_result(delete_result)
@@ -450,7 +450,7 @@ class TestAreaFloorIntegration:
 
         # 1. CREATE: Floor first
         floor_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -467,7 +467,7 @@ class TestAreaFloorIntegration:
 
         # 2. CREATE: Area assigned to floor
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "name": area_name,
                 "floor_id": floor_id,
@@ -483,7 +483,7 @@ class TestAreaFloorIntegration:
         logger.info(f"Created area on floor: {area_id}")
 
         # 3. VERIFY: Check floor assignment in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         list_data = parse_mcp_result(list_result)
 
         areas = list_data.get("areas", [])
@@ -500,7 +500,7 @@ class TestAreaFloorIntegration:
 
         # 4. UPDATE: Remove floor assignment
         update_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "area_id": area_id,
                 "floor_id": "",  # Empty string to remove assignment
@@ -512,7 +512,7 @@ class TestAreaFloorIntegration:
         logger.info("Removed floor assignment")
 
         # 5. VERIFY: Floor assignment removed
-        verify_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        verify_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         verify_data = parse_mcp_result(verify_result)
 
         areas_after = verify_data.get("areas", [])
@@ -528,9 +528,9 @@ class TestAreaFloorIntegration:
         logger.info("Verified floor assignment removed")
 
         # 6. CLEANUP: Delete area first, then floor
-        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool("ha_config_remove_area_or_floor", {"area_id": area_id})
         await mcp_client.call_tool(
-            "ha_config_remove_area", {"type": "floor", "floor_id": floor_id}
+            "ha_config_remove_area_or_floor", {"type": "floor", "floor_id": floor_id}
         )
         logger.info("Cleanup completed")
 
@@ -546,7 +546,7 @@ class TestAreaFloorIntegration:
 
         # 1. CREATE: Floor
         floor_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -571,7 +571,7 @@ class TestAreaFloorIntegration:
 
         for name in area_names:
             area_result = await mcp_client.call_tool(
-                "ha_config_set_area",
+                "ha_config_set_area_or_floor",
                 {
                     "name": name,
                     "floor_id": floor_id,
@@ -589,7 +589,7 @@ class TestAreaFloorIntegration:
             logger.info(f"Created area: {name} (ID: {area_id})")
 
         # 3. VERIFY: All areas on floor
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
         list_data = parse_mcp_result(list_result)
 
         areas = list_data.get("areas", [])
@@ -603,7 +603,7 @@ class TestAreaFloorIntegration:
         # 4. CLEANUP: Delete areas first, then floor
         for area_id in area_ids:
             delete_result = await mcp_client.call_tool(
-                "ha_config_remove_area", {"area_id": area_id}
+                "ha_config_remove_area_or_floor", {"area_id": area_id}
             )
             delete_data = parse_mcp_result(delete_result)
             if not delete_data.get("success"):
@@ -612,7 +612,7 @@ class TestAreaFloorIntegration:
                 logger.info(f"Deleted area: {area_id}")
 
         floor_delete_result = await mcp_client.call_tool(
-            "ha_config_remove_area", {"type": "floor", "floor_id": floor_id}
+            "ha_config_remove_area_or_floor", {"type": "floor", "floor_id": floor_id}
         )
         floor_delete_data = parse_mcp_result(floor_delete_result)
         if not floor_delete_data.get("success"):
@@ -631,7 +631,7 @@ async def test_area_list_empty_or_populated(mcp_client):
     """
     logger.info("Testing ha_list_areas functionality")
 
-    list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+    list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {})
     list_data = parse_mcp_result(list_result)
 
     assert list_data.get("success"), f"Failed to list areas: {list_data}"
@@ -653,7 +653,7 @@ async def test_floor_list_empty_or_populated(mcp_client):
     """
     logger.info("Testing ha_list_floors functionality")
 
-    list_result = await mcp_client.call_tool("ha_config_list_areas", {"type": "floor"})
+    list_result = await mcp_client.call_tool("ha_config_list_areas_or_floors", {"type": "floor"})
     list_data = parse_mcp_result(list_result)
 
     assert list_data.get("success"), f"Failed to list floors: {list_data}"

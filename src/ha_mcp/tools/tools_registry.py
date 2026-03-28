@@ -9,7 +9,6 @@ This module provides tools for:
 Important: Device renaming does NOT cascade to entities - they are independent registries.
 """
 
-import json
 import logging
 import re
 from typing import Annotated, Any
@@ -18,7 +17,12 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    extract_tool_error_message,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .util_helpers import coerce_bool_param, parse_string_list_param
 
 # Known voice assistant identifiers
@@ -425,8 +429,13 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 should_preserve_exposure is not None
             )  # default=True guarantees non-None
 
+            # Treat empty string as None (entity-only rename)
+            if new_device_name is not None and not new_device_name.strip():
+                new_device_name = None
+
             # If new_device_name provided, look up the device_id first
             device_id = None
+            registry_lookup_failed = False
             if new_device_name is not None:
                 entity_registry_msg: dict[str, Any] = {
                     "type": "config/entity_registry/list"
@@ -441,6 +450,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             device_id = ent.get("device_id")
                             break
                 else:
+                    registry_lookup_failed = True
                     logger.warning(
                         f"Could not query entity registry to find device for {entity_id}. "
                         "Device rename will be skipped."
@@ -471,13 +481,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         name=new_device_name,
                     )
                 except ToolError as te:
-                    try:
-                        error_data = json.loads(str(te))
-                        device_error = error_data.get("error", {}).get(
-                            "message", str(te)
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        device_error = str(te)
+                    device_error = extract_tool_error_message(te)
                     results["device_rename"] = {"success": False, "error": device_error}
                     return {
                         "success": True,
@@ -491,9 +495,15 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                 results["device_rename"] = device_rename_result
             elif not device_id:
+                reason = (
+                    "Entity registry lookup failed — could not determine device"
+                    if registry_lookup_failed
+                    else "Entity has no associated device"
+                )
                 results["device_rename"] = {
                     "skipped": True,
-                    "reason": "Entity has no associated device",
+                    "reason": reason,
+                    **({"warning": "Registry query failed; retry may succeed"} if registry_lookup_failed else {}),
                 }
 
             # Build success response
@@ -520,10 +530,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"Device name was not changed."
                 )
             else:
-                response["message"] = (
-                    f"Successfully renamed entity ({entity_id} -> {new_entity_id}). "
-                    f"No associated device found."
-                )
+                if registry_lookup_failed:
+                    response["message"] = (
+                        f"Successfully renamed entity ({entity_id} -> {new_entity_id}). "
+                        f"Device rename skipped: registry lookup failed."
+                    )
+                else:
+                    response["message"] = (
+                        f"Successfully renamed entity ({entity_id} -> {new_entity_id}). "
+                        f"No associated device found."
+                    )
 
             if entity_rename_result.get("voice_exposure_migration"):
                 response["voice_exposure_migration"] = entity_rename_result[

@@ -30,9 +30,12 @@ class TestOperationStatusConsolidation:
             {"operation_id": "nonexistent_op_12345"},
         )
 
-        # Should return a response (may be error or not-found)
+        assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
+        # Should return a structured response (success or error), not crash
+        assert "success" in result or "error" in result, (
+            f"Response missing 'success' or 'error' field: {result}"
+        )
         logger.info(f"Single invalid op result: {result}")
-        # The tool should handle this gracefully without crashing
 
     async def test_list_operation_ids_empty(self, mcp_client):
         """
@@ -48,8 +51,12 @@ class TestOperationStatusConsolidation:
             {"operation_id": []},
         )
 
+        assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
+        # Empty list should return a response (success with empty results, or error)
+        assert "success" in result or "error" in result, (
+            f"Response missing 'success' or 'error' field: {result}"
+        )
         logger.info(f"Empty list result: {result}")
-        # Should not crash — either returns empty results or an error
 
     async def test_list_operation_ids_invalid(self, mcp_client):
         """
@@ -69,8 +76,11 @@ class TestOperationStatusConsolidation:
             },
         )
 
+        assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
+        assert "success" in result or "error" in result, (
+            f"Response missing 'success' or 'error' field: {result}"
+        )
         logger.info(f"List invalid ops result: {result}")
-        # Should handle gracefully and return status for each
 
     async def test_single_vs_list_different_dispatch(self, mcp_client):
         """
@@ -96,6 +106,17 @@ class TestOperationStatusConsolidation:
             {"operation_id": [op_id]},
         )
 
+        assert isinstance(single_result, dict), "Single result should be a dict"
+        assert isinstance(list_result, dict), "List result should be a dict"
+
+        # Both should return structured responses
+        assert "success" in single_result or "error" in single_result, (
+            f"Single result missing 'success'/'error': {single_result}"
+        )
+        assert "success" in list_result or "error" in list_result, (
+            f"List result missing 'success'/'error': {list_result}"
+        )
+
         logger.info(
             f"Single result keys: {list(single_result.keys()) if isinstance(single_result, dict) else 'not dict'}"
         )
@@ -103,5 +124,24 @@ class TestOperationStatusConsolidation:
             f"List result keys: {list(list_result.keys()) if isinstance(list_result, dict) else 'not dict'}"
         )
 
-        # Both should succeed or fail gracefully, but response formats may differ
-        # since they go through different internal methods
+    async def test_json_string_list_coercion(self, mcp_client):
+        """
+        Test: Passing operation_id as a JSON string (e.g. '["op1","op2"]')
+        should be coerced to a list and use the bulk status path.
+
+        MCP clients sometimes send lists as JSON strings rather than native arrays.
+        """
+        logger.info("Testing JSON string coercion for operation_id")
+
+        # JSON string that should be parsed as a list
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_operation_status",
+            {"operation_id": '["json_string_op_1", "json_string_op_2"]'},
+        )
+
+        assert isinstance(result, dict), f"Expected dict response, got {type(result)}"
+        assert "success" in result or "error" in result, (
+            f"Response missing 'success' or 'error' field: {result}"
+        )
+        logger.info(f"JSON string coercion result: {result}")

@@ -4,8 +4,8 @@ Area and floor management tools for Home Assistant.
 This module provides tools for listing, creating, updating, and deleting
 Home Assistant areas and floors - essential organizational features for smart homes.
 
-Areas and floors use the same tool interface with a ``type`` parameter
-(``"area"`` or ``"floor"``) to select which registry to operate on.
+Areas and floors use the same tool interface (``_or_floor`` suffix) with a
+``type`` parameter (``"area"`` or ``"floor"``) to select which registry to operate on.
 """
 
 import logging
@@ -33,7 +33,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
     )
     @log_tool_usage
-    async def ha_config_list_areas(
+    async def ha_config_list_areas_or_floors(
         type: Annotated[  # noqa: A002
             Literal["area", "floor"],
             Field(
@@ -104,7 +104,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
     )
     @log_tool_usage
-    async def ha_config_set_area(
+    async def ha_config_set_area_or_floor(
         type: Annotated[  # noqa: A002
             Literal["area", "floor"],
             Field(
@@ -130,8 +130,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "When type='area': Floor ID to assign this area to (empty string to remove). "
-                    "When type='floor': Floor ID to update (omit to create new floor)."
+                    "Floor ID. For type='area': assigns area to this floor (empty string to unassign). "
+                    "For type='floor': identifies the floor to update (omit to create new)."
                 ),
                 default=None,
             ),
@@ -220,7 +220,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=[
                     "Check Home Assistant connection",
                     "For create: Verify the name is unique",
-                    f"For update: Verify the {registry}_id exists using ha_config_list_areas(type='{registry}')",
+                    f"For update: Verify the {registry}_id exists using ha_config_list_areas_or_floors(type='{registry}')",
                 ],
             )
 
@@ -402,7 +402,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
     )
     @log_tool_usage
-    async def ha_config_remove_area(
+    async def ha_config_remove_area_or_floor(
         type: Annotated[  # noqa: A002
             Literal["area", "floor"],
             Field(
@@ -440,7 +440,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ErrorCode.VALIDATION_MISSING_PARAMETER,
                             "floor_id is required when type='floor'",
                             suggestions=[
-                                "Provide floor_id to delete, use ha_config_list_areas(type='floor') to find IDs"
+                                "Provide floor_id to delete, use ha_config_list_areas_or_floors(type='floor') to find IDs"
                             ],
                         )
                     )
@@ -457,7 +457,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ErrorCode.VALIDATION_MISSING_PARAMETER,
                             "area_id is required when type='area'",
                             suggestions=[
-                                "Provide area_id to delete, use ha_config_list_areas() to find IDs"
+                                "Provide area_id to delete, use ha_config_list_areas_or_floors() to find IDs"
                             ],
                         )
                     )
@@ -502,6 +502,6 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={f"{registry}_id": item_id},
                 suggestions=[
                     "Check Home Assistant connection",
-                    f"Verify the {registry}_id exists using ha_config_list_areas(type='{registry}')",
+                    f"Verify the {registry}_id exists using ha_config_list_areas_or_floors(type='{registry}')",
                 ],
             )

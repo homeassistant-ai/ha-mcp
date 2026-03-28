@@ -165,7 +165,7 @@ async def _mcp_call(mcp_client, tool_name: str, args: dict | None = None) -> str
 async def _check_area_exists(mcp_client, check: dict) -> dict:
     name = check["name"]
     try:
-        text = await _mcp_call(mcp_client, "ha_config_list_areas")
+        text = await _mcp_call(mcp_client, "ha_config_list_areas_or_floors")
         if name.lower() in text.lower():
             return {**check, "type": "area_exists", "passed": True, "detail": f"Found area '{name}'"}
     except Exception as e:

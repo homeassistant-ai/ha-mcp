@@ -2,7 +2,7 @@
 Edge Case Tests for Consolidated Area/Floor Tools
 
 Tests behavior when cross-type parameters are provided, ensuring
-the consolidated ha_config_set_area/ha_config_remove_area tools
+the consolidated ha_config_set_area_or_floor/ha_config_remove_area_or_floor tools
 handle type-specific params correctly.
 """
 
@@ -39,7 +39,7 @@ class TestConsolidatedAreaFloorEdgeCases:
         logger.info(f"Testing floor create with area-only params: {floor_name}")
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -58,7 +58,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor", "floor_id": floor_id},
         )
 
@@ -75,7 +75,7 @@ class TestConsolidatedAreaFloorEdgeCases:
         logger.info(f"Testing area create with floor-only params: {area_name}")
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "name": area_name,
                 "level": 5,  # floor-only param
@@ -93,7 +93,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"area_id": area_id},
         )
 
@@ -105,7 +105,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor"},
         )
 
@@ -123,7 +123,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {},
         )
 
@@ -141,7 +141,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {"type": "floor", "level": 1},
         )
 
@@ -156,7 +156,7 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {"icon": "mdi:sofa"},
         )
 
@@ -171,7 +171,7 @@ class TestConsolidatedAreaFloorEdgeCases:
         logger.info(f"Testing floor create without level: {floor_name}")
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_area",
+            "ha_config_set_area_or_floor",
             {
                 "type": "floor",
                 "name": floor_name,
@@ -188,6 +188,6 @@ class TestConsolidatedAreaFloorEdgeCases:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_area",
+            "ha_config_remove_area_or_floor",
             {"type": "floor", "floor_id": floor_id},
         )

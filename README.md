@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-91+-blue" alt="91+ Tools">
+    <img src="https://img.shields.io/badge/tools-87+-blue" alt="87+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -129,7 +129,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (91 tools)</b></summary>
+<summary><b>🛠️ Complete Tool List (87 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -139,7 +139,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
 | **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard` + dashboard skill references |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area` |
+| **Areas & Floors** | `ha_config_list_areas_or_floors`, `ha_config_set_area_or_floor`, `ha_config_remove_area_or_floor` |
 | **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
 | **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
 | **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
