@@ -65,7 +65,13 @@ async def _check_yaml_tool_available(mcp_client) -> tuple[bool, str | None]:
 
 
 async def _check_service_available(mcp_client) -> tuple[bool, str | None]:
-    """Check if the edit_yaml_config service is available in HA."""
+    """Check if ha_config_set_yaml tool is registered AND the HA service is available."""
+    # First check if the tool is even registered
+    tool_available, tool_error = await _check_yaml_tool_available(mcp_client)
+    if not tool_available:
+        return False, tool_error
+
+    # Then probe the service
     try:
         data = await safe_call_tool(
             mcp_client,
