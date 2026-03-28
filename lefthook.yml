@@ -24,5 +24,4 @@ pre-commit:
             glob:
               - "**/*.py"
               - "pyproject.toml"
-            root: "tests"
-            run: uv run pytest src/unit/ addon/test_addon_startup.py -n auto -m "not slow" --tb=short -q
+            run: cd tests && uv run pytest src/unit/ addon/test_addon_startup.py -n auto -m "not slow" --tb=short -q

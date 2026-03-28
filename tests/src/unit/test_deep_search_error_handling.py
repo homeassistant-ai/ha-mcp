@@ -4,9 +4,11 @@ Validates that ha_deep_search uses structured error responses and does NOT
 leak internal tracebacks to clients (issue #517).
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_search import register_search_tools
 
@@ -64,8 +66,10 @@ class TestDeepSearchErrorHandling:
             side_effect=RuntimeError("Connection refused")
         )
 
-        result = await deep_search_tool(query="test_query")
+        with pytest.raises(ToolError) as exc_info:
+            await deep_search_tool(query="test_query")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
         assert "code" in result["error"]
@@ -82,8 +86,10 @@ class TestDeepSearchErrorHandling:
             side_effect=RuntimeError("Something went wrong")
         )
 
-        result = await deep_search_tool(query="test_query")
+        with pytest.raises(ToolError) as exc_info:
+            await deep_search_tool(query="test_query")
 
+        result = json.loads(str(exc_info.value))
         suggestions = result["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
@@ -112,7 +118,9 @@ class TestDeepSearchErrorHandling:
             side_effect=exception_cls(exception_msg)
         )
 
-        result = await deep_search_tool(query="test_query")
+        with pytest.raises(ToolError) as exc_info:
+            await deep_search_tool(query="test_query")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["error"]["code"] == expected_code
