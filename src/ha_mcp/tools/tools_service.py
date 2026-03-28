@@ -75,7 +75,7 @@ def _build_service_suggestions(
         f"Verify {entity_id} exists using ha_get_state()"
         if entity_id
         else "Specify an entity_id for targeted service calls",
-        f"Check available services for {domain} domain using ha_get_domain_docs()",
+        f"Check available services for {domain} domain using ha_get_skill_home_assistant_best_practices",
         "Use ha_search_entities() to find correct entity IDs",
     ]
 
@@ -128,7 +128,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           Only applies to state-changing services on a single entity. Set to False for
           fire-and-forget calls, bulk operations, or services without observable state changes.
 
-        **For detailed service documentation and parameters, use ha_get_domain_docs(domain).**
+        **For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**
 
         Common patterns: Use ha_get_state() to check current values before making changes.
         Use ha_search_entities() to find correct entity IDs.

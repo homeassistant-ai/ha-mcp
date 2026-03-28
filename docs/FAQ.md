@@ -46,6 +46,42 @@ The demo environment resets weekly. Your changes won't persist.
 
 ## Troubleshooting
 
+### OAuth stopped working after upgrading to v7.0.0
+
+v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set `HOMEASSISTANT_URL` as a server-side environment variable before starting ha-mcp. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.
+
+### Claude.ai says "Couldn't reach the MCP server"
+
+**This is normal.** Claude.ai shows this error during its initial connection handshake, but the server connects successfully afterward. To verify you're actually connected:
+
+1. Look for a **"Configure"** button on the connector — click it
+2. If you see tools listed, you're connected and ready to go
+
+You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection — this is the easiest way to confirm it's truly connected. Checking your server logs for successful requests (HTTP 200) after the initial error also confirms the connection is working.
+
+This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.
+
+### "Terminating session: None" in server logs
+
+**This is normal.** ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The `Terminating session: None` log message is the MCP SDK reporting this routine cleanup — the connection stays active.
+
+### Cloudflare: LLM can't connect ("Block AI training bots")
+
+If you're using Cloudflare and your LLM client can't connect to the MCP server (but visiting the URL in your browser works), Cloudflare's **"Block AI training bots"** setting is almost certainly the cause. This is the most common connection issue for Cloudflare users.
+
+To disable it:
+
+1. Log in to [Cloudflare](https://dash.cloudflare.com)
+2. In the left sidebar, click **Domains**, then click **Overview**
+3. Click on the domain you use for connecting to Home Assistant
+4. On the right side of the page, find **"Control AI Crawlers"**
+5. Under **"Block AI training bots"**, open the dropdown
+6. Select **"do not block (allow crawlers)"**
+
+![Cloudflare AI Crawlers Setting](https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
+
+See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.
@@ -146,7 +182,7 @@ uvx --refresh ha-mcp@latest
 uvx ha-mcp@latest --version
 ```
 
-The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest) (currently 6.x). If you see version 3.x or older, the cache needs clearing.
+The version should match the [latest release](https://github.com/homeassistant-ai/ha-mcp/releases/latest). If you see a much older version, the cache needs clearing.
 
 ---
 
