@@ -5,7 +5,7 @@ This test suite validates:
 - Security boundaries: path traversal, file allowlist, key allowlist
 - CRUD operations: add, replace, remove actions
 - Validation: null content rejection, type mismatch errors
-- Safeguards: backup creation, config check integration
+- Safeguards: backup creation, config check integration, post-edit action hints
 - Feature flag behavior (disabled by default)
 
 These tests require:
@@ -554,3 +554,60 @@ class TestYamlConfigSafeguards:
                 f"Config check result should be in response: {data}"
             )
             logger.info(f"Config check result: {inner.get('config_check')}")
+
+    async def test_post_action_reload_for_template(self, mcp_client_with_yaml_config):
+        """Template key should return post_action=reload_available."""
+        service_check = await _check_service_available(mcp_client_with_yaml_config)
+        _skip_if_unavailable(service_check, "Post action reload")
+
+        content = "- sensor:\n    - name: Post Action Test\n      state: 'ok'"
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "template",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_test_post_action_reload.yaml",
+                    "backup": False,
+                },
+            )
+            inner = data.get("data", data)
+            assert inner.get("success") is True, f"Add should succeed: {data}"
+            assert inner.get("post_action") == "reload_available", (
+                f"template should have post_action=reload_available: {data}"
+            )
+            assert "reload_service" in inner, (
+                f"reload_service should be present for reloadable keys: {data}"
+            )
+            logger.info(
+                f"post_action={inner.get('post_action')}, "
+                f"reload_service={inner.get('reload_service')}"
+            )
+
+    async def test_post_action_restart_for_shell_command(self, mcp_client_with_yaml_config):
+        """shell_command key should return post_action=restart_required."""
+        service_check = await _check_service_available(mcp_client_with_yaml_config)
+        _skip_if_unavailable(service_check, "Post action restart")
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "shell_command",
+                    "action": "add",
+                    "content": "test_cmd: echo hello",
+                    "file": "packages/_e2e_test_post_action_restart.yaml",
+                    "backup": False,
+                },
+            )
+            inner = data.get("data", data)
+            assert inner.get("success") is True, f"Add should succeed: {data}"
+            assert inner.get("post_action") == "restart_required", (
+                f"shell_command should have post_action=restart_required: {data}"
+            )
+            assert "reload_service" not in inner, (
+                f"reload_service should NOT be present for restart-only keys: {data}"
+            )
+            logger.info(f"post_action={inner.get('post_action')}")

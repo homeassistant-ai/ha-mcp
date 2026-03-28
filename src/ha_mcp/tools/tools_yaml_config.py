@@ -119,6 +119,10 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Safeguards: file backup, YAML validation, top-level key whitelist,
         path traversal blocking, post-edit config check.
 
+        IMPORTANT: Check 'post_action' in the response. Most keys require
+        a full HA restart ('restart_required'). Only template, mqtt, and
+        group support reload ('reload_available' with 'reload_service').
+
         Note: YAML comments are not preserved after editing. The backup
         retains the original file with comments intact.
         """

@@ -31,6 +31,8 @@ from .const import (
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
     DOMAIN,
+    YAML_KEY_DEFAULT_POST_ACTION,
+    YAML_KEY_POST_ACTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -690,6 +692,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
             if backup_path_str:
                 result["backup_path"] = backup_path_str
+
+            # Surface the post-edit action required to activate the change
+            post_info = YAML_KEY_POST_ACTIONS.get(
+                yaml_path, YAML_KEY_DEFAULT_POST_ACTION
+            )
+            result.update(post_info)
 
             # Run HA config check to verify the file is loadable
             try:

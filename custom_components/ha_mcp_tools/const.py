@@ -33,3 +33,24 @@ ALLOWED_YAML_KEYS = frozenset(
         "utility_meter",
     }
 )
+
+# Post-edit action required for each YAML key.
+# Only template, mqtt, and group have YAML reload services in HA core
+# (verified against homeassistant/components/homeassistant/__init__.py,
+# async_handle_reload_all). All others require a full HA restart.
+YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
+    "template": {
+        "post_action": "reload_available",
+        "reload_service": "homeassistant.reload_custom_templates",
+    },
+    "mqtt": {
+        "post_action": "reload_available",
+        "reload_service": "mqtt.reload",
+    },
+    "group": {
+        "post_action": "reload_available",
+        "reload_service": "group.reload",
+    },
+}
+# Default for keys not in YAML_KEY_POST_ACTIONS:
+YAML_KEY_DEFAULT_POST_ACTION = {"post_action": "restart_required"}
