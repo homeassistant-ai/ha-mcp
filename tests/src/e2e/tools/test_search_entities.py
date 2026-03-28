@@ -52,8 +52,9 @@ async def test_search_entities_empty_query_with_domain_filter(mcp_client):
     data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
-    assert data.get("search_type") == "domain_listing", \
+    assert data.get("search_type") == "domain_listing", (
         f"Expected search_type 'domain_listing', got '{data.get('search_type')}'"
+    )
     assert "results" in data
     results = data.get("results", [])
 
@@ -63,8 +64,9 @@ async def test_search_entities_empty_query_with_domain_filter(mcp_client):
     # Verify all results are from the correct domain
     for entity in results:
         entity_id = entity.get("entity_id", "")
-        assert entity_id.startswith("light."), \
+        assert entity_id.startswith("light."), (
             f"Entity {entity_id} should be in light domain"
+        )
         assert entity.get("domain") == "light"
         assert entity.get("match_type") == "domain_listing"
 
@@ -98,21 +100,22 @@ async def test_search_entities_domain_filter_with_query(mcp_client):
 
     result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "bed", "domain_filter": "light", "limit": 10},
+        {"query": "bed", "domain_filter": "light", "limit": 10, "exact_match": False},
     )
     raw_data = assert_mcp_success(result, "Domain filter with query")
     # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
     data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
-    # When there's a query, it should use fuzzy search
+    # With exact_match=False, it should use fuzzy search
     assert data.get("search_type") == "fuzzy_search"
 
     # All results should be from the filtered domain
     for entity in data.get("results", []):
         entity_id = entity.get("entity_id", "")
-        assert entity_id.startswith("light."), \
+        assert entity_id.startswith("light."), (
             f"Entity {entity_id} should be in light domain"
+        )
 
     logger.info(f"Found {len(data.get('results', []))} lights matching 'bed'")
 
@@ -187,15 +190,21 @@ async def test_search_entities_limit_respected(mcp_client):
     raw_data_limited = assert_mcp_success(result_limited, "Limited lights")
     data_limited = raw_data_limited.get("data", raw_data_limited)
 
-    assert len(data_limited.get("results", [])) == 2, "Expected exactly 2 results with limit=2"
+    assert len(data_limited.get("results", [])) == 2, (
+        "Expected exactly 2 results with limit=2"
+    )
     # total_matches should still show the actual count
     assert data_limited.get("total_matches") == total_lights
     # has_more should be True since we limited the results
-    assert data_limited.get("has_more") is True, "Expected has_more=True when limit < total_matches"
+    assert data_limited.get("has_more") is True, (
+        "Expected has_more=True when limit < total_matches"
+    )
     assert data_limited.get("count") == 2, "Expected count=2"
     assert data_limited.get("next_offset") == 2, "Expected next_offset=2"
 
-    logger.info(f"Limit correctly applied: 2 results of {total_lights} total, has_more={data_limited.get('has_more')}")
+    logger.info(
+        f"Limit correctly applied: 2 results of {total_lights} total, has_more={data_limited.get('has_more')}"
+    )
 
 
 @pytest.mark.asyncio
@@ -222,14 +231,16 @@ async def test_search_entities_multiple_domains(mcp_client):
             # Verify all results match the domain
             for entity in data.get("results", []):
                 entity_id = entity.get("entity_id", "")
-                assert entity_id.startswith(f"{domain}."), \
+                assert entity_id.startswith(f"{domain}."), (
                     f"Entity {entity_id} should be in {domain} domain"
+                )
 
     logger.info(f"Domain listing results: {results_summary}")
 
     # At least one domain should have results
-    assert any(count > 0 for count in results_summary.values()), \
+    assert any(count > 0 for count in results_summary.values()), (
         "Expected at least one domain to have entities"
+    )
 
 
 # ============================================================================
@@ -247,14 +258,14 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
 
     result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "light", "limit": 5},
+        {"query": "light", "limit": 5, "exact_match": False},
     )
     raw_data = assert_mcp_success(result, "Fuzzy search success")
     data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"
-    # Normal search should NOT have warning or partial flag
+    # Normal fuzzy search should NOT have warning or partial flag
     assert "warning" not in data or data.get("warning") is None
     assert "partial" not in data or data.get("partial") is not True
     # Strong matches should not include suggestions
@@ -288,9 +299,15 @@ async def test_search_entities_response_structure_issue_214(mcp_client):
     assert isinstance(data["results"], list), "Results must be a list"
 
     # search_type should be one of the expected values
-    valid_search_types = ["fuzzy_search", "exact_match", "partial_listing", "domain_listing"]
-    assert data["search_type"] in valid_search_types, \
+    valid_search_types = [
+        "fuzzy_search",
+        "exact_match",
+        "partial_listing",
+        "domain_listing",
+    ]
+    assert data["search_type"] in valid_search_types, (
         f"search_type '{data['search_type']}' not in {valid_search_types}"
+    )
 
     logger.info(f"Response structure valid with search_type: {data['search_type']}")
 
@@ -353,24 +370,36 @@ async def test_search_entities_pagination_metadata(mcp_client):
     total_matches = data.get("total_matches", 0)
 
     # count should match actual results length
-    assert data["count"] == results_count, \
+    assert data["count"] == results_count, (
         f"count ({data['count']}) should equal results length ({results_count})"
+    )
 
     # If total_matches > results count, has_more should be True
     if total_matches > results_count:
-        assert data["has_more"] is True, \
+        assert data["has_more"] is True, (
             f"Expected has_more=True when total_matches ({total_matches}) > results ({results_count})"
-        assert data["next_offset"] is not None, "next_offset should be set when has_more=True"
-        logger.info(f"Pagination: {results_count} of {total_matches} shown, has_more=True, next_offset={data['next_offset']}")
+        )
+        assert data["next_offset"] is not None, (
+            "next_offset should be set when has_more=True"
+        )
+        logger.info(
+            f"Pagination: {results_count} of {total_matches} shown, has_more=True, next_offset={data['next_offset']}"
+        )
     else:
-        assert data["has_more"] is False, \
+        assert data["has_more"] is False, (
             f"Expected has_more=False when total_matches ({total_matches}) <= results ({results_count})"
-        assert data.get("next_offset") is None, "next_offset should be None when has_more=False"
-        logger.info(f"No pagination needed: {results_count} of {total_matches} shown, has_more=False")
+        )
+        assert data.get("next_offset") is None, (
+            "next_offset should be None when has_more=False"
+        )
+        logger.info(
+            f"No pagination needed: {results_count} of {total_matches} shown, has_more=False"
+        )
 
     # total_matches should always be >= results_count
-    assert total_matches >= results_count, \
+    assert total_matches >= results_count, (
         f"total_matches ({total_matches}) should be >= results count ({results_count})"
+    )
 
     logger.info("Pagination metadata test passed")
 
