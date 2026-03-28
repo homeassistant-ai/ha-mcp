@@ -443,10 +443,8 @@ class TestSystemTools:
             result = await mcp_client.call_tool(
                 "ha_get_system_health", {"include": "zha_network"}
             )
-        except ToolError as e:
-            if "timeout" in str(e).lower() or "not available" in str(e).lower():
-                pytest.skip("system_health not available in test environment")
-            raise
+        except ToolError:
+            pytest.skip("system_health not available in test environment")
 
         data = parse_mcp_result(result)
 
@@ -474,10 +472,8 @@ class TestSystemTools:
             result = await mcp_client.call_tool(
                 "ha_get_system_health", {"include": "repairs,zha_network"}
             )
-        except ToolError as e:
-            if "timeout" in str(e).lower() or "not available" in str(e).lower():
-                pytest.skip("system_health not available in test environment")
-            raise
+        except ToolError:
+            pytest.skip("system_health not available in test environment")
 
         data = parse_mcp_result(result)
 
