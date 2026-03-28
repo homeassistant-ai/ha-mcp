@@ -1,12 +1,12 @@
 """
-Tests for ha_get_logs tool - logbook entries with pagination.
+Tests for ha_get_logs tool - log access with multiple sources and pagination.
 """
 
 import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -315,3 +315,152 @@ async def test_logbook_empty_result(mcp_client):
     assert data["has_more"] is False, "has_more should be False"
 
     logger.info("Empty logbook correctly returns success with no entries")
+
+
+# ---- Tests for new log sources ----
+
+
+@pytest.mark.asyncio
+async def test_logs_system_source(mcp_client):
+    """Test system log retrieval via source='system'."""
+    logger.info("Testing system log source")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "system"},
+    )
+
+    raw_data = assert_mcp_success(result, "System log retrieval")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "system", "Source should be 'system'"
+    assert "entries" in data, "Response should contain entries"
+    assert "total_entries" in data, "Response should contain total_entries"
+    assert "returned_entries" in data, "Response should contain returned_entries"
+    assert "limit" in data, "Response should contain limit"
+
+    logger.info(f"Retrieved {data['returned_entries']} system log entries")
+
+
+@pytest.mark.asyncio
+async def test_logs_system_source_with_level_filter(mcp_client):
+    """Test system log filtering by severity level."""
+    logger.info("Testing system log with level filter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "system", "level": "ERROR"},
+    )
+
+    raw_data = assert_mcp_success(result, "System log with level filter")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "system"
+
+    # If filters were applied, verify they're reported
+    filters = data.get("filters_applied", {})
+    if filters:
+        assert filters.get("level") == "ERROR"
+
+    logger.info(f"Retrieved {data['returned_entries']} ERROR-level entries")
+
+
+@pytest.mark.asyncio
+async def test_logs_error_log_source(mcp_client):
+    """Test raw error log retrieval via source='error_log'."""
+    logger.info("Testing error_log source")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "error_log", "limit": 20},
+    )
+
+    raw_data = assert_mcp_success(result, "Error log retrieval")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "error_log", "Source should be 'error_log'"
+    assert "log" in data, "Response should contain log text"
+    assert "total_lines" in data, "Response should contain total_lines"
+    assert "returned_lines" in data, "Response should contain returned_lines"
+    assert data["limit"] == 20, f"Limit should be 20, got {data['limit']}"
+
+    logger.info(f"Retrieved {data['returned_lines']} of {data['total_lines']} log lines")
+
+
+@pytest.mark.asyncio
+async def test_logs_invalid_source(mcp_client):
+    """Test that invalid source returns validation error."""
+    logger.info("Testing invalid source parameter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "invalid_source"},
+    )
+
+    data = parse_mcp_result(result)
+
+    # Should be an error response
+    assert data.get("success") is not True, "Invalid source should fail"
+    error = data.get("error", {})
+    if isinstance(error, dict):
+        assert "invalid" in error.get("message", "").lower() or "source" in error.get("message", "").lower()
+
+    logger.info("Invalid source correctly returns error")
+
+
+@pytest.mark.asyncio
+async def test_logs_invalid_level(mcp_client):
+    """Test that invalid level returns validation error."""
+    logger.info("Testing invalid level parameter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "system", "level": "INVALID"},
+    )
+
+    data = parse_mcp_result(result)
+
+    assert data.get("success") is not True, "Invalid level should fail"
+
+    logger.info("Invalid level correctly returns error")
+
+
+@pytest.mark.asyncio
+async def test_logs_supervisor_missing_slug(mcp_client):
+    """Test that supervisor source without slug returns validation error."""
+    logger.info("Testing supervisor source without slug")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "supervisor"},
+    )
+
+    data = parse_mcp_result(result)
+
+    assert data.get("success") is not True, "Supervisor without slug should fail"
+
+    logger.info("Supervisor without slug correctly returns error")
+
+
+@pytest.mark.asyncio
+async def test_logs_default_source_is_logbook(mcp_client):
+    """Test that default source (no source param) returns logbook data."""
+    logger.info("Testing default source is logbook")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"hours_back": 1},
+    )
+
+    raw_data = assert_mcp_success(result, "Default source logbook")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "logbook", "Default source should be 'logbook'"
+    assert "entries" in data
+    assert "has_more" in data
+
+    logger.info("Default source correctly returns logbook data")

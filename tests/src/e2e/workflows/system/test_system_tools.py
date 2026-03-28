@@ -372,6 +372,56 @@ class TestSystemTools:
 
         logger.info("Get system health test completed successfully")
 
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_repairs(self, mcp_client):
+        """
+        Test: Get system health with repairs included.
+
+        Verifies that the include="repairs" parameter adds repair data
+        to the system health response.
+        """
+        logger.info("Testing get system health with repairs include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = data.get("error", "")
+            if "not available" in str(error_msg).lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with repairs failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "repairs" in data, "Missing 'repairs' field when include='repairs'"
+
+        repairs = data["repairs"]
+        assert "issues" in repairs, "Repairs should contain 'issues' list"
+        assert "count" in repairs, "Repairs should contain 'count'"
+        assert isinstance(repairs["issues"], list), "Repairs issues should be a list"
+
+        logger.info(f"System health with repairs: {repairs['count']} repair issues found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_default_no_extras(self, mcp_client):
+        """
+        Test: Default system health (no include) should NOT contain repairs/zha_network.
+        """
+        logger.info("Testing default system health has no extras...")
+
+        result = await mcp_client.call_tool("ha_get_system_health", {})
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            pytest.skip("system_health not available in test environment")
+
+        assert "repairs" not in data, "Default health should not include repairs"
+        assert "zha_network" not in data, "Default health should not include zha_network"
+
+        logger.info("Default system health correctly excludes extras")
+
 
 @pytest.mark.system
 class TestSystemToolsIntegration:
