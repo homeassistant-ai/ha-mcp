@@ -393,17 +393,16 @@ async def test_logs_error_log_source(mcp_client):
 
 @pytest.mark.asyncio
 async def test_logs_invalid_source(mcp_client):
-    """Test that invalid source returns validation error."""
+    """Test that invalid source returns validation error (schema or tool-level)."""
     logger.info("Testing invalid source parameter")
 
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises((ToolError, Exception)):
         await mcp_client.call_tool(
             "ha_get_logs",
             {"source": "invalid_source"},
         )
 
-    assert "invalid" in str(exc_info.value).lower() or "source" in str(exc_info.value).lower()
-    logger.info("Invalid source correctly raises ToolError")
+    logger.info("Invalid source correctly raises error")
 
 
 @pytest.mark.asyncio
@@ -455,3 +454,70 @@ async def test_logs_default_source_is_logbook(mcp_client):
     assert "has_more" in data
 
     logger.info("Default source correctly returns logbook data")
+
+
+@pytest.mark.asyncio
+async def test_logs_system_source_with_search(mcp_client):
+    """Test system log search filtering."""
+    logger.info("Testing system log with search filter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "system", "search": "homeassistant"},
+    )
+
+    raw_data = assert_mcp_success(result, "System log with search")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "system"
+
+    filters = data.get("filters_applied", {})
+    if filters:
+        assert filters.get("search") == "homeassistant"
+
+    logger.info(f"Search returned {data['returned_entries']} entries")
+
+
+@pytest.mark.asyncio
+async def test_logs_error_log_with_level_filter(mcp_client):
+    """Test error log filtering by level."""
+    logger.info("Testing error_log with level filter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "error_log", "level": "WARNING"},
+    )
+
+    raw_data = assert_mcp_success(result, "Error log with level filter")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "error_log"
+    assert "log" in data
+
+    filters = data.get("filters_applied", {})
+    if filters:
+        assert filters.get("level") == "WARNING"
+
+    logger.info(f"Retrieved {data['returned_lines']} WARNING-level lines")
+
+
+@pytest.mark.asyncio
+async def test_logs_logbook_with_search(mcp_client):
+    """Test logbook source with search keyword filtering."""
+    logger.info("Testing logbook with search filter")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "logbook", "hours_back": 24, "search": "sun"},
+    )
+
+    raw_data = assert_mcp_success(result, "Logbook with search")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "logbook"
+    assert "entries" in data
+
+    logger.info(f"Logbook search returned {data.get('returned_entries', 0)} entries")

@@ -632,21 +632,28 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "ieee_address"
                 ):
                     try:
-                        zha_msg: dict[str, Any] = {"type": "zha/devices"}
-                        zha_result = await client.send_websocket_message(zha_msg)
+                        zha_result = await client.send_websocket_message(
+                            {"type": "zha/devices"}
+                        )
                         if zha_result.get("success"):
-                            zha_devices = zha_result.get("result", [])
+                            # Build ieee→metrics map for O(1) lookup
+                            zha_by_ieee = {
+                                d.get("ieee"): d
+                                for d in zha_result.get("result", [])
+                                if d.get("ieee")
+                            }
                             target_ieee = device_info["ieee_address"]
-                            for zha_dev in zha_devices:
-                                if zha_dev.get("ieee") == target_ieee:
-                                    device_info["radio_metrics"] = {
-                                        "lqi": zha_dev.get("lqi"),
-                                        "rssi": zha_dev.get("rssi"),
-                                    }
-                                    break
-                    except Exception as e:
+                            zha_dev = zha_by_ieee.get(target_ieee)
+                            if zha_dev:
+                                device_info["radio_metrics"] = {
+                                    "lqi": zha_dev.get("lqi"),
+                                    "rssi": zha_dev.get("rssi"),
+                                }
+                    except (TimeoutError, OSError) as e:
                         logger.warning(
-                            f"Could not fetch ZHA radio metrics for device {device_info.get('device_id')}: {e}"
+                            "Could not fetch ZHA radio metrics for device %s: %s",
+                            device_info.get("device_id"),
+                            e,
                         )
 
                 entities = device_info.get("entities", [])

@@ -642,8 +642,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         for r in issues
                     ]
-        except Exception as e:
-            logger.warning(f"Failed to fetch repairs for overview: {e}")
+        except (TimeoutError, OSError) as e:
+            logger.warning("Failed to fetch repairs for overview: %s", e)
 
         # Include tool discovery hint when search transform is active
         settings = get_global_settings()

@@ -6,11 +6,13 @@ template evaluation, and domain documentation retrieval.
 """
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
@@ -21,12 +23,16 @@ logger = logging.getLogger(__name__)
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant utility tools."""
 
-    # Default and maximum limits for logbook entries
-    DEFAULT_LOGBOOK_LIMIT = 50
-    MAX_LOGBOOK_LIMIT = 500
-    # Default limit for non-logbook log sources
+    # Default and maximum limits for log entries
+    DEFAULT_LIMIT = 50
     DEFAULT_LOG_LIMIT = 100
-    VALID_SOURCES = ("logbook", "system", "error_log", "supervisor")
+    MAX_LIMIT = 500
+    # Regex to match log level at the start of a log line
+    _LOG_LEVEL_RE = re.compile(
+        r"(?:^|\s)(DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\s|:|\])", re.IGNORECASE
+    )
+
+    # Valid log level values
     VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
 
     @mcp.tool(
@@ -39,7 +45,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_logs(
-        source: str = "logbook",
+        source: Literal["logbook", "system", "error_log", "supervisor"] = "logbook",
         # Shared parameters
         limit: int | str | None = None,
         search: str | None = None,
@@ -62,23 +68,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "error_log": Raw home-assistant.log text
         - "supervisor": Add-on container logs (requires slug parameter)
 
-        **Shared params:** limit, search (keyword filter)
+        **Shared params:** limit, search (keyword filter on entries/lines)
         **Logbook params:** hours_back, entity_id, end_time, offset
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
         **Supervisor params:** slug (add-on slug, e.g. "core_mosquitto")
         """
-
-        # Validate source
-        if source not in VALID_SOURCES:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid source '{source}'. Must be one of: {', '.join(VALID_SOURCES)}",
-                    suggestions=[
-                        f"Use source='{s}' for {s} logs" for s in VALID_SOURCES
-                    ],
-                )
-            )
 
         # Validate level if provided
         if level is not None:
@@ -93,6 +87,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             level = level_upper
 
+        # Warn about source-incompatible parameters
+        if source != "logbook" and any(p is not None for p in [entity_id, end_time]):
+            logger.info(
+                "Parameters entity_id/end_time are only used with source='logbook'; "
+                "ignoring for source='%s'",
+                source,
+            )
+        if source == "logbook" and level is not None:
+            logger.info(
+                "Parameter 'level' is only used with source='system' or 'error_log'; "
+                "ignoring for source='logbook'"
+            )
+
         # --- source="logbook" ---
         if source == "logbook":
             return await _get_logbook(
@@ -101,6 +108,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 end_time=end_time,
                 limit=limit,
                 offset=offset,
+                search=search,
             )
 
         # --- source="system" ---
@@ -120,33 +128,25 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         # --- source="supervisor" ---
-        if source == "supervisor":
-            if not slug:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "The 'slug' parameter is required for source='supervisor'",
-                        suggestions=[
-                            "Provide the add-on slug, e.g. slug='core_mosquitto'",
-                            "Use ha_list_addons() to find available add-on slugs",
-                        ],
-                    )
+        # source == "supervisor" (Literal type guarantees this)
+        if not slug:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "The 'slug' parameter is required for source='supervisor'",
+                    suggestions=[
+                        "Provide the add-on slug, e.g. slug='core_mosquitto'",
+                        "Use ha_list_addons() to find available add-on slugs",
+                    ],
                 )
-            return await _get_supervisor_log(
-                slug=slug,
-                limit=limit,
-                search=search,
             )
-
-        # Unreachable (validated above), but satisfy type checker
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Unhandled source '{source}'",
-            )
+        return await _get_supervisor_log(
+            slug=slug,
+            limit=limit,
+            search=search,
         )
 
-    # ---- Logbook source (original ha_get_logbook logic) ----
+    # ---- Logbook source ----
 
     async def _get_logbook(
         hours_back: int | str = 1,
@@ -154,8 +154,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         end_time: str | None = None,
         limit: int | str | None = None,
         offset: int | str = 0,
+        search: str | None = None,
     ) -> dict[str, Any]:
-        """Fetch logbook entries with pagination (original ha_get_logbook logic)."""
+        """Fetch logbook entries with search and pagination."""
 
         # Coerce parameters with string handling for AI tools
         try:
@@ -165,8 +166,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=1,
                 min_value=1,
             )
-            if hours_back_int is None:
-                hours_back_int = 1
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -180,12 +179,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             effective_limit = coerce_int_param(
                 limit,
                 param_name="limit",
-                default=DEFAULT_LOGBOOK_LIMIT,
+                default=DEFAULT_LIMIT,
                 min_value=1,
-                max_value=MAX_LOGBOOK_LIMIT,
+                max_value=MAX_LIMIT,
             )
-            if effective_limit is None:
-                effective_limit = DEFAULT_LOGBOOK_LIMIT
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -202,8 +199,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=0,
                 min_value=0,
             )
-            if offset_int is None:
-                offset_int = 0
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -227,6 +222,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id=entity_id, start_time=start_timestamp, end_time=end_time
             )
 
+            # Apply search filter if provided
+            filters_applied: dict[str, str] = {}
+            if search and isinstance(response, list):
+                search_lower = search.lower()
+                response = [
+                    e
+                    for e in response
+                    if search_lower in str(e.get("name", "")).lower()
+                    or search_lower in str(e.get("message", "")).lower()
+                    or search_lower in str(e.get("entity_id", "")).lower()
+                ]
+                filters_applied["search"] = search
+
             # Get total count before pagination
             total_entries = len(response) if isinstance(response, list) else 1
 
@@ -238,7 +246,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 paginated_entries = response
                 has_more = False
 
-            logbook_data = {
+            logbook_data: dict[str, Any] = {
                 "success": True,
                 "source": "logbook",
                 "entries": paginated_entries,
@@ -254,6 +262,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "offset": offset_int,
                 "has_more": has_more,
             }
+            if filters_applied:
+                logbook_data["filters_applied"] = filters_applied
 
             # Add helpful message when results are truncated
             if has_more:
@@ -268,6 +278,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     param_parts.append(f"entity_id={entity_id}")
                 if end_time:
                     param_parts.append(f"end_time={end_time}")
+                if search:
+                    param_parts.append(f"search={search}")
 
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
@@ -317,11 +329,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             effective_limit = coerce_int_param(
                 limit,
                 param_name="limit",
-                default=DEFAULT_LOGBOOK_LIMIT,
+                default=DEFAULT_LIMIT,
                 min_value=1,
-                max_value=MAX_LOGBOOK_LIMIT,
+                max_value=MAX_LIMIT,
             )
-            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -386,7 +397,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
-        except Exception as e:
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantAPIError,
+            TimeoutError,
+            OSError,
+        ) as e:
             exception_to_structured_error(
                 e,
                 context={"source": "system"},
@@ -410,9 +426,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 param_name="limit",
                 default=DEFAULT_LOG_LIMIT,
                 min_value=1,
-                max_value=MAX_LOGBOOK_LIMIT,
+                max_value=MAX_LIMIT,
             )
-            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -430,7 +445,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             filters_applied: dict[str, str] = {}
 
             if level:
-                lines = [ln for ln in lines if level in ln]
+
+                def _line_has_level(ln: str, target: str) -> bool:
+                    m = _LOG_LEVEL_RE.search(ln)
+                    return m is not None and m.group(1).upper() == target
+
+                lines = [ln for ln in lines if _line_has_level(ln, level)]
                 filters_applied["level"] = level
 
             if search:
@@ -459,7 +479,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
-        except Exception as e:
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantAPIError,
+            TimeoutError,
+            OSError,
+        ) as e:
             exception_to_structured_error(
                 e,
                 context={"source": "error_log"},
@@ -483,9 +508,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 param_name="limit",
                 default=DEFAULT_LOG_LIMIT,
                 min_value=1,
-                max_value=MAX_LOGBOOK_LIMIT,
+                max_value=MAX_LIMIT,
             )
-            assert effective_limit is not None  # default guarantees non-None
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -529,7 +553,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Result may be a string (log text) or dict with result key
             log_text = result.get("result", "")
             if isinstance(log_text, dict):
-                log_text = log_text.get("data", str(log_text))
+                if "data" in log_text:
+                    log_text = log_text["data"]
+                else:
+                    logger.warning(
+                        "Supervisor log for '%s' returned unexpected dict structure",
+                        slug,
+                    )
+                    log_text = ""
             if not isinstance(log_text, str):
                 log_text = str(log_text)
 
@@ -564,7 +595,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
-        except Exception as e:
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantAPIError,
+            TimeoutError,
+            OSError,
+        ) as e:
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
@@ -763,22 +799,18 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
             else:
                 error_info = result.get("error", "Unknown error occurred")
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        str(error_info)
-                        if not isinstance(error_info, str)
-                        else error_info,
-                        context={"template": template, "request_id": request_id},
-                        suggestions=[
-                            "Check template syntax - ensure proper Jinja2 formatting",
-                            "Verify entity_ids exist using ha_get_state()",
-                            "Use default values: {{ states('sensor.temp') | float(0) }}",
-                            "Check for typos in function names and entity references",
-                            "Test simpler templates first to isolate issues",
-                        ],
-                    )
-                )
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(error_info) if not isinstance(error_info, str) else error_info,
+                    context={"template": template, "request_id": request_id},
+                    suggestions=[
+                        "Check template syntax - ensure proper Jinja2 formatting",
+                        "Verify entity_ids exist using ha_get_state()",
+                        "Use default values: {{ states('sensor.temp') | float(0) }}",
+                        "Check for typos in function names and entity references",
+                        "Test simpler templates first to isolate issues",
+                    ],
+                ))
 
         except ToolError:
             raise

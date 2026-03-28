@@ -319,6 +319,11 @@ class TestSystemTools:
         assert isinstance(data["notification_count"], int)
         logger.info(f"Notification count: {data['notification_count']}")
 
+        # Verify repair_count is present
+        assert "repair_count" in data, "Missing 'repair_count' field"
+        assert isinstance(data["repair_count"], int)
+        logger.info(f"Repair count: {data['repair_count']}")
+
         logger.info("Get system overview test completed successfully")
 
     @pytest.mark.asyncio
@@ -421,6 +426,58 @@ class TestSystemTools:
         assert "zha_network" not in data, "Default health should not include zha_network"
 
         logger.info("Default system health correctly excludes extras")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_zha_network(self, mcp_client):
+        """
+        Test: Get system health with ZHA network data.
+
+        ZHA may or may not be installed — verify response structure
+        regardless (error isolation means it should still succeed).
+        """
+        logger.info("Testing get system health with zha_network include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "zha_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = data.get("error", "")
+            if "not available" in str(error_msg).lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with ZHA failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "zha_network" in data, "Missing 'zha_network' when include='zha_network'"
+
+        zha = data["zha_network"]
+        assert "devices" in zha, "ZHA network should contain 'devices' list"
+        assert "count" in zha, "ZHA network should contain 'count'"
+        assert isinstance(zha["devices"], list), "ZHA devices should be a list"
+
+        logger.info(f"System health with ZHA: {zha['count']} devices found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_combined_include(self, mcp_client):
+        """
+        Test: Get system health with comma-separated include parameter.
+        """
+        logger.info("Testing system health with combined include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs,zha_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            pytest.skip("system_health not available in test environment")
+
+        assert "repairs" in data, "Combined include should have repairs"
+        assert "zha_network" in data, "Combined include should have zha_network"
+
+        logger.info("Combined include correctly returns both sections")
 
 
 @pytest.mark.system

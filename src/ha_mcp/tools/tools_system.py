@@ -325,7 +325,8 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.
           - "repairs": Repair items from Settings > System > Repairs
-          - "zha_network": ZHA Zigbee devices with LQI/RSSI radio signal metrics
+          - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
+          - "zha_network_full": ZHA Zigbee devices with all device details
           - Example: include="repairs,zha_network"
         """
         # Parse include parameter into a set of requested sections
@@ -374,45 +375,56 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Fetch repairs if requested
             if "repairs" in includes:
+                result["repairs"] = {"issues": [], "count": 0}
                 try:
                     repairs_result = await ws_client.send_command(
                         "repairs/list_issues"
                     )
                     if repairs_result.get("success"):
                         repairs_list = repairs_result.get("result", {}).get("issues", [])
-                    else:
-                        repairs_list = []
-                    result["repairs"] = {
-                        "issues": repairs_list,
-                        "count": len(repairs_list),
-                    }
-                except Exception as e:
-                    result["repairs"] = {
-                        "error": f"Repairs data not available: {e}",
-                        "issues": [],
-                        "count": 0,
-                    }
+                        result["repairs"] = {
+                            "issues": repairs_list,
+                            "count": len(repairs_list),
+                        }
+                except (TimeoutError, OSError) as e:
+                    logger.warning("Failed to fetch repairs: %s", e)
+                    result["repairs"]["error"] = f"Repairs data not available: {e}"
 
             # Fetch ZHA network data if requested
-            if "zha_network" in includes:
+            zha_full = "zha_network_full" in includes
+            zha_summary = "zha_network" in includes
+            if zha_full or zha_summary:
+                result["zha_network"] = {"devices": [], "count": 0}
                 try:
                     zha_result = await ws_client.send_command(
                         "zha/devices"
                     )
                     if zha_result.get("success"):
-                        zha_devices = zha_result.get("result", [])
-                    else:
-                        zha_devices = []
-                    result["zha_network"] = {
-                        "devices": zha_devices,
-                        "count": len(zha_devices),
-                    }
-                except Exception as e:
-                    result["zha_network"] = {
-                        "error": f"ZHA integration not available or error: {e}",
-                        "devices": [],
-                        "count": 0,
-                    }
+                        raw_devices = zha_result.get("result", [])
+                        if zha_full:
+                            # Return complete device data
+                            zha_devices = raw_devices
+                        else:
+                            # Return only radio-relevant fields to reduce response size
+                            zha_devices = [
+                                {
+                                    "ieee": d.get("ieee"),
+                                    "name": d.get("user_given_name") or d.get("name"),
+                                    "manufacturer": d.get("manufacturer"),
+                                    "model": d.get("model"),
+                                    "lqi": d.get("lqi"),
+                                    "rssi": d.get("rssi"),
+                                    "available": d.get("available"),
+                                }
+                                for d in raw_devices
+                            ]
+                        result["zha_network"] = {
+                            "devices": zha_devices,
+                            "count": len(zha_devices),
+                        }
+                except (TimeoutError, OSError) as e:
+                    logger.warning("Failed to fetch ZHA network data: %s", e)
+                    result["zha_network"]["error"] = f"ZHA integration not available or error: {e}"
 
             return result
 
