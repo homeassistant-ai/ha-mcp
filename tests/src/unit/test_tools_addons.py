@@ -70,13 +70,15 @@ class TestCallAddonApiErrors:
 
         # "..foo" is not a ".." path segment, so it should pass the traversal check
         # but it will fail on the addon info lookup (next step)
-        with patch(
-            "ha_mcp.tools.tools_addons.get_addon_info",
-            new_callable=AsyncMock,
-            return_value={"success": False, "error": {"code": "RESOURCE_NOT_FOUND", "message": "Not found"}},
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value={"success": False, "error": {"code": "RESOURCE_NOT_FOUND", "message": "Not found"}},
+            ),
+            pytest.raises(ToolError) as exc_info,
         ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "test_addon", "..foo/bar")
+            await _call_addon_api(client, "test_addon", "..foo/bar")
 
         # Should have passed traversal check and failed on addon lookup instead
         result = _parse_tool_error(exc_info)
@@ -96,9 +98,8 @@ class TestCallAddonApiErrors:
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
             return_value=error_response,
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "fake_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "fake_addon", "/api/test")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -121,9 +122,8 @@ class TestCallAddonApiErrors:
                     "state": "started",
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -147,9 +147,8 @@ class TestCallAddonApiErrors:
                     "ingress_entry": "/api/hassio_ingress/abc123",
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -174,9 +173,8 @@ class TestCallAddonApiErrors:
                     "ingress_entry": "",
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -201,9 +199,8 @@ class TestCallAddonApiErrors:
                     "ingress_port": None,
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -300,9 +297,8 @@ class TestCallAddonWsErrors:
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
             return_value=error_response,
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_ws(client, "fake_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "fake_addon", "/compile")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -325,9 +321,8 @@ class TestCallAddonWsErrors:
                     "state": "started",
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -384,9 +379,8 @@ class TestCallAddonWsErrors:
                     "ingress_entry": "/api/hassio_ingress/abc123",
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
@@ -600,9 +594,8 @@ class TestCallAddonWsErrors:
                     "ingress_port": None,
                 },
             },
-        ):
-            with pytest.raises(ToolError) as exc_info:
-                await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
