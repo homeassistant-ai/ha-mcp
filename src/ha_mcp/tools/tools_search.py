@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..config import get_global_settings
@@ -475,6 +476,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, result)
 
+        except ToolError:
+            raise
         except Exception as e:
             exception_to_structured_error(
                 e,
@@ -734,6 +737,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 exact_match=exact_match_bool,
             )
             return cast(dict[str, Any], result)
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in deep search: query={query}, "
@@ -768,6 +773,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
+        except ToolError:
+            raise
         except Exception as e:
             exception_to_structured_error(
                 e,
@@ -907,6 +914,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, response)
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting bulk states: {e}", exc_info=True)
             exception_to_structured_error(
