@@ -151,7 +151,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               <span class="text-slate-600">-</span>
                               <span class="text-slate-400">
                                 {schema.description || ''}
-                                {schema.type && (
+                                {(schema.type || schema.anyOf) && (
                                   <span class="text-slate-600 ml-1">({
                                     schema.anyOf
                                       ? schema.anyOf.map((s: any) => s.type).filter(Boolean).join(' | ')
