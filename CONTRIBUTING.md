@@ -29,9 +29,10 @@ uv run lefthook install    # Install git hooks
 uv run ruff format src/ tests/     # Format
 uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
+uv run ast-grep scan               # AST lint (error handling patterns)
 ```
 
-On every commit, hooks run `ruff check --fix` (lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). The **Ruff Lint** CI job also enforces this on pull requests.
+On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). The **Ruff Lint** and **AST Lint** CI jobs also enforce this on pull requests.
 
 ## 🔄 Migrating from pre-commit to lefthook
 

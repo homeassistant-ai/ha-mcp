@@ -1,10 +1,12 @@
 """Unit tests for add-on tools (_call_addon_api and _call_addon_ws error paths)."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import websockets.exceptions
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws
 
@@ -31,6 +33,11 @@ def _make_mock_client() -> MagicMock:
     return client
 
 
+def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
+    """Parse the JSON payload from a ToolError."""
+    return json.loads(str(exc_info.value))
+
+
 class TestCallAddonApiErrors:
     """Tests for _call_addon_api error paths."""
 
@@ -38,18 +45,21 @@ class TestCallAddonApiErrors:
     async def test_path_traversal_rejected(self):
         """Paths containing '..' components should be rejected."""
         client = _make_mock_client()
-        result = await _call_addon_api(client, "test_addon", "../../etc/passwd")
+        with pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "../../etc/passwd")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert "error" in result
         assert "traversal" in result["error"]["message"].lower() or ".." in result["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_path_traversal_middle_segment(self):
         """Paths with '..' in the middle should also be rejected."""
         client = _make_mock_client()
-        result = await _call_addon_api(client, "test_addon", "api/../secret/data")
+        with pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "api/../secret/data")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert ".." in result["error"]["message"]
 
@@ -60,20 +70,24 @@ class TestCallAddonApiErrors:
 
         # "..foo" is not a ".." path segment, so it should pass the traversal check
         # but it will fail on the addon info lookup (next step)
-        with patch(
-            "ha_mcp.tools.tools_addons.get_addon_info",
-            new_callable=AsyncMock,
-            return_value={"success": False, "error": {"code": "RESOURCE_NOT_FOUND", "message": "Not found"}},
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value={"success": False, "error": {"code": "RESOURCE_NOT_FOUND", "message": "Not found"}},
+            ),
+            pytest.raises(ToolError) as exc_info,
         ):
-            result = await _call_addon_api(client, "test_addon", "..foo/bar")
+            await _call_addon_api(client, "test_addon", "..foo/bar")
 
         # Should have passed traversal check and failed on addon lookup instead
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "Not found" in result["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_addon_not_found(self):
-        """Should return error when add-on slug doesn't exist."""
+        """Should raise ToolError when add-on slug doesn't exist."""
         client = _make_mock_client()
         error_response = {
             "success": False,
@@ -84,15 +98,16 @@ class TestCallAddonApiErrors:
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
             return_value=error_response,
-        ):
-            result = await _call_addon_api(client, "fake_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "fake_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "not found" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_addon_no_ingress_support(self):
-        """Should return error when add-on doesn't support Ingress."""
+        """Should raise ToolError when add-on doesn't support Ingress."""
         client = _make_mock_client()
 
         with patch(
@@ -107,15 +122,16 @@ class TestCallAddonApiErrors:
                     "state": "started",
                 },
             },
-        ):
-            result = await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "ingress" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_addon_not_running(self):
-        """Should return error when add-on is not running."""
+        """Should raise ToolError when add-on is not running."""
         client = _make_mock_client()
 
         with patch(
@@ -131,16 +147,17 @@ class TestCallAddonApiErrors:
                     "ingress_entry": "/api/hassio_ingress/abc123",
                 },
             },
-        ):
-            result = await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "not running" in result["error"]["message"].lower()
         assert "stopped" in result["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_addon_no_ingress_entry(self):
-        """Should return error when add-on has Ingress but no entry path."""
+        """Should raise ToolError when add-on has Ingress but no entry path."""
         client = _make_mock_client()
 
         with patch(
@@ -156,15 +173,16 @@ class TestCallAddonApiErrors:
                     "ingress_entry": "",
                 },
             },
-        ):
-            result = await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "ingress_entry" in result["error"]["message"].lower() or "ingress" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_addon_missing_network_info(self):
-        """Should return error when add-on is missing ip_address or ingress_port."""
+        """Should raise ToolError when add-on is missing ip_address or ingress_port."""
         client = _make_mock_client()
 
         with patch(
@@ -181,15 +199,16 @@ class TestCallAddonApiErrors:
                     "ingress_port": None,
                 },
             },
-        ):
-            result = await _call_addon_api(client, "test_addon", "/api/test")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_api(client, "test_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "network info" in result["error"]["message"].lower() or "ip_address" in str(result).lower()
 
     @pytest.mark.asyncio
     async def test_http_timeout(self):
-        """Should return timeout error when add-on API doesn't respond."""
+        """Should raise ToolError when add-on API doesn't respond."""
         client = _make_mock_client()
 
         with patch(
@@ -204,14 +223,16 @@ class TestCallAddonApiErrors:
             mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "timeout" in result["error"]["message"].lower() or "timed out" in str(result).lower()
 
     @pytest.mark.asyncio
     async def test_http_connection_error(self):
-        """Should return connection error when can't reach add-on."""
+        """Should raise ToolError when can't reach add-on."""
         client = _make_mock_client()
 
         with patch(
@@ -226,8 +247,10 @@ class TestCallAddonApiErrors:
             mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_http_client)
             mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_api(client, "test_addon", "/api/test")
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/api/test")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "connect" in result["error"]["message"].lower() or "connection" in str(result).lower()
 
@@ -254,14 +277,16 @@ class TestCallAddonWsErrors:
     async def test_ws_path_traversal_rejected(self):
         """Paths containing '..' components should be rejected."""
         client = _make_mock_client()
-        result = await _call_addon_ws(client, "test_addon", "../../etc/passwd")
+        with pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "../../etc/passwd")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "traversal" in result["error"]["message"].lower() or ".." in result["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_ws_addon_not_found(self):
-        """Should return error when add-on slug doesn't exist."""
+        """Should raise ToolError when add-on slug doesn't exist."""
         client = _make_mock_client()
         error_response = {
             "success": False,
@@ -272,15 +297,16 @@ class TestCallAddonWsErrors:
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
             return_value=error_response,
-        ):
-            result = await _call_addon_ws(client, "fake_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "fake_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "not found" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_ws_addon_no_ingress_support(self):
-        """Should return error when add-on doesn't support Ingress and no port override."""
+        """Should raise ToolError when add-on doesn't support Ingress and no port override."""
         client = _make_mock_client()
 
         with patch(
@@ -295,9 +321,10 @@ class TestCallAddonWsErrors:
                     "state": "started",
                 },
             },
-        ):
-            result = await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "ingress" in result["error"]["message"].lower()
 
@@ -336,7 +363,7 @@ class TestCallAddonWsErrors:
 
     @pytest.mark.asyncio
     async def test_ws_addon_not_running(self):
-        """Should return error when add-on is not running."""
+        """Should raise ToolError when add-on is not running."""
         client = _make_mock_client()
 
         with patch(
@@ -352,15 +379,16 @@ class TestCallAddonWsErrors:
                     "ingress_entry": "/api/hassio_ingress/abc123",
                 },
             },
-        ):
-            result = await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "not running" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_ws_handshake_failure(self):
-        """Should return error when WebSocket handshake fails."""
+        """Should raise ToolError when WebSocket handshake fails."""
         client = _make_mock_client()
 
         with patch(
@@ -375,14 +403,16 @@ class TestCallAddonWsErrors:
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_ws(client, "test_addon", "/compile")
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "handshake" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_ws_connection_closed_during_send(self):
-        """Should return error when connection closes during send."""
+        """Should raise ToolError when connection closes during send."""
         client = _make_mock_client()
 
         with patch(
@@ -397,17 +427,19 @@ class TestCallAddonWsErrors:
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_ws(
-                client, "test_addon", "/compile",
-                body={"type": "spawn", "configuration": "test.yaml"},
-            )
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(
+                    client, "test_addon", "/compile",
+                    body={"type": "spawn", "configuration": "test.yaml"},
+                )
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "closed unexpectedly" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_ws_connection_error(self):
-        """Should return error when can't connect to add-on WebSocket."""
+        """Should raise ToolError when can't connect to add-on WebSocket."""
         client = _make_mock_client()
 
         with patch(
@@ -422,8 +454,10 @@ class TestCallAddonWsErrors:
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_ws(client, "test_addon", "/compile")
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "connect" in result["error"]["message"].lower() or "connection" in str(result).lower()
 
@@ -543,7 +577,7 @@ class TestCallAddonWsErrors:
 
     @pytest.mark.asyncio
     async def test_ws_missing_network_info(self):
-        """Should return error when add-on is missing ip_address."""
+        """Should raise ToolError when add-on is missing ip_address."""
         client = _make_mock_client()
 
         with patch(
@@ -560,8 +594,9 @@ class TestCallAddonWsErrors:
                     "ingress_port": None,
                 },
             },
-        ):
-            result = await _call_addon_ws(client, "test_addon", "/compile")
+        ), pytest.raises(ToolError) as exc_info:
+            await _call_addon_ws(client, "test_addon", "/compile")
 
+        result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "network info" in result["error"]["message"].lower() or "ip_address" in str(result).lower()
