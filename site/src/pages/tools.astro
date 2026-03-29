@@ -409,10 +409,19 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
     if (modified !== original) {
       descChanges.set(toolName, { original, modified, file });
-      card.classList.add('border-l-2', 'border-l-violet-500');
+      card.classList.add('border-l-2', 'border-l-violet-500', 'bg-violet-500/5');
+      // Add modified badge if not present
+      const header = card.querySelector('.flex.items-center.gap-2')!;
+      if (!header.querySelector('.modified-badge')) {
+        const badge = document.createElement('span');
+        badge.className = 'modified-badge inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border bg-violet-500/20 text-violet-400 border-violet-500/30';
+        badge.textContent = 'modified';
+        header.appendChild(badge);
+      }
     } else {
       descChanges.delete(toolName);
-      card.classList.remove('border-l-2', 'border-l-violet-500');
+      card.classList.remove('border-l-2', 'border-l-violet-500', 'bg-violet-500/5');
+      card.querySelector('.modified-badge')?.remove();
     }
 
     regeneratePrompt();
