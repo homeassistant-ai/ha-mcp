@@ -320,7 +320,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"device_id": device_id},
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Rename Entity"})
+    @mcp.tool(tags={"Device Registry"}, annotations={"destructiveHint": True, "title": "Rename Entity"})
     @log_tool_usage
     async def ha_rename_entity(
         entity_id: Annotated[
@@ -401,11 +401,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
 
     @mcp.tool(
+        tags={"Device Registry"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["system", "zigbee"],
-            "title": "Get Device",
+            "title": "Get Device"
         }
     )
     @log_tool_usage
@@ -731,10 +731,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e)
 
     @mcp.tool(
+        tags={"Device Registry"},
         annotations={
             "destructiveHint": True,
-            "tags": ["system"],
-            "title": "Update Device",
+            "title": "Update Device"
         }
     )
     @log_tool_usage
@@ -816,11 +816,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
 
     @mcp.tool(
+        tags={"Device Registry"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["system"],
-            "title": "Remove Device",
+            "title": "Remove Device"
         }
     )
     @log_tool_usage
@@ -949,6 +949,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Device Registry"},
         annotations={"destructiveHint": True, "title": "Rename Entity and Device"}
     )
     @log_tool_usage

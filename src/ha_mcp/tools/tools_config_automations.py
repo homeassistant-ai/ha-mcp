@@ -206,11 +206,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
     """Register Home Assistant automation configuration tools."""
 
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["automation"],
-            "title": "Get Automation Config",
+            "title": "Get Automation Config"
         }
     )
     @log_tool_usage
@@ -275,10 +275,10 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             )
 
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "destructiveHint": True,
-            "tags": ["automation"],
-            "title": "Create or Update Automation",
+            "title": "Create or Update Automation"
         }
     )
     @log_tool_usage
@@ -538,11 +538,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             )
 
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["automation"],
-            "title": "Remove Automation",
+            "title": "Remove Automation"
         }
     )
     @log_tool_usage

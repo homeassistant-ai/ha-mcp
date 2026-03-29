@@ -527,12 +527,16 @@ Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
 def register_<domain>_tools(mcp, client, **kwargs):
-    @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
+    @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
     async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
         """One-line summary starting with action verb."""
         # For complex schemas, add: "Use ha_get_skill_home_assistant_best_practices for details."
 ```
+
+### Tool Tags
+
+Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table and `site/src/data/tools.json`. Regenerate after changes: `python scripts/extract_tools.py`
 
 ### Safety Annotations
 | Annotation | Default | Use For |

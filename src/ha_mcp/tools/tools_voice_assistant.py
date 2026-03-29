@@ -29,10 +29,11 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
     """Register voice assistant exposure management tools."""
 
     @mcp.tool(
+        tags={"Entity Registry"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Entity Exposure",
+            "title": "Get Entity Exposure"
         }
     )
     @log_tool_usage

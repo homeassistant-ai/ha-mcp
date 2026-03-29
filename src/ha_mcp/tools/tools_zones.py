@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant zone configuration tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["zone"], "title": "Get Zone"})
+    @mcp.tool(tags={"Zones"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"})
     @log_tool_usage
     async def ha_get_zone(
         zone_id: Annotated[
@@ -103,7 +103,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Use ha_search_entities(domain_filter='zone') as alternative",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["zone"], "title": "Set Zone"})
+    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "title": "Set Zone"})
     @log_tool_usage
     async def ha_set_zone(
         name: Annotated[
@@ -282,7 +282,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["zone"], "title": "Remove Zone"})
+    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"})
     @log_tool_usage
     async def ha_remove_zone(
         zone_id: Annotated[

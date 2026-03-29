@@ -33,6 +33,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
         has_read_only = 'readOnlyHint' in decorator_args and 'True' in decorator_args.split('readOnlyHint')[1][:20]
         has_destructive = 'destructiveHint' in decorator_args and 'True' in decorator_args.split('destructiveHint')[1][:20]
         has_title = 'title' in decorator_args
+        has_tags = 'tags=' in decorator_args or 'tags =' in decorator_args
 
         tools.append({
             'file': file_path.name,
@@ -40,6 +41,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
             'has_read_only_hint': has_read_only,
             'has_destructive_hint': has_destructive,
             'has_title': has_title,
+            'has_tags': has_tags,
             'decorator_args': decorator_args.strip(),
         })
 
@@ -119,6 +121,22 @@ class TestToolAnnotations:
         assert not missing_titles, (
             f"Tools missing title annotation ({len(missing_titles)}):\n  "
             + "\n  ".join(missing_titles)
+        )
+
+    def test_all_tools_have_tags(self):
+        """Every tool must have a tags= parameter for categorization."""
+        tools = get_all_tools()
+
+        missing_tags = [
+            f"{tool['file']}:{tool['function']}"
+            for tool in tools
+            if not tool['has_tags']
+        ]
+
+        assert not missing_tags, (
+            f"Tools missing tags= parameter ({len(missing_tags)}):\n  "
+            + "\n  ".join(missing_tags)
+            + "\n\nAdd tags={'Category Name'} to each @mcp.tool() decorator."
         )
 
     def test_tool_count_sanity_check(self):

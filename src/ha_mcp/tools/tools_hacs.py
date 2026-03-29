@@ -67,7 +67,7 @@ async def _assert_hacs_available() -> None:
 def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register HACS integration tools with the MCP server."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Info"})
+    @mcp.tool(tags={"HACS"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get HACS Info"})
     @log_tool_usage
     async def ha_hacs_info() -> dict[str, Any]:
         """Get HACS status, version, and enabled categories.
@@ -129,7 +129,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "List HACS Installed"})
+    @mcp.tool(tags={"HACS"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List HACS Installed"})
     @log_tool_usage
     async def ha_hacs_list_installed(
         category: Annotated[
@@ -236,7 +236,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "search"], "title": "Search HACS Store"})
+    @mcp.tool(tags={"HACS"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Search HACS Store"})
     @log_tool_usage
     async def ha_hacs_search(
         query: str,
@@ -404,7 +404,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["hacs", "info"], "title": "Get HACS Repository Info"})
+    @mcp.tool(tags={"HACS"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get HACS Repository Info"})
     @log_tool_usage
     async def ha_hacs_repository_info(repository_id: str) -> dict[str, Any]:
         """Get detailed repository information including README and documentation.
@@ -509,7 +509,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Add HACS Repository"})
+    @mcp.tool(tags={"HACS"}, annotations={"destructiveHint": True, "title": "Add HACS Repository"})
     @log_tool_usage
     async def ha_hacs_add_repository(
         repository: str,
@@ -623,7 +623,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["hacs", "management"], "title": "Download/Install HACS Repository"})
+    @mcp.tool(tags={"HACS"}, annotations={"destructiveHint": True, "title": "Download/Install HACS Repository"})
     @log_tool_usage
     async def ha_hacs_download(
         repository_id: str,

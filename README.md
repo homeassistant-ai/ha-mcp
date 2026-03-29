@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-95+-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-93-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -129,33 +129,37 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (96 tools)</b></summary>
+<!-- TOOLS_TABLE_START -->
+
+<summary><b>Complete Tool List (93 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
-| **Search & Discovery** | `ha_search_entities`, `ha_deep_search`, `ha_get_overview`, `ha_get_state` |
-| **Service & Device Control** | `ha_call_service`, `ha_bulk_control`, `ha_get_operation_status`, `ha_get_bulk_status`, `ha_list_services` |
-| **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
-| **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
-| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard` + dashboard skill references |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
-| **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
-| **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
-| **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
-| **Todo Lists** | `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
-| **Calendar** | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event` |
-| **Blueprints** | `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint` |
-| **Device Registry** | `ha_get_device`, `ha_update_device`, `ha_remove_device`, `ha_rename_entity` |
-| **ZHA & Integrations** | `ha_get_zha_devices`, `ha_get_entity_integration_source` |
-| **Add-ons** | `ha_get_addon` |
+| **Add-ons** | `ha_call_addon_api`, `ha_get_addon` |
+| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
+| **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
+| **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
+| **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |
-| **History & Statistics** | `ha_get_history`, `ha_get_statistics` |
-| **Automation Traces** | `ha_get_automation_traces` |
-| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates` |
-| **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
-| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_integration` |
+| **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard`, `ha_dashboard_find_card` |
+| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_rename_entity_and_device`, `ha_rename_entity`, `ha_update_device` |
+| **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_set_entity` |
+| **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
+| **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
+| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_info`, `ha_hacs_list_installed`, `ha_hacs_repository_info`, `ha_hacs_search` |
+| **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema`, `ha_set_config_entry_helper` |
+| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logbook`, `ha_get_statistics` |
+| **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
+| **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
+| **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
+| **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_get_states`, `ha_search_entities` |
+| **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_bulk_status`, `ha_get_operation_status`, `ha_list_services` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **Todo Lists** | `ha_add_todo_item`, `ha_get_todo`, `ha_remove_todo_item`, `ha_update_todo_item` |
+| **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
+| **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
 
+<!-- TOOLS_TABLE_END -->
 </details>
 
 ---
