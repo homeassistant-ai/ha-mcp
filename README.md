@@ -253,6 +253,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@smenzer](https://github.com/smenzer)** — Documentation fix.
 - **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
+- **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 
 ---
 
