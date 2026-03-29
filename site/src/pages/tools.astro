@@ -13,6 +13,15 @@ for (const tool of toolsData) {
 const sortedCategories = Object.keys(categories).sort();
 const totalTools = toolsData.length;
 
+// Group tools by source file
+const fileGroups: Record<string, typeof toolsData> = {};
+for (const tool of toolsData) {
+  const file = tool.source_file || 'unknown';
+  if (!fileGroups[file]) fileGroups[file] = [];
+  fileGroups[file].push(tool);
+}
+const sortedFiles = Object.keys(fileGroups).sort();
+
 // Helper to get badge color based on annotations
 function getBadgeInfo(annotations: Record<string, any>) {
   if (annotations.readOnlyHint) return { label: 'read', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
@@ -67,17 +76,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
       </div>
       <div class="flex items-center gap-4">
         <p id="results-count" class="text-sm text-slate-500"></p>
-        <button id="expand-all" class="text-sm text-slate-500 hover:text-slate-300 transition-colors ml-auto">
-          Expand all
-        </button>
+        <div class="flex items-center gap-3 ml-auto">
+          <span class="text-xs text-slate-600">Group by:</span>
+          <button id="group-category" class="group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
+          <span class="text-slate-700">|</span>
+          <button id="group-file" class="group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">File</button>
+          <span class="text-slate-700 mx-1">|</span>
+          <button id="expand-all" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">
+            Expand all
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- Tool List -->
     <div id="tools-container" class="space-y-3">
       {sortedCategories.map(cat => (
-        <div class="category-group" data-category-name={cat}>
-          <h2 class="text-lg font-semibold text-slate-300 mb-3 mt-6 first:mt-0">{cat}</h2>
+        <div class="tool-group" data-group-name={cat}>
+          <h2 class="group-heading text-lg font-semibold text-slate-300 mb-3 mt-6 first:mt-0">{cat}</h2>
           {categories[cat].sort((a, b) => a.name.localeCompare(b.name)).map(tool => {
             const badge = getBadgeInfo(tool.annotations);
             const properties = (tool.inputSchema as any)?.properties || {};
@@ -90,6 +106,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                 data-tool-title={tool.title.toLowerCase()}
                 data-tool-desc={tool.description.toLowerCase()}
                 data-tool-category={cat}
+                data-tool-file={tool.source_file}
                 data-tool-type={badge.label}
               >
                 <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
@@ -175,15 +192,18 @@ function getBadgeInfo(annotations: Record<string, any>) {
 <script>
   const searchInput = document.getElementById('search') as HTMLInputElement;
   const toolCards = document.querySelectorAll<HTMLElement>('.tool-card');
-  const categoryGroups = document.querySelectorAll<HTMLElement>('.category-group');
+  const container = document.getElementById('tools-container')!;
   const filterBtns = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
   const catBtns = document.querySelectorAll<HTMLButtonElement>('.cat-btn');
   const resultsCount = document.getElementById('results-count')!;
+  const groupCategoryBtn = document.getElementById('group-category')!;
+  const groupFileBtn = document.getElementById('group-file')!;
+  const expandAllBtn = document.getElementById('expand-all')!;
 
   let activeFilter = 'all';
   let activeCategory = 'all';
+  let activeGroupBy: 'category' | 'file' = 'category';
   let allExpanded = false;
-  const expandAllBtn = document.getElementById('expand-all')!;
 
   // Toggle tool details
   document.querySelectorAll('.tool-header').forEach(header => {
@@ -212,6 +232,64 @@ function getBadgeInfo(annotations: Record<string, any>) {
         chevron.classList.remove('rotate-90');
       }
     });
+  });
+
+  // Group by toggle
+  function regroup() {
+    const key = activeGroupBy === 'category' ? 'toolCategory' : 'toolFile';
+
+    // Collect all cards
+    const cards = Array.from(toolCards);
+
+    // Build groups
+    const groups = new Map<string, HTMLElement[]>();
+    cards.forEach(card => {
+      const val = card.dataset[key] || 'Other';
+      if (!groups.has(val)) groups.set(val, []);
+      groups.get(val)!.push(card);
+    });
+
+    // Rebuild DOM
+    container.innerHTML = '';
+    const sortedKeys = Array.from(groups.keys()).sort();
+    for (const groupName of sortedKeys) {
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'tool-group';
+      groupDiv.dataset.groupName = groupName;
+
+      const heading = document.createElement('h2');
+      heading.className = 'group-heading text-lg font-semibold text-slate-300 mb-3 mt-6';
+      heading.textContent = groupName;
+      groupDiv.appendChild(heading);
+
+      for (const card of groups.get(groupName)!) {
+        groupDiv.appendChild(card);
+      }
+      container.appendChild(groupDiv);
+    }
+
+    // Update toggle style
+    if (activeGroupBy === 'category') {
+      groupCategoryBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
+      groupFileBtn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
+    } else {
+      groupCategoryBtn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
+      groupFileBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    }
+
+    applyFilters();
+  }
+
+  groupCategoryBtn.addEventListener('click', () => {
+    if (activeGroupBy === 'category') return;
+    activeGroupBy = 'category';
+    regroup();
+  });
+
+  groupFileBtn.addEventListener('click', () => {
+    if (activeGroupBy === 'file') return;
+    activeGroupBy = 'file';
+    regroup();
   });
 
   // Filter buttons
@@ -251,11 +329,10 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
     toolCards.forEach(card => {
       const name = card.dataset.toolName || '';
+      const title = card.dataset.toolTitle || '';
       const desc = card.dataset.toolDesc || '';
       const category = card.dataset.toolCategory || '';
       const type = card.dataset.toolType || '';
-
-      const title = card.dataset.toolTitle || '';
 
       const matchesSearch = !query || name.includes(query) || title.includes(query) || desc.includes(query);
       const matchesFilter = activeFilter === 'all' || type === activeFilter;
@@ -269,8 +346,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
       }
     });
 
-    // Hide empty category groups
-    categoryGroups.forEach(group => {
+    // Hide empty groups
+    container.querySelectorAll<HTMLElement>('.tool-group').forEach(group => {
       const visibleCards = group.querySelectorAll('.tool-card:not(.hidden)');
       group.classList.toggle('hidden', visibleCards.length === 0);
     });
