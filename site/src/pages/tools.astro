@@ -79,7 +79,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
           All categories
         </button>
         {sortedCategories.map(cat => (
-          <button data-group-filter={cat} class="group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-500 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-300 transition-colors">
+          <button data-group-filter={cat} class="group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-200 transition-colors">
             {cat} <span class="text-slate-600">({categories[cat].length})</span>
           </button>
         ))}
@@ -87,19 +87,19 @@ function getBadgeInfo(annotations: Record<string, any>) {
       <div class="flex items-center gap-4">
         <p id="results-count" class="text-sm text-slate-500"></p>
         <div class="flex items-center gap-3 ml-auto">
-          <span class="text-xs text-slate-600">Group:</span>
-          <button id="group-category" class="group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
-          <span class="text-slate-700">|</span>
-          <button id="group-file" class="group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">File</button>
-          <span class="text-slate-700">|</span>
-          <button id="group-none" class="group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">None</button>
-          <span class="text-slate-700 mx-2">|</span>
-          <span class="text-xs text-slate-600">Sort:</span>
-          <button id="sort-alpha" class="sort-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors">A-Z</button>
-          <span class="text-slate-700">|</span>
-          <button id="sort-size" class="sort-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">Size</button>
-          <span class="text-slate-700 mx-2">|</span>
-          <button id="expand-all" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">
+          <span class="text-sm text-slate-400">Group:</span>
+          <button id="group-category" class="group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
+          <span class="text-slate-600">|</span>
+          <button id="group-file" class="group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">File</button>
+          <span class="text-slate-600">|</span>
+          <button id="group-none" class="group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">None</button>
+          <span class="text-slate-600 mx-2">|</span>
+          <span class="text-sm text-slate-400">Sort:</span>
+          <button id="sort-alpha" class="sort-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">A-Z</button>
+          <span class="text-slate-600">|</span>
+          <button id="sort-size" class="sort-btn text-base text-slate-400 hover:text-slate-200 transition-colors">Size</button>
+          <span class="text-slate-600 mx-2">|</span>
+          <button id="expand-all" class="text-base text-slate-400 hover:text-slate-200 transition-colors">
             Expand all
           </button>
         </div>
@@ -348,7 +348,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
       for (const name of sortedKeys) {
         const btn = document.createElement('button');
         btn.dataset.groupFilter = name;
-        btn.className = 'group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-500 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-300 transition-colors';
+        btn.className = 'group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-200 transition-colors';
         btn.innerHTML = `${name} <span class="text-slate-600">(${groups.get(name)!.length})</span>`;
         groupFiltersDiv.appendChild(btn);
       }
@@ -358,10 +358,10 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
     // Update group toggle style
     [groupCategoryBtn, groupFileBtn, groupNoneBtn].forEach(btn => {
-      btn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
+      btn.className = 'group-btn text-base text-slate-400 hover:text-slate-200 transition-colors';
     });
     const activeBtn = activeGroupBy === 'category' ? groupCategoryBtn : activeGroupBy === 'file' ? groupFileBtn : groupNoneBtn;
-    activeBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    activeBtn.className = 'group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors';
 
     applyFilters();
   }
@@ -386,8 +386,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   // Sort toggle
   function updateSortStyle() {
-    sortAlphaBtn.className = `sort-btn text-sm transition-colors ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-500 hover:text-slate-300'}`;
-    sortSizeBtn.className = `sort-btn text-sm transition-colors ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-500 hover:text-slate-300'}`;
+    sortAlphaBtn.className = `sort-btn text-base transition-colors ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+    sortSizeBtn.className = `sort-btn text-base transition-colors ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
   }
 
   sortAlphaBtn.addEventListener('click', () => {
