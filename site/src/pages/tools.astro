@@ -418,6 +418,52 @@ function getBadgeInfo(annotations: Record<string, any>) {
     regeneratePrompt();
   });
 
+  // LCS-based unified diff with context lines
+  function lcsContextDiff(a: string[], b: string[], ctx: number): string {
+    // Compute LCS table
+    const m = a.length, n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+
+    // Backtrack to produce edit script
+    type Op = { type: ' ' | '-' | '+'; line: string };
+    const ops: Op[] = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i-1] === b[j-1]) {
+        i--; j--;
+        ops.push({ type: ' ', line: a[i] });
+      } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+        j--;
+        ops.push({ type: '+', line: b[j] });
+      } else {
+        i--;
+        ops.push({ type: '-', line: a[i] });
+      }
+    }
+    ops.reverse();
+
+    // Find changed op indices and build context window
+    const changed = new Set<number>();
+    ops.forEach((op, idx) => { if (op.type !== ' ') changed.add(idx); });
+    const visible = new Set<number>();
+    for (const idx of changed)
+      for (let k = Math.max(0, idx - ctx); k <= Math.min(ops.length - 1, idx + ctx); k++)
+        visible.add(k);
+
+    let result = '';
+    let lastShown = -1;
+    for (let idx = 0; idx < ops.length; idx++) {
+      if (!visible.has(idx)) continue;
+      if (lastShown >= 0 && idx > lastShown + 1) result += ' ...\n';
+      lastShown = idx;
+      result += `${ops[idx].type} ${ops[idx].line}\n`;
+    }
+    return result;
+  }
+
   function regeneratePrompt() {
     const count = descChanges.size;
     designChangeCount.textContent = count === 0
@@ -434,36 +480,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
     for (const [toolName, { original, modified, file }] of descChanges) {
       prompt += `\n## ${toolName} (${file})\n`;
       prompt += '```diff\n';
-      const origLines = original.split('\n');
-      const modLines = modified.split('\n');
-      const maxLen = Math.max(origLines.length, modLines.length);
-      const CONTEXT = 2;
-      // Find changed line indices
-      const changedLines = new Set<number>();
-      for (let i = 0; i < maxLen; i++) {
-        if ((origLines[i] ?? '') !== (modLines[i] ?? '')) changedLines.add(i);
-      }
-      // Build context set (changed lines + 2 lines before/after)
-      const visibleLines = new Set<number>();
-      for (const i of changedLines) {
-        for (let j = Math.max(0, i - CONTEXT); j <= Math.min(maxLen - 1, i + CONTEXT); j++) {
-          visibleLines.add(j);
-        }
-      }
-      let lastShown = -1;
-      for (let i = 0; i < maxLen; i++) {
-        if (!visibleLines.has(i)) continue;
-        if (lastShown >= 0 && i > lastShown + 1) prompt += ' ...\n';
-        lastShown = i;
-        const o = origLines[i] ?? '';
-        const m = modLines[i] ?? '';
-        if (o === m) {
-          prompt += ` ${o}\n`;
-        } else {
-          if (i < origLines.length) prompt += `- ${o}\n`;
-          if (i < modLines.length) prompt += `+ ${m}\n`;
-        }
-      }
+      prompt += lcsContextDiff(original.split('\n'), modified.split('\n'), 2);
       prompt += '```\n';
     }
 
