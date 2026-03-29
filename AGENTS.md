@@ -536,7 +536,7 @@ def register_<domain>_tools(mcp, client, **kwargs):
 
 ### Tool Tags
 
-Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table and `site/src/data/tools.json`. Regenerate after changes: `uv run python scripts/extract_tools.py`
+Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table and `site/src/data/tools.json`. Regenerate after changes: `python scripts/extract_tools.py`
 
 ### Safety Annotations
 | Annotation | Default | Use For |

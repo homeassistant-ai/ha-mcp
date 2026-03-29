@@ -1,6 +1,6 @@
 """Tests that tool documentation artifacts stay in sync with source code.
 
-Run `uv run python scripts/extract_tools.py` to regenerate if this fails.
+Run `python scripts/extract_tools.py` to regenerate if this fails.
 """
 
 import re
@@ -38,7 +38,7 @@ class TestToolDocsSync:
     def test_docs_in_sync(self):
         """Verify generated artifacts match current tool definitions.
 
-        If this fails, run: uv run python scripts/extract_tools.py
+        If this fails, run: python scripts/extract_tools.py
         """
         result = subprocess.run(
             [sys.executable, "scripts/extract_tools.py", "--check"],
