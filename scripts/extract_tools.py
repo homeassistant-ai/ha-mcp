@@ -82,14 +82,15 @@ def extract_tools() -> list[dict]:
 
                 for kw in dec.keywords:
                     if kw.arg == "tags" and isinstance(kw.value, ast.Set):
-                        tags = {elt.value for elt in kw.value.elts if isinstance(elt, ast.Constant)}
+                        tags = {str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)}
                     elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
-                        for k, v in zip(kw.value.keys, kw.value.values):
+                        for k, v in zip(kw.value.keys, kw.value.values, strict=True):
                             if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
-                                if k.value == "title":
-                                    title = v.value
-                                elif k.value in ANNOTATION_KEYS:
-                                    annotations[k.value] = v.value
+                                key = str(k.value)
+                                if key == "title":
+                                    title = str(v.value)
+                                elif key in ANNOTATION_KEYS:
+                                    annotations[key] = bool(v.value)
 
                 # Extract params with types, descriptions, defaults
                 properties: dict[str, dict] = {}
@@ -149,8 +150,10 @@ def generate_readme_table(tools: list[dict]) -> str:
         "| Category | Tools |",
         "|----------|-------|",
     ]
-    for cat in sorted(categories):
-        lines.append(f"| **{cat}** | {', '.join(sorted(categories[cat]))} |")
+    lines.extend(
+        f"| **{cat}** | {', '.join(sorted(categories[cat]))} |"
+        for cat in sorted(categories)
+    )
     lines.extend(["", README_END_MARKER])
     return "\n".join(lines)
 
