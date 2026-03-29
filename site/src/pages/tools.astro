@@ -603,11 +603,12 @@ function getBadgeInfo(annotations: Record<string, any>) {
     }
 
     // Update group toggle style
-    [groupCategoryBtn, groupFileBtn, groupNoneBtn].forEach(btn => {
-      btn.className = 'group-btn text-base text-slate-400 hover:text-slate-200 transition-colors';
-    });
-    const activeBtn = activeGroupBy === 'category' ? groupCategoryBtn : activeGroupBy === 'file' ? groupFileBtn : groupNoneBtn;
-    activeBtn.className = 'group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    const inactiveStyle = 'group-btn text-base text-slate-400 hover:text-slate-200 transition-colors';
+    const activeStyle = 'group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    const fileHide = designMode ? '' : 'design-only hidden';
+    groupCategoryBtn.className = activeGroupBy === 'category' ? activeStyle : inactiveStyle;
+    groupFileBtn.className = `${activeGroupBy === 'file' ? activeStyle : inactiveStyle} ${fileHide}`;
+    groupNoneBtn.className = activeGroupBy === 'none' ? activeStyle : inactiveStyle;
 
     applyFilters();
   }
@@ -618,8 +619,9 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   // Sort toggle
   function updateSortStyle() {
-    sortAlphaBtn.className = `sort-btn text-base transition-colors ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
-    sortSizeBtn.className = `sort-btn text-base transition-colors ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+    const sortHide = designMode ? '' : 'design-only hidden';
+    sortAlphaBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+    sortSizeBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
   }
   sortAlphaBtn.addEventListener('click', () => { activeSort = 'alpha'; updateSortStyle(); regroup(); });
   sortSizeBtn.addEventListener('click', () => { activeSort = 'size'; updateSortStyle(); regroup(); });
