@@ -437,7 +437,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
       const origLines = original.split('\n');
       const modLines = modified.split('\n');
       const maxLen = Math.max(origLines.length, modLines.length);
+      const CONTEXT = 2;
+      // Find changed line indices
+      const changedLines = new Set<number>();
       for (let i = 0; i < maxLen; i++) {
+        if ((origLines[i] ?? '') !== (modLines[i] ?? '')) changedLines.add(i);
+      }
+      // Build context set (changed lines + 2 lines before/after)
+      const visibleLines = new Set<number>();
+      for (const i of changedLines) {
+        for (let j = Math.max(0, i - CONTEXT); j <= Math.min(maxLen - 1, i + CONTEXT); j++) {
+          visibleLines.add(j);
+        }
+      }
+      let lastShown = -1;
+      for (let i = 0; i < maxLen; i++) {
+        if (!visibleLines.has(i)) continue;
+        if (lastShown >= 0 && i > lastShown + 1) prompt += ' ...\n';
+        lastShown = i;
         const o = origLines[i] ?? '';
         const m = modLines[i] ?? '';
         if (o === m) {
