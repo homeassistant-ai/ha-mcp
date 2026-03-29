@@ -99,6 +99,9 @@ function getBadgeInfo(annotations: Record<string, any>) {
             const properties = (tool.inputSchema as any)?.properties || {};
             const required = (tool.inputSchema as any)?.required || [];
             const params = Object.entries(properties);
+            const descChars = tool.description.length;
+            const schemaChars = JSON.stringify(tool.inputSchema).length;
+            const totalChars = descChars + schemaChars;
             return (
               <div
                 class="tool-card bg-slate-800/30 rounded-lg border border-slate-700/50 hover:border-slate-600/50 transition-colors"
@@ -125,6 +128,9 @@ function getBadgeInfo(annotations: Record<string, any>) {
                           idempotent
                         </span>
                       )}
+                      <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono border bg-slate-800/50 text-slate-500 border-slate-700/30" title={`desc: ${descChars} + schema: ${schemaChars}`}>
+                        {totalChars > 1000 ? `${(totalChars / 1000).toFixed(1)}k` : totalChars} chars
+                      </span>
                     </div>
                     <p class="text-sm text-slate-400 mt-1 line-clamp-1">{tool.description.split('\n')[0]}</p>
                   </div>
