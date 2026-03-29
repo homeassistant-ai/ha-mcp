@@ -163,10 +163,10 @@ def update_readme(tools: list[dict]) -> str:
             print("WARNING: Could not find tool table markers in README.md", file=sys.stderr)
             return readme
 
-    # Update badge count
+    # Update badge count (matches both "95+" and "93" formats)
     readme = re.sub(
-        r'tools-\d+\+-blue',
-        f'tools-{count}-blue',
+        r"tools-[^-]+-blue",
+        f"tools-{count}-blue",
         readme,
     )
 
