@@ -1693,11 +1693,23 @@
     "source_file": "tools_history.py"
   },
   {
-    "name": "ha_get_logbook",
-    "title": "Get Logbook Entries",
-    "description": "Get Home Assistant logbook entries for the specified time period.\n\nReturns paginated logbook entries to prevent excessively large responses.\n\n**Parameters:**\n- hours_back: Number of hours to look back (default: 1)\n- entity_id: Optional entity ID to filter entries\n- end_time: Optional end time in ISO format (defaults to now)\n- limit: Maximum number of entries to return (default: 50, max: 500)\n- offset: Number of entries to skip for pagination (default: 0)\n\n**Pagination:**\nWhen the logbook has more entries than the limit, use offset to get\nadditional pages. The response includes `has_more` to indicate if\nmore entries are available.\n\n**IMPORTANT - Pagination Stability:**\nPagination is performed client-side on the full result set returned\nby Home Assistant. If new logbook entries are created between page\nrequests, results may shift and items could be missed or duplicated\nacross pages. For best results, use consistent time ranges (start/end)\nand retrieve pages in quick succession.\n\n**Example:**\n- First page: ha_get_logbook(hours_back=24, limit=50, offset=0)\n- Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)",
+    "name": "ha_get_logs",
+    "title": "Get Logs",
+    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug parameter)\n\n**Shared params:** limit, search (keyword filter on entries/lines)\n**Logbook params:** hours_back, entity_id, end_time, offset\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug (add-on slug, e.g. \"core_mosquitto\")",
     "inputSchema": {
       "properties": {
+        "source": {
+          "type": "Literal['logbook', 'system', 'error_log', 'supervisor']",
+          "default": "logbook"
+        },
+        "limit": {
+          "type": "int | str | None",
+          "default": null
+        },
+        "search": {
+          "type": "str | None",
+          "default": null
+        },
         "hours_back": {
           "type": "int | str",
           "default": 1
@@ -1710,13 +1722,17 @@
           "type": "str | None",
           "default": null
         },
-        "limit": {
-          "type": "int | str | None",
-          "default": null
-        },
         "offset": {
           "type": "int | str",
           "default": 0
+        },
+        "level": {
+          "type": "str | None",
+          "default": null
+        },
+        "slug": {
+          "type": "str | None",
+          "default": null
         }
       }
     },
@@ -2488,8 +2504,15 @@
   {
     "name": "ha_get_system_health",
     "title": "Get System Health",
-    "description": "Get Home Assistant system health information.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.",
-    "inputSchema": {},
+    "description": "Get Home Assistant system health information.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details\n  - Example: include=\"repairs,zha_network\"",
+    "inputSchema": {
+      "properties": {
+        "include": {
+          "type": "str | None",
+          "default": null
+        }
+      }
+    },
     "annotations": {
       "idempotentHint": true,
       "readOnlyHint": true
