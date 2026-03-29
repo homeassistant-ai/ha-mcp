@@ -23,8 +23,10 @@ class TestToolDocsSync:
             if not f.exists():
                 continue
             content = f.read_text(encoding="utf-8")
-            for match in re.finditer(r'"tags"\s*:', content):
-                legacy.append(f"{f.name}:{match.start()}")
+            legacy.extend(
+                f"{f.name}:{match.start()}"
+                for match in re.finditer(r'"tags"\s*:', content)
+            )
 
         assert not legacy, (
             f"Found legacy \"tags\" inside annotations dict in {len(legacy)} location(s):\n"

@@ -102,7 +102,7 @@ async def extract_tools() -> list[dict]:
             "source_file": _SOURCE_MAP.get(t.name, ""),
         })
 
-    result.sort(key=lambda x: (x["tags"][0] if x["tags"] else "zzz", x["name"]))
+    result.sort(key=lambda x: (next(iter(x["tags"]), "zzz"), x["name"]))
     return result
 
 
