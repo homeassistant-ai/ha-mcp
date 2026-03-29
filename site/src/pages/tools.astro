@@ -93,6 +93,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                       <code class="text-sm font-medium text-blue-400">{tool.name}</code>
+                      {tool.title && <span class="text-sm text-slate-500">{tool.title}</span>}
                       <span class={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.color}`}>
                         {badge.label}
                       </span>
