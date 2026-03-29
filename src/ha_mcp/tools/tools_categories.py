@@ -24,11 +24,11 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant category management tools."""
 
     @mcp.tool(
+        tags={"Labels & Categories"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["category"],
-            "title": "Get Category",
+            "title": "Get Category"
         }
     )
     @log_tool_usage
@@ -143,10 +143,10 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Labels & Categories"},
         annotations={
             "destructiveHint": True,
-            "tags": ["category"],
-            "title": "Create or Update Category",
+            "title": "Create or Update Category"
         }
     )
     @log_tool_usage
@@ -246,11 +246,11 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Labels & Categories"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["category"],
-            "title": "Remove Category",
+            "title": "Remove Category"
         }
     )
     @log_tool_usage

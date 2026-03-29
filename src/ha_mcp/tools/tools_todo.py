@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant todo list management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["todo"], "title": "Get Todo"})
+    @mcp.tool(tags={"Todo Lists"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Todo"})
     @log_tool_usage
     async def ha_get_todo(
         entity_id: Annotated[
@@ -179,7 +179,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
             exception_to_structured_error(e, context=context or None, suggestions=suggestions)
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Add Todo Item"})
+    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "title": "Add Todo Item"})
     @log_tool_usage
     async def ha_add_todo_item(
         entity_id: Annotated[
@@ -290,7 +290,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["todo"], "title": "Update Todo Item"})
+    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "title": "Update Todo Item"})
     @log_tool_usage
     async def ha_update_todo_item(
         entity_id: Annotated[
@@ -452,7 +452,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["todo"], "title": "Remove Todo Item"})
+    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Todo Item"})
     @log_tool_usage
     async def ha_remove_todo_item(
         entity_id: Annotated[

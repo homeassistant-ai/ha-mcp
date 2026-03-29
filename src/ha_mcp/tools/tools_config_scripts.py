@@ -56,11 +56,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant script configuration tools."""
 
     @mcp.tool(
+        tags={"Scripts"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["script"],
-            "title": "Get Script Config",
+            "title": "Get Script Config"
         }
     )
     @log_tool_usage
@@ -102,10 +102,10 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Scripts"},
         annotations={
             "destructiveHint": True,
-            "tags": ["script"],
-            "title": "Create or Update Script",
+            "title": "Create or Update Script"
         }
     )
     @log_tool_usage
@@ -320,11 +320,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Scripts"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["script"],
-            "title": "Remove Script",
+            "title": "Remove Script"
         }
     )
     @log_tool_usage

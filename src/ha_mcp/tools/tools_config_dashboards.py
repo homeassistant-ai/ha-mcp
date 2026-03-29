@@ -260,11 +260,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     """Register Home Assistant dashboard configuration tools."""
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard"],
-            "title": "Get Dashboard",
+            "title": "Get Dashboard"
         }
     )
     @log_tool_usage
@@ -398,10 +398,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             )
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard"],
-            "title": "Create or Update Dashboard",
+            "title": "Create or Update Dashboard"
         }
     )
     @log_tool_usage
@@ -1004,10 +1004,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             )
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard"],
-            "title": "Delete Dashboard",
+            "title": "Delete Dashboard"
         }
     )
     @log_tool_usage
@@ -1157,11 +1157,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         pass  # Default: register the tool if settings unavailable
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard", "card"],
-            "title": "Find Dashboard Card",
+            "title": "Find Dashboard Card"
         }
     )
     @log_tool_usage

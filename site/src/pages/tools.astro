@@ -1,0 +1,255 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
+import toolsData from '../data/tools.json';
+
+// Group tools by category
+const categories: Record<string, typeof toolsData> = {};
+for (const tool of toolsData) {
+  const cat = tool.tags?.[0] || 'Other';
+  if (!categories[cat]) categories[cat] = [];
+  categories[cat].push(tool);
+}
+const sortedCategories = Object.keys(categories).sort();
+const totalTools = toolsData.length;
+
+// Helper to get badge color based on annotations
+function getBadgeInfo(annotations: Record<string, any>) {
+  if (annotations.readOnlyHint) return { label: 'read', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
+  if (annotations.destructiveHint) return { label: 'write', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+  return { label: 'write', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+}
+---
+
+<Layout title="Tool Explorer - Home Assistant MCP">
+  <Nav active="tools" />
+
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <!-- Header -->
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold text-white mb-2">Tool Explorer</h1>
+      <p class="text-slate-400">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
+    </header>
+
+    <!-- Search and Filters -->
+    <div class="mb-8 space-y-4">
+      <div class="flex flex-col sm:flex-row gap-4">
+        <div class="flex-1">
+          <input
+            type="text"
+            id="search"
+            placeholder="Search tools by name or description..."
+            class="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25"
+          />
+        </div>
+        <div class="flex gap-2">
+          <button data-filter="all" class="filter-btn active px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+            All
+          </button>
+          <button data-filter="read" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+            Read
+          </button>
+          <button data-filter="write" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+            Write
+          </button>
+        </div>
+      </div>
+      <!-- Category filter -->
+      <div class="flex flex-wrap gap-2" id="category-filters">
+        <button data-category="all" class="cat-btn active px-3 py-1 rounded-full text-xs font-medium bg-slate-700/50 text-slate-300 border border-slate-600/50 hover:bg-slate-600/50 transition-colors">
+          All categories
+        </button>
+        {sortedCategories.map(cat => (
+          <button data-category={cat} class="cat-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-500 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-300 transition-colors">
+            {cat} <span class="text-slate-600">({categories[cat].length})</span>
+          </button>
+        ))}
+      </div>
+      <p id="results-count" class="text-sm text-slate-500"></p>
+    </div>
+
+    <!-- Tool List -->
+    <div id="tools-container" class="space-y-3">
+      {sortedCategories.map(cat => (
+        <div class="category-group" data-category-name={cat}>
+          <h2 class="text-lg font-semibold text-slate-300 mb-3 mt-6 first:mt-0">{cat}</h2>
+          {categories[cat].sort((a, b) => a.name.localeCompare(b.name)).map(tool => {
+            const badge = getBadgeInfo(tool.annotations);
+            const properties = (tool.inputSchema as any)?.properties || {};
+            const required = (tool.inputSchema as any)?.required || [];
+            const params = Object.entries(properties);
+            return (
+              <div
+                class="tool-card bg-slate-800/30 rounded-lg border border-slate-700/50 hover:border-slate-600/50 transition-colors"
+                data-tool-name={tool.name}
+                data-tool-desc={tool.description.toLowerCase()}
+                data-tool-category={cat}
+                data-tool-type={badge.label}
+              >
+                <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
+                  <svg class="tool-chevron w-4 h-4 mt-1 text-slate-500 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                  </svg>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <code class="text-sm font-medium text-blue-400">{tool.name}</code>
+                      <span class={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.color}`}>
+                        {badge.label}
+                      </span>
+                      {tool.annotations.idempotentHint && (
+                        <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border bg-purple-500/20 text-purple-400 border-purple-500/30">
+                          idempotent
+                        </span>
+                      )}
+                    </div>
+                    <p class="text-sm text-slate-400 mt-1 line-clamp-1">{tool.description.split('\n')[0]}</p>
+                  </div>
+                </button>
+                <div class="tool-details hidden px-4 pb-4 ml-7">
+                  <div class="border-t border-slate-700/50 pt-3 space-y-4">
+                    {/* Full description */}
+                    <div>
+                      <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Description</h4>
+                      <p class="text-sm text-slate-300 whitespace-pre-line">{tool.description}</p>
+                    </div>
+
+                    {/* Parameters */}
+                    {params.length > 0 && (
+                      <div>
+                        <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Parameters</h4>
+                        <div class="space-y-2">
+                          {params.map(([name, schema]: [string, any]) => (
+                            <div class="flex items-start gap-2 text-sm">
+                              <code class="text-amber-400 shrink-0">{name}</code>
+                              {required.includes(name) && (
+                                <span class="text-red-400 text-xs mt-0.5">required</span>
+                              )}
+                              <span class="text-slate-600">-</span>
+                              <span class="text-slate-400">
+                                {schema.description || ''}
+                                {schema.type && (
+                                  <span class="text-slate-600 ml-1">({
+                                    schema.anyOf
+                                      ? schema.anyOf.map((s: any) => s.type).filter(Boolean).join(' | ')
+                                      : schema.type
+                                  })</span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Source file */}
+                    {tool.source_file && (
+                      <div class="flex items-center gap-2 text-xs text-slate-600">
+                        <span>Source:</span>
+                        <a
+                          href={`https://github.com/homeassistant-ai/ha-mcp/blob/master/src/ha_mcp/tools/${tool.source_file}`}
+                          target="_blank"
+                          class="text-slate-500 hover:text-blue-400 transition-colors"
+                        >
+                          {tool.source_file}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  </div>
+</Layout>
+
+<script>
+  const searchInput = document.getElementById('search') as HTMLInputElement;
+  const toolCards = document.querySelectorAll<HTMLElement>('.tool-card');
+  const categoryGroups = document.querySelectorAll<HTMLElement>('.category-group');
+  const filterBtns = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
+  const catBtns = document.querySelectorAll<HTMLButtonElement>('.cat-btn');
+  const resultsCount = document.getElementById('results-count')!;
+
+  let activeFilter = 'all';
+  let activeCategory = 'all';
+
+  // Toggle tool details
+  document.querySelectorAll('.tool-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const card = header.closest('.tool-card')!;
+      const details = card.querySelector('.tool-details')!;
+      const chevron = card.querySelector('.tool-chevron')!;
+      details.classList.toggle('hidden');
+      chevron.classList.toggle('rotate-90');
+    });
+  });
+
+  // Filter buttons
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeFilter = btn.dataset.filter!;
+      filterBtns.forEach(b => {
+        b.classList.remove('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+        b.classList.add('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
+      });
+      btn.classList.add('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+      btn.classList.remove('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
+      applyFilters();
+    });
+  });
+
+  // Category buttons
+  catBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeCategory = btn.dataset.category!;
+      catBtns.forEach(b => {
+        b.classList.remove('active', 'bg-slate-700/50', 'text-slate-300', 'border-slate-600/50');
+        b.classList.add('bg-slate-800/50', 'text-slate-500', 'border-slate-700/30');
+      });
+      btn.classList.add('active', 'bg-slate-700/50', 'text-slate-300', 'border-slate-600/50');
+      btn.classList.remove('bg-slate-800/50', 'text-slate-500', 'border-slate-700/30');
+      applyFilters();
+    });
+  });
+
+  // Search
+  searchInput.addEventListener('input', () => applyFilters());
+
+  function applyFilters() {
+    const query = searchInput.value.toLowerCase().trim();
+    let visible = 0;
+
+    toolCards.forEach(card => {
+      const name = card.dataset.toolName || '';
+      const desc = card.dataset.toolDesc || '';
+      const category = card.dataset.toolCategory || '';
+      const type = card.dataset.toolType || '';
+
+      const matchesSearch = !query || name.includes(query) || desc.includes(query);
+      const matchesFilter = activeFilter === 'all' || type === activeFilter;
+      const matchesCategory = activeCategory === 'all' || category === activeCategory;
+
+      if (matchesSearch && matchesFilter && matchesCategory) {
+        card.classList.remove('hidden');
+        visible++;
+      } else {
+        card.classList.add('hidden');
+      }
+    });
+
+    // Hide empty category groups
+    categoryGroups.forEach(group => {
+      const visibleCards = group.querySelectorAll('.tool-card:not(.hidden)');
+      group.classList.toggle('hidden', visibleCards.length === 0);
+    });
+
+    if (query || activeFilter !== 'all' || activeCategory !== 'all') {
+      resultsCount.textContent = `Showing ${visible} of ${toolCards.length} tools`;
+    } else {
+      resultsCount.textContent = '';
+    }
+  }
+</script>

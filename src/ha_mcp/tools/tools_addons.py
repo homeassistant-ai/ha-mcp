@@ -783,7 +783,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["addon"], "title": "Get Add-ons"})
+    @mcp.tool(tags={"Add-ons"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Add-ons"})
     @log_tool_usage
     async def ha_get_addon(
         source: Annotated[
@@ -878,13 +878,15 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             raise_tool_error(result)
         return result
 
-    @mcp.tool(annotations={
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "readOnlyHint": False,
-        "tags": ["addon"],
-        "title": "Call Add-on API",
-    })
+    @mcp.tool(
+        tags={"Add-ons"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "readOnlyHint": False,
+            "title": "Call Add-on API",
+        },
+    )
     @log_tool_usage
     async def ha_call_addon_api(
         slug: Annotated[

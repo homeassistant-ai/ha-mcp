@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register calendar management tools with the MCP server."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["calendar"], "title": "Get Calendar Events"})
+    @mcp.tool(tags={"Calendar"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Calendar Events"})
     @log_tool_usage
     async def ha_config_get_calendar_events(
         entity_id: Annotated[
@@ -144,7 +144,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["calendar"], "title": "Create or Update Calendar Event"})
+    @mcp.tool(tags={"Calendar"}, annotations={"destructiveHint": True, "title": "Create or Update Calendar Event"})
     @log_tool_usage
     async def ha_config_set_calendar_event(
         entity_id: Annotated[
@@ -263,7 +263,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["calendar"], "title": "Remove Calendar Event"})
+    @mcp.tool(tags={"Calendar"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Calendar Event"})
     @log_tool_usage
     async def ha_config_remove_calendar_event(
         entity_id: Annotated[

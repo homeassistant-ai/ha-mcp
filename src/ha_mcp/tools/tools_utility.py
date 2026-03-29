@@ -26,11 +26,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     MAX_LOGBOOK_LIMIT = 500
 
     @mcp.tool(
+        tags={"History & Statistics"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["history"],
-            "title": "Get Logbook Entries",
+            "title": "Get Logbook Entries"
         }
     )
     @log_tool_usage
@@ -212,11 +212,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Utilities"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["docs"],
-            "title": "Evaluate Template",
+            "title": "Evaluate Template"
         }
     )
     @log_tool_usage

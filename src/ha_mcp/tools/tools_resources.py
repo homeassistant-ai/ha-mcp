@@ -63,11 +63,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "List Dashboard Resources",
+            "title": "List Dashboard Resources"
         }
     )
     @log_tool_usage
@@ -184,10 +184,10 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "Set Dashboard Resource",
+            "title": "Set Dashboard Resource"
         }
     )
     @log_tool_usage
@@ -497,10 +497,10 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "Delete Dashboard Resource",
+            "title": "Delete Dashboard Resource"
         }
     )
     @log_tool_usage
