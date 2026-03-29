@@ -5,6 +5,7 @@ Run `uv run python scripts/extract_tools.py` to regenerate if this fails.
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
@@ -40,16 +41,16 @@ class TestToolDocsSync:
         If this fails, run: uv run python scripts/extract_tools.py
         """
         result = subprocess.run(
-            ["uv", "run", "python", "scripts/extract_tools.py", "--check"],
+            [sys.executable, "scripts/extract_tools.py", "--check"],
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
-            timeout=60,
+            timeout=30,
         )
 
         assert result.returncode == 0, (
             "Tool documentation is out of sync with source code.\n\n"
             + result.stderr
             + "\nRun this command to fix:\n"
-            + "  uv run python scripts/extract_tools.py\n"
+            + "  python scripts/extract_tools.py\n"
         )
