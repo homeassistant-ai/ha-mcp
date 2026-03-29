@@ -65,7 +65,12 @@ function getBadgeInfo(annotations: Record<string, any>) {
           </button>
         ))}
       </div>
-      <p id="results-count" class="text-sm text-slate-500"></p>
+      <div class="flex items-center gap-4">
+        <p id="results-count" class="text-sm text-slate-500"></p>
+        <button id="expand-all" class="text-sm text-slate-500 hover:text-slate-300 transition-colors ml-auto">
+          Expand all
+        </button>
+      </div>
     </div>
 
     <!-- Tool List -->
@@ -82,6 +87,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
               <div
                 class="tool-card bg-slate-800/30 rounded-lg border border-slate-700/50 hover:border-slate-600/50 transition-colors"
                 data-tool-name={tool.name}
+                data-tool-title={tool.title.toLowerCase()}
                 data-tool-desc={tool.description.toLowerCase()}
                 data-tool-category={cat}
                 data-tool-type={badge.label}
@@ -176,6 +182,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   let activeFilter = 'all';
   let activeCategory = 'all';
+  let allExpanded = false;
+  const expandAllBtn = document.getElementById('expand-all')!;
 
   // Toggle tool details
   document.querySelectorAll('.tool-header').forEach(header => {
@@ -185,6 +193,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
       const chevron = card.querySelector('.tool-chevron')!;
       details.classList.toggle('hidden');
       chevron.classList.toggle('rotate-90');
+    });
+  });
+
+  // Expand/collapse all
+  expandAllBtn.addEventListener('click', () => {
+    allExpanded = !allExpanded;
+    expandAllBtn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
+    toolCards.forEach(card => {
+      if (card.classList.contains('hidden')) return;
+      const details = card.querySelector('.tool-details')!;
+      const chevron = card.querySelector('.tool-chevron')!;
+      if (allExpanded) {
+        details.classList.remove('hidden');
+        chevron.classList.add('rotate-90');
+      } else {
+        details.classList.add('hidden');
+        chevron.classList.remove('rotate-90');
+      }
     });
   });
 
@@ -229,7 +255,9 @@ function getBadgeInfo(annotations: Record<string, any>) {
       const category = card.dataset.toolCategory || '';
       const type = card.dataset.toolType || '';
 
-      const matchesSearch = !query || name.includes(query) || desc.includes(query);
+      const title = card.dataset.toolTitle || '';
+
+      const matchesSearch = !query || name.includes(query) || title.includes(query) || desc.includes(query);
       const matchesFilter = activeFilter === 'all' || type === activeFilter;
       const matchesCategory = activeCategory === 'all' || category === activeCategory;
 
