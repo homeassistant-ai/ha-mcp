@@ -87,19 +87,19 @@ async def _supervisor_api_call(
         if not result.get("success"):
             error_msg = str(result.get("error", ""))
             if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                return create_error_response(
+                raise_tool_error(create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     "Supervisor API not available",
                     details=str(result),
                     suggestions=[
                         "This feature requires Home Assistant OS or Supervised installation",
                     ],
-                )
-            return create_error_response(
+                ))
+            raise_tool_error(create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Supervisor API call failed: {endpoint}",
                 details=str(result),
-            )
+            ))
 
         return {"success": True, "result": result.get("result", {})}
 
@@ -107,10 +107,9 @@ async def _supervisor_api_call(
         raise
     except Exception as e:
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
-        return exception_to_structured_error(
+        exception_to_structured_error(
             e,
             context={"endpoint": endpoint},
-            raise_error=False,
             suggestions=["Check Home Assistant connection and Supervisor availability"],
         )
     finally:
@@ -311,23 +310,23 @@ async def _call_addon_ws(
     # 1. Sanitize path
     normalized = unquote(path).lstrip("/")
     if ".." in normalized.split("/"):
-        return create_validation_error(
+        raise_tool_error(create_validation_error(
             "Path contains '..' traversal component",
             parameter="path",
             details=f"Rejected path: {path}",
-        )
+        ))
 
     # 2. Get add-on info
     addon_response = await get_addon_info(client, slug)
     if not addon_response.get("success"):
-        return addon_response
+        raise_tool_error(addon_response)
 
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
 
     # 3. Verify add-on supports Ingress (unless using direct port override)
     if not port and not addon.get("ingress"):
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_FAILED,
             f"Add-on '{addon_name}' does not support Ingress",
             suggestions=[
@@ -335,37 +334,37 @@ async def _call_addon_ws(
                 f"Use ha_get_addon(slug='{slug}') to see available ports",
             ],
             context={"slug": slug},
-        )
+        ))
 
     # 4. Verify add-on is running
     if addon.get("state") != "started":
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
             suggestions=[
                 f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
             ],
             context={"slug": slug, "state": addon.get("state")},
-        )
+        ))
 
     # 5. Build WebSocket URL
     addon_ip = addon.get("ip_address", "")
     if port:
         if not addon_ip:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 ErrorCode.INTERNAL_ERROR,
                 f"Add-on '{addon_name}' is missing ip_address",
                 context={"slug": slug},
-            )
+            ))
         target_port = port
     else:
         ingress_port = addon.get("ingress_port")
         if not addon_ip or not ingress_port:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 ErrorCode.INTERNAL_ERROR,
                 f"Add-on '{addon_name}' is missing network info",
                 context={"slug": slug},
-            )
+            ))
         target_port = ingress_port
 
     ws_url = f"ws://{addon_ip}:{target_port}/{normalized}"
@@ -439,7 +438,7 @@ async def _call_addon_ws(
                 total_size += len(clean)
 
     except websockets.exceptions.InvalidHandshake as e:
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"WebSocket handshake failed with '{addon_name}': {e!s}",
             suggestions=[
@@ -447,9 +446,9 @@ async def _call_addon_ws(
                 f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
             ],
             context={"slug": slug, "path": path},
-        )
+        ))
     except websockets.exceptions.ConnectionClosed as e:
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"WebSocket connection to '{addon_name}' closed unexpectedly: {e!s}",
             suggestions=[
@@ -457,20 +456,20 @@ async def _call_addon_ws(
                 "Try again or check add-on logs for errors",
             ],
             context={"slug": slug, "path": path},
-        )
+        ))
     except TimeoutError:
-        return create_timeout_error(
+        raise_tool_error(create_timeout_error(
             f"WebSocket connection to '{addon_name}'",
             timeout,
             details=f"path={path}",
             context={"slug": slug, "path": path},
-        )
+        ))
     except OSError as e:
-        return create_connection_error(
+        raise_tool_error(create_connection_error(
             f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
             details="Check that the add-on is running and the port is correct",
             context={"slug": slug},
-        )
+        ))
 
     elapsed = round(time.monotonic() - start_time, 2)
 
@@ -554,23 +553,23 @@ async def _call_addon_api(
     # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
     normalized = unquote(path).lstrip("/")
     if ".." in normalized.split("/"):
-        return create_validation_error(
+        raise_tool_error(create_validation_error(
             "Path contains '..' traversal component",
             parameter="path",
             details=f"Rejected path: {path}",
-        )
+        ))
 
     # 2. Get add-on info to verify ingress support and get entry path
     addon_response = await get_addon_info(client, slug)
     if not addon_response.get("success"):
-        return addon_response
+        raise_tool_error(addon_response)
 
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
 
     # 3. Verify add-on supports Ingress (unless using direct port override)
     if not port and not addon.get("ingress"):
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_FAILED,
             f"Add-on '{addon_name}' does not support Ingress",
             suggestions=[
@@ -579,18 +578,18 @@ async def _call_addon_api(
                 "Use the 'port' parameter to connect to a direct access port",
             ],
             context={"slug": slug},
-        )
+        ))
 
     # 4. Verify add-on is running
     if addon.get("state") != "started":
-        return create_error_response(
+        raise_tool_error(create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
             suggestions=[
                 f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
             ],
             context={"slug": slug, "state": addon.get("state")},
-        )
+        ))
 
     # 5. Build URL to the add-on container
     addon_ip = addon.get("ip_address", "")
@@ -600,21 +599,21 @@ async def _call_addon_api(
         # (e.g., 1880 for Node-RED, 6052 for ESPHome) instead of the ingress port.
         # Requires 'leave_front_door_open' or equivalent setting on the add-on.
         if not addon_ip:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 ErrorCode.INTERNAL_ERROR,
                 f"Add-on '{addon_name}' is missing ip_address",
                 context={"slug": slug, "ip_address": addon_ip},
-            )
+            ))
         target_port = port
     else:
         # Default: use the ingress port for direct container communication
         ingress_port = addon.get("ingress_port")
         if not addon_ip or not ingress_port:
-            return create_error_response(
+            raise_tool_error(create_error_response(
                 ErrorCode.INTERNAL_ERROR,
                 f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
                 context={"slug": slug, "ip_address": addon_ip, "ingress_port": ingress_port},
-            )
+            ))
         target_port = ingress_port
 
     url = f"http://{addon_ip}:{target_port}/{normalized}"
@@ -648,18 +647,18 @@ async def _call_addon_api(
                 content=request_content,
             )
     except httpx.TimeoutException:
-        return create_timeout_error(
+        raise_tool_error(create_timeout_error(
             f"add-on API call to '{addon_name}'",
             timeout,
             details=f"path={path}, method={method}",
             context={"slug": slug, "path": path},
-        )
+        ))
     except httpx.ConnectError as e:
-        return create_connection_error(
+        raise_tool_error(create_connection_error(
             f"Failed to connect to add-on '{addon_name}': {e!s}",
             details="Check that the add-on is running and Home Assistant Ingress is working",
             context={"slug": slug},
-        )
+        ))
 
     # 7. Parse response
     content_type = response.headers.get("content-type", "")
