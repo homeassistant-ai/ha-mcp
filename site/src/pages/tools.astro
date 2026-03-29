@@ -55,11 +55,21 @@ function getBadgeInfo(annotations: Record<string, any>) {
           <button data-filter="all" class="filter-btn active px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
             All
           </button>
-          <button data-filter="read" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+          <button data-filter="read" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
             Read
           </button>
-          <button data-filter="write" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+          <button data-filter="write" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
             Write
+          </button>
+          <span class="text-slate-700 mx-1">|</span>
+          <button data-size-filter="small" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-green-400 border border-slate-700/50 hover:bg-green-500/10 transition-colors">
+            &lt;1k
+          </button>
+          <button data-size-filter="medium" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-amber-400 border border-slate-700/50 hover:bg-amber-500/10 transition-colors">
+            1-2k
+          </button>
+          <button data-size-filter="large" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-red-400 border border-slate-700/50 hover:bg-red-500/10 transition-colors">
+            &gt;2k
           </button>
         </div>
       </div>
@@ -77,11 +87,18 @@ function getBadgeInfo(annotations: Record<string, any>) {
       <div class="flex items-center gap-4">
         <p id="results-count" class="text-sm text-slate-500"></p>
         <div class="flex items-center gap-3 ml-auto">
-          <span class="text-xs text-slate-600">Group by:</span>
+          <span class="text-xs text-slate-600">Group:</span>
           <button id="group-category" class="group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
           <span class="text-slate-700">|</span>
           <button id="group-file" class="group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">File</button>
-          <span class="text-slate-700 mx-1">|</span>
+          <span class="text-slate-700">|</span>
+          <button id="group-none" class="group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">None</button>
+          <span class="text-slate-700 mx-2">|</span>
+          <span class="text-xs text-slate-600">Sort:</span>
+          <button id="sort-alpha" class="sort-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors">A-Z</button>
+          <span class="text-slate-700">|</span>
+          <button id="sort-size" class="sort-btn text-sm text-slate-500 hover:text-slate-300 transition-colors">Size</button>
+          <span class="text-slate-700 mx-2">|</span>
           <button id="expand-all" class="text-sm text-slate-500 hover:text-slate-300 transition-colors">
             Expand all
           </button>
@@ -111,6 +128,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                 data-tool-category={cat}
                 data-tool-file={tool.source_file}
                 data-tool-type={badge.label}
+                data-tool-size={totalChars}
               >
                 <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
                   <svg class="tool-chevron w-4 h-4 mt-1 text-slate-500 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -223,11 +241,17 @@ function getBadgeInfo(annotations: Record<string, any>) {
   const resultsCount = document.getElementById('results-count')!;
   const groupCategoryBtn = document.getElementById('group-category')!;
   const groupFileBtn = document.getElementById('group-file')!;
+  const sortAlphaBtn = document.getElementById('sort-alpha')!;
+  const sortSizeBtn = document.getElementById('sort-size')!;
   const expandAllBtn = document.getElementById('expand-all')!;
 
   let activeFilter = 'all';
+  let activeSizeFilter = 'all';
   let activeGroupFilter = 'all';
-  let activeGroupBy: 'category' | 'file' = 'category';
+  const sizeFilterBtns = document.querySelectorAll<HTMLButtonElement>('.size-filter-btn');
+  let activeGroupBy: 'category' | 'file' | 'none' = 'category';
+  let activeSort: 'alpha' | 'size' = 'alpha';
+  const groupNoneBtn = document.getElementById('group-none')!;
   let allExpanded = false;
 
   // Toggle tool details
@@ -259,69 +283,87 @@ function getBadgeInfo(annotations: Record<string, any>) {
     });
   });
 
+  function sortCards(cards: HTMLElement[]): HTMLElement[] {
+    if (activeSort === 'size') {
+      return cards.sort((a, b) => parseInt(b.dataset.toolSize || '0') - parseInt(a.dataset.toolSize || '0'));
+    }
+    return cards.sort((a, b) => (a.dataset.toolName || '').localeCompare(b.dataset.toolName || ''));
+  }
+
   // Group by toggle
   function regroup() {
-    const key = activeGroupBy === 'category' ? 'toolCategory' : 'toolFile';
-
-    // Collect all cards
     const cards = Array.from(toolCards);
-
-    // Build groups
-    const groups = new Map<string, HTMLElement[]>();
-    cards.forEach(card => {
-      const val = card.dataset[key] || 'Other';
-      if (!groups.has(val)) groups.set(val, []);
-      groups.get(val)!.push(card);
-    });
-
-    // Rebuild tool container
     container.innerHTML = '';
-    const sortedKeys = Array.from(groups.keys()).sort();
-    for (const groupName of sortedKeys) {
+
+    if (activeGroupBy === 'none') {
+      // Flat list, no groups
       const groupDiv = document.createElement('div');
       groupDiv.className = 'tool-group';
-      groupDiv.dataset.groupName = groupName;
-
-      const heading = document.createElement('h2');
-      heading.className = 'group-heading text-lg font-semibold text-slate-300 mb-3 mt-6';
-      heading.textContent = groupName;
-      groupDiv.appendChild(heading);
-
-      for (const card of groups.get(groupName)!) {
+      groupDiv.dataset.groupName = 'all';
+      for (const card of sortCards(cards)) {
         groupDiv.appendChild(card);
       }
       container.appendChild(groupDiv);
-    }
 
-    // Rebuild filter chips
-    activeGroupFilter = 'all';
-    const allLabel = activeGroupBy === 'category' ? 'All categories' : 'All files';
-    groupFiltersDiv.innerHTML = '';
-
-    const allBtn = document.createElement('button');
-    allBtn.dataset.groupFilter = 'all';
-    allBtn.className = 'group-filter-btn active px-3 py-1 rounded-full text-xs font-medium bg-slate-700/50 text-slate-300 border border-slate-600/50 hover:bg-slate-600/50 transition-colors';
-    allBtn.textContent = allLabel;
-    groupFiltersDiv.appendChild(allBtn);
-
-    for (const name of sortedKeys) {
-      const btn = document.createElement('button');
-      btn.dataset.groupFilter = name;
-      btn.className = 'group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-500 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-300 transition-colors';
-      btn.innerHTML = `${name} <span class="text-slate-600">(${groups.get(name)!.length})</span>`;
-      groupFiltersDiv.appendChild(btn);
-    }
-
-    bindGroupFilterBtns();
-
-    // Update toggle style
-    if (activeGroupBy === 'category') {
-      groupCategoryBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
-      groupFileBtn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
+      // Hide filter chips
+      groupFiltersDiv.classList.add('hidden');
     } else {
-      groupCategoryBtn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
-      groupFileBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
+      const key = activeGroupBy === 'category' ? 'toolCategory' : 'toolFile';
+
+      // Build groups
+      const groups = new Map<string, HTMLElement[]>();
+      cards.forEach(card => {
+        const val = card.dataset[key] || 'Other';
+        if (!groups.has(val)) groups.set(val, []);
+        groups.get(val)!.push(card);
+      });
+
+      const sortedKeys = Array.from(groups.keys()).sort();
+      for (const groupName of sortedKeys) {
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'tool-group';
+        groupDiv.dataset.groupName = groupName;
+
+        const heading = document.createElement('h2');
+        heading.className = 'group-heading text-lg font-semibold text-slate-300 mb-3 mt-6';
+        heading.textContent = groupName;
+        groupDiv.appendChild(heading);
+
+        for (const card of sortCards(groups.get(groupName)!)) {
+          groupDiv.appendChild(card);
+        }
+        container.appendChild(groupDiv);
+      }
+
+      // Rebuild filter chips
+      groupFiltersDiv.classList.remove('hidden');
+      activeGroupFilter = 'all';
+      const allLabel = activeGroupBy === 'category' ? 'All categories' : 'All files';
+      groupFiltersDiv.innerHTML = '';
+
+      const allBtn = document.createElement('button');
+      allBtn.dataset.groupFilter = 'all';
+      allBtn.className = 'group-filter-btn active px-3 py-1 rounded-full text-xs font-medium bg-slate-700/50 text-slate-300 border border-slate-600/50 hover:bg-slate-600/50 transition-colors';
+      allBtn.textContent = allLabel;
+      groupFiltersDiv.appendChild(allBtn);
+
+      for (const name of sortedKeys) {
+        const btn = document.createElement('button');
+        btn.dataset.groupFilter = name;
+        btn.className = 'group-filter-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-500 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-300 transition-colors';
+        btn.innerHTML = `${name} <span class="text-slate-600">(${groups.get(name)!.length})</span>`;
+        groupFiltersDiv.appendChild(btn);
+      }
+
+      bindGroupFilterBtns();
     }
+
+    // Update group toggle style
+    [groupCategoryBtn, groupFileBtn, groupNoneBtn].forEach(btn => {
+      btn.className = 'group-btn text-sm text-slate-500 hover:text-slate-300 transition-colors';
+    });
+    const activeBtn = activeGroupBy === 'category' ? groupCategoryBtn : activeGroupBy === 'file' ? groupFileBtn : groupNoneBtn;
+    activeBtn.className = 'group-btn text-sm text-blue-400 font-medium hover:text-blue-300 transition-colors';
 
     applyFilters();
   }
@@ -335,6 +377,32 @@ function getBadgeInfo(annotations: Record<string, any>) {
   groupFileBtn.addEventListener('click', () => {
     if (activeGroupBy === 'file') return;
     activeGroupBy = 'file';
+    regroup();
+  });
+
+  groupNoneBtn.addEventListener('click', () => {
+    if (activeGroupBy === 'none') return;
+    activeGroupBy = 'none';
+    regroup();
+  });
+
+  // Sort toggle
+  function updateSortStyle() {
+    sortAlphaBtn.className = `sort-btn text-sm transition-colors ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-500 hover:text-slate-300'}`;
+    sortSizeBtn.className = `sort-btn text-sm transition-colors ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-500 hover:text-slate-300'}`;
+  }
+
+  sortAlphaBtn.addEventListener('click', () => {
+    if (activeSort === 'alpha') return;
+    activeSort = 'alpha';
+    updateSortStyle();
+    regroup();
+  });
+
+  sortSizeBtn.addEventListener('click', () => {
+    if (activeSort === 'size') return;
+    activeSort = 'size';
+    updateSortStyle();
     regroup();
   });
 
@@ -352,17 +420,45 @@ function getBadgeInfo(annotations: Record<string, any>) {
     });
   });
 
-  // Group filter chips (category or file)
+  // Size filter buttons (toggle)
+  sizeFilterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.sizeFilter!;
+      activeSizeFilter = activeSizeFilter === val ? 'all' : val;
+      sizeFilterBtns.forEach(b => {
+        b.classList.remove('border-green-500/30', 'border-amber-500/30', 'border-red-500/30', 'bg-green-500/20', 'bg-amber-500/20', 'bg-red-500/20');
+        b.classList.add('border-slate-700/50', 'bg-slate-800/50');
+      });
+      if (activeSizeFilter !== 'all') {
+        const colors = { small: ['border-green-500/30', 'bg-green-500/20'], medium: ['border-amber-500/30', 'bg-amber-500/20'], large: ['border-red-500/30', 'bg-red-500/20'] };
+        const c = colors[activeSizeFilter as keyof typeof colors];
+        btn.classList.remove('border-slate-700/50', 'bg-slate-800/50');
+        btn.classList.add(...c);
+      }
+      applyFilters();
+    });
+  });
+
+  // Group filter chips (category or file) - click active chip to toggle off
   function bindGroupFilterBtns() {
     groupFiltersDiv.querySelectorAll<HTMLButtonElement>('.group-filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        activeGroupFilter = btn.dataset.groupFilter!;
+        const val = btn.dataset.groupFilter!;
+        // Toggle: clicking active chip resets to all
+        if (val === activeGroupFilter && val !== 'all') {
+          activeGroupFilter = 'all';
+        } else {
+          activeGroupFilter = val;
+        }
         groupFiltersDiv.querySelectorAll('.group-filter-btn').forEach(b => {
           b.classList.remove('active', 'bg-slate-700/50', 'text-slate-300', 'border-slate-600/50');
           b.classList.add('bg-slate-800/50', 'text-slate-500', 'border-slate-700/30');
         });
-        btn.classList.add('active', 'bg-slate-700/50', 'text-slate-300', 'border-slate-600/50');
-        btn.classList.remove('bg-slate-800/50', 'text-slate-500', 'border-slate-700/30');
+        const activeChip = groupFiltersDiv.querySelector(`[data-group-filter="${activeGroupFilter}"]`);
+        if (activeChip) {
+          activeChip.classList.add('active', 'bg-slate-700/50', 'text-slate-300', 'border-slate-600/50');
+          activeChip.classList.remove('bg-slate-800/50', 'text-slate-500', 'border-slate-700/30');
+        }
         applyFilters();
       });
     });
@@ -385,11 +481,15 @@ function getBadgeInfo(annotations: Record<string, any>) {
         : (card.dataset.toolFile || '');
       const type = card.dataset.toolType || '';
 
+      const size = parseInt(card.dataset.toolSize || '0');
+      const sizeCategory = size > 2000 ? 'large' : size > 1000 ? 'medium' : 'small';
+
       const matchesSearch = !query || name.includes(query) || title.includes(query) || desc.includes(query);
       const matchesFilter = activeFilter === 'all' || type === activeFilter;
       const matchesGroup = activeGroupFilter === 'all' || groupVal === activeGroupFilter;
+      const matchesSize = activeSizeFilter === 'all' || sizeCategory === activeSizeFilter;
 
-      if (matchesSearch && matchesFilter && matchesGroup) {
+      if (matchesSearch && matchesFilter && matchesGroup && matchesSize) {
         card.classList.remove('hidden');
         visible++;
       } else {
@@ -403,7 +503,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
       group.classList.toggle('hidden', visibleCards.length === 0);
     });
 
-    if (query || activeFilter !== 'all' || activeGroupFilter !== 'all') {
+    if (query || activeFilter !== 'all' || activeGroupFilter !== 'all' || activeSizeFilter !== 'all') {
       resultsCount.textContent = `Showing ${visible} of ${toolCards.length} tools`;
     } else {
       resultsCount.textContent = '';
