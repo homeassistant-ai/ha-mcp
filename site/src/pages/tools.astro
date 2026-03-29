@@ -35,10 +35,53 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   <div class="container mx-auto px-4 py-8 max-w-6xl">
     <!-- Header -->
-    <header class="mb-8">
-      <h1 class="text-3xl font-bold text-white mb-2">Tool Explorer</h1>
-      <p class="text-slate-400">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
+    <header class="mb-8 flex items-start justify-between">
+      <div>
+        <h1 class="text-3xl font-bold text-white mb-2">Tool Explorer</h1>
+        <p class="text-slate-400">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
+      </div>
+      <button
+        id="design-mode-toggle"
+        class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors bg-violet-500/20 text-violet-400 border-violet-500/30 hover:bg-violet-500/30"
+      >
+        Design Mode
+      </button>
     </header>
+
+    <!-- Design Panel (hidden by default, shown in design mode) -->
+    <div id="design-panel" class="design-only hidden mb-6 space-y-4">
+      <!-- Instructions banner -->
+      <div class="bg-violet-500/10 border border-violet-500/20 rounded-lg">
+        <button id="design-instructions-toggle" class="w-full text-left px-4 py-3 flex items-center gap-2 text-sm text-violet-300">
+          <svg class="w-4 h-4 transition-transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span class="font-medium">Design Mode Instructions</span>
+        </button>
+        <div id="design-instructions-body" class="px-4 pb-3 text-sm text-violet-300/80">
+          Edit tool descriptions directly below. Changes are tracked and
+          summarized as a prompt you can copy to a coding agent. Use [brackets] for
+          instructions to the agent vs direct text edits.
+        </div>
+      </div>
+
+      <!-- Generated Prompt box -->
+      <div class="bg-slate-900/80 border border-slate-700/50 rounded-lg p-4 space-y-2">
+        <div class="flex items-center justify-between">
+          <span id="design-change-count" class="text-sm text-slate-400">No tools modified</span>
+          <button id="design-copy-btn" class="px-3 py-1 rounded text-xs font-medium bg-violet-500/20 text-violet-400 border border-violet-500/30 hover:bg-violet-500/30 transition-colors">
+            Copy
+          </button>
+        </div>
+        <textarea
+          id="design-prompt"
+          readonly
+          rows="6"
+          class="w-full bg-slate-950 text-slate-300 font-mono text-xs border border-slate-700/50 rounded-lg p-3 resize-y focus:outline-none"
+          placeholder="Edit tool descriptions below to generate a prompt..."
+        ></textarea>
+      </div>
+    </div>
 
     <!-- Search and Filters -->
     <div class="mb-8 space-y-4">
@@ -61,14 +104,14 @@ function getBadgeInfo(annotations: Record<string, any>) {
           <button data-filter="write" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
             Write
           </button>
-          <span class="text-slate-700 mx-1">|</span>
-          <button data-size-filter="small" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-green-400 border border-slate-700/50 hover:bg-green-500/10 transition-colors">
+          <span class="design-only hidden text-slate-700 mx-1">|</span>
+          <button data-size-filter="small" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-green-400 border border-slate-700/50 hover:bg-green-500/10 transition-colors">
             &lt;1k
           </button>
-          <button data-size-filter="medium" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-amber-400 border border-slate-700/50 hover:bg-amber-500/10 transition-colors">
+          <button data-size-filter="medium" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-amber-400 border border-slate-700/50 hover:bg-amber-500/10 transition-colors">
             1-2k
           </button>
-          <button data-size-filter="large" class="size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-red-400 border border-slate-700/50 hover:bg-red-500/10 transition-colors">
+          <button data-size-filter="large" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-red-400 border border-slate-700/50 hover:bg-red-500/10 transition-colors">
             &gt;2k
           </button>
         </div>
@@ -82,8 +125,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
           </button>
         ))}
       </div>
-      <!-- File filter chips (multi-toggle) -->
-      <div class="flex flex-wrap gap-2" id="file-filters">
+      <!-- File filter chips (multi-toggle, design-only) -->
+      <div class="design-only hidden flex flex-wrap gap-2" id="file-filters">
         <span class="text-sm text-slate-400 self-center mr-1">Files:</span>
         {sortedFiles.map(file => (
           <button data-file={file} class="file-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-200 transition-colors">
@@ -136,6 +179,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                 data-tool-file={tool.source_file}
                 data-tool-type={badge.label}
                 data-tool-size={totalChars}
+                data-original-desc={tool.description}
               >
                 <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
                   <svg class="tool-chevron w-4 h-4 mt-1 text-slate-500 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -153,7 +197,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                           idempotent
                         </span>
                       )}
-                      <span class={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                      <span class={`size-badge design-only hidden inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono border ${
                         totalChars > 2000
                           ? 'bg-red-500/20 text-red-400 border-red-500/30'
                           : totalChars > 1000
@@ -171,7 +215,11 @@ function getBadgeInfo(annotations: Record<string, any>) {
                     {/* Full description */}
                     <div>
                       <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Description</h4>
-                      <p class="text-sm text-slate-300 whitespace-pre-line">{tool.description}</p>
+                      <p class="desc-display text-sm text-slate-300 whitespace-pre-line">{tool.description}</p>
+                      <textarea
+                        class="desc-edit hidden w-full bg-slate-900/50 border border-slate-700/50 text-slate-300 text-sm rounded-lg p-3 resize-none focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/25 whitespace-pre-line"
+                        rows="4"
+                      >{tool.description}</textarea>
                     </div>
 
                     {/* Parameters */}
@@ -262,7 +310,143 @@ function getBadgeInfo(annotations: Record<string, any>) {
   const CHIP_ACTIVE = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
   const CHIP_INACTIVE = 'bg-slate-800/50 text-slate-400 border-slate-700/30';
 
-  // Toggle tool details
+  // ── Design Mode ──────────────────────────────────────────────────────
+
+  const designToggleBtn = document.getElementById('design-mode-toggle') as HTMLButtonElement;
+  const designPanel = document.getElementById('design-panel')!;
+  const designPrompt = document.getElementById('design-prompt') as HTMLTextAreaElement;
+  const designCopyBtn = document.getElementById('design-copy-btn')!;
+  const designChangeCount = document.getElementById('design-change-count')!;
+  const designInstructionsToggle = document.getElementById('design-instructions-toggle')!;
+  const designInstructionsBody = document.getElementById('design-instructions-body')!;
+  const designOnlyEls = document.querySelectorAll<HTMLElement>('.design-only');
+
+  let designMode = false;
+  // Map<toolName, {original, modified, file}>
+  const descChanges = new Map<string, {original: string, modified: string, file: string}>();
+
+  designToggleBtn.addEventListener('click', () => {
+    designMode = !designMode;
+    if (designMode) {
+      designToggleBtn.textContent = 'Exit Design';
+      designToggleBtn.classList.remove('bg-violet-500/20', 'text-violet-400', 'border-violet-500/30');
+      designToggleBtn.classList.add('bg-violet-500', 'text-white', 'border-violet-500');
+      designOnlyEls.forEach(el => el.classList.remove('hidden'));
+      // Show desc-edit textareas for any expanded cards; hide desc-display
+      toolCards.forEach(card => {
+        const details = card.querySelector('.tool-details');
+        if (details && !details.classList.contains('hidden')) {
+          activateEditMode(card);
+        }
+      });
+    } else {
+      designToggleBtn.textContent = 'Design Mode';
+      designToggleBtn.classList.add('bg-violet-500/20', 'text-violet-400', 'border-violet-500/30');
+      designToggleBtn.classList.remove('bg-violet-500', 'text-white', 'border-violet-500');
+      designOnlyEls.forEach(el => el.classList.add('hidden'));
+      // Hide all desc-edit textareas, show desc-display
+      toolCards.forEach(card => {
+        deactivateEditMode(card);
+      });
+    }
+  });
+
+  function activateEditMode(card: Element) {
+    const descP = card.querySelector('.desc-display') as HTMLElement | null;
+    const descTA = card.querySelector('.desc-edit') as HTMLTextAreaElement | null;
+    if (descP && descTA) {
+      descP.classList.add('hidden');
+      descTA.classList.remove('hidden');
+      autoResizeTextarea(descTA);
+    }
+  }
+
+  function deactivateEditMode(card: Element) {
+    const descP = card.querySelector('.desc-display') as HTMLElement | null;
+    const descTA = card.querySelector('.desc-edit') as HTMLTextAreaElement | null;
+    if (descP && descTA) {
+      descP.classList.remove('hidden');
+      descTA.classList.add('hidden');
+    }
+  }
+
+  function autoResizeTextarea(ta: HTMLTextAreaElement) {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
+
+  // Instructions collapsible
+  designInstructionsToggle.addEventListener('click', () => {
+    const chevron = designInstructionsToggle.querySelector('svg')!;
+    designInstructionsBody.classList.toggle('hidden');
+    chevron.classList.toggle('rotate-90');
+  });
+
+  // Copy button
+  designCopyBtn.addEventListener('click', () => {
+    const text = designPrompt.value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const original = designCopyBtn.textContent;
+      designCopyBtn.textContent = 'Copied!';
+      setTimeout(() => { designCopyBtn.textContent = original; }, 1500);
+    });
+  });
+
+  // Listen for textarea input on desc-edit
+  document.addEventListener('input', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains('desc-edit')) return;
+    const ta = target as HTMLTextAreaElement;
+    autoResizeTextarea(ta);
+
+    const card = ta.closest('.tool-card') as HTMLElement;
+    if (!card) return;
+    const toolName = card.dataset.toolName || '';
+    const original = card.dataset.originalDesc || '';
+    const file = card.dataset.toolFile || '';
+    const modified = ta.value;
+
+    if (modified !== original) {
+      descChanges.set(toolName, { original, modified, file });
+      card.classList.add('border-l-2', 'border-l-violet-500');
+    } else {
+      descChanges.delete(toolName);
+      card.classList.remove('border-l-2', 'border-l-violet-500');
+    }
+
+    regeneratePrompt();
+  });
+
+  function regeneratePrompt() {
+    const count = descChanges.size;
+    designChangeCount.textContent = count === 0
+      ? 'No tools modified'
+      : `${count} tool${count > 1 ? 's' : ''} modified`;
+
+    if (count === 0) {
+      designPrompt.value = '';
+      return;
+    }
+
+    let prompt = 'Update these tool descriptions in ha-mcp:\n';
+
+    for (const [toolName, { original, modified, file }] of descChanges) {
+      prompt += `\n## ${toolName} (${file})\n`;
+      prompt += '```diff\n';
+      prompt += `- ${original.replace(/\n/g, '\n- ')}\n`;
+      prompt += `+ ${modified.replace(/\n/g, '\n+ ')}\n`;
+      prompt += '```\n';
+    }
+
+    designPrompt.value = prompt;
+    // Auto-resize the prompt textarea
+    designPrompt.style.height = 'auto';
+    designPrompt.style.height = designPrompt.scrollHeight + 'px';
+  }
+
+  // ── Toggle tool details ──────────────────────────────────────────────
+
   document.querySelectorAll('.tool-header').forEach(header => {
     header.addEventListener('click', () => {
       const card = header.closest('.tool-card')!;
@@ -270,6 +454,15 @@ function getBadgeInfo(annotations: Record<string, any>) {
       const chevron = card.querySelector('.tool-chevron')!;
       details.classList.toggle('hidden');
       chevron.classList.toggle('rotate-90');
+
+      // If design mode is on, toggle edit mode when expanding
+      if (designMode) {
+        if (!details.classList.contains('hidden')) {
+          activateEditMode(card);
+        } else {
+          deactivateEditMode(card);
+        }
+      }
     });
   });
 
@@ -284,9 +477,11 @@ function getBadgeInfo(annotations: Record<string, any>) {
       if (allExpanded) {
         details.classList.remove('hidden');
         chevron.classList.add('rotate-90');
+        if (designMode) activateEditMode(card);
       } else {
         details.classList.add('hidden');
         chevron.classList.remove('rotate-90');
+        if (designMode) deactivateEditMode(card);
       }
     });
   });
