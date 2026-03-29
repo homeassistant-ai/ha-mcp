@@ -434,8 +434,19 @@ function getBadgeInfo(annotations: Record<string, any>) {
     for (const [toolName, { original, modified, file }] of descChanges) {
       prompt += `\n## ${toolName} (${file})\n`;
       prompt += '```diff\n';
-      prompt += `- ${original.replace(/\n/g, '\n- ')}\n`;
-      prompt += `+ ${modified.replace(/\n/g, '\n+ ')}\n`;
+      const origLines = original.split('\n');
+      const modLines = modified.split('\n');
+      const maxLen = Math.max(origLines.length, modLines.length);
+      for (let i = 0; i < maxLen; i++) {
+        const o = origLines[i] ?? '';
+        const m = modLines[i] ?? '';
+        if (o === m) {
+          prompt += ` ${o}\n`;
+        } else {
+          if (i < origLines.length) prompt += `- ${o}\n`;
+          if (i < modLines.length) prompt += `+ ${m}\n`;
+        }
+      }
       prompt += '```\n';
     }
 
