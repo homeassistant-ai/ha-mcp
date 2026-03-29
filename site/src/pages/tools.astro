@@ -142,7 +142,13 @@ function getBadgeInfo(annotations: Record<string, any>) {
                       <div>
                         <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Parameters</h4>
                         <div class="space-y-2">
-                          {params.map(([name, schema]: [string, any]) => (
+                          {params.map(([name, schema]: [string, any]) => {
+                            const typeStr = schema.anyOf
+                              ? schema.anyOf.map((s: any) => s.type).filter(Boolean).join(' | ')
+                              : schema.type;
+                            const enums = schema.enum || schema.anyOf?.flatMap((s: any) => s.enum || []) || [];
+                            const hasDefault = 'default' in schema && schema.default !== undefined;
+                            return (
                             <div class="flex items-start gap-2 text-sm">
                               <code class="text-amber-400 shrink-0">{name}</code>
                               {required.includes(name) && (
@@ -151,16 +157,23 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               <span class="text-slate-600">-</span>
                               <span class="text-slate-400">
                                 {schema.description || ''}
-                                {(schema.type || schema.anyOf) && (
-                                  <span class="text-slate-600 ml-1">({
-                                    schema.anyOf
-                                      ? schema.anyOf.map((s: any) => s.type).filter(Boolean).join(' | ')
-                                      : schema.type
-                                  })</span>
+                                {typeStr && <span class="text-slate-600 ml-1">({typeStr})</span>}
+                                {enums.length > 0 && (
+                                  <span class="text-slate-600 ml-1">
+                                    [{enums.map((e: any, i: number) => (
+                                      <><code class="text-cyan-500/70">{String(e)}</code>{i < enums.length - 1 ? ', ' : ''}</>
+                                    ))}]
+                                  </span>
+                                )}
+                                {hasDefault && (
+                                  <span class="text-slate-600 ml-1">
+                                    = <code class="text-emerald-500/70">{JSON.stringify(schema.default)}</code>
+                                  </span>
                                 )}
                               </span>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
