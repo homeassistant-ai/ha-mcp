@@ -302,11 +302,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         return response_data
 
     @mcp.tool(
+        tags={"Entity Registry"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["entity"],
-            "title": "Set Entity",
+            "title": "Set Entity"
         }
     )
     @log_tool_usage
@@ -683,11 +683,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e, context={"entity_id": eid_context})
 
     @mcp.tool(
+        tags={"Entity Registry"},
         annotations={
             "readOnlyHint": True,
             "idempotentHint": True,
-            "tags": ["entity"],
-            "title": "Get Entity",
+            "title": "Get Entity"
         }
     )
     @log_tool_usage

@@ -139,11 +139,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         raise ValueError("smart_tools is required for search tools registration")
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Search Entities",
+            "title": "Search Entities"
         }
     )
     @log_tool_usage
@@ -494,11 +494,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get System Overview",
+            "title": "Get System Overview"
         }
     )
     @log_tool_usage
@@ -652,11 +652,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         return result
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Deep Search",
+            "title": "Deep Search"
         }
     )
     @log_tool_usage
@@ -759,11 +759,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Entity State",
+            "title": "Get Entity State"
         }
     )
     @log_tool_usage
@@ -787,11 +787,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Multiple Entity States",
+            "title": "Get Multiple Entity States"
         }
     )
     @log_tool_usage

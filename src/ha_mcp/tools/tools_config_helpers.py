@@ -71,11 +71,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["helper"],
-            "title": "List Helpers",
+            "title": "List Helpers"
         }
     )
     @log_tool_usage
@@ -170,10 +170,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "destructiveHint": True,
-            "tags": ["helper"],
-            "title": "Create or Update Helper",
+            "title": "Create or Update Helper"
         }
     )
     @log_tool_usage
@@ -958,11 +958,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["helper"],
-            "title": "Remove Helper",
+            "title": "Remove Helper"
         }
     )
     @log_tool_usage

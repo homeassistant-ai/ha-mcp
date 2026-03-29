@@ -49,7 +49,7 @@ RELOAD_TARGETS = {
 def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant system management tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Check Configuration"})
+    @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Check Configuration"})
     @log_tool_usage
     async def ha_check_config() -> dict[str, Any]:
         """
@@ -86,7 +86,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Restart Home Assistant"})
+    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Restart Home Assistant"})
     @log_tool_usage
     async def ha_restart(
         confirm: bool | str = False,
@@ -191,7 +191,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(e)
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["system"], "title": "Reload Core Components"})
+    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Reload Core Components"})
     @log_tool_usage
     async def ha_reload_core(
         target: str = "all",
@@ -311,7 +311,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["system"], "title": "Get System Health"})
+    @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health"})
     @log_tool_usage
     async def ha_get_system_health() -> dict[str, Any]:
         """
