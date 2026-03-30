@@ -20,11 +20,13 @@ options:
   enable_skills: true
   enable_skills_as_tools: false
   enable_tool_search: false
+  enable_yaml_config_editing: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
+  enable_yaml_config_editing: bool?
 ports:
   9583/tcp: 9583
