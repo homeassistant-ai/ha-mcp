@@ -18,7 +18,8 @@ jobs:
     name: Check uv.lock
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -31,7 +32,8 @@ jobs:
     name: Ruff Lint
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -43,11 +45,29 @@ jobs:
     - name: Run ruff check
       run: uv run ruff check src/ tests/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
 
+  ast-grep:
+    name: AST Lint
+    runs-on: ubuntu-latest
+    container:
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim
+    timeout-minutes: 2
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: uv sync --dev
+
+    - name: Run ast-grep
+      run: uv run ast-grep scan
+
   mypy:
     name: Mypy Type Check
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -66,7 +86,8 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/astral-sh/uv:0.9.30-python3.13-trixie-slim
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:

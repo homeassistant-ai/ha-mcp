@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
 
 const base = import.meta.env.BASE_URL;
 
@@ -10,23 +11,7 @@ const withBase = (path: string) => {
 ---
 
 <Layout title="FAQ & Troubleshooting - Home Assistant MCP">
-  <!-- Navigation Bar -->
-  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
-    <div class="container mx-auto px-4 max-w-4xl">
-      <div class="flex items-center justify-between h-14">
-        <a href={withBase('/')} class="flex items-center gap-2">
-          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
-          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
-          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
-        </a>
-        <div class="flex items-center gap-6">
-          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
-          <a href={withBase('/setup')} class="text-sm text-slate-300 hover:text-white transition-colors">Setup</a>
-          <a href={withBase('/faq')} class="text-sm text-blue-400 font-medium">FAQ</a>
-        </div>
-      </div>
-    </div>
-  </nav>
+  <Nav active="faq" />
 
   <div class="container mx-auto px-4 py-8 max-w-3xl">
     <!-- Header -->
@@ -137,6 +122,22 @@ const withBase = (path: string) => {
       <h2 class="text-2xl font-semibold text-white mb-6">Troubleshooting</h2>
 
       <div class="space-y-6">
+        <div class="faq-item" id="oauth-v7-migration">
+          <h3 class="text-lg font-medium text-white mb-2">OAuth stopped working after upgrading to v7.0.0</h3>
+          <p class="text-slate-300 mb-4">v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> as a server-side environment variable before starting ha-mcp.</p>
+          <pre class="code-block mt-2"><code># Docker
+docker run -d -p 8086:8086 \
+  -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+  -e MCP_BASE_URL=https://your-mcp-server.example.com \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
+
+# uvx
+HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+MCP_BASE_URL=https://your-mcp-server.example.com \
+uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">full migration guide</a> for details.</p>
+        </div>
+
         <div class="faq-item" id="ssl-certificates">
           <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
           <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>

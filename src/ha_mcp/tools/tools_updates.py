@@ -394,7 +394,7 @@ def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         return result
 
-    @mcp.tool(annotations={"idempotentHint": True, "openWorldHint": True, "readOnlyHint": True, "tags": ["update"], "title": "Get Updates"})
+    @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "openWorldHint": True, "readOnlyHint": True, "title": "Get Updates"})
     @log_tool_usage
     async def ha_get_updates(
         entity_id: Annotated[

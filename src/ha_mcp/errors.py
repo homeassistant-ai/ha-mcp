@@ -137,7 +137,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Entity domain must match the original domain",
     ],
     ErrorCode.SERVICE_NOT_FOUND: [
-        "Use ha_get_domain_docs() to see available services",
+        "Use ha_get_skill_home_assistant_best_practices for documentation",
         "Check the service name spelling",
         "Verify the domain supports this service",
     ],
@@ -148,7 +148,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ErrorCode.SERVICE_INVALID_ACTION: [
         "Check available actions for this domain",
         "Common actions: turn_on, turn_off, toggle",
-        "Use ha_get_domain_docs() for service documentation",
+        "Use ha_get_skill_home_assistant_best_practices for documentation",
     ],
     ErrorCode.SERVICE_CALL_FAILED: [
         "Check the service parameters are correct",
@@ -161,7 +161,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ],
     ErrorCode.CONFIG_INVALID: [
         "Review the configuration format",
-        "Use ha_get_domain_docs() for configuration help",
+        "Use ha_get_skill_home_assistant_best_practices for configuration help",
     ],
     ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS: [
         "Check documentation for required fields",

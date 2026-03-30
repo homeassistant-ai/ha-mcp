@@ -25,7 +25,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # AREA TOOLS
     # ============================================================
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["area"], "title": "List Areas"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"})
     @log_tool_usage
     async def ha_config_list_areas() -> dict[str, Any]:
         """
@@ -63,7 +63,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify WebSocket connection is active",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["area"], "title": "Create or Update Area"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "title": "Create or Update Area"})
     @log_tool_usage
     async def ha_config_set_area(
         name: Annotated[
@@ -208,7 +208,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "If assigning to a floor, verify floor_id exists",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["area"], "title": "Remove Area"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area"})
     @log_tool_usage
     async def ha_config_remove_area(
         area_id: Annotated[
@@ -258,7 +258,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # FLOOR TOOLS
     # ============================================================
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["floor"], "title": "List Floors"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors"})
     @log_tool_usage
     async def ha_config_list_floors() -> dict[str, Any]:
         """
@@ -296,7 +296,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify WebSocket connection is active",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["floor"], "title": "Create or Update Floor"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "title": "Create or Update Floor"})
     @log_tool_usage
     async def ha_config_set_floor(
         name: Annotated[
@@ -429,7 +429,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "For update: Verify the floor_id exists using ha_config_list_floors()",
             ])
 
-    @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True, "tags": ["floor"], "title": "Remove Floor"})
+    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Floor"})
     @log_tool_usage
     async def ha_config_remove_floor(
         floor_id: Annotated[

@@ -8,9 +8,10 @@ Tests observable behavior of performance optimizations:
 """
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -211,6 +212,7 @@ class TestGetSystemOverview:
             result = await tools.get_system_overview(detail_level="standard")
 
         assert result["success"] is True
+        assert "partial" not in result
         assert result["system_summary"]["total_entities"] == 2
         assert result["system_summary"]["total_areas"] == 2
 
@@ -257,6 +259,41 @@ class TestGetSystemOverview:
         assert result["success"] is True
         assert result["system_summary"]["total_entities"] == 2
         assert result["system_summary"]["total_areas"] == 0
+
+    @pytest.mark.asyncio
+    async def test_entities_fetch_failure_raises_error(self, sample_services):
+        """When get_states() fails, surface the error instead of returning 0 entities.
+
+        Regression test for issue #811: ha_get_overview returned success with
+        total_entities=0 when the HA connection was broken, masking the real error.
+        """
+        client = MockClient(entities=[], services=sample_services)
+        client.get_states = AsyncMock(side_effect=ConnectionError("Connection refused"))
+
+        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools = SmartSearchTools(client=client)
+            with pytest.raises(ToolError):
+                await tools.get_system_overview(detail_level="minimal")
+
+    @pytest.mark.asyncio
+    async def test_services_fetch_failure_continues_with_empty_services(
+        self, sample_entities, sample_services
+    ):
+        """When get_services() fails, the overview still succeeds with total_services=0."""
+        client = MockClient(entities=sample_entities, services=sample_services)
+        client.get_services = AsyncMock(side_effect=ConnectionError("Connection refused"))
+
+        with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools = SmartSearchTools(client=client)
+            result = await tools.get_system_overview(detail_level="minimal")
+
+        assert result["success"] is True
+        assert result["partial"] is True
+        assert any("Services unavailable" in w for w in result["warnings"])
+        assert result["system_summary"]["total_entities"] == 2
+        assert result["system_summary"]["total_services"] == 0
 
     @pytest.mark.asyncio
     async def test_resolves_area_through_device_registry(self, sample_services):

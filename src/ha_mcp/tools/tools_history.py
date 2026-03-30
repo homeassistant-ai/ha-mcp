@@ -112,7 +112,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_HISTORY_LIMIT = 100
     MAX_HISTORY_LIMIT = 1000
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Entity History"})
+    @mcp.tool(tags={"History & Statistics"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Entity History"})
     @log_tool_usage
     async def ha_get_history(
         entity_ids: Annotated[
@@ -401,7 +401,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["history"], "title": "Get Statistics"})
+    @mcp.tool(tags={"History & Statistics"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Statistics"})
     @log_tool_usage
     async def ha_get_statistics(
         entity_ids: Annotated[

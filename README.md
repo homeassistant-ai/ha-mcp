@@ -1,4 +1,4 @@
-> ⚠️ **Breaking change in OAuth (beta) mode** — v7.0.0 requires `HOMEASSISTANT_URL` to be set server-side. [See issue #749 for migration instructions.](https://github.com/homeassistant-ai/ha-mcp/issues/749)
+> ⚠️ **Breaking change in OAuth mode (v7.0.0)** — Set `HOMEASSISTANT_URL` server-side. The consent form now accepts only the token. [Migration guide →](docs/OAUTH.md#migrating-from-v6x)
 
 <div align="center">
   <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-95+-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-93-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -129,33 +129,37 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
 
 <details>
-<summary><b>🛠️ Complete Tool List (96 tools)</b></summary>
+<!-- TOOLS_TABLE_START -->
+
+<summary><b>Complete Tool List (93 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
-| **Search & Discovery** | `ha_search_entities`, `ha_deep_search`, `ha_get_overview`, `ha_get_state` |
-| **Service & Device Control** | `ha_call_service`, `ha_bulk_control`, `ha_get_operation_status`, `ha_get_bulk_status`, `ha_list_services` |
-| **Automations** | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation` |
-| **Scripts** | `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script` |
-| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper` |
-| **Dashboards** | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_get_dashboard_guide`, `ha_get_card_documentation` |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor` |
-| **Labels** | `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels` |
-| **Zones** | `ha_get_zone`, `ha_set_zone`, `ha_remove_zone` |
-| **Groups** | `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group` |
-| **Todo Lists** | `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
-| **Calendar** | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event` |
-| **Blueprints** | `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint` |
-| **Device Registry** | `ha_get_device`, `ha_update_device`, `ha_remove_device`, `ha_rename_entity` |
-| **ZHA & Integrations** | `ha_get_zha_devices`, `ha_get_entity_integration_source` |
-| **Add-ons** | `ha_get_addon` |
+| **Add-ons** | `ha_call_addon_api`, `ha_get_addon` |
+| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
+| **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
+| **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
+| **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |
-| **History & Statistics** | `ha_get_history`, `ha_get_statistics` |
-| **Automation Traces** | `ha_get_automation_traces` |
-| **System & Updates** | `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_system_info`, `ha_get_system_health`, `ha_get_updates` |
-| **Backup & Restore** | `ha_backup_create`, `ha_backup_restore` |
-| **Utility** | `ha_get_logbook`, `ha_eval_template`, `ha_get_domain_docs`, `ha_get_integration` |
+| **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard`, `ha_dashboard_find_card` |
+| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_rename_entity_and_device`, `ha_rename_entity`, `ha_update_device` |
+| **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_set_entity` |
+| **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
+| **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
+| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_info`, `ha_hacs_list_installed`, `ha_hacs_repository_info`, `ha_hacs_search` |
+| **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema`, `ha_set_config_entry_helper` |
+| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logbook`, `ha_get_statistics` |
+| **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
+| **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
+| **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
+| **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_get_states`, `ha_search_entities` |
+| **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_bulk_status`, `ha_get_operation_status`, `ha_list_services` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **Todo Lists** | `ha_add_todo_item`, `ha_get_todo`, `ha_remove_todo_item`, `ha_update_todo_item` |
+| **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
+| **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
 
+<!-- TOOLS_TABLE_END -->
 </details>
 
 ---
@@ -173,7 +177,7 @@ Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
-| `ENABLE_SKILLS_AS_TOOLS` | `false` | Also expose skills via `list_resources`/`read_resource` tools for clients that don't support MCP resources natively. |
+| `ENABLE_SKILLS_AS_TOOLS` | `true` | Expose skills and doc resources via `list_resources`/`read_resource` tools. Resource-capable clients can set to `false` to reduce tool count. |
 
 Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
 
@@ -235,7 +239,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@ryphez](https://github.com/ryphez)** — Codex Desktop UI MCP quick setup guide.
 - **[@Danm72](https://github.com/Danm72)** — Entity registry tools (`ha_set_entity`, `ha_get_entity`) for managing entity properties.
 - **[@Raygooo](https://github.com/Raygooo)** — SOCKS proxy support.
-- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
+- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete); person/zone/tag config store routing.
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
@@ -245,6 +249,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
 - **[@adraguidev](https://github.com/adraguidev)** — Fix menu-based config entry flows for group helpers (#647).
 - **[@transportrefer](https://github.com/transportrefer)** — Integration options inspection (`ha_get_integration` schema support, #689).
+- **[@teh-hippo](https://github.com/teh-hippo)** — Fix blueprint import missing save step.
+- **[@smenzer](https://github.com/smenzer)** — Documentation fix.
+- **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 
 ---

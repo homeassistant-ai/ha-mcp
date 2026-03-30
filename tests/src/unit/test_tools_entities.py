@@ -593,7 +593,7 @@ class TestHaSetEntityCombined:
         assert "exposure_succeeded" in result
 
     @pytest.mark.asyncio
-    async def test_enabled_invalid_value_returns_error(self, mock_mcp, mock_client):
+    async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
         """Invalid value for enabled should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -601,11 +601,14 @@ class TestHaSetEntityCombined:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id="light.test", enabled="maybe")
 
-        error_text = str(exc_info.value).lower()
-        assert "enabled" in error_text or "boolean" in error_text
+        result = json.loads(str(exc_info.value))
+        assert result["success"] is False
+        error = result.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "enabled" in error_msg.lower() or "boolean" in error_msg.lower()
 
     @pytest.mark.asyncio
-    async def test_hidden_invalid_value_returns_error(self, mock_mcp, mock_client):
+    async def test_hidden_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
         """Invalid value for hidden should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -613,8 +616,11 @@ class TestHaSetEntityCombined:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id="light.test", hidden="maybe")
 
-        error_text = str(exc_info.value).lower()
-        assert "hidden" in error_text or "boolean" in error_text
+        result = json.loads(str(exc_info.value))
+        assert result["success"] is False
+        error = result.get("error", {})
+        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        assert "hidden" in error_msg.lower() or "boolean" in error_msg.lower()
 
     @pytest.mark.asyncio
     async def test_expose_to_all_three_assistants(self, mock_mcp, mock_client):
