@@ -1,3 +1,57 @@
+edit_yaml_config:
+  name: Edit YAML Config
+  description: >-
+    Add, replace, or remove a top-level key in configuration.yaml or
+    package files. Validates YAML, creates backups, and restricts edits
+    to a whitelist of allowed keys.
+  fields:
+    file:
+      name: File
+      description: >-
+        Relative path to the YAML file. Supports configuration.yaml and
+        packages/*.yaml.
+      required: true
+      example: "configuration.yaml"
+      selector:
+        text:
+    action:
+      name: Action
+      description: "Action to perform: add, replace, or remove."
+      required: true
+      example: "add"
+      selector:
+        select:
+          options:
+            - "add"
+            - "replace"
+            - "remove"
+    yaml_path:
+      name: YAML Path
+      description: >-
+        Top-level YAML key to modify (e.g., template, sensor,
+        binary_sensor). Only whitelisted keys are allowed.
+      required: true
+      example: "template"
+      selector:
+        text:
+    content:
+      name: Content
+      description: >-
+        YAML content for the value under yaml_path. Required for add
+        and replace actions.
+      required: false
+      example: "- sensor:\n    - name: My Sensor\n      state: '{{ now() }}'"
+      selector:
+        text:
+          multiline: true
+    backup:
+      name: Backup
+      description: Create a backup before editing. Default is true.
+      required: false
+      default: true
+      selector:
+        boolean:
+
 list_files:
   name: List Files
   description: List files in a directory within the Home Assistant config directory.

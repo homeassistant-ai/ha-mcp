@@ -60,6 +60,20 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
     raise ToolError(json.dumps(error_response, indent=2, default=str))
 
 
+def extract_tool_error_message(te: ToolError) -> str:
+    """Extract a human-readable error message from a ToolError.
+
+    Pairs with raise_tool_error() which serializes error dicts as JSON.
+    Falls back to str(te) if the message is not valid JSON.
+    """
+    try:
+        error_data = json.loads(str(te))
+        msg = error_data.get("error", {}).get("message", str(te))
+        return str(msg)
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return str(te)
+
+
 async def get_connected_ws_client(
     base_url: str, token: str
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:

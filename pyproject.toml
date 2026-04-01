@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "7.1.0"
+version = "7.2.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.1.1",
+    "fastmcp==3.2.0",
     "httpx[socks]==0.28.1",
     "pydantic==2.12.5",
     "python-dotenv==1.2.2",
