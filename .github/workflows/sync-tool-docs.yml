@@ -1,0 +1,50 @@
+name: Sync Tool Documentation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/ha_mcp/tools/**'
+      - 'scripts/extract_tools.py'
+
+# Restrict permissions by default
+permissions:
+  contents: read
+
+jobs:
+  sync-tools-json:
+    name: Regenerate tools.json & README
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 2
+
+    steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      continue-on-error: true
+
+    - uses: actions/checkout@v6
+      with:
+        # Use app token to bypass branch protection ruleset
+        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Regenerate tool documentation
+      run: python scripts/extract_tools.py
+
+    - name: Commit and push if changed
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add site/src/data/tools.json README.md
+        git diff --staged --quiet || git commit -m "chore(internal): sync tool docs after merge [skip ci]"
+        git diff --staged --quiet 2>/dev/null || git push
