@@ -39,7 +39,8 @@ class TestCompactLogbookEntries:
         # Bulky fields stripped
         assert "attributes" not in entry
         assert "icon" not in entry
-        assert "source" not in entry
+        # source preserved (causality info for debugging)
+        assert entry["source"] == "automation.motion"
 
     def test_preserves_all_fields_when_only_essential(self):
         """Entries with only essential fields should be unchanged."""
@@ -104,7 +105,7 @@ class TestCompactLogbookEntries:
 
     def test_compact_fields_constant_contains_expected_fields(self):
         """Verify the constant has the expected essential fields."""
-        expected = {"when", "entity_id", "state", "name", "message", "domain", "context_id"}
+        expected = {"when", "entity_id", "state", "name", "message", "domain", "context_id", "source"}
         assert expected == COMPACT_LOGBOOK_FIELDS
 
     def test_missing_essential_fields_not_fabricated(self):
