@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# Prevent overlapping runs if multiple tool PRs merge in quick succession
+concurrency:
+  group: sync-tool-docs
+  cancel-in-progress: true
+
 jobs:
   sync-tools-json:
     name: Regenerate tools.json & README
@@ -46,5 +51,7 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add site/src/data/tools.json README.md
-        git diff --staged --quiet || git commit -m "chore(internal): sync tool docs after merge [skip ci]"
-        git diff --staged --quiet 2>/dev/null || git push
+        if ! git diff --staged --quiet; then
+          git commit -m "chore(internal): sync tool docs after merge [skip ci]"
+          git push
+        fi
