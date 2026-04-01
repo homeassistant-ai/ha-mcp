@@ -1621,7 +1621,7 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Retrieve execution traces for automations and scripts to debug issues.\n\nTraces show what happened during automation/script runs:\n- What triggered the automation\n- Which conditions passed or failed\n- What actions were executed\n- Any errors that occurred\n- Variable values during execution\n\nUSAGE MODES:\n\n1. List recent traces (omit run_id):\n   ha_get_automation_traces(\"automation.motion_light\")\n   Returns a summary of recent execution runs with timestamps, triggers, and status.\n\n2. Get detailed trace (provide run_id):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   Returns full execution details including trigger info, condition results,\n   action trace with timing, and context variables.\n\nDEBUGGING EXAMPLES:\n\nAutomation not triggering:\n- Check if traces exist (automation may not be triggered)\n- Look at trigger info to see what event was received\n\nAutomation runs but conditions fail:\n- Get detailed trace to see condition_results\n- Each condition shows whether it passed (true) or failed (false)\n\nUnexpected behavior in actions:\n- Get detailed trace to see action_trace\n- Shows each action step with result and any errors\n- For 'choose' actions, shows which branch was taken\n\nTemplate debugging:\n- Detailed trace shows evaluated template values in context\n- Trigger variables available under trigger_variables\n\nNOTES:\n- Traces are stored for a limited time by Home Assistant\n- Works for both automations and scripts (use full entity_id)\n- The 'state' field shows: 'stopped' (completed), 'running', or error state",
+    "description": "Retrieve execution traces for automations and scripts to debug issues.\n\nTraces show what happened during automation/script runs:\n- What triggered the automation\n- Which conditions passed or failed\n- What actions were executed\n- Any errors that occurred\n- Variable values during execution\n\nUSAGE MODES:\n\n1. List recent traces (omit run_id):\n   ha_get_automation_traces(\"automation.motion_light\")\n   Returns a summary of recent execution runs with timestamps, triggers, and status.\n\n2. Get detailed trace (provide run_id):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   Returns full execution details including trigger info, condition results,\n   action trace with timing, and context variables.\n\n3. Get detailed trace with logbook (provide run_id and detailed=True):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", detailed=True)\n   Returns the formatted trace plus logbook entries and context metadata.\n   Useful when the standard trace summary doesn't reveal enough for debugging.\n   Note: script-style action paths (sequence/, numeric) are always matched\n   regardless of this flag.\n\n4. Get full variables without deduplication (provide run_id and deduplicate=False):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", deduplicate=False)\n   Returns the formatted trace with full variables at every action step.\n\nDEBUGGING EXAMPLES:\n\nAutomation not triggering:\n- Check if traces exist (automation may not be triggered)\n- Look at trigger info to see what event was received\n\nAutomation runs but conditions fail:\n- Get detailed trace to see condition_results\n- Each condition shows whether it passed (true) or failed (false)\n\nUnexpected behavior in actions:\n- Get detailed trace to see action_trace\n- Shows each action step with result and any errors\n- For 'choose' actions, shows which branch was taken\n\nTemplate debugging:\n- Detailed trace shows evaluated template values in context\n- Trigger variables available under trigger_variables\n\nNOTES:\n- Traces are stored for a limited time by Home Assistant\n- Works for both automations and scripts (use full entity_id)\n- The 'state' field shows: 'stopped' (completed), 'running', or error state",
     "inputSchema": {
       "properties": {
         "automation_id": {
@@ -1634,6 +1634,18 @@
         "limit": {
           "type": "Annotated[int, Field(description='Maximum number of traces to return when listing (default: 10, max: 50)', default=10, ge=1, le=50)]",
           "default": 10
+        },
+        "deduplicate": {
+          "type": "Annotated[bool, Field(description='Deduplicate variables across action steps (default: True). Set to False to include full variables at every step.', default=True)]",
+          "default": true
+        },
+        "detailed": {
+          "type": "Annotated[bool, Field(description='Include extra diagnostic data: logbook entries and context metadata (default: False). Use when standard trace lacks detail for debugging.', default=False)]",
+          "default": false
+        },
+        "sections": {
+          "type": "Annotated[str | None, Field(description=\"Comma-separated list of trace sections to return. Valid values: trigger, conditions, actions, config, error, logbook, context. Omit to return all sections. Example: 'actions' or 'trigger,conditions'.\", default=None)]",
+          "default": null
         }
       },
       "required": [
@@ -1695,7 +1707,7 @@
   {
     "name": "ha_get_logbook",
     "title": "Get Logbook Entries",
-    "description": "Get Home Assistant logbook entries for the specified time period.\n\nReturns paginated logbook entries to prevent excessively large responses.\n\n**Parameters:**\n- hours_back: Number of hours to look back (default: 1)\n- entity_id: Optional entity ID to filter entries\n- end_time: Optional end time in ISO format (defaults to now)\n- limit: Maximum number of entries to return (default: 50, max: 500)\n- offset: Number of entries to skip for pagination (default: 0)\n\n**Pagination:**\nWhen the logbook has more entries than the limit, use offset to get\nadditional pages. The response includes `has_more` to indicate if\nmore entries are available.\n\n**IMPORTANT - Pagination Stability:**\nPagination is performed client-side on the full result set returned\nby Home Assistant. If new logbook entries are created between page\nrequests, results may shift and items could be missed or duplicated\nacross pages. For best results, use consistent time ranges (start/end)\nand retrieve pages in quick succession.\n\n**Example:**\n- First page: ha_get_logbook(hours_back=24, limit=50, offset=0)\n- Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)",
+    "description": "Get Home Assistant logbook entries for the specified time period.\n\nReturns paginated logbook entries to prevent excessively large responses.\n\n**Parameters:**\n- hours_back: Number of hours to look back (default: 1)\n- entity_id: Optional entity ID to filter entries\n- end_time: Optional end time in ISO format (defaults to now)\n- limit: Maximum number of entries to return (default: 50, max: 500)\n- offset: Number of entries to skip for pagination (default: 0)\n- compact: Return only essential fields per entry (default: True).\n  When True, each entry contains only: when, entity_id, state, name, message, domain, context_id.\n  Set to False to include full attribute dictionaries and all fields.\n\n**Pagination:**\nWhen the logbook has more entries than the limit, use offset to get\nadditional pages. The response includes `has_more` to indicate if\nmore entries are available.\n\n**IMPORTANT - Pagination Stability:**\nPagination is performed client-side on the full result set returned\nby Home Assistant. If new logbook entries are created between page\nrequests, results may shift and items could be missed or duplicated\nacross pages. For best results, use consistent time ranges (start/end)\nand retrieve pages in quick succession.\n\n**Example:**\n- First page: ha_get_logbook(hours_back=24, limit=50, offset=0)\n- Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)\n- Full details: ha_get_logbook(hours_back=1, compact=False)",
     "inputSchema": {
       "properties": {
         "hours_back": {
@@ -1717,6 +1729,10 @@
         "offset": {
           "type": "int | str",
           "default": 0
+        },
+        "compact": {
+          "type": "bool | str",
+          "default": true
         }
       }
     },
