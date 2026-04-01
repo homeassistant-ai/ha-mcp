@@ -19,6 +19,23 @@ from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_p
 
 logger = logging.getLogger(__name__)
 
+# Fields to keep in compact logbook mode (strips attribute dictionaries
+# and other bulky fields that can cause context exhaustion — see #683)
+COMPACT_LOGBOOK_FIELDS = {"when", "entity_id", "state", "name", "message", "domain", "context_id", "source"}
+
+
+def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
+    """Strip logbook entries to essential fields only.
+
+    Returns entries with only the fields in COMPACT_LOGBOOK_FIELDS,
+    filtering out any non-dict entries.
+    """
+    return [
+        {k: v for k, v in entry.items() if k in COMPACT_LOGBOOK_FIELDS}
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+
 
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant utility tools."""
@@ -155,10 +172,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         limit: int | str | None = None,
         offset: int | str = 0,
         search: str | None = None,
+        compact: bool | str = True,
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
 
         # Coerce parameters with string handling for AI tools
+        compact_bool = coerce_bool_param(compact, "compact", default=True)
         try:
             hours_back_int = coerce_int_param(
                 hours_back,
@@ -246,6 +265,12 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 paginated_entries = response
                 has_more = False
 
+            # In compact mode, strip entries to essential fields only.
+            # This prevents full attribute dictionaries from exhausting
+            # the LLM context window during debugging workflows.
+            if compact_bool and isinstance(paginated_entries, list):
+                paginated_entries = _compact_logbook_entries(paginated_entries)
+
             logbook_data: dict[str, Any] = {
                 "success": True,
                 "source": "logbook",
@@ -280,6 +305,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     param_parts.append(f"end_time={end_time}")
                 if search:
                     param_parts.append(f"search={search}")
+                if not compact_bool:
+                    param_parts.append("compact=False")
 
                 param_str = ", ".join(param_parts)
                 logbook_data["pagination_hint"] = (
