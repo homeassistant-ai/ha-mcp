@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-92-blue" alt="90+ Tools">
+    <img src="https://img.shields.io/badge/tools-92-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -239,7 +239,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@ryphez](https://github.com/ryphez)** — Codex Desktop UI MCP quick setup guide.
 - **[@Danm72](https://github.com/Danm72)** — Entity registry tools (`ha_set_entity`, `ha_get_entity`) for managing entity properties.
 - **[@Raygooo](https://github.com/Raygooo)** — SOCKS proxy support.
-- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete).
+- **[@cj-elevate](https://github.com/cj-elevate)** — Integration & entity management tools (enable/disable/delete); person/zone/tag config store routing.
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
@@ -249,6 +249,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
 - **[@adraguidev](https://github.com/adraguidev)** — Fix menu-based config entry flows for group helpers (#647).
 - **[@transportrefer](https://github.com/transportrefer)** — Integration options inspection (`ha_get_integration` schema support, #689).
+- **[@teh-hippo](https://github.com/teh-hippo)** — Fix blueprint import missing save step.
+- **[@smenzer](https://github.com/smenzer)** — Documentation fix.
+- **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 
 ---
