@@ -253,10 +253,23 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if result.get("success"):
                 zone_data = result.get("result", {})
                 zone_name = name or zone_data.get("name", zone_id)
+                created_zone_id = zone_data.get("id", zone_id)
+
+                # Verify zone appears in registry after create
+                if not zone_id and created_zone_id:
+                    try:
+                        verify = await client.send_websocket_message({"type": "zone/list"})
+                        if verify.get("success"):
+                            zone_ids = [z.get("id") for z in verify.get("result", [])]
+                            if created_zone_id not in zone_ids:
+                                logger.warning(f"Zone {created_zone_id} not found in registry after create")
+                    except Exception as e:
+                        logger.debug(f"Zone create verification failed: {e}")
+
                 response: dict[str, Any] = {
                     "success": True,
                     "zone_data": zone_data,
-                    "zone_id": zone_data.get("id", zone_id),
+                    "zone_id": created_zone_id,
                     "message": f"Successfully {'updated' if zone_id else 'created'} zone: {zone_name}",
                 }
                 if zone_id and fields_to_update:
@@ -310,6 +323,16 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if result.get("success"):
+                # Verify zone is gone from registry
+                try:
+                    verify = await client.send_websocket_message({"type": "zone/list"})
+                    if verify.get("success"):
+                        zone_ids = [z.get("id") for z in verify.get("result", [])]
+                        if zone_id in zone_ids:
+                            logger.warning(f"Zone {zone_id} still in registry after delete")
+                except Exception as e:
+                    logger.debug(f"Zone delete verification failed: {e}")
+
                 return {
                     "success": True,
                     "zone_id": zone_id,
