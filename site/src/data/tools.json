@@ -792,7 +792,7 @@
   {
     "name": "ha_rename_entity",
     "title": "Rename Entity",
-    "description": "Rename a Home Assistant entity by changing its entity_id.\n\nChanges the entity_id (e.g., light.old_name -> light.new_name).\nThe domain must remain the same - you cannot change a light to a switch.\n\nVOICE ASSISTANT EXPOSURE:\nBy default, this function preserves voice assistant exposure settings\n(Alexa, Google Assistant, Assist) when renaming. The exposure settings\nare stored separately from the entity registry and must be migrated\nmanually. Set preserve_voice_exposure=False to skip this migration.\n\nIMPORTANT LIMITATIONS:\n- References in automations/scripts/dashboards are NOT automatically updated\n- Entity history is preserved (HA 2022.4+)\n- Some entities cannot be renamed:\n  - Entities without unique IDs\n  - Entities disabled by integration\n\nEXAMPLES:\n- Rename light: ha_rename_entity(\"light.bedroom_1\", \"light.master_bedroom\")\n- Rename with friendly name: ha_rename_entity(\"sensor.temp\", \"sensor.living_room_temp\", name=\"Living Room Temperature\")\n- Rename without exposure migration: ha_rename_entity(\"light.old\", \"light.new\", preserve_voice_exposure=False)\n\nNOTE: This is different from renaming a device. Device and entity renaming are independent.\nRenaming a device does NOT rename its entities. See ha_update_device() for device renaming.\nFor renaming both entity and device together, use ha_rename_entity_and_device().",
+    "description": "Rename a Home Assistant entity by changing its entity_id, optionally renaming its device too.\n\nChanges the entity_id (e.g., light.old_name -> light.new_name).\nThe domain must remain the same - you cannot change a light to a switch.\n\nDEVICE RENAME:\nProvide new_device_name to also rename the device associated with this entity.\nThe device is looked up automatically from the entity registry.\n\nVOICE ASSISTANT EXPOSURE:\nBy default, this function preserves voice assistant exposure settings\n(Alexa, Google Assistant, Assist) when renaming. The exposure settings\nare stored separately from the entity registry and must be migrated\nmanually. Set preserve_voice_exposure=False to skip this migration.\n\nIMPORTANT LIMITATIONS:\n- References in automations/scripts/dashboards are NOT automatically updated\n- Entity history is preserved (HA 2022.4+)\n- Some entities cannot be renamed:\n  - Entities without unique IDs\n  - Entities disabled by integration\n\nEXAMPLES:\n- Rename light: ha_rename_entity(\"light.bedroom_1\", \"light.master_bedroom\")\n- Rename with friendly name: ha_rename_entity(\"sensor.temp\", \"sensor.living_room_temp\", name=\"Living Room Temperature\")\n- Rename entity and device: ha_rename_entity(\"light.bedroom_1\", \"light.master_bedroom\", new_device_name=\"Master Bedroom Lamp\")\n- Rename without exposure migration: ha_rename_entity(\"light.old\", \"light.new\", preserve_voice_exposure=False)\n\nNOTE: Device and entity renaming are independent in HA. Renaming a device does\nNOT rename its entities. See ha_update_device() for device-only renaming.",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -809,46 +809,12 @@
           "type": "Annotated[str | None, Field(description=\"Optional: New icon (e.g., 'mdi:lightbulb')\", default=None)]",
           "default": null
         },
+        "new_device_name": {
+          "type": "Annotated[str | None, Field(description='Optional: New display name for the associated device. If provided, both entity and device are renamed in one operation.', default=None)]",
+          "default": null
+        },
         "preserve_voice_exposure": {
           "type": "Annotated[bool | str | None, Field(description='Migrate voice assistant exposure settings to the new entity_id. Defaults to True. Set to False to skip exposure migration.', default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "entity_id",
-        "new_entity_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Device Registry"
-    ],
-    "source_file": "tools_registry.py"
-  },
-  {
-    "name": "ha_rename_entity_and_device",
-    "title": "Rename Entity and Device",
-    "description": "Convenience tool to rename both an entity and its associated device in one operation.\n\nThis tool:\n1. Finds the device associated with the entity\n2. Renames the entity (changing entity_id)\n3. Renames the device (changing display name)\n4. Preserves voice assistant exposure settings (by default)\n\nWHEN TO USE:\n- When you want to rename a device and its primary entity together\n- For smart home devices where device and entity should have matching names\n\nIMPORTANT:\n- If the entity has multiple associated entities (e.g., a smart bulb with brightness, color, etc.),\n  only the specified entity is renamed. Other entities retain their original IDs.\n- If the entity has no associated device, only the entity is renamed.\n\nEXAMPLES:\n- Rename lamp: ha_rename_entity_and_device(\"light.bedroom_1\", \"light.master_bedroom\", \"Master Bedroom Lamp\")\n- Rename only entity_id: ha_rename_entity_and_device(\"sensor.temp\", \"sensor.living_room_temp\")\n\nSee also:\n- ha_rename_entity() - Rename only the entity\n- ha_update_device() - Update only the device",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "Annotated[str, Field(description=\"Entity ID to rename (e.g., 'light.bedroom_lamp'). Used to find associated device.\")]"
-        },
-        "new_entity_id": {
-          "type": "Annotated[str, Field(description=\"New entity ID (e.g., 'light.master_bedroom_lamp'). Domain must match.\")]"
-        },
-        "new_device_name": {
-          "type": "Annotated[str | None, Field(description='New display name for the device. If not provided, device name is not changed.', default=None)]",
-          "default": null
-        },
-        "new_entity_name": {
-          "type": "Annotated[str | None, Field(description='New friendly name for the entity. If not provided, entity name is not changed.', default=None)]",
-          "default": null
-        },
-        "preserve_voice_exposure": {
-          "type": "Annotated[bool | str | None, Field(description='Migrate voice assistant exposure settings to the new entity_id. Defaults to True.', default=None)]",
           "default": null
         }
       },
@@ -2369,35 +2335,13 @@
     "source_file": "tools_service.py"
   },
   {
-    "name": "ha_get_bulk_status",
-    "title": "Get Bulk Operation Status",
-    "description": "Check status of multiple device control operations.\n\nUse this tool to check the status of operations initiated by ha_bulk_control\nor control_device_smart. Each of these tools returns unique operation_ids\nthat can be tracked here.\n\n**IMPORTANT:** This tool is for tracking async device operations, NOT for\nchecking current entity states. To get current states of entities, use\nha_get_state instead.\n\n**Args:**\n    operation_ids: List of operation IDs returned by ha_bulk_control or\n                  control_device_smart (e.g., [\"op_1234\", \"op_5678\"])\n\n**Returns:**\n    Status summary with completion/pending/failed counts and detailed\n    results for each operation.\n\n**Example:**\n    # After calling control_device_smart\n    result = control_device_smart(\"light.kitchen\", \"on\")\n    op_id = result[\"operation_id\"]  # e.g., \"op_1234\"\n\n    # Check operation status\n    status = ha_get_bulk_status([op_id])",
-    "inputSchema": {
-      "properties": {
-        "operation_ids": {
-          "type": "list[str]"
-        }
-      },
-      "required": [
-        "operation_ids"
-      ]
-    },
-    "annotations": {
-      "readOnlyHint": true
-    },
-    "tags": [
-      "Service & Device Control"
-    ],
-    "source_file": "tools_service.py"
-  },
-  {
     "name": "ha_get_operation_status",
     "title": "Get Operation Status",
-    "description": "Check status of device operation with real-time WebSocket verification.",
+    "description": "Check status of one or more device operations with real-time WebSocket verification.\n\nPass a single operation_id string to check one operation, or a list of IDs\nto check multiple operations at once (bulk status).\n\nThe timeout_seconds parameter applies to single-operation checks only.\nBulk checks poll each operation individually with a short internal timeout.\n\nUse this to track operations initiated by ha_bulk_control or ha_call_service.\nFor current entity states, use ha_get_state instead.",
     "inputSchema": {
       "properties": {
         "operation_id": {
-          "type": "str"
+          "type": "Annotated[str | list[str], Field(description='Single operation ID or list of operation IDs to check. Use a single string for one operation, or a list for bulk status checks.')]"
         },
         "timeout_seconds": {
           "type": "int",
