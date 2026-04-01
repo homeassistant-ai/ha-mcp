@@ -46,6 +46,7 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     "ha_search_entities",
     "ha_config_get_automation",
     "ha_config_set_automation",
+    "ha_config_set_yaml",
 )
 
 # Tool name patterns that indicate delete/remove operations

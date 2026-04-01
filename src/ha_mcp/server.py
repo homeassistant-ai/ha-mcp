@@ -380,6 +380,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "create update modify edit script sequence actions "
             "new script write save"
         ),
+        "ha_config_set_yaml": (
+            "edit yaml configuration.yaml packages template sensor "
+            "binary_sensor command_line rest mqtt platform yaml-only "
+            "config file modify add remove replace"
+        ),
     }
 
     # Description overrides that REPLACE the original description for BM25.
