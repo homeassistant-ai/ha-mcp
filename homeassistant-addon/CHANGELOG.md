@@ -3,6 +3,108 @@
 <!-- version list -->
 
 
+## v7.2.0 (2026-04-01)
+
+### Added
+
+- Add managed YAML config editing tool (ha_config_set_yaml)
+  ([#827](https://github.com/homeassistant-ai/ha-mcp/pull/827))
+- Tool explorer with taxonomy, auto-generated docs, and design mode
+  ([#839](https://github.com/homeassistant-ai/ha-mcp/pull/839))
+- Add generic add-on API proxy tool (ha_call_addon_api)
+  ([#641](https://github.com/homeassistant-ai/ha-mcp/pull/641))
+- Add support for automation/script/scene categories
+  ([#677](https://github.com/homeassistant-ai/ha-mcp/pull/677))
+- Convert doc tools to MCP resources and skill references
+  ([#806](https://github.com/homeassistant-ai/ha-mcp/pull/806))
+- Add Python 3.14 support
+  ([#700](https://github.com/homeassistant-ai/ha-mcp/pull/700))
+- Search-based tool discovery with categorized call proxies
+  ([#727](https://github.com/homeassistant-ai/ha-mcp/pull/727))
+- **uat**: Add --mcp-env flag and tokens_first_input metric
+  ([#791](https://github.com/homeassistant-ai/ha-mcp/pull/791))
+
+### Changed
+
+- Credit @teh-hippo, @smenzer, @The-Greg-O; update @cj-elevate
+  ([`66b3bb8`](https://github.com/homeassistant-ai/ha-mcp/commit/66b3bb803fe0fcb4ac7172cce0dcf9f8cfb8979d))
+- Document OAuth v7.0.0 breaking change (HOMEASSISTANT_URL required)
+  ([#829](https://github.com/homeassistant-ai/ha-mcp/pull/829))
+- Replace hardcoded path with <repo-root> placeholder
+  ([#797](https://github.com/homeassistant-ai/ha-mcp/pull/797))
+
+### Fixed
+
+- Reduce context exhaustion and improve trace detail for debugging
+  ([#822](https://github.com/homeassistant-ai/ha-mcp/pull/822))
+- Add ast-grep rules to catch silent error handling bugs
+  ([#838](https://github.com/homeassistant-ai/ha-mcp/pull/838))
+- Add exact_match to all search tools, badge search, and dashboard deep search
+  ([#814](https://github.com/homeassistant-ai/ha-mcp/pull/814))
+- Surface connection errors in ha_get_overview instead of returning empty data
+  ([#812](https://github.com/homeassistant-ai/ha-mcp/pull/812))
+- OAuth token refresh broken and state lost on container restart
+  ([#790](https://github.com/homeassistant-ai/ha-mcp/pull/790))
+- **addon**: Reject corrupt or URL-valued secret paths
+  ([#792](https://github.com/homeassistant-ai/ha-mcp/pull/792))
+
+### Refactoring
+
+- Consolidate 5 redundant tools (merge after #806)
+  ([#813](https://github.com/homeassistant-ai/ha-mcp/pull/813))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- Prevent issue triage timeout on complex issues
+  ([#832](https://github.com/homeassistant-ai/ha-mcp/pull/832))
+
+### Chores
+
+- Credit @transportrefer for integration options schema support
+  ([#689](https://github.com/homeassistant-ai/ha-mcp/pull/689))
+- Credit @adraguidev for menu-based config entry flow fix
+  ([#647](https://github.com/homeassistant-ai/ha-mcp/pull/647))
+- Credit @saphid for config entry options flow design
+  ([#590](https://github.com/homeassistant-ai/ha-mcp/pull/590))
+- **deps**: Bump astro from 5.16.11 to 5.18.1 in /site
+  ([#826](https://github.com/homeassistant-ai/ha-mcp/pull/826))
+- **deps**: Bump picomatch in /site
+  ([#821](https://github.com/homeassistant-ai/ha-mcp/pull/821))
+- **deps**: Bump yaml from 2.8.2 to 2.8.3 in /site
+  ([#820](https://github.com/homeassistant-ai/ha-mcp/pull/820))
+- **deps**: Bump smol-toml from 1.6.0 to 1.6.1 in /site
+  ([#818](https://github.com/homeassistant-ai/ha-mcp/pull/818))
+- **ci**: Bump uv in PR workflow from 0.9.30 to 0.11.0 and add Renovate annotations
+  ([#817](https://github.com/homeassistant-ai/ha-mcp/pull/817))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.11.0
+  ([#816](https://github.com/homeassistant-ai/ha-mcp/pull/816))
+- Migrate from pre-commit to lefthook for parallel hook execution
+  ([#802](https://github.com/homeassistant-ai/ha-mcp/pull/802))
+- Remove hardcoded assignee from issue templates
+  ([#800](https://github.com/homeassistant-ai/ha-mcp/pull/800))
+- Extend type checking and tests to all Python dirs
+  ([#793](https://github.com/homeassistant-ai/ha-mcp/pull/793))
+- **deps**: Bump h3 from 1.15.8 to 1.15.9 in /site
+  ([#795](https://github.com/homeassistant-ai/ha-mcp/pull/795))
+- **deps**: Bump h3 from 1.15.5 to 1.15.8 in /site
+  ([#786](https://github.com/homeassistant-ai/ha-mcp/pull/786))
+- **addon**: Publish version 7.1.0 [skip ci]
+  ([`a8ffaf6`](https://github.com/homeassistant-ai/ha-mcp/commit/a8ffaf65c49305f8a6753cea68743752998c352b))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#842](https://github.com/homeassistant-ai/ha-mcp/pull/842))
+- **deps**: Bump renovatebot/github-action in the github-actions group
+  ([#807](https://github.com/homeassistant-ai/ha-mcp/pull/807))
+</details>
+
+
 ## v7.1.0 (2026-03-18)
 
 ### Added
