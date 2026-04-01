@@ -44,12 +44,12 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     logger.info("YAML config editing tools enabled")
 
     @mcp.tool(
+        tags={"System"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
-            "tags": ["filesystem", "config", "yaml"],
             "title": "Set YAML Config",
-        }
+        },
     )
     @log_tool_usage
     async def ha_config_set_yaml(
