@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .util_helpers import wait_for_entity_registered, wait_for_entity_removed
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,14 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Determine if this was a create or update based on fields provided
             is_create = entities is not None and name is None and add_entities is None and remove_entities is None
 
+            # Verify entity is queryable after creation/update
+            try:
+                registered = await wait_for_entity_registered(client, entity_id)
+                if not registered:
+                    logger.warning(f"Group {entity_id} set but not yet queryable")
+            except Exception as e:
+                logger.debug(f"Verification failed for group {entity_id}: {e}")
+
             return {
                 "success": True,
                 "entity_id": entity_id,
@@ -284,6 +293,14 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             await client.call_service("group", "remove", service_data)
 
             entity_id = f"group.{object_id}"
+
+            # Verify entity is removed
+            try:
+                removed = await wait_for_entity_removed(client, entity_id)
+                if not removed:
+                    logger.warning(f"Group {entity_id} removed but entity still queryable")
+            except Exception as e:
+                logger.debug(f"Removal verification failed for group {entity_id}: {e}")
 
             return {
                 "success": True,
