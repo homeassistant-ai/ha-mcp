@@ -101,10 +101,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     logger.info("Filesystem tools enabled via feature flag")
 
     @mcp.tool(
+        tags={"Files"},
         annotations={
             "readOnlyHint": True,
-            "tags": ["filesystem", "config"],
-            "title": "List Files",
+            "title": "List Files"
         }
     )
     @log_tool_usage
@@ -197,10 +197,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Files"},
         annotations={
             "readOnlyHint": True,
-            "tags": ["filesystem", "config"],
-            "title": "Read File",
+            "title": "Read File"
         }
     )
     @log_tool_usage
@@ -309,10 +309,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Files"},
         annotations={
             "destructiveHint": True,
-            "tags": ["filesystem", "config"],
-            "title": "Write File",
+            "title": "Write File"
         }
     )
     @log_tool_usage
@@ -439,10 +439,10 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Files"},
         annotations={
             "destructiveHint": True,
-            "tags": ["filesystem", "config"],
-            "title": "Delete File",
+            "title": "Delete File"
         }
     )
     @log_tool_usage

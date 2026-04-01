@@ -179,10 +179,10 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         ))
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "destructiveHint": True,
-            "tags": ["config"],
-            "title": "Set Config Entry Helper",
+            "title": "Set Config Entry Helper"
         }
     )
     @log_tool_usage
@@ -335,10 +335,10 @@ def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             exception_to_structured_error(e, context=context)
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "readOnlyHint": True,
-            "tags": ["config"],
-            "title": "Get Helper Schema",
+            "title": "Get Helper Schema"
         }
     )
     @log_tool_usage

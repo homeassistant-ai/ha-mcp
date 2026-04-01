@@ -1,0 +1,13 @@
+id: no-timezone-on-errors
+language: python
+rule:
+  pattern: add_timezone_metadata($CLIENT, $ERR)
+  inside:
+    kind: except_clause
+files:
+  - "src/ha_mcp/tools/**"
+message: |
+  Do not call `add_timezone_metadata` on error responses.
+  Timezone context is only meaningful for successful responses containing timestamps.
+  Errors are read by the LLM to decide next steps — timezone info is irrelevant.
+severity: error

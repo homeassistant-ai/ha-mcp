@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
 import { getCollection } from 'astro:content';
 
 const base = import.meta.env.BASE_URL;
@@ -50,23 +51,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 ---
 
 <Layout title="Home Assistant MCP Setup Wizard">
-  <!-- Navigation Bar -->
-  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
-    <div class="container mx-auto px-4 max-w-4xl">
-      <div class="flex items-center justify-between h-14">
-        <a href={withBase('/')} class="flex items-center gap-2">
-          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
-          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
-          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
-        </a>
-        <div class="flex items-center gap-6">
-          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
-          <a href="#section-client" class="text-sm text-blue-400 font-medium">Setup</a>
-          <a href={withBase('/faq')} class="text-sm text-slate-300 hover:text-white transition-colors">FAQ</a>
-        </div>
-      </div>
-    </div>
-  </nav>
+  <Nav active="setup" />
 
   <div class="container mx-auto px-4 py-8 max-w-4xl">
     <!-- Hero Section -->
@@ -438,7 +423,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
 
         <!-- Configuration -->
-        <div class="mb-6">
+        <div class="mb-6" id="config-section">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Client Configuration</h3>
             <button id="copy-btn" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors">
@@ -1174,6 +1159,19 @@ cloudflared tunnel route dns ha-mcp mcp.yourdomain.com
 # Run with permanent URL
 cloudflared tunnel run ha-mcp</code></pre>
           </div>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
+            <p class="text-amber-300 text-sm font-medium">⚠️ Disable "Block AI Training Bots"</p>
+            <p class="text-amber-200/80 text-xs mt-1">This is the <strong>most common connection issue</strong> for Cloudflare users. If your LLM can't connect but the URL works in your browser, this setting is almost certainly the cause.</p>
+            <ol class="text-amber-200/80 text-xs mt-2 space-y-1 list-decimal list-inside">
+              <li>Log in to <a href="https://dash.cloudflare.com" target="_blank" class="text-blue-400 hover:underline">Cloudflare</a></li>
+              <li>In the left sidebar, click <strong>Domains</strong>, then <strong>Overview</strong></li>
+              <li>Click on the domain you use for connecting to Home Assistant</li>
+              <li>On the right side, find <strong>"Control AI Crawlers"</strong></li>
+              <li>Under <strong>"Block AI training bots"</strong>, open the dropdown</li>
+              <li>Select <strong>"do not block (allow crawlers)"</strong></li>
+            </ol>
+            <p class="text-amber-200/80 text-xs mt-2"><a href="https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg" target="_blank" class="text-blue-400 hover:underline">Screenshot of the setting</a></p>
+          </div>
         </div>`;
       } else if (state.proxy === 'custom') {
         proxyInstr = `<div class="instruction-block">
@@ -1189,6 +1187,14 @@ cloudflared tunnel run ha-mcp</code></pre>
       instructions.push(proxyInstr);
     }
 
+    // Verify by visiting URL in browser (for all HTTP-based setups)
+    if (!isLocal) {
+      instructions.push(`<div class="instruction-block border-green-700/50 bg-green-900/10">
+        <h4 class="instruction-title text-green-300">✅ Verify Your Server</h4>
+        <p class="text-slate-300 text-sm">Visit your MCP server URL directly in your browser. If the server is running correctly, you'll see a message confirming <strong>"HA-MCP server is up and running"</strong> along with setup guidance. If you don't see this message, double-check your server URL, deployment, and proxy settings above.</p>
+      </div>`);
+    }
+
     // mcp-proxy instructions for stdio-only clients
     if (needsMcpProxy) {
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
@@ -1198,8 +1204,6 @@ cloudflared tunnel run ha-mcp</code></pre>
       </div>`;
       instructions.push(mcpProxyInstr);
     }
-
-    instructionsEl.innerHTML = instructions.join('');
 
     // Generate client config
     const isStdio = isLocal;
@@ -1423,41 +1427,92 @@ mcpServers:
         }
       }
     } else if (state.client.configFormat === 'ui') {
+      // UI-based clients get formatted instruction blocks instead of a code box
+      let uiSteps = '';
       if (state.client.id === 'chatgpt') {
-        config = `1. Open ChatGPT → Settings → Connectors
-2. Click Advanced settings → Enable Developer mode
-3. Create custom connector:
-   - Name: Home Assistant
-   - URL: {{MCP_SERVER_URL}}
-   - Auth: None`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ ChatGPT Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open ChatGPT → <strong>Settings</strong> → <strong>Connectors</strong></li>
+            <li>Click <strong>Advanced settings</strong> → Enable <strong>Developer mode</strong></li>
+            <li>Create custom connector:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+                <li>Auth: None</li>
+              </ul>
+            </li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'claude-ai') {
-        config = `1. Open Claude.ai → Settings → Connectors
-2. Click Add Connector
-3. Enter:
-   - Name: Home Assistant
-   - URL: {{MCP_SERVER_URL}}`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Claude.ai Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open Claude.ai → <strong>Settings</strong> → <strong>Connectors</strong></li>
+            <li>Click <strong>Add Connector</strong></li>
+            <li>Enter:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+              </ul>
+            </li>
+            <li>You may see <em>"Couldn't reach the MCP server"</em> — <strong>this is normal</strong> and can be safely ignored</li>
+            <li>If you see a <strong>"Configure"</strong> button on the connector, click it — if tools are listed, you're connected</li>
+            <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'raycast') {
-        config = `1. Open Raycast → Settings → Extensions → AI
-2. Scroll to Model Context Protocol
-3. Click Add Server:
-   - Name: Home Assistant
-   - Command: uvx
-   - Arguments: ha-mcp@latest
-4. Add environment variables:
-   - HOMEASSISTANT_URL: {{HOMEASSISTANT_URL}}
-   - HOMEASSISTANT_TOKEN: {{HOMEASSISTANT_TOKEN}}`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Raycast Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open Raycast → <strong>Settings</strong> → <strong>Extensions</strong> → <strong>AI</strong></li>
+            <li>Scroll to <strong>Model Context Protocol</strong></li>
+            <li>Click <strong>Add Server</strong>:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
+                <li>Command: <code class="bg-slate-800 px-1 rounded">uvx</code></li>
+                <li>Arguments: <code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code></li>
+              </ul>
+            </li>
+            <li>Add environment variables:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>: {{HOMEASSISTANT_URL}}</li>
+                <li><code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>: {{HOMEASSISTANT_TOKEN}}</li>
+              </ul>
+            </li>
+          </ol>
+        </div>`;
       } else if (state.client.id === 'open-webui') {
-        config = `1. Open Admin Settings → External Tools
-2. Click + (Add Server)
-3. Set Type: MCP (Streamable HTTP)
-4. Enter:
-   - Server URL: {{MCP_SERVER_URL}}
-   - Auth: (configure if needed)
-5. Click Save`;
+        uiSteps = `<div class="instruction-block">
+          <h4 class="instruction-title">⚙️ Open WebUI Configuration</h4>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Open <strong>Admin Settings</strong> → <strong>External Tools</strong></li>
+            <li>Click <strong>+ (Add Server)</strong></li>
+            <li>Set Type: <strong>MCP (Streamable HTTP)</strong></li>
+            <li>Enter:
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Server URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+                <li>Auth: (configure if needed)</li>
+              </ul>
+            </li>
+            <li>Click <strong>Save</strong></li>
+          </ol>
+        </div>`;
       }
+      instructions.push(uiSteps);
     }
 
-    configEl.textContent = config;
+    // Render all instructions (including UI client steps added during config generation)
+    instructionsEl.innerHTML = instructions.join('');
+
+    // Show/hide config code box depending on whether it's a UI-based client
+    const configSection = document.getElementById('config-section');
+    if (state.client.configFormat === 'ui') {
+      configSection.classList.add('hidden');
+    } else {
+      configSection.classList.remove('hidden');
+      configEl.textContent = config;
+    }
 
     // Hints
     hints = [];
