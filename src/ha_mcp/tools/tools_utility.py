@@ -5,12 +5,10 @@ This module provides general-purpose utility tools including logbook access,
 template evaluation, and domain documentation retrieval.
 """
 
-import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
 from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
@@ -45,11 +43,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     MAX_LOGBOOK_LIMIT = 500
 
     @mcp.tool(
+        tags={"History & Statistics"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["history"],
-            "title": "Get Logbook Entries",
+            "title": "Get Logbook Entries"
         }
     )
     @log_tool_usage
@@ -246,11 +244,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Utilities"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["docs"],
-            "title": "Evaluate Template",
+            "title": "Evaluate Template"
         }
     )
     @log_tool_usage
@@ -476,69 +474,3 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=suggestions,
             )
 
-    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Domain Docs"})
-    async def ha_get_domain_docs(domain: str) -> dict[str, Any]:
-        """Get comprehensive documentation for Home Assistant entity domains."""
-        domain = domain.lower().strip()
-
-        # GitHub URL for Home Assistant integration documentation
-        github_url = f"https://raw.githubusercontent.com/home-assistant/home-assistant.io/refs/heads/current/source/_integrations/{domain}.markdown"
-
-        try:
-            # Fetch documentation from GitHub
-            async with httpx.AsyncClient(timeout=30.0) as client_http:
-                response = await client_http.get(github_url)
-
-                if response.status_code == 200:
-                    # Successfully fetched documentation
-                    doc_content = response.text
-
-                    # Extract title from the first line if available
-                    lines = doc_content.split("\n")
-                    title = lines[0] if lines else f"{domain.title()} Integration"
-
-                    return {
-                        "domain": domain,
-                        "source": "Home Assistant Official Documentation",
-                        "url": github_url,
-                        "documentation": doc_content,
-                        "title": title.strip("# "),
-                        "fetched_at": asyncio.get_event_loop().time(),
-                        "status": "success",
-                    }
-
-                elif response.status_code == 404:
-                    # Domain documentation not found
-                    raise_tool_error(create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"No official documentation found for domain '{domain}'",
-                        context={"domain": domain, "github_url": github_url},
-                        suggestions=[
-                            "Check if the domain name is correct. Common domains include: light, climate, switch, lock, sensor, automation, media_player, cover, fan, binary_sensor, camera, alarm_control_panel, etc.",
-                        ],
-                    ))
-
-                else:
-                    # Other HTTP errors
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to fetch documentation for '{domain}' (HTTP {response.status_code})",
-                        context={"domain": domain, "github_url": github_url},
-                        suggestions=["Try again later or check the domain name"],
-                    ))
-
-        except ToolError:
-            raise
-        except httpx.TimeoutException:
-            exception_to_structured_error(
-                httpx.TimeoutException(f"Timeout while fetching documentation for '{domain}'"),
-                context={"domain": domain},
-                suggestions=["Try again later - GitHub may be temporarily unavailable"],
-            )
-
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={"domain": domain},
-                suggestions=["Check your internet connection and try again"],
-            )

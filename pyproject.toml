@@ -24,13 +24,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.1.1",
+    "fastmcp==3.2.0",
     "httpx[socks]==0.28.1",
     "pydantic==2.12.5",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
-    "cryptography==46.0.5",
+    "cryptography==46.0.6",
 ]
 
 [project.urls]
@@ -51,7 +51,7 @@ package-dir = {"" = "src", "tests" = "tests"}
 packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
-ha_mcp = ["py.typed", "_pypi_marker", "resources/*.md", "resources/*.json", "resources/skills-vendor/**/*"]
+ha_mcp = ["py.typed", "_pypi_marker", "resources/skills-vendor/**/*"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -176,6 +176,7 @@ dev = [
     "lefthook>=1.10.0",
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
+    "ast-grep-cli>=0.42.0",
 ]
 
 # Semantic versioning configuration

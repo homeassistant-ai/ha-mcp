@@ -527,12 +527,16 @@ Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
 def register_<domain>_tools(mcp, client, **kwargs):
-    @mcp.tool(annotations={"readOnlyHint": True, "idempotentHint": True})
+    @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
     async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
         """One-line summary starting with action verb."""
-        # For complex schemas, add: "Use ha_get_domain_docs('<domain>') for details."
+        # For complex schemas, add: "Use ha_get_skill_home_assistant_best_practices for details."
 ```
+
+### Tool Tags
+
+Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table and `site/src/data/tools.json`. Regenerate after changes: `python scripts/extract_tools.py`
 
 ### Safety Annotations
 | Annotation | Default | Use For |
@@ -693,14 +697,14 @@ Context engineering treats LLM context as a finite resource with diminishing ret
 
 | Pattern | Example |
 |---------|---------|
-| **Docs on demand** | Tool descriptions reference `ha_get_domain_docs()` instead of embedding full documentation |
+| **Docs on demand** | Tool descriptions reference the `ha_get_skill_home_assistant_best_practices` skill instead of embedding full documentation |
 | **Hints in UX flow** | First tool in a workflow hints at related tools (e.g., `ha_search_entities` suggests `ha_get_state`) |
-| **Error-driven discovery** | When a tool fails, the error response hints at `ha_get_domain_docs()` for syntax help |
+| **Error-driven discovery** | When a tool fails, the error response hints at the skill guidance tool for help |
 | **Layered parameters** | Required params first, optional params with sensible defaults |
 | **Focused returns** | Return essential data; let user request details via follow-up tools |
 
 **Practical examples in this codebase:**
-- `ha_config_set_helper` has minimal docstring, points to `ha_get_domain_docs()` for each helper type
+- `ha_config_set_helper` has minimal docstring, points to the skill guidance tool for each helper type
 - Search tools return entity IDs and names; full state requires `ha_get_state`
 - Error responses include `suggestions` array guiding next steps
 
@@ -718,7 +722,7 @@ Task tool with model=haiku or model=sonnet:
 
 This reveals:
 - What the model knows from training (no need to document)
-- What gaps exist (target these with `ha_get_domain_docs()` hints)
+- What gaps exist (target these with skill guidance hints)
 - Confidence levels across model tiers (haiku vs sonnet vs opus)
 
 **Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against HA Core source:

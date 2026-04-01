@@ -1,0 +1,29 @@
+id: no-return-error-response
+language: python
+rule:
+  any:
+    - pattern: return create_error_response($$$)
+    - pattern: return exception_to_structured_error($$$)
+    - pattern: return create_connection_error($$$)
+    - pattern: return create_auth_error($$$)
+    - pattern: return create_entity_not_found_error($$$)
+    - pattern: return create_service_error($$$)
+    - pattern: return create_validation_error($$$)
+    - pattern: return create_config_error($$$)
+    - pattern: return create_timeout_error($$$)
+    - pattern: return create_resource_not_found_error($$$)
+  not:
+    inside:
+      kind: function_definition
+      has:
+        kind: identifier
+        regex: ^create_
+files:
+  - "src/ha_mcp/tools/**"
+message: |
+  Do not return error dicts from tool functions — use `raise_tool_error()` instead.
+  Returning an error dict does not set `isError=true` on the MCP response (per MCP spec).
+  For `create_error_response`: use `raise_tool_error(create_error_response(...))`.
+  For `exception_to_structured_error`: remove `raise_error=False` (it raises by default).
+  Exception: batch item failures appended to a results list (use `.append()` instead of `return`).
+severity: error

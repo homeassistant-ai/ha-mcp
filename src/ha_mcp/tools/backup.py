@@ -391,7 +391,7 @@ def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs:
 
 **Returns:** Backup ID and job status"""
 
-    @mcp.tool(description=backup_create_description, annotations={"destructiveHint": True, "title": "Create Backup"})
+    @mcp.tool(description=backup_create_description, tags={"System"}, annotations={"destructiveHint": True, "title": "Create Backup"})
     @log_tool_usage
     async def ha_backup_create(
         name: Annotated[
@@ -405,7 +405,7 @@ def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs:
         """Create a fast Home Assistant backup (local only)."""
         return await create_backup(client, name)
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Restore Backup"})
+    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Restore Backup"})
     @log_tool_usage
     async def ha_backup_restore(
         backup_id: Annotated[

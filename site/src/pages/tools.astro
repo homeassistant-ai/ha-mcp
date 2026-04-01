@@ -1,0 +1,702 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
+import toolsData from '../data/tools.json';
+
+// Group tools by category
+const categories: Record<string, typeof toolsData> = {};
+for (const tool of toolsData) {
+  const cat = tool.tags?.[0] || 'Other';
+  if (!categories[cat]) categories[cat] = [];
+  categories[cat].push(tool);
+}
+const sortedCategories = Object.keys(categories).sort();
+const totalTools = toolsData.length;
+
+// Group tools by source file
+const fileGroups: Record<string, typeof toolsData> = {};
+for (const tool of toolsData) {
+  const file = tool.source_file || 'unknown';
+  if (!fileGroups[file]) fileGroups[file] = [];
+  fileGroups[file].push(tool);
+}
+const sortedFiles = Object.keys(fileGroups).sort();
+
+// Helper to get badge color based on annotations
+function getBadgeInfo(annotations: Record<string, any>) {
+  if (annotations.readOnlyHint) return { label: 'read', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
+  if (annotations.destructiveHint) return { label: 'write', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+  return { label: 'write', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+}
+---
+
+<Layout title="Tool Explorer - Home Assistant MCP">
+  <Nav active="tools" />
+
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <!-- Header -->
+    <header class="mb-8 flex items-start justify-between">
+      <div>
+        <h1 class="text-3xl font-bold text-white mb-2">Tool Explorer</h1>
+        <p class="text-slate-400">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
+      </div>
+      <button
+        id="design-mode-toggle"
+        class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors bg-violet-500/20 text-violet-400 border-violet-500/30 hover:bg-violet-500/30"
+      >
+        Design Mode
+      </button>
+    </header>
+
+    <!-- Design Panel (hidden by default, shown in design mode) -->
+    <div id="design-panel" class="design-only hidden mb-6 space-y-4">
+      <!-- Instructions banner -->
+      <div class="bg-violet-500/10 border border-violet-500/20 rounded-lg">
+        <button id="design-instructions-toggle" class="w-full text-left px-4 py-3 flex items-center gap-2 text-sm text-violet-300">
+          <svg class="w-4 h-4 transition-transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <span class="font-medium">Design Mode Instructions</span>
+        </button>
+        <div id="design-instructions-body" class="px-4 pb-3 text-sm text-violet-300/80">
+          Edit tool descriptions directly below. Changes are tracked and
+          summarized as a prompt you can copy to a coding agent. Use [brackets] for
+          instructions to the agent vs direct text edits.
+        </div>
+      </div>
+
+      <!-- Generated Prompt box -->
+      <div class="bg-slate-900/80 border border-slate-700/50 rounded-lg p-4 space-y-2">
+        <div class="flex items-center justify-between">
+          <span id="design-change-count" class="text-sm text-slate-400">No tools modified</span>
+          <button id="design-copy-btn" class="px-3 py-1 rounded text-xs font-medium bg-violet-500/20 text-violet-400 border border-violet-500/30 hover:bg-violet-500/30 transition-colors">
+            Copy
+          </button>
+        </div>
+        <textarea
+          id="design-prompt"
+          readonly
+          rows="6"
+          class="w-full bg-slate-950 text-slate-300 font-mono text-xs border border-slate-700/50 rounded-lg p-3 resize-y focus:outline-none"
+          placeholder="Edit tool descriptions below to generate a prompt..."
+        ></textarea>
+      </div>
+    </div>
+
+    <!-- Search and Filters -->
+    <div class="mb-8 space-y-4">
+      <div class="flex flex-col sm:flex-row gap-4">
+        <div class="flex-1">
+          <input
+            type="text"
+            id="search"
+            placeholder="Search tools by name or description..."
+            class="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25"
+          />
+        </div>
+        <div class="flex gap-2">
+          <button data-filter="all" class="filter-btn active px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+            All
+          </button>
+          <button data-filter="read" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
+            Read
+          </button>
+          <button data-filter="write" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
+            Write
+          </button>
+          <span class="design-only hidden text-slate-700 mx-1">|</span>
+          <button data-size-filter="small" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-green-400 border border-slate-700/50 hover:bg-green-500/10 transition-colors">
+            &lt;1k
+          </button>
+          <button data-size-filter="medium" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-amber-400 border border-slate-700/50 hover:bg-amber-500/10 transition-colors">
+            1-2k
+          </button>
+          <button data-size-filter="large" class="design-only hidden size-filter-btn px-3 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-red-400 border border-slate-700/50 hover:bg-red-500/10 transition-colors">
+            &gt;2k
+          </button>
+        </div>
+      </div>
+      <!-- Category filter chips (multi-toggle) -->
+      <div class="flex flex-wrap gap-2" id="category-filters">
+        <span class="text-sm text-slate-400 self-center mr-1">Categories:</span>
+        {sortedCategories.map(cat => (
+          <button data-cat={cat} class="cat-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-200 transition-colors">
+            {cat} <span class="text-slate-600">({categories[cat].length})</span>
+          </button>
+        ))}
+      </div>
+      <!-- File filter chips (multi-toggle, design-only) -->
+      <div class="design-only hidden flex flex-wrap gap-2" id="file-filters">
+        <span class="text-sm text-slate-400 self-center mr-1">Files:</span>
+        {sortedFiles.map(file => (
+          <button data-file={file} class="file-btn px-3 py-1 rounded-full text-xs font-medium bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50 hover:text-slate-200 transition-colors">
+            {file.replace('tools_', '').replace('.py', '')} <span class="text-slate-600">({fileGroups[file].length})</span>
+          </button>
+        ))}
+      </div>
+      <div class="flex items-center gap-4">
+        <p id="results-count" class="text-sm text-slate-500"></p>
+        <div class="flex items-center gap-3 ml-auto">
+          <span class="text-sm text-slate-400">Group:</span>
+          <button id="group-category" class="group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
+          <span class="design-only hidden text-slate-600">|</span>
+          <button id="group-file" class="design-only hidden group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">File</button>
+          <span class="text-slate-600">|</span>
+          <button id="group-none" class="group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">None</button>
+          <span class="design-only hidden text-slate-600 mx-2">|</span>
+          <span class="design-only hidden text-sm text-slate-400">Sort:</span>
+          <button id="sort-alpha" class="design-only hidden sort-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">A-Z</button>
+          <span class="design-only hidden text-slate-600">|</span>
+          <button id="sort-size" class="design-only hidden sort-btn text-base text-slate-400 hover:text-slate-200 transition-colors">Size</button>
+          <span class="text-slate-600 mx-2">|</span>
+          <button id="expand-all" class="text-base text-slate-400 hover:text-slate-200 transition-colors">
+            Expand all
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tool List -->
+    <div id="tools-container" class="space-y-3">
+      {sortedCategories.map(cat => (
+        <div class="tool-group" data-group-name={cat}>
+          <h2 class="group-heading text-lg font-semibold text-slate-300 mb-3 mt-6 first:mt-0">{cat}</h2>
+          {categories[cat].sort((a, b) => a.name.localeCompare(b.name)).map(tool => {
+            const badge = getBadgeInfo(tool.annotations);
+            const properties = (tool.inputSchema as any)?.properties || {};
+            const required = (tool.inputSchema as any)?.required || [];
+            const params = Object.entries(properties);
+            const descChars = tool.description.length;
+            const schemaChars = JSON.stringify(tool.inputSchema).length;
+            const totalChars = descChars + schemaChars;
+            return (
+              <div
+                class="tool-card bg-slate-800/30 rounded-lg border border-slate-700/50 hover:border-slate-600/50 transition-colors"
+                data-tool-name={tool.name}
+                data-tool-title={tool.title.toLowerCase()}
+                data-tool-desc={tool.description.toLowerCase()}
+                data-tool-category={cat}
+                data-tool-file={tool.source_file}
+                data-tool-type={badge.label}
+                data-tool-size={totalChars}
+                data-original-desc={tool.description}
+              >
+                <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
+                  <svg class="tool-chevron w-4 h-4 mt-1 text-slate-500 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                  </svg>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <code class="text-sm font-medium text-blue-400">{tool.name}</code>
+                      {tool.title && <span class="text-sm text-slate-400">{tool.title}</span>}
+                      <span class={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.color}`}>
+                        {badge.label}
+                      </span>
+                      {tool.annotations.idempotentHint && (
+                        <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border bg-purple-500/20 text-purple-400 border-purple-500/30">
+                          idempotent
+                        </span>
+                      )}
+                      <span class={`size-badge design-only hidden inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                        totalChars > 2000
+                          ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                          : totalChars > 1000
+                            ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                            : 'bg-green-500/20 text-green-400 border-green-500/30'
+                      }`} title={`desc: ${descChars} + schema: ${schemaChars}`}>
+                        {totalChars > 1000 ? `${(totalChars / 1000).toFixed(1)}k` : totalChars} chars
+                      </span>
+                    </div>
+                    <p class="text-sm text-slate-400 mt-1 line-clamp-1">{tool.description.split('\n')[0]}</p>
+                  </div>
+                </button>
+                <div class="tool-details hidden px-4 pb-4 ml-7">
+                  <div class="border-t border-slate-700/50 pt-3 space-y-4">
+                    {/* Full description */}
+                    <div>
+                      <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Description</h4>
+                      <p class="desc-display text-sm text-slate-300 whitespace-pre-line">{tool.description}</p>
+                      <textarea
+                        class="desc-edit hidden w-full bg-slate-900/50 border border-slate-700/50 text-slate-300 text-sm rounded-lg p-3 resize-none focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/25 whitespace-pre-line"
+                        rows="4"
+                      >{tool.description}</textarea>
+                    </div>
+
+                    {/* Parameters */}
+                    {params.length > 0 && (
+                      <div>
+                        <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Parameters</h4>
+                        <div class="space-y-2">
+                          {params.map(([name, schema]: [string, any]) => {
+                            const typeStr = schema.anyOf
+                              ? schema.anyOf.map((s: any) => s.type).filter(Boolean).join(' | ')
+                              : schema.type;
+                            const enums = schema.enum || schema.anyOf?.flatMap((s: any) => s.enum || []) || [];
+                            const hasDefault = 'default' in schema && schema.default !== undefined;
+                            return (
+                            <div class="flex items-start gap-2 text-sm">
+                              <code class="text-amber-400 shrink-0">{name}</code>
+                              {required.includes(name) && (
+                                <span class="text-red-400 text-xs mt-0.5">required</span>
+                              )}
+                              <span class="text-slate-600">-</span>
+                              <span class="text-slate-400">
+                                {schema.description || ''}
+                                {typeStr && <span class="text-slate-600 ml-1">({typeStr})</span>}
+                                {enums.length > 0 && (
+                                  <span class="text-slate-600 ml-1">
+                                    [{enums.map((e: any, i: number) => (
+                                      <><code class="text-cyan-500/70">{String(e)}</code>{i < enums.length - 1 ? ', ' : ''}</>
+                                    ))}]
+                                  </span>
+                                )}
+                                {hasDefault && (
+                                  <span class="text-slate-600 ml-1">
+                                    = <code class="text-emerald-500/70">{JSON.stringify(schema.default)}</code>
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Metadata */}
+                    <div class="flex items-center gap-4 text-xs text-slate-600">
+                      <span>Category: <span class="text-slate-400">{cat}</span></span>
+                      {tool.source_file && (
+                        <span>Source: <a
+                          href={`https://github.com/homeassistant-ai/ha-mcp/blob/master/src/ha_mcp/tools/${tool.source_file}`}
+                          target="_blank"
+                          class="text-slate-400 hover:text-blue-400 transition-colors"
+                        >{tool.source_file}</a></span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  </div>
+</Layout>
+
+<script>
+  const searchInput = document.getElementById('search') as HTMLInputElement;
+  const toolCards = document.querySelectorAll<HTMLElement>('.tool-card');
+  const container = document.getElementById('tools-container')!;
+  const filterBtns = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
+  const sizeFilterBtns = document.querySelectorAll<HTMLButtonElement>('.size-filter-btn');
+  const resultsCount = document.getElementById('results-count')!;
+  const groupCategoryBtn = document.getElementById('group-category')!;
+  const groupFileBtn = document.getElementById('group-file')!;
+  const groupNoneBtn = document.getElementById('group-none')!;
+  const sortAlphaBtn = document.getElementById('sort-alpha')!;
+  const sortSizeBtn = document.getElementById('sort-size')!;
+  const expandAllBtn = document.getElementById('expand-all')!;
+
+  let activeFilter = 'all';
+  let activeSizeFilter = 'all';
+  let selectedCats = new Set<string>();
+  let selectedFiles = new Set<string>();
+  let activeGroupBy: 'category' | 'file' | 'none' = 'category';
+  let activeSort: 'alpha' | 'size' = 'alpha';
+  let allExpanded = false;
+
+  const CHIP_ACTIVE = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+  const CHIP_INACTIVE = 'bg-slate-800/50 text-slate-400 border-slate-700/30';
+
+  // ── Design Mode ──────────────────────────────────────────────────────
+
+  const designToggleBtn = document.getElementById('design-mode-toggle') as HTMLButtonElement;
+  const designPanel = document.getElementById('design-panel')!;
+  const designPrompt = document.getElementById('design-prompt') as HTMLTextAreaElement;
+  const designCopyBtn = document.getElementById('design-copy-btn')!;
+  const designChangeCount = document.getElementById('design-change-count')!;
+  const designInstructionsToggle = document.getElementById('design-instructions-toggle')!;
+  const designInstructionsBody = document.getElementById('design-instructions-body')!;
+  const designOnlyEls = document.querySelectorAll<HTMLElement>('.design-only');
+
+  let designMode = false;
+  // Map<toolName, {original, modified, file}>
+  const descChanges = new Map<string, {original: string, modified: string, file: string}>();
+
+  designToggleBtn.addEventListener('click', () => {
+    designMode = !designMode;
+    if (designMode) {
+      designToggleBtn.textContent = 'Exit Design';
+      designToggleBtn.classList.remove('bg-violet-500/20', 'text-violet-400', 'border-violet-500/30');
+      designToggleBtn.classList.add('bg-violet-500', 'text-white', 'border-violet-500');
+      designOnlyEls.forEach(el => el.classList.remove('hidden'));
+      // Show desc-edit textareas for any expanded cards; hide desc-display
+      toolCards.forEach(card => {
+        const details = card.querySelector('.tool-details');
+        if (details && !details.classList.contains('hidden')) {
+          activateEditMode(card);
+        }
+      });
+    } else {
+      designToggleBtn.textContent = 'Design Mode';
+      designToggleBtn.classList.add('bg-violet-500/20', 'text-violet-400', 'border-violet-500/30');
+      designToggleBtn.classList.remove('bg-violet-500', 'text-white', 'border-violet-500');
+      designOnlyEls.forEach(el => el.classList.add('hidden'));
+      // Hide all desc-edit textareas, show desc-display
+      toolCards.forEach(card => {
+        deactivateEditMode(card);
+      });
+    }
+  });
+
+  function activateEditMode(card: Element) {
+    const descP = card.querySelector('.desc-display') as HTMLElement | null;
+    const descTA = card.querySelector('.desc-edit') as HTMLTextAreaElement | null;
+    if (descP && descTA) {
+      descP.classList.add('hidden');
+      descTA.classList.remove('hidden');
+      autoResizeTextarea(descTA);
+    }
+  }
+
+  function deactivateEditMode(card: Element) {
+    const descP = card.querySelector('.desc-display') as HTMLElement | null;
+    const descTA = card.querySelector('.desc-edit') as HTMLTextAreaElement | null;
+    if (descP && descTA) {
+      descP.classList.remove('hidden');
+      descTA.classList.add('hidden');
+    }
+  }
+
+  function autoResizeTextarea(ta: HTMLTextAreaElement) {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
+
+  // Instructions collapsible
+  designInstructionsToggle.addEventListener('click', () => {
+    const chevron = designInstructionsToggle.querySelector('svg')!;
+    designInstructionsBody.classList.toggle('hidden');
+    chevron.classList.toggle('rotate-90');
+  });
+
+  // Copy button
+  designCopyBtn.addEventListener('click', () => {
+    const text = designPrompt.value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const original = designCopyBtn.textContent;
+      designCopyBtn.textContent = 'Copied!';
+      setTimeout(() => { designCopyBtn.textContent = original; }, 1500);
+    });
+  });
+
+  // Listen for textarea input on desc-edit
+  document.addEventListener('input', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains('desc-edit')) return;
+    const ta = target as HTMLTextAreaElement;
+    autoResizeTextarea(ta);
+
+    const card = ta.closest('.tool-card') as HTMLElement;
+    if (!card) return;
+    const toolName = card.dataset.toolName || '';
+    const original = card.dataset.originalDesc || '';
+    const file = card.dataset.toolFile || '';
+    const modified = ta.value;
+
+    if (modified !== original) {
+      descChanges.set(toolName, { original, modified, file });
+      card.classList.add('border-l-2', 'border-l-violet-500', 'bg-violet-500/5');
+      // Add modified badge if not present
+      const header = card.querySelector('.flex.items-center.gap-2')!;
+      if (!header.querySelector('.modified-badge')) {
+        const badge = document.createElement('span');
+        badge.className = 'modified-badge inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border bg-violet-500/20 text-violet-400 border-violet-500/30';
+        badge.textContent = 'modified';
+        header.appendChild(badge);
+      }
+    } else {
+      descChanges.delete(toolName);
+      card.classList.remove('border-l-2', 'border-l-violet-500', 'bg-violet-500/5');
+      card.querySelector('.modified-badge')?.remove();
+    }
+
+    regeneratePrompt();
+  });
+
+  // LCS-based unified diff with context lines
+  function lcsContextDiff(a: string[], b: string[], ctx: number): string {
+    // Compute LCS table
+    const m = a.length, n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+
+    // Backtrack to produce edit script
+    type Op = { type: ' ' | '-' | '+'; line: string };
+    const ops: Op[] = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i-1] === b[j-1]) {
+        i--; j--;
+        ops.push({ type: ' ', line: a[i] });
+      } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+        j--;
+        ops.push({ type: '+', line: b[j] });
+      } else {
+        i--;
+        ops.push({ type: '-', line: a[i] });
+      }
+    }
+    ops.reverse();
+
+    // Find changed op indices and build context window
+    const changed = new Set<number>();
+    ops.forEach((op, idx) => { if (op.type !== ' ') changed.add(idx); });
+    const visible = new Set<number>();
+    for (const idx of changed)
+      for (let k = Math.max(0, idx - ctx); k <= Math.min(ops.length - 1, idx + ctx); k++)
+        visible.add(k);
+
+    let result = '';
+    let lastShown = -1;
+    for (let idx = 0; idx < ops.length; idx++) {
+      if (!visible.has(idx)) continue;
+      if (lastShown >= 0 && idx > lastShown + 1) result += ' ...\n';
+      lastShown = idx;
+      result += `${ops[idx].type} ${ops[idx].line}\n`;
+    }
+    return result;
+  }
+
+  function regeneratePrompt() {
+    const count = descChanges.size;
+    designChangeCount.textContent = count === 0
+      ? 'No tools modified'
+      : `${count} tool${count > 1 ? 's' : ''} modified`;
+
+    if (count === 0) {
+      designPrompt.value = '';
+      return;
+    }
+
+    let prompt = 'Update these tool descriptions in ha-mcp:\n';
+
+    for (const [toolName, { original, modified, file }] of descChanges) {
+      prompt += `\n## ${toolName} (${file})\n`;
+      prompt += '```diff\n';
+      prompt += lcsContextDiff(original.split('\n'), modified.split('\n'), 2);
+      prompt += '```\n';
+    }
+
+    designPrompt.value = prompt;
+    // Auto-resize the prompt textarea
+    designPrompt.style.height = 'auto';
+    designPrompt.style.height = designPrompt.scrollHeight + 'px';
+  }
+
+  // ── Toggle tool details ──────────────────────────────────────────────
+
+  document.querySelectorAll('.tool-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const card = header.closest('.tool-card')!;
+      const details = card.querySelector('.tool-details')!;
+      const chevron = card.querySelector('.tool-chevron')!;
+      details.classList.toggle('hidden');
+      chevron.classList.toggle('rotate-90');
+
+      // If design mode is on, toggle edit mode when expanding
+      if (designMode) {
+        if (!details.classList.contains('hidden')) {
+          activateEditMode(card);
+        } else {
+          deactivateEditMode(card);
+        }
+      }
+    });
+  });
+
+  // Expand/collapse all
+  expandAllBtn.addEventListener('click', () => {
+    allExpanded = !allExpanded;
+    expandAllBtn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
+    toolCards.forEach(card => {
+      if (card.classList.contains('hidden')) return;
+      const details = card.querySelector('.tool-details')!;
+      const chevron = card.querySelector('.tool-chevron')!;
+      if (allExpanded) {
+        details.classList.remove('hidden');
+        chevron.classList.add('rotate-90');
+        if (designMode) activateEditMode(card);
+      } else {
+        details.classList.add('hidden');
+        chevron.classList.remove('rotate-90');
+        if (designMode) deactivateEditMode(card);
+      }
+    });
+  });
+
+  // Multi-toggle chips helper
+  function bindMultiToggle(selector: string, dataAttr: string, selectedSet: Set<string>) {
+    document.querySelectorAll<HTMLButtonElement>(selector).forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = btn.dataset[dataAttr]!;
+        if (selectedSet.has(val)) {
+          selectedSet.delete(val);
+          CHIP_ACTIVE.split(' ').forEach(c => btn.classList.remove(c));
+          CHIP_INACTIVE.split(' ').forEach(c => btn.classList.add(c));
+        } else {
+          selectedSet.add(val);
+          CHIP_INACTIVE.split(' ').forEach(c => btn.classList.remove(c));
+          CHIP_ACTIVE.split(' ').forEach(c => btn.classList.add(c));
+        }
+        applyFilters();
+      });
+    });
+  }
+
+  bindMultiToggle('.cat-btn', 'cat', selectedCats);
+  bindMultiToggle('.file-btn', 'file', selectedFiles);
+
+  // Sort
+  function sortCards(cards: HTMLElement[]): HTMLElement[] {
+    if (activeSort === 'size') {
+      return cards.sort((a, b) => parseInt(b.dataset.toolSize || '0') - parseInt(a.dataset.toolSize || '0'));
+    }
+    return cards.sort((a, b) => (a.dataset.toolName || '').localeCompare(b.dataset.toolName || ''));
+  }
+
+  // Group by toggle
+  function regroup() {
+    const cards = Array.from(toolCards);
+    container.innerHTML = '';
+
+    if (activeGroupBy === 'none') {
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'tool-group';
+      for (const card of sortCards(cards)) groupDiv.appendChild(card);
+      container.appendChild(groupDiv);
+    } else {
+      const key = activeGroupBy === 'category' ? 'toolCategory' : 'toolFile';
+      const groups = new Map<string, HTMLElement[]>();
+      cards.forEach(card => {
+        const val = card.dataset[key] || 'Other';
+        if (!groups.has(val)) groups.set(val, []);
+        groups.get(val)!.push(card);
+      });
+
+      for (const groupName of Array.from(groups.keys()).sort()) {
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'tool-group';
+        groupDiv.dataset.groupName = groupName;
+        const heading = document.createElement('h2');
+        heading.className = 'group-heading text-lg font-semibold text-slate-300 mb-3 mt-6';
+        heading.textContent = groupName;
+        groupDiv.appendChild(heading);
+        for (const card of sortCards(groups.get(groupName)!)) groupDiv.appendChild(card);
+        container.appendChild(groupDiv);
+      }
+    }
+
+    // Update group toggle style
+    const inactiveStyle = 'group-btn text-base text-slate-400 hover:text-slate-200 transition-colors';
+    const activeStyle = 'group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    const fileHide = designMode ? '' : 'design-only hidden';
+    groupCategoryBtn.className = activeGroupBy === 'category' ? activeStyle : inactiveStyle;
+    groupFileBtn.className = `${activeGroupBy === 'file' ? activeStyle : inactiveStyle} ${fileHide}`;
+    groupNoneBtn.className = activeGroupBy === 'none' ? activeStyle : inactiveStyle;
+
+    applyFilters();
+  }
+
+  groupCategoryBtn.addEventListener('click', () => { activeGroupBy = 'category'; regroup(); });
+  groupFileBtn.addEventListener('click', () => { activeGroupBy = 'file'; regroup(); });
+  groupNoneBtn.addEventListener('click', () => { activeGroupBy = 'none'; regroup(); });
+
+  // Sort toggle
+  function updateSortStyle() {
+    const sortHide = designMode ? '' : 'design-only hidden';
+    sortAlphaBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+    sortSizeBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+  }
+  sortAlphaBtn.addEventListener('click', () => { activeSort = 'alpha'; updateSortStyle(); regroup(); });
+  sortSizeBtn.addEventListener('click', () => { activeSort = 'size'; updateSortStyle(); regroup(); });
+
+  // Read/Write filter buttons
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeFilter = btn.dataset.filter!;
+      filterBtns.forEach(b => {
+        b.classList.remove('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+        b.classList.add('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
+      });
+      btn.classList.add('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+      btn.classList.remove('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
+      applyFilters();
+    });
+  });
+
+  // Size filter buttons (toggle)
+  sizeFilterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.sizeFilter!;
+      activeSizeFilter = activeSizeFilter === val ? 'all' : val;
+      sizeFilterBtns.forEach(b => {
+        b.classList.remove('border-green-500/30', 'border-amber-500/30', 'border-red-500/30', 'bg-green-500/20', 'bg-amber-500/20', 'bg-red-500/20');
+        b.classList.add('border-slate-700/50', 'bg-slate-800/50');
+      });
+      if (activeSizeFilter !== 'all') {
+        const colors = { small: ['border-green-500/30', 'bg-green-500/20'], medium: ['border-amber-500/30', 'bg-amber-500/20'], large: ['border-red-500/30', 'bg-red-500/20'] };
+        const c = colors[activeSizeFilter as keyof typeof colors];
+        btn.classList.remove('border-slate-700/50', 'bg-slate-800/50');
+        btn.classList.add(...c);
+      }
+      applyFilters();
+    });
+  });
+
+  // Search
+  searchInput.addEventListener('input', () => applyFilters());
+
+  function applyFilters() {
+    const query = searchInput.value.toLowerCase().trim();
+    let visible = 0;
+
+    toolCards.forEach(card => {
+      const name = card.dataset.toolName || '';
+      const title = card.dataset.toolTitle || '';
+      const desc = card.dataset.toolDesc || '';
+      const category = card.dataset.toolCategory || '';
+      const file = card.dataset.toolFile || '';
+      const type = card.dataset.toolType || '';
+      const size = parseInt(card.dataset.toolSize || '0');
+      const sizeCategory = size > 2000 ? 'large' : size > 1000 ? 'medium' : 'small';
+
+      const matchesSearch = !query || name.includes(query) || title.includes(query) || desc.includes(query);
+      const matchesFilter = activeFilter === 'all' || type === activeFilter;
+      const matchesCat = selectedCats.size === 0 || selectedCats.has(category);
+      const matchesFile = selectedFiles.size === 0 || selectedFiles.has(file);
+      const matchesSize = activeSizeFilter === 'all' || sizeCategory === activeSizeFilter;
+
+      if (matchesSearch && matchesFilter && matchesCat && matchesFile && matchesSize) {
+        card.classList.remove('hidden');
+        visible++;
+      } else {
+        card.classList.add('hidden');
+      }
+    });
+
+    // Hide empty groups
+    container.querySelectorAll<HTMLElement>('.tool-group').forEach(group => {
+      const visibleCards = group.querySelectorAll('.tool-card:not(.hidden)');
+      group.classList.toggle('hidden', visibleCards.length === 0);
+    });
+
+    const hasFilters = query || activeFilter !== 'all' || selectedCats.size > 0 || selectedFiles.size > 0 || activeSizeFilter !== 'all';
+    resultsCount.textContent = hasFilters ? `Showing ${visible} of ${toolCards.length} tools` : '';
+  }
+</script>

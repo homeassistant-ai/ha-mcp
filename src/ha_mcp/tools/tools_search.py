@@ -8,12 +8,13 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import (
     add_timezone_metadata,
     coerce_bool_param,
@@ -63,23 +64,23 @@ async def _exact_match_search(
 
         # Check for exact substring match in entity_id or friendly_name
         if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
-            is_exact = query_lower == entity_id.lower() or query_lower == friendly_name.lower()
+            is_exact = (
+                query_lower == entity_id.lower() or query_lower == friendly_name.lower()
+            )
             results.append(
                 {
                     "entity_id": entity_id,
                     "friendly_name": friendly_name,
                     "domain": domain,
                     "state": entity.get("state", "unknown"),
-                    "score": 100
-                    if is_exact
-                    else 80,
+                    "score": 100 if is_exact else 80,
                     "match_type": "exact_match",
                 }
             )
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
-    paginated = results[offset:offset + limit]
+    paginated = results[offset : offset + limit]
     return {
         "success": True,
         "query": query,
@@ -121,7 +122,7 @@ async def _partial_results_search(
             }
         )
 
-    paginated = results[offset:offset + limit]
+    paginated = results[offset : offset + limit]
     return {
         "success": True,
         "partial": True,
@@ -139,11 +140,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         raise ValueError("smart_tools is required for search tools registration")
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Search Entities",
+            "title": "Search Entities"
         }
     )
     @log_tool_usage
@@ -154,9 +155,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         limit: int = 10,
         offset: Annotated[
             int | str,
-            Field(default=0, description="Number of results to skip for pagination (default: 0)"),
+            Field(
+                default=0,
+                description="Number of results to skip for pagination (default: 0)",
+            ),
         ] = 0,
         group_by_domain: bool | str = False,
+        exact_match: Annotated[
+            bool | str,
+            Field(
+                default=True,
+                description=(
+                    "Use exact substring matching (default: True). "
+                    "Set to False for fuzzy matching when the query may contain "
+                    "typos or approximate terms."
+                ),
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
 
@@ -183,6 +198,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
             or False
         )
+        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
@@ -245,7 +261,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         for match in matches
                     ]
 
-                    pagination = _build_pagination_metadata(total_matches, offset, limit, results)
+                    pagination = _build_pagination_metadata(
+                        total_matches, offset, limit, results
+                    )
 
                     search_data: dict[str, Any] = {
                         "success": True,
@@ -315,7 +333,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ]
 
                 # Format results to match fuzzy search output
-                paginated_entities = filtered_entities[offset:offset + limit]
+                paginated_entities = filtered_entities[offset : offset + limit]
                 results = []
                 for entity in paginated_entities:
                     entity_id = entity.get("entity_id", "")
@@ -335,7 +353,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "success": True,
                     "query": query,
                     "domain_filter": domain_filter,
-                    **_build_pagination_metadata(len(filtered_entities), offset, limit, results),
+                    **_build_pagination_metadata(
+                        len(filtered_entities), offset, limit, results
+                    ),
                     "results": results,
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
@@ -344,35 +364,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     domain_list_data["by_domain"] = {domain_filter: results}
                 return await add_timezone_metadata(client, domain_list_data)
 
-            # Graceful degradation with fallback search methods
-            # 1. Try fuzzy search (primary method)
-            # 2. If that fails, try exact match
-            # 3. If that fails, return partial results with warning
-            # 4. Only error if all methods fail
+            # Search strategy depends on exact_match setting:
+            # - exact_match=True: use exact substring matching directly
+            # - exact_match=False: try fuzzy first, fall back to exact, then partial
 
             result: dict[str, Any] | None = None
             warning: str | None = None
-            search_type = "fuzzy_search"
+            search_type = "exact_match" if exact_match_bool else "fuzzy_search"
 
-            # Step 1: Try fuzzy search
-            try:
-                result = await smart_tools.smart_entity_search(
-                    query, limit, offset=offset, domain_filter=domain_filter
-                )
-                search_type = "fuzzy_search"
-            except asyncio.CancelledError:
-                raise
-            except Exception as fuzzy_error:
-                logger.warning(
-                    f"Fuzzy search failed, trying exact match: {fuzzy_error}"
-                )
-
-                # Step 2: Try exact match fallback
+            if exact_match_bool:
+                # Exact match mode: skip fuzzy, go straight to substring matching
                 try:
                     result = await _exact_match_search(
                         client, query, domain_filter, limit, offset
                     )
-                    warning = "Fuzzy search unavailable, using exact match"
                     search_type = "exact_match"
                 except asyncio.CancelledError:
                     raise
@@ -380,8 +385,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     logger.warning(
                         f"Exact match failed, trying partial results: {exact_error}"
                     )
-
-                    # Step 3: Try partial results fallback
                     try:
                         result = await _partial_results_search(
                             client, query, domain_filter, limit, offset
@@ -391,11 +394,46 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     except asyncio.CancelledError:
                         raise
                     except Exception as partial_error:
-                        # Step 4: All methods failed - raise to outer exception handler
                         logger.error(f"All search methods failed: {partial_error}")
-                        raise Exception(
-                            "All search methods failed"
-                        ) from partial_error
+                        raise Exception("All search methods failed") from partial_error
+            else:
+                # Fuzzy mode: graceful degradation chain
+                try:
+                    result = await smart_tools.smart_entity_search(
+                        query, limit, offset=offset, domain_filter=domain_filter
+                    )
+                    search_type = "fuzzy_search"
+                except asyncio.CancelledError:
+                    raise
+                except Exception as fuzzy_error:
+                    logger.warning(
+                        f"Fuzzy search failed, trying exact match: {fuzzy_error}"
+                    )
+                    try:
+                        result = await _exact_match_search(
+                            client, query, domain_filter, limit, offset
+                        )
+                        warning = "Fuzzy search unavailable, using exact match"
+                        search_type = "exact_match"
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exact_error:
+                        logger.warning(
+                            f"Exact match failed, trying partial results: {exact_error}"
+                        )
+                        try:
+                            result = await _partial_results_search(
+                                client, query, domain_filter, limit, offset
+                            )
+                            warning = "Search degraded, returning partial results"
+                            search_type = "partial_listing"
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as partial_error:
+                            logger.error(f"All search methods failed: {partial_error}")
+                            raise Exception(
+                                "All search methods failed"
+                            ) from partial_error
 
             # Convert 'matches' to 'results' for backward compatibility
             if "matches" in result:
@@ -415,7 +453,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "has_more" not in result:
                 total = result.get("total_matches", 0)
                 result["has_more"] = (result["offset"] + result["count"]) < total
-                result["next_offset"] = result["offset"] + limit if result["has_more"] else None
+                result["next_offset"] = (
+                    result["offset"] + limit if result["has_more"] else None
+                )
 
             # Group by domain if requested
             if group_by_domain_bool and "results" in result:
@@ -436,30 +476,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, result)
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "query": query,
                     "domain_filter": domain_filter,
                     "area_filter": area_filter,
                 },
-                raise_error=False,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get System Overview",
+            "title": "Get System Overview"
         }
     )
     @log_tool_usage
@@ -543,18 +582,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
             # Full detail level adds extended system info
             if detail_level == "full":
-                system_info.update({
-                    "country": config.get("country"),
-                    "currency": config.get("currency"),
-                    "unit_system": config.get("unit_system", {}),
-                    "latitude": config.get("latitude"),
-                    "longitude": config.get("longitude"),
-                    "elevation": config.get("elevation"),
-                    "components_loaded": len(config.get("components", [])),
-                    "safe_mode": config.get("safe_mode", False),
-                    "internal_url": config.get("internal_url"),
-                    "external_url": config.get("external_url"),
-                })
+                system_info.update(
+                    {
+                        "country": config.get("country"),
+                        "currency": config.get("currency"),
+                        "unit_system": config.get("unit_system", {}),
+                        "latitude": config.get("latitude"),
+                        "longitude": config.get("longitude"),
+                        "elevation": config.get("elevation"),
+                        "components_loaded": len(config.get("components", [])),
+                        "safe_mode": config.get("safe_mode", False),
+                        "internal_url": config.get("internal_url"),
+                        "external_url": config.get("external_url"),
+                    }
+                )
             result["system_info"] = system_info
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
@@ -597,23 +638,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "(not in parallel) to avoid cascading cancellations. "
                     "Do NOT assume a capability is unavailable without searching first."
                 ),
-                "pinned_tools": sorted([
-                    *DEFAULT_PINNED_TOOLS,
-                    "ha_search_tools",
-                    "ha_call_read_tool",
-                    "ha_call_write_tool",
-                    "ha_call_delete_tool",
-                ]),
+                "pinned_tools": sorted(
+                    [
+                        *DEFAULT_PINNED_TOOLS,
+                        "ha_search_tools",
+                        "ha_call_read_tool",
+                        "ha_call_write_tool",
+                        "ha_call_delete_tool",
+                    ]
+                ),
             }
 
         return result
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Deep Search",
+            "title": "Deep Search"
         }
     )
     @log_tool_usage
@@ -624,8 +667,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 default=None,
                 description=(
-                    "Types to search: 'automation', 'script', 'helper'. "
-                    "Pass as list or JSON array string. Default: all types."
+                    "Types to search: 'automation', 'script', 'helper', 'dashboard'. "
+                    "Pass as list or JSON array string. Default: automation, script, helper."
                 ),
             ),
         ] = None,
@@ -641,43 +684,61 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = False,
+        exact_match: Annotated[
+            bool | str,
+            Field(
+                default=True,
+                description=(
+                    "Use exact substring matching (default: True). "
+                    "Set to False for fuzzy matching when the query may contain typos "
+                    "or when searching with approximate terms."
+                ),
+            ),
+        ] = True,
     ) -> dict[str, Any]:
-        """Search inside automation, script, and helper *configurations* — not for finding entity IDs.
+        """Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 
         Use this when you need to find automations/scripts by what they *do* (e.g., which automations
         call a specific service, reference a particular entity, or contain a certain action).
         For finding entity IDs by name, use ha_search_entities instead.
 
         Searches within configuration definitions including triggers, actions, sequences, and other
-        config fields. Perfect for finding automations that use specific services, helpers referenced
-        in scripts, or tracking down where particular entities are being used.
+        config fields. Also searches dashboard configurations (cards, badges, views) when
+        search_types includes 'dashboard'.
+
+        **NOTE:** Dashboards and badges are NOT searched by default. Add 'dashboard' to
+        search_types to include them.
 
         Args:
-            query: Search query (can be partial, with typos)
-            search_types: Types to search (list of strings, default: ["automation", "script", "helper"])
+            query: Search query (exact substring by default, or fuzzy with exact_match=False)
+            search_types: Types to search (default: ["automation", "script", "helper"])
             limit: Maximum total results to return (default: 5)
+            exact_match: Use exact substring matching (default: True)
 
         Examples:
-            - Find automations using a service: ha_deep_search("light.turn_on")
-            - Find scripts with delays: ha_deep_search("delay")
-            - Find helpers with specific options: ha_deep_search("option_a")
-            - Search all types for an entity: ha_deep_search("sensor.temperature")
-            - Search only automations: ha_deep_search("motion", search_types=["automation"])
-
-        Returns detailed matches with:
-            - match_in_name: True if query matched the entity name
-            - match_in_config: True if query matched within the configuration
-            - config: Full configuration for matched items
-            - score: Match quality score (higher is better)
+            - Find automations referencing an entity: ha_deep_search("sensor.temperature")
+            - Find with fuzzy matching: ha_deep_search("motion", exact_match=False)
+            - Search dashboards for entity refs: ha_deep_search("sensor.temperature", search_types=["dashboard"])
+            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
-        include_config_bool = coerce_bool_param(include_config, "include_config", default=False) or False
+        include_config_bool = (
+            coerce_bool_param(include_config, "include_config", default=False) or False
+        )
+        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
         try:
             result = await smart_tools.deep_search(
-                query, parsed_search_types, limit, offset, include_config_bool
+                query,
+                parsed_search_types,
+                limit,
+                offset,
+                include_config_bool,
+                exact_match=exact_match_bool,
             )
             return cast(dict[str, Any], result)
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in deep search: query={query}, "
@@ -685,14 +746,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"error={e}",
                 exc_info=True,
             )
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "query": query,
                     "search_types": parsed_search_types,
                     "limit": limit,
                 },
-                raise_error=False,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
@@ -700,11 +760,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Entity State",
+            "title": "Get Entity State"
         }
     )
     @log_tool_usage
@@ -713,26 +773,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
-                raise_error=False,
                 suggestions=[
                     f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Multiple Entity States",
+            "title": "Get Multiple Entity States"
         }
     )
     @log_tool_usage
@@ -801,20 +860,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         try:
+
             async def _fetch_state(entity_id: str) -> dict[str, Any]:
                 try:
                     state = await client.get_entity_state(entity_id)
                     return {"success": True, "entity_id": entity_id, "state": state}
                 except Exception as e:
                     logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
+                    # ast-grep-ignore — batch item failure, aggregated via asyncio.gather
                     return exception_to_structured_error(
-                        e, context={"entity_id": entity_id},
+                        e,
+                        context={"entity_id": entity_id},
                         raise_error=False,
                     )
 
-            results = await asyncio.gather(
-                *(_fetch_state(eid) for eid in unique_ids)
-            )
+            results = await asyncio.gather(*(_fetch_state(eid) for eid in unique_ids))
 
             states: dict[str, Any] = {}
             errors: list[dict[str, Any]] = []
@@ -825,11 +885,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:
-                        error_detail = {"code": "INTERNAL_ERROR", "message": "Unknown error"}
-                    errors.append({
-                        "entity_id": result.get("entity_id", eid),
-                        "error": error_detail,
-                    })
+                        error_detail = {
+                            "code": "INTERNAL_ERROR",
+                            "message": "Unknown error",
+                        }
+                    errors.append(
+                        {
+                            "entity_id": result.get("entity_id", eid),
+                            "error": error_detail,
+                        }
+                    )
 
             response: dict[str, Any] = {
                 "success": len(states) > 0,
@@ -849,10 +914,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, response)
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting bulk states: {e}", exc_info=True)
-            error_response = exception_to_structured_error(
-                e, context={"entity_ids": entity_ids},
-                raise_error=False,
+            exception_to_structured_error(
+                e,
+                context={"entity_ids": entity_ids},
             )
-            return await add_timezone_metadata(client, error_response)

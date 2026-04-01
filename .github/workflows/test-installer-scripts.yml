@@ -15,6 +15,9 @@ on:
     - cron: '0 21 * * *'  # Daily at 4pm Eastern
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test-macos:
     runs-on: macos-latest

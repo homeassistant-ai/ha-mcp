@@ -71,11 +71,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant helper configuration tools."""
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["helper"],
-            "title": "List Helpers",
+            "title": "List Helpers"
         }
     )
     @log_tool_usage
@@ -129,7 +129,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
-        For detailed helper documentation, use: ha_get_domain_docs("input_number"), etc.
+        For detailed helper documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Use the websocket list endpoint for the helper type
@@ -170,10 +170,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "destructiveHint": True,
-            "tags": ["helper"],
-            "title": "Create or Update Helper",
+            "title": "Create or Update Helper"
         }
     )
     @log_tool_usage
@@ -445,7 +445,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                "state": "{{ states('sensor.foo') }}",
              })
 
-        For detailed parameter info: ha_get_domain_docs("counter"), ha_get_domain_docs("zone"), etc.
+        For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Parse JSON list parameters if provided as strings
@@ -958,11 +958,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Helper Entities"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["helper"],
-            "title": "Remove Helper",
+            "title": "Remove Helper"
         }
     )
     @log_tool_usage

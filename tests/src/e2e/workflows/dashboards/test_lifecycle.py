@@ -20,6 +20,8 @@ import json
 import logging
 from typing import Any
 
+import pytest
+
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
 
@@ -348,78 +350,22 @@ class TestDashboardErrorHandling:
         logger.info("Get nonexistent dashboard test completed successfully")
 
     async def test_delete_nonexistent_dashboard(self, mcp_client):
-        """Test deleting non-existent dashboard returns RESOURCE_NOT_FOUND."""
+        """Test deleting non-existent dashboard raises ToolError with RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent dashboard test")
 
-        result = await mcp_client.call_tool(
-            "ha_config_delete_dashboard",
-            {"dashboard_id": "nonexistent-dashboard-67890"},
-        )
-        data = parse_mcp_result(result)
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await mcp_client.call_tool(
+                "ha_config_delete_dashboard",
+                {"dashboard_id": "nonexistent-dashboard-67890"},
+            )
+
+        data = json.loads(str(exc_info.value))
         assert data["success"] is False
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
         logger.info("Delete nonexistent dashboard test completed successfully")
-
-
-class TestDashboardDocumentationTools:
-    """Test dashboard documentation tools."""
-
-    async def test_get_dashboard_guide(self, mcp_client):
-        """Test ha_get_dashboard_guide returns the guide."""
-        logger.info("Testing ha_get_dashboard_guide")
-        mcp = MCPAssertions(mcp_client)
-
-        data = await mcp.call_tool_success("ha_get_dashboard_guide", {})
-
-        assert data["success"] is True
-        assert data["action"] == "get_guide"
-        assert "guide" in data
-        assert data["format"] == "markdown"
-
-        # Verify guide contains key sections
-        guide_content = data["guide"]
-        assert "url_path must contain hyphen" in guide_content.lower()
-        assert "Dashboard Structure" in guide_content
-        assert "Card Categories" in guide_content
-
-        logger.info("ha_get_dashboard_guide test passed")
-
-    async def test_get_card_types(self, mcp_client):
-        """Test ha_get_card_documentation returns all card types when called without card_type."""
-        logger.info("Testing ha_get_card_documentation (list mode)")
-        mcp = MCPAssertions(mcp_client)
-
-        data = await mcp.call_tool_success("ha_get_card_documentation", {})
-
-        assert data["success"] is True
-        assert data["action"] == "get_card_types"
-        assert "card_types" in data
-        assert "total_count" in data
-        assert data["total_count"] == 41
-
-        # Verify some common card types are present
-        card_types = data["card_types"]
-        assert "light" in card_types
-        assert "entity" in card_types
-
-        logger.info("ha_get_card_documentation (list mode) test passed")
-
-    async def test_get_card_documentation_invalid(self, mcp_client):
-        """Test ha_get_card_documentation with invalid card type."""
-        logger.info("Testing ha_get_card_documentation with invalid card type")
-        mcp = MCPAssertions(mcp_client)
-
-        data = await mcp.call_tool_failure(
-            "ha_get_card_documentation",
-            {"card_type": "nonexistent-card-type"},
-            expected_error="Unknown card type",
-        )
-
-        assert data["success"] is False
-        assert data["card_type"] == "nonexistent-card-type"
-
-        logger.info("ha_get_card_documentation (invalid) test passed")
 
 
 class TestFindCard:
