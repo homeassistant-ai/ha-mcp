@@ -62,10 +62,21 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         detailed: Annotated[
             bool,
             Field(
-                description="Include extra diagnostic data: logbook entries, script-style paths, and context (default: False). Use when standard trace lacks detail for debugging.",
+                description="Include extra diagnostic data: logbook entries and context metadata (default: False). Use when standard trace lacks detail for debugging.",
                 default=False,
             ),
         ] = False,
+        sections: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Comma-separated list of trace sections to return. "
+                    "Valid values: trigger, conditions, actions, config, error, logbook, context. "
+                    "Omit to return all sections. Example: 'actions' or 'trigger,conditions'."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Retrieve execution traces for automations and scripts to debug issues.
@@ -90,9 +101,10 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         3. Get detailed trace with logbook (provide run_id and detailed=True):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", detailed=True)
-           Returns the formatted trace plus logbook entries, script-style action
-           paths, and context metadata. Useful when the standard trace summary
-           doesn't reveal enough for debugging.
+           Returns the formatted trace plus logbook entries and context metadata.
+           Useful when the standard trace summary doesn't reveal enough for debugging.
+           Note: script-style action paths (sequence/, numeric) are always matched
+           regardless of this flag.
 
         4. Get full variables without deduplication (provide run_id and deduplicate=False):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", deduplicate=False)
@@ -180,6 +192,7 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     return _format_detailed_trace(
                         automation_id, run_id, trace_data,
                         deduplicate=deduplicate, detailed=detailed,
+                        sections=sections,
                     )
                 else:
                     # List recent traces
@@ -442,6 +455,7 @@ def _format_trace_list(
 def _format_detailed_trace(
     automation_id: str, run_id: str, trace: dict[str, Any],
     *, deduplicate: bool = True, detailed: bool = False,
+    sections: str | None = None,
 ) -> dict[str, Any]:
     """Format detailed trace for AI consumption."""
     domain = "automation" if automation_id.startswith("automation.") else "script"
@@ -606,5 +620,23 @@ def _format_detailed_trace(
             result["logbook_entries"] = trace["logbook_entries"]
         if trace.get("context"):
             result["context"] = trace["context"]
+
+    # Filter to requested sections if specified.
+    # Maps user-facing section names to result dict keys.
+    if sections:
+        section_key_map = {
+            "trigger": "trigger",
+            "conditions": "condition_results",
+            "actions": "action_trace",
+            "config": "config_summary",
+            "error": "error",
+            "logbook": "logbook_entries",
+            "context": "context",
+        }
+        requested = {s.strip().lower() for s in sections.split(",")}
+        keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
+        # Always keep metadata keys
+        keep_keys |= {"success", "automation_id", "run_id", "timestamp", "state", "script_execution"}
+        result = {k: v for k, v in result.items() if k in keep_keys}
 
     return result

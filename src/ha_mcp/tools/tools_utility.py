@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Fields to keep in compact logbook mode (strips attribute dictionaries
 # and other bulky fields that can cause context exhaustion — see #683)
-COMPACT_LOGBOOK_FIELDS = {"when", "entity_id", "state", "name", "message", "domain", "context_id"}
+COMPACT_LOGBOOK_FIELDS = {"when", "entity_id", "state", "name", "message", "domain", "context_id", "source"}
 
 
 def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
