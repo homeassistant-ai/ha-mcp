@@ -48,7 +48,9 @@ class TestGroupVerification:
             "ha_get_state", {"entity_id": entity_id}
         )
         state_data = assert_mcp_success(state_result, "Get group state after create")
-        assert state_data.get("entity_id") == entity_id, (
+        # Response may nest entity data under "data" key
+        inner = state_data.get("data", state_data)
+        assert inner.get("entity_id") == entity_id, (
             f"Created group not queryable immediately after tool returned success: {state_data}"
         )
         logger.info(f"Group {entity_id} confirmed queryable after create")
