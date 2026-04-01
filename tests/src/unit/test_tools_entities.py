@@ -1091,3 +1091,141 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
+
+
+class TestHaSetEntityRegistryDisableGuardrail:
+    """Test that registry-disable (enabled=False) is blocked for automations and scripts."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_entity_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_set_entity function."""
+        register_entity_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_set_entity"]
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on automation entity should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.test", enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        # Ensure no WebSocket call was made
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_script_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on script entity should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="script.my_script", enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "script" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_string_false_blocked(self, set_entity_tool, mock_client):
+        """enabled='false' (string) on automation entity should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.morning", enabled="false")
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_string_capital_false_blocked(self, set_entity_tool, mock_client):
+        """enabled='False' (capital F, common from Python agents) should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.evening", enabled="False")
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_single_element_list_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on single-element list ['automation.test'] should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id=["automation.test"], enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enable_automation_allowed(self, set_entity_tool, mock_client):
+        """enabled=True on automation entity should be allowed (re-enabling is fine)."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_entry": {
+                        "entity_id": "automation.test",
+                        "name": None,
+                        "original_name": "Test",
+                        "icon": None,
+                        "area_id": None,
+                        "disabled_by": None,
+                        "hidden_by": None,
+                        "aliases": [],
+                        "labels": [],
+                    }
+                },
+            }
+        )
+
+        result = await set_entity_tool(entity_id="automation.test", enabled=True)
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_disable_other_domain_allowed(self, set_entity_tool, mock_client):
+        """enabled=False on non-automation/script entities should still work."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_entry": {
+                        "entity_id": "sensor.temperature",
+                        "name": None,
+                        "original_name": "Temperature",
+                        "icon": None,
+                        "area_id": None,
+                        "disabled_by": "user",
+                        "hidden_by": None,
+                        "aliases": [],
+                        "labels": [],
+                    }
+                },
+            }
+        )
+
+        result = await set_entity_tool(entity_id="sensor.temperature", enabled=False)
+        assert result["success"] is True
