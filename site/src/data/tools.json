@@ -97,6 +97,156 @@
     "source_file": "tools_addons.py"
   },
   {
+    "name": "ha_config_list_areas",
+    "title": "List Areas",
+    "description": "List all Home Assistant areas (rooms).\n\nReturns area ID, name, icon, floor assignment, aliases, and picture URL.",
+    "inputSchema": {},
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_config_list_floors",
+    "title": "List Floors",
+    "description": "List all Home Assistant floors.\n\nReturns floor ID, name, icon, level (0=ground, 1=first, -1=basement), and aliases.",
+    "inputSchema": {},
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_config_remove_area",
+    "title": "Remove Area",
+    "description": "Delete a Home Assistant area.\n\nEntities and devices in the area are not deleted, just unassigned.\nMay break automations referencing this area.",
+    "inputSchema": {
+      "properties": {
+        "area_id": {
+          "type": "Annotated[str, Field(description='Area ID to delete (use ha_config_list_areas to find IDs)')]"
+        }
+      },
+      "required": [
+        "area_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_config_remove_floor",
+    "title": "Remove Floor",
+    "description": "Delete a Home Assistant floor.\n\nAreas on this floor are not deleted, just unassigned.\nMay break automations referencing this floor.",
+    "inputSchema": {
+      "properties": {
+        "floor_id": {
+          "type": "Annotated[str, Field(description='Floor ID to delete (use ha_config_list_floors to find IDs)')]"
+        }
+      },
+      "required": [
+        "floor_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_config_set_area",
+    "title": "Create or Update Area",
+    "description": "Create or update a Home Assistant area (room).\n\nProvide name only to create a new area. Provide area_id to update existing.\nAreas organize entities by physical location for room-based control.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "type": "Annotated[str | None, Field(description=\"Name for the area (required for create, optional for update, e.g., 'Living Room', 'Kitchen')\", default=None)]",
+          "default": null
+        },
+        "area_id": {
+          "type": "Annotated[str | None, Field(description='Area ID to update (omit to create new area, use ha_config_list_areas to find IDs)', default=None)]",
+          "default": null
+        },
+        "floor_id": {
+          "type": "Annotated[str | None, Field(description='Floor ID to assign this area to (use ha_config_list_floors to find IDs, empty string to remove)', default=None)]",
+          "default": null
+        },
+        "icon": {
+          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:sofa', 'mdi:bed', empty string to remove)\", default=None)]",
+          "default": null
+        },
+        "aliases": {
+          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge', 'family room'], empty list to clear)\", default=None)]",
+          "default": null
+        },
+        "picture": {
+          "type": "Annotated[str | None, Field(description='URL to a picture representing the area (empty string to remove)', default=None)]",
+          "default": null
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_config_set_floor",
+    "title": "Create or Update Floor",
+    "description": "Create or update a Home Assistant floor.\n\nProvide name only to create a new floor. Provide floor_id to update existing.\nFloors organize areas into vertical levels for building-wide control.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "type": "Annotated[str | None, Field(description=\"Name for the floor (required for create, optional for update, e.g., 'Ground Floor', 'Basement')\", default=None)]",
+          "default": null
+        },
+        "floor_id": {
+          "type": "Annotated[str | None, Field(description='Floor ID to update (omit to create new floor, use ha_config_list_floors to find IDs)', default=None)]",
+          "default": null
+        },
+        "level": {
+          "type": "Annotated[int | None, Field(description='Numeric level for ordering (0=ground, 1=first, -1=basement, etc.)', default=None)]",
+          "default": null
+        },
+        "icon": {
+          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:home-floor-1', 'mdi:home-floor-b', empty string to remove)\", default=None)]",
+          "default": null
+        },
+        "aliases": {
+          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['downstairs', 'main level'], empty list to clear)\", default=None)]",
+          "default": null
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
     "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.",
@@ -2280,6 +2430,45 @@
     "source_file": "tools_system.py"
   },
   {
+    "name": "ha_config_set_yaml",
+    "title": "Set YAML Config",
+    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nNote: YAML comments are not preserved after editing. The backup\nretains the original file with comments intact.",
+    "inputSchema": {
+      "properties": {
+        "yaml_path": {
+          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify (e.g., 'template', 'sensor', 'input_boolean'). Only whitelisted keys are allowed.\")]"
+        },
+        "action": {
+          "type": "Annotated[str, Field(description=\"Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely).\")]"
+        },
+        "content": {
+          "type": "Annotated[str | None, Field(default=None, description=\"YAML content for the value under yaml_path. Required for 'add' and 'replace' actions. Must be valid YAML.\")]",
+          "default": null
+        },
+        "file": {
+          "type": "Annotated[str, Field(default='configuration.yaml', description=\"Relative path to the YAML config file. Defaults to 'configuration.yaml'. Also supports 'packages/*.yaml'.\")]",
+          "default": "configuration.yaml"
+        },
+        "backup": {
+          "type": "Annotated[bool | str, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to www/yaml_backups/.')]",
+          "default": true
+        }
+      },
+      "required": [
+        "yaml_path",
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false
+    },
+    "tags": [
+      "System"
+    ],
+    "source_file": "tools_yaml_config.py"
+  },
+  {
     "name": "ha_get_system_health",
     "title": "Get System Health",
     "description": "Get Home Assistant system health information.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.",
@@ -2658,180 +2847,5 @@
       "Zones"
     ],
     "source_file": "tools_zones.py"
-  },
-  {
-    "name": "ha_config_list_areas",
-    "title": "List Areas",
-    "description": "List all Home Assistant areas (rooms).\n\nReturns area ID, name, icon, floor assignment, aliases, and picture URL.",
-    "inputSchema": {},
-    "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_list_floors",
-    "title": "List Floors",
-    "description": "List all Home Assistant floors.\n\nReturns floor ID, name, icon, level (0=ground, 1=first, -1=basement), and aliases.",
-    "inputSchema": {},
-    "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_remove_area",
-    "title": "Remove Area",
-    "description": "Delete a Home Assistant area.\n\nEntities and devices in the area are not deleted, just unassigned.\nMay break automations referencing this area.",
-    "inputSchema": {
-      "properties": {
-        "area_id": {
-          "type": "Annotated[str, Field(description='Area ID to delete (use ha_config_list_areas to find IDs)')]"
-        }
-      },
-      "required": [
-        "area_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_remove_floor",
-    "title": "Remove Floor",
-    "description": "Delete a Home Assistant floor.\n\nAreas on this floor are not deleted, just unassigned.\nMay break automations referencing this floor.",
-    "inputSchema": {
-      "properties": {
-        "floor_id": {
-          "type": "Annotated[str, Field(description='Floor ID to delete (use ha_config_list_floors to find IDs)')]"
-        }
-      },
-      "required": [
-        "floor_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_set_area",
-    "title": "Create or Update Area",
-    "description": "Create or update a Home Assistant area (room).\n\nProvide name only to create a new area. Provide area_id to update existing.\nAreas organize entities by physical location for room-based control.",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "type": "Annotated[str | None, Field(description=\"Name for the area (required for create, optional for update, e.g., 'Living Room', 'Kitchen')\", default=None)]",
-          "default": null
-        },
-        "area_id": {
-          "type": "Annotated[str | None, Field(description='Area ID to update (omit to create new area, use ha_config_list_areas to find IDs)', default=None)]",
-          "default": null
-        },
-        "floor_id": {
-          "type": "Annotated[str | None, Field(description='Floor ID to assign this area to (use ha_config_list_floors to find IDs, empty string to remove)', default=None)]",
-          "default": null
-        },
-        "icon": {
-          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:sofa', 'mdi:bed', empty string to remove)\", default=None)]",
-          "default": null
-        },
-        "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge', 'family room'], empty list to clear)\", default=None)]",
-          "default": null
-        },
-        "picture": {
-          "type": "Annotated[str | None, Field(description='URL to a picture representing the area (empty string to remove)', default=None)]",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_set_floor",
-    "title": "Create or Update Floor",
-    "description": "Create or update a Home Assistant floor.\n\nProvide name only to create a new floor. Provide floor_id to update existing.\nFloors organize areas into vertical levels for building-wide control.",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "type": "Annotated[str | None, Field(description=\"Name for the floor (required for create, optional for update, e.g., 'Ground Floor', 'Basement')\", default=None)]",
-          "default": null
-        },
-        "floor_id": {
-          "type": "Annotated[str | None, Field(description='Floor ID to update (omit to create new floor, use ha_config_list_floors to find IDs)', default=None)]",
-          "default": null
-        },
-        "level": {
-          "type": "Annotated[int | None, Field(description='Numeric level for ordering (0=ground, 1=first, -1=basement, etc.)', default=None)]",
-          "default": null
-        },
-        "icon": {
-          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:home-floor-1', 'mdi:home-floor-b', empty string to remove)\", default=None)]",
-          "default": null
-        },
-        "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['downstairs', 'main level'], empty list to clear)\", default=None)]",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_set_yaml",
-    "title": "Set YAML Config",
-    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nNote: YAML comments are not preserved after editing. The backup\nretains the original file with comments intact.",
-    "inputSchema": {
-      "properties": {
-        "yaml_path": {
-          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify (e.g., 'template', 'sensor', 'input_boolean'). Only whitelisted keys are allowed.\")]"
-        },
-        "action": {
-          "type": "Annotated[str, Field(description=\"Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely).\")]"
-        },
-        "content": {
-          "type": "Annotated[str | None, Field(default=None, description=\"YAML content for the value under yaml_path. Required for 'add' and 'replace' actions. Must be valid YAML.\")]",
-          "default": null
-        },
-        "file": {
-          "type": "Annotated[str, Field(default='configuration.yaml', description=\"Relative path to the YAML config file. Defaults to 'configuration.yaml'. Also supports 'packages/*.yaml'.\")]",
-          "default": "configuration.yaml"
-        },
-        "backup": {
-          "type": "Annotated[bool | str, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to www/yaml_backups/.')]",
-          "default": true
-        }
-      },
-      "required": [
-        "yaml_path",
-        "action"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false
-    },
-    "tags": [],
-    "source_file": "tools_yaml_config.py"
   }
 ]

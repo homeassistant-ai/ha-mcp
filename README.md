@@ -136,6 +136,7 @@ Spend less time configuring, more time enjoying your smart home.
 | Category | Tools |
 |----------|-------|
 | **Add-ons** | `ha_call_addon_api`, `ha_get_addon` |
+| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
@@ -150,11 +151,10 @@ Spend less time configuring, more time enjoying your smart home.
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logbook`, `ha_get_statistics` |
 | **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
-| **Other** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor`, `ha_config_set_yaml` |
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_get_states`, `ha_search_entities` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_add_todo_item`, `ha_get_todo`, `ha_remove_todo_item`, `ha_update_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
