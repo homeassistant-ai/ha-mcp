@@ -205,6 +205,27 @@ def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
+    async def _resolve_automation_entity_id(identifier: str) -> str | None:
+        """Resolve an automation identifier to its entity_id.
+
+        If identifier is already an entity_id (starts with "automation."),
+        returns it directly. Otherwise, searches states to find the entity
+        whose unique_id matches the identifier.
+        """
+        if identifier.startswith("automation."):
+            return identifier
+        try:
+            states = await client.get_states()
+            for state in states:
+                if (
+                    state.get("entity_id", "").startswith("automation.")
+                    and state.get("attributes", {}).get("id") == identifier
+                ):
+                    return state["entity_id"]
+        except Exception as e:
+            logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
+        return None
+
     @mcp.tool(
         tags={"Automations"},
         annotations={
@@ -239,20 +260,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             normalized_config = _normalize_config_for_roundtrip(config_result)
 
             # Resolve entity_id and fetch category from entity registry
-            entity_id = identifier if identifier.startswith("automation.") else None
-            if not entity_id:
-                try:
-                    states = await client.get_states()
-                    for state in states:
-                        if (
-                            state.get("entity_id", "").startswith("automation.")
-                            and state.get("attributes", {}).get("id") == identifier
-                        ):
-                            entity_id = state["entity_id"]
-                            break
-                except Exception as e:
-                    logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
-
+            entity_id = await _resolve_automation_entity_id(identifier)
             if entity_id:
                 try:
                     reg_result = await client.send_websocket_message(
@@ -627,20 +635,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             # Resolve entity_id for wait verification (identifier may be a unique_id)
-            entity_id_for_wait: str | None = None
-            if identifier.startswith("automation."):
-                entity_id_for_wait = identifier
-            else:
-                # Try to find entity_id by matching unique_id in automation states
-                try:
-                    states = await client.get_states()
-                    for state in states:
-                        eid = state.get("entity_id", "")
-                        if eid.startswith("automation.") and state.get("attributes", {}).get("id") == identifier:
-                            entity_id_for_wait = eid
-                            break
-                except Exception as e:
-                    logger.warning(f"Could not resolve unique_id '{identifier}' to entity_id: {e} — wait verification will be skipped")
+            entity_id_for_wait = await _resolve_automation_entity_id(identifier)
 
             result = await client.delete_automation_config(identifier)
 
