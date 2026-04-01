@@ -221,7 +221,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     state.get("entity_id", "").startswith("automation.")
                     and state.get("attributes", {}).get("id") == identifier
                 ):
-                    return state["entity_id"]
+                    return str(state["entity_id"])
         except Exception as e:
             logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
         return None
