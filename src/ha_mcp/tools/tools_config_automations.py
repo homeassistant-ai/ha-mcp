@@ -237,6 +237,35 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             config_result = await client.get_automation_config(identifier)
             # Normalize config for round-trip compatibility (GET → SET)
             normalized_config = _normalize_config_for_roundtrip(config_result)
+
+            # Resolve entity_id and fetch category from entity registry
+            entity_id = identifier if identifier.startswith("automation.") else None
+            if not entity_id:
+                try:
+                    states = await client.get_states()
+                    for state in states:
+                        if (
+                            state.get("entity_id", "").startswith("automation.")
+                            and state.get("attributes", {}).get("id") == identifier
+                        ):
+                            entity_id = state["entity_id"]
+                            break
+                except Exception:
+                    pass
+
+            if entity_id:
+                try:
+                    reg_result = await client.send_websocket_message(
+                        {"type": "config/entity_registry/get", "entity_id": entity_id}
+                    )
+                    if reg_result.get("success"):
+                        categories = reg_result.get("result", {}).get("categories", {})
+                        cat_id = categories.get("automation")
+                        if cat_id:
+                            normalized_config["category"] = cat_id
+                except Exception:
+                    pass  # Category lookup is best-effort
+
             return {
                 "success": True,
                 "action": "get",
@@ -296,6 +325,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 default=None,
             ),
         ] = None,
+        category: Annotated[
+            str | None,
+            Field(
+                description="Category ID to assign to this automation. Use ha_config_get_category(scope='automation') to list available categories, or ha_config_set_category() to create one.",
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -327,6 +363,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         OPTIONAL CONFIG FIELDS (Regular Automations):
         - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
+        - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
         - condition: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
         - max: Maximum concurrent executions (for queued/parallel modes)
@@ -444,6 +481,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
             config_dict = cast(dict[str, Any], parsed_config)
 
+            # Extract category before sending to HA REST API (which rejects unknown keys).
+            # Parameter takes precedence over config dict value.
+            config_category = config_dict.pop("category", None)
+            effective_category = category or config_category
+
             # Normalize field names (triggers -> trigger, actions -> action, etc.)
             config_dict = _normalize_automation_config(config_dict)
 
@@ -506,6 +548,19 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
                 except Exception as e:
                     result["warning"] = f"Automation created but verification failed: {e}"
+
+            # Apply category to entity registry if provided
+            if effective_category and entity_id:
+                try:
+                    await client.send_websocket_message({
+                        "type": "config/entity_registry/update",
+                        "entity_id": entity_id,
+                        "categories": {"automation": effective_category},
+                    })
+                    result["category"] = effective_category
+                except Exception as e:
+                    logger.warning(f"Failed to set category for {entity_id}: {e}")
+                    result["category_warning"] = f"Automation saved but failed to set category: {e}"
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings

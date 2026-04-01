@@ -405,6 +405,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        category: Annotated[
+            str | None,
+            Field(
+                description="Category ID to assign to this helper. Use ha_config_get_category() to list available categories.",
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -643,8 +650,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         except Exception as e:
                             helper_data["warning"] = f"Helper created but verification failed: {e}"
 
-                    # Update entity registry if area_id or labels specified
-                    if (area_id or labels) and entity_id:
+                    # Update entity registry if area_id, labels, or category specified
+                    if (area_id or labels or category) and entity_id:
                         update_message: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
@@ -653,6 +660,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_message["area_id"] = area_id
                         if labels:
                             update_message["labels"] = labels
+                        if category:
+                            update_message["categories"] = {helper_type: category}
 
                         update_result = await client.send_websocket_message(
                             update_message
@@ -660,6 +669,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if update_result.get("success"):
                             helper_data["area_id"] = area_id
                             helper_data["labels"] = labels
+                            if category:
+                                helper_data["category"] = category
 
                     return {
                         "success": True,
