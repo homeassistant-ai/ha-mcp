@@ -20,6 +20,8 @@ import json
 import logging
 from typing import Any
 
+import pytest
+
 # Import test utilities
 from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
 
@@ -348,14 +350,18 @@ class TestDashboardErrorHandling:
         logger.info("Get nonexistent dashboard test completed successfully")
 
     async def test_delete_nonexistent_dashboard(self, mcp_client):
-        """Test deleting non-existent dashboard returns RESOURCE_NOT_FOUND."""
+        """Test deleting non-existent dashboard raises ToolError with RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent dashboard test")
 
-        result = await mcp_client.call_tool(
-            "ha_config_delete_dashboard",
-            {"dashboard_id": "nonexistent-dashboard-67890"},
-        )
-        data = parse_mcp_result(result)
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await mcp_client.call_tool(
+                "ha_config_delete_dashboard",
+                {"dashboard_id": "nonexistent-dashboard-67890"},
+            )
+
+        data = json.loads(str(exc_info.value))
         assert data["success"] is False
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 

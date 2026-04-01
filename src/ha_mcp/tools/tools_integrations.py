@@ -22,11 +22,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
     @mcp.tool(
+        tags={"Integrations"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["integration"],
-            "title": "Get Integration",
+            "title": "Get Integration"
         }
     )
     @log_tool_usage
@@ -297,10 +297,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Integrations"},
         annotations={
             "destructiveHint": True,
-            "tags": ["integration"],
-            "title": "Set Integration Enabled",
+            "title": "Set Integration Enabled"
         }
     )
     @log_tool_usage
@@ -364,10 +364,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
     @mcp.tool(
+        tags={"Integrations"},
         annotations={
             "destructiveHint": True,
-            "tags": ["integration"],
-            "title": "Delete Config Entry",
+            "title": "Delete Config Entry"
         }
     )
     @log_tool_usage

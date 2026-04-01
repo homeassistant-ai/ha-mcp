@@ -55,10 +55,10 @@ def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     from .tools_hacs import CATEGORY_MAP, _assert_hacs_available
 
     @mcp.tool(
+        tags={"Utilities"},
         annotations={
             "destructiveHint": True,
-            "tags": ["mcp", "management", "installation"],
-            "title": "Install MCP Tools Component",
+            "title": "Install MCP Tools Component"
         }
     )
     @log_tool_usage

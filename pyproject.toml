@@ -176,6 +176,7 @@ dev = [
     "lefthook>=1.10.0",
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
+    "ast-grep-cli>=0.42.0",
 ]
 
 # Semantic versioning configuration

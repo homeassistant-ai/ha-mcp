@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register service discovery tools with the MCP server."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["service"], "title": "List Available Services"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Available Services"})
     @log_tool_usage
     async def ha_list_services(
         domain: str | None = None,

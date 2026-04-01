@@ -56,7 +56,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "blueprints": blueprints,
         }
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["blueprint"], "title": "Get Blueprint"})
+    @mcp.tool(tags={"Blueprints"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Blueprint"})
     @log_tool_usage
     async def ha_get_blueprint(
         path: Annotated[
@@ -183,7 +183,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "tags": ["blueprint"], "title": "Import Blueprint"})
+    @mcp.tool(tags={"Blueprints"}, annotations={"destructiveHint": True, "title": "Import Blueprint"})
     @log_tool_usage
     async def ha_import_blueprint(
         url: Annotated[

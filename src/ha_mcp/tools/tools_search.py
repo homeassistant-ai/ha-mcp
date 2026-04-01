@@ -8,12 +8,13 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import (
     add_timezone_metadata,
     coerce_bool_param,
@@ -139,11 +140,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         raise ValueError("smart_tools is required for search tools registration")
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Search Entities",
+            "title": "Search Entities"
         }
     )
     @log_tool_usage
@@ -475,30 +476,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, result)
 
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "query": query,
                     "domain_filter": domain_filter,
                     "area_filter": area_filter,
                 },
-                raise_error=False,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
                     "Check area/domain filter spelling",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get System Overview",
+            "title": "Get System Overview"
         }
     )
     @log_tool_usage
@@ -652,11 +652,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         return result
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Deep Search",
+            "title": "Deep Search"
         }
     )
     @log_tool_usage
@@ -737,6 +737,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 exact_match=exact_match_bool,
             )
             return cast(dict[str, Any], result)
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in deep search: query={query}, "
@@ -744,14 +746,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"error={e}",
                 exc_info=True,
             )
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "query": query,
                     "search_types": parsed_search_types,
                     "limit": limit,
                 },
-                raise_error=False,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Try simpler search terms",
@@ -759,11 +760,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Entity State",
+            "title": "Get Entity State"
         }
     )
     @log_tool_usage
@@ -772,26 +773,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             result = await client.get_entity_state(entity_id)
             return await add_timezone_metadata(client, result)
+        except ToolError:
+            raise
         except Exception as e:
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
-                raise_error=False,
                 suggestions=[
                     f"Verify entity '{entity_id}' exists in Home Assistant",
                     "Check Home Assistant connection",
                     "Use ha_search_entities() to find correct entity IDs",
                 ],
             )
-            error_with_tz = await add_timezone_metadata(client, error_response)
-            raise_tool_error(error_with_tz)
 
     @mcp.tool(
+        tags={"Search & Discovery"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["search"],
-            "title": "Get Multiple Entity States",
+            "title": "Get Multiple Entity States"
         }
     )
     @log_tool_usage
@@ -867,6 +867,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     return {"success": True, "entity_id": entity_id, "state": state}
                 except Exception as e:
                     logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
+                    # ast-grep-ignore — batch item failure, aggregated via asyncio.gather
                     return exception_to_structured_error(
                         e,
                         context={"entity_id": entity_id},
@@ -913,11 +914,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             return await add_timezone_metadata(client, response)
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error getting bulk states: {e}", exc_info=True)
-            error_response = exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"entity_ids": entity_ids},
-                raise_error=False,
             )
-            return await add_timezone_metadata(client, error_response)

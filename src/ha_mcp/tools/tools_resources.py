@@ -63,11 +63,11 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "List Dashboard Resources",
+            "title": "List Dashboard Resources"
         }
     )
     @log_tool_usage
@@ -184,10 +184,10 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "Set Dashboard Resource",
+            "title": "Set Dashboard Resource"
         }
     )
     @log_tool_usage
@@ -497,10 +497,10 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # =========================================================================
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard", "resources"],
-            "title": "Delete Dashboard Resource",
+            "title": "Delete Dashboard Resource"
         }
     )
     @log_tool_usage
@@ -544,14 +544,14 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     error_str = str(error_msg)
 
                 if "not found" in error_str.lower() or "unable to find" in error_str.lower():
-                    return create_resource_not_found_error(
+                    raise_tool_error(create_resource_not_found_error(
                         "Dashboard resource",
                         resource_id,
                         details=(
                             f"Resource '{resource_id}' not found. "
                             "Use ha_config_list_dashboard_resources() to see available resources."
                         ),
-                    )
+                    ))
 
                 raise_tool_error(create_error_response(
                     code=ErrorCode.SERVICE_CALL_FAILED,
@@ -575,10 +575,9 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise
         except Exception as e:
             logger.error(f"Error deleting dashboard resource: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"action": "delete", "resource_id": resource_id},
-                raise_error=False,
                 suggestions=[
                     "Verify resource ID using ha_config_list_dashboard_resources()",
                     "Check that you have admin permissions",

@@ -260,11 +260,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     """Register Home Assistant dashboard configuration tools."""
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard"],
-            "title": "Get Dashboard",
+            "title": "Get Dashboard"
         }
     )
     @log_tool_usage
@@ -398,10 +398,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             )
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard"],
-            "title": "Create or Update Dashboard",
+            "title": "Create or Update Dashboard"
         }
     )
     @log_tool_usage
@@ -1004,10 +1004,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             )
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "tags": ["dashboard"],
-            "title": "Delete Dashboard",
+            "title": "Delete Dashboard"
         }
     )
     @log_tool_usage
@@ -1057,14 +1057,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     break
 
             if resolved_id is None:
-                return create_resource_not_found_error(
+                raise_tool_error(create_resource_not_found_error(
                     "Dashboard",
                     dashboard_id,
                     details=(
                         f"No dashboard found with ID or URL path '{dashboard_id}'. "
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
                     ),
-                )
+                ))
 
             response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": resolved_id}
@@ -1121,10 +1121,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             raise
         except Exception as e:
             logger.error(f"Error deleting dashboard: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"action": "delete", "dashboard_id": dashboard_id},
-                raise_error=False,
                 suggestions=[
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
@@ -1157,11 +1156,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         pass  # Default: register the tool if settings unavailable
 
     @mcp.tool(
+        tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["dashboard", "card"],
-            "title": "Find Dashboard Card",
+            "title": "Find Dashboard Card"
         }
     )
     @log_tool_usage

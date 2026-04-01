@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+import yaml
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -24,7 +25,15 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import config_validation as cv
 
-from .const import ALLOWED_READ_DIRS, ALLOWED_WRITE_DIRS, DOMAIN
+from .const import (
+    ALLOWED_READ_DIRS,
+    ALLOWED_WRITE_DIRS,
+    ALLOWED_YAML_CONFIG_FILES,
+    ALLOWED_YAML_KEYS,
+    DOMAIN,
+    YAML_KEY_DEFAULT_POST_ACTION,
+    YAML_KEY_POST_ACTIONS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,8 +42,19 @@ SERVICE_LIST_FILES = "list_files"
 SERVICE_READ_FILE = "read_file"
 SERVICE_WRITE_FILE = "write_file"
 SERVICE_DELETE_FILE = "delete_file"
+SERVICE_EDIT_YAML_CONFIG = "edit_yaml_config"
 
 # Service schemas
+SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Required("file"): cv.string,
+        vol.Required("action"): vol.In(["add", "replace", "remove"]),
+        vol.Required("yaml_path"): cv.string,
+        vol.Optional("content"): cv.string,
+        vol.Optional("backup", default=True): cv.boolean,
+    }
+)
+
 SERVICE_LIST_FILES_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
@@ -78,7 +98,9 @@ ALLOWED_READ_FILES = [
 DEFAULT_LOG_TAIL_LINES = 1000
 
 
-def _is_path_allowed_for_dir(config_dir: Path, rel_path: str, allowed_dirs: list[str]) -> bool:
+def _is_path_allowed_for_dir(
+    config_dir: Path, rel_path: str, allowed_dirs: list[str]
+) -> bool:
     """Check if a path is within allowed directories."""
     # Normalize the path
     normalized = os.path.normpath(rel_path)
@@ -185,9 +207,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Security check
         if not _is_path_allowed_for_dir(config_dir, rel_path, ALLOWED_READ_DIRS):
-            _LOGGER.warning(
-                "Attempted to list files in disallowed path: %s", rel_path
-            )
+            _LOGGER.warning("Attempted to list files in disallowed path: %s", rel_path)
             return {
                 "success": False,
                 "error": f"Path not allowed. Must be in: {', '.join(ALLOWED_READ_DIRS)}",
@@ -261,13 +281,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Security check
         if not _is_path_allowed_for_read(config_dir, rel_path):
-            _LOGGER.warning(
-                "Attempted to read disallowed path: %s", rel_path
-            )
+            _LOGGER.warning("Attempted to read disallowed path: %s", rel_path)
             allowed_patterns = (
-                ALLOWED_READ_FILES +
-                [f"{d}/**" for d in ALLOWED_READ_DIRS] +
-                ["packages/*.yaml", "custom_components/**/*.py"]
+                ALLOWED_READ_FILES
+                + [f"{d}/**" for d in ALLOWED_READ_DIRS]
+                + ["packages/*.yaml", "custom_components/**/*.py"]
             )
             return {
                 "success": False,
@@ -365,9 +383,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Security check - only allow writes to specific directories
         if not _is_path_allowed_for_dir(config_dir, rel_path, ALLOWED_WRITE_DIRS):
-            _LOGGER.warning(
-                "Attempted to write to disallowed path: %s", rel_path
-            )
+            _LOGGER.warning("Attempted to write to disallowed path: %s", rel_path)
             return {
                 "success": False,
                 "error": f"Write not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS)}",
@@ -435,9 +451,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Security check - only allow deletes from specific directories
         if not _is_path_allowed_for_dir(config_dir, rel_path, ALLOWED_WRITE_DIRS):
-            _LOGGER.warning(
-                "Attempted to delete from disallowed path: %s", rel_path
-            )
+            _LOGGER.warning("Attempted to delete from disallowed path: %s", rel_path)
             return {
                 "success": False,
                 "error": f"Delete not allowed. Must be in: {', '.join(ALLOWED_WRITE_DIRS)}",
@@ -486,7 +500,255 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "error": str(err),
             }
 
+    async def handle_edit_yaml_config(call: ServiceCall) -> ServiceResponse:
+        """Handle the edit_yaml_config service call."""
+        rel_path = call.data["file"]
+        action = call.data["action"]
+        yaml_path = call.data["yaml_path"]
+        content = call.data.get("content")
+        do_backup = call.data.get("backup", True)
+
+        # Validate file path — only configuration.yaml and packages/*.yaml
+        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+        if normalized.startswith("..") or normalized.startswith("/"):
+            return {
+                "success": False,
+                "error": "Path traversal is not allowed.",
+            }
+
+        is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
+        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
+            normalized, "packages/**/*.yaml"
+        )
+        if not is_config_yaml and not is_package:
+            return {
+                "success": False,
+                "error": (
+                    f"File '{rel_path}' is not allowed. "
+                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
+                ),
+            }
+
+        # Validate yaml_path against allowlist
+        if yaml_path not in ALLOWED_YAML_KEYS:
+            return {
+                "success": False,
+                "error": (
+                    f"Key '{yaml_path}' is not in the allowed list. "
+                    f"Allowed keys: {', '.join(sorted(ALLOWED_YAML_KEYS))}"
+                ),
+            }
+
+        # Validate content is valid YAML for add/replace
+        parsed_content: Any = None
+        if action in ("add", "replace"):
+            if not content:
+                return {
+                    "success": False,
+                    "error": f"'content' is required for action '{action}'.",
+                }
+            try:
+                parsed_content = yaml.safe_load(content)
+            except yaml.YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Invalid YAML content: {err}",
+                }
+            if parsed_content is None:
+                return {
+                    "success": False,
+                    "error": "Content parsed as null/empty. Provide non-empty YAML.",
+                }
+
+        target_file = config_dir / normalized
+        backup_path_str: str | None = None
+
+        try:
+            # Read existing file content (or start with empty dict)
+            if target_file.exists():
+                raw_content = await hass.async_add_executor_job(target_file.read_text)
+                try:
+                    data = yaml.safe_load(raw_content) or {}
+                except yaml.YAMLError as err:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Cannot parse existing file '{rel_path}': {err}. "
+                            "The file may contain !include or !secret directives "
+                            "that require Home Assistant's YAML loader. "
+                            "This tool only supports standard YAML."
+                        ),
+                    }
+                if not isinstance(data, dict):
+                    return {
+                        "success": False,
+                        "error": f"File '{rel_path}' root is not a YAML mapping.",
+                    }
+            else:
+                if action == "remove":
+                    return {
+                        "success": False,
+                        "error": f"File does not exist: {rel_path}",
+                    }
+                data = {}
+                raw_content = ""
+
+            # Create backup before editing (from already-read content, not disk)
+            if do_backup and raw_content:
+                backup_dir = config_dir / "www" / "yaml_backups"
+                await hass.async_add_executor_job(
+                    backup_dir.mkdir, parents=True, exist_ok=True
+                )
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = normalized.replace(os.sep, "_")
+                backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
+                await hass.async_add_executor_job(
+                    backup_file.write_text, raw_content
+                )
+                backup_path_str = str(backup_file.relative_to(config_dir))
+                _LOGGER.info("Backup created: %s", backup_path_str)
+
+            # Perform the action
+            if action == "add":
+                if yaml_path in data:
+                    existing = data[yaml_path]
+                    # Merge: list extends list, dict merges dict
+                    if isinstance(existing, list) and isinstance(parsed_content, list):
+                        data[yaml_path] = existing + parsed_content
+                    elif isinstance(existing, dict) and isinstance(
+                        parsed_content, dict
+                    ):
+                        existing.update(parsed_content)
+                    else:
+                        return {
+                            "success": False,
+                            "error": (
+                                f"Type mismatch for key '{yaml_path}': "
+                                f"existing is {type(existing).__name__}, "
+                                f"new content is {type(parsed_content).__name__}. "
+                                "Use action='replace' to overwrite."
+                            ),
+                        }
+                else:
+                    data[yaml_path] = parsed_content
+            elif action == "replace":
+                data[yaml_path] = parsed_content
+            elif action == "remove":
+                if yaml_path not in data:
+                    return {
+                        "success": False,
+                        "error": f"Key '{yaml_path}' not found in '{rel_path}'.",
+                    }
+                del data[yaml_path]
+
+            # Serialize back to YAML
+            new_content = yaml.dump(
+                data,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+            # Validate the result parses cleanly
+            try:
+                yaml.safe_load(new_content)
+            except yaml.YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Generated YAML failed validation: {err}",
+                }
+
+            # Create parent directories if needed (for new package files)
+            if not target_file.parent.exists():
+                await hass.async_add_executor_job(
+                    target_file.parent.mkdir, parents=True, exist_ok=True
+                )
+
+            # Atomic write: write to temp file, then rename into place
+            def _atomic_write() -> None:
+                tmp_file = target_file.with_suffix(".tmp")
+                tmp_file.write_text(new_content)
+                os.replace(str(tmp_file), str(target_file))
+
+            await hass.async_add_executor_job(_atomic_write)
+
+            stat = target_file.stat()
+            modified_dt = datetime.fromtimestamp(stat.st_mtime)
+
+            _LOGGER.info(
+                "YAML config edited: %s (action=%s, key=%s)",
+                rel_path,
+                action,
+                yaml_path,
+            )
+
+            result: dict[str, Any] = {
+                "success": True,
+                "file": rel_path,
+                "action": action,
+                "yaml_path": yaml_path,
+                "size": stat.st_size,
+                "modified": modified_dt.isoformat(),
+            }
+            if backup_path_str:
+                result["backup_path"] = backup_path_str
+
+            # Surface the post-edit action required to activate the change
+            post_info = YAML_KEY_POST_ACTIONS.get(
+                yaml_path, YAML_KEY_DEFAULT_POST_ACTION
+            )
+            result.update(post_info)
+
+            # Run HA config check to verify the file is loadable
+            try:
+                check_result = await hass.services.async_call(
+                    "homeassistant",
+                    "check_config",
+                    {},
+                    blocking=True,
+                    return_response=True,
+                )
+                if isinstance(check_result, dict):
+                    errors = check_result.get("errors")
+                    if errors:
+                        result["config_check"] = "errors"
+                        result["config_check_errors"] = errors
+                        _LOGGER.warning(
+                            "Config check found errors after editing %s: %s",
+                            rel_path,
+                            errors,
+                        )
+                    else:
+                        result["config_check"] = "ok"
+            except Exception as check_err:
+                result["config_check"] = "unavailable"
+                result["config_check_error"] = str(check_err)
+                _LOGGER.debug("Config check unavailable: %s", check_err)
+
+            return result
+
+        except PermissionError:
+            _LOGGER.error("Permission denied editing: %s", rel_path)
+            return {
+                "success": False,
+                "error": f"Permission denied: {rel_path}",
+            }
+        except OSError as err:
+            _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
+            return {
+                "success": False,
+                "error": str(err),
+            }
+
     # Register all services with response support
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_EDIT_YAML_CONFIG,
+        handle_edit_yaml_config,
+        schema=SERVICE_EDIT_YAML_CONFIG_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_LIST_FILES,
@@ -526,6 +788,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     # Remove all services
+    hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)

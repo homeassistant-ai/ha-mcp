@@ -86,7 +86,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     if not device_tools:
         raise ValueError("device_tools is required for service tools registration")
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Call Service"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
     @log_tool_usage
     async def ha_call_service(
         domain: str,
@@ -290,7 +290,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=suggestions,
             )
 
-    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     @log_tool_usage
     async def ha_get_operation_status(
         operation_id: Annotated[
@@ -349,7 +349,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Bulk Control"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
     @log_tool_usage
     async def ha_bulk_control(
         operations: str | list[dict[str, Any]], parallel: bool | str = True

@@ -85,11 +85,11 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register bug report tools with the MCP server."""
 
     @mcp.tool(
+        tags={"Utilities"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["system", "diagnostics", "feedback"],
-            "title": "Report Issue or Feedback",
+            "title": "Report Issue or Feedback"
         }
     )
     @log_tool_usage
