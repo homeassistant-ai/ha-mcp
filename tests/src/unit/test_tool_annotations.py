@@ -143,7 +143,7 @@ class TestToolAnnotations:
         """Sanity check that we're finding a reasonable number of tools."""
         tools = get_all_tools()
 
-        # We should have at least 50 tools (currently ~87)
+        # We should have at least 50 tools (currently ~92)
         assert len(tools) >= 50, f"Only found {len(tools)} tools, expected at least 50"
 
         # We should have a mix of read-only and destructive tools

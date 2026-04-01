@@ -2,7 +2,7 @@
 
 ## Project Context
 
-**ha-mcp** is a Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart homes. It provides 87+ tools for entity control, automations, device management, and configuration via Home Assistant's REST and WebSocket APIs.
+**ha-mcp** is a Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart homes. It provides 92+ tools for entity control, automations, device management, and configuration via Home Assistant's REST and WebSocket APIs.
 
 **Key Technologies:**
 - Python 3.13, FastMCP framework
@@ -11,7 +11,7 @@
 - Architecture: Tool registry with lazy loading, service layer pattern, WebSocket state verification
 
 **Code Organization:**
-- `src/ha_mcp/tools/` - 87+ MCP tools (tool modules auto-discovered)
+- `src/ha_mcp/tools/` - 92+ MCP tools (tool modules auto-discovered)
 - `src/ha_mcp/client/` - REST and WebSocket clients
 - `tests/src/e2e/` - End-to-end tests with real Home Assistant instance
 - `tests/src/unit/` - Unit tests for utilities

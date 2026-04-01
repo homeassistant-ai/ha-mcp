@@ -120,5 +120,5 @@ Stories are derived from:
 - Real user workflows observed in GitHub issues (#445, #384, #320, #319, #405, etc.)
 - Community discussions (#512 Agent Skills, #477 Paulus discussion, #448 community feedback)
 - Research repo insights (homeassistant-ai/research: ideas, Paulus notes)
-- Tool usage patterns inferred from the 87+ tool codebase
+- Tool usage patterns inferred from the 92+ tool codebase
 - Common HA community patterns (Reddit, forums, blog posts)

@@ -59,7 +59,7 @@ class TestCategorizeTool:
         assert _categorize_tool(tool) == "read"
 
     def test_destructive_delete_tool(self):
-        tool = _make_tool("ha_config_remove_area_or_floor", destructive=True, idempotent=True)
+        tool = _make_tool("ha_config_remove_area", destructive=True, idempotent=True)
         assert _categorize_tool(tool) == "delete"
 
     def test_destructive_delete_pattern(self):
@@ -119,10 +119,10 @@ class TestRenderResults:
 
     @pytest.mark.anyio
     async def test_delete_tool_execute_via(self, transform):
-        tools = [_make_tool("ha_config_remove_area_or_floor", destructive=True, description="Remove")]
+        tools = [_make_tool("ha_config_remove_area", destructive=True, description="Remove")]
         results = await transform._render_results(tools)
         assert "ha_call_delete_tool" in results[0]["execute_via"]
-        assert "ha_config_remove_area_or_floor" in results[0]["execute_via"]
+        assert "ha_config_remove_area" in results[0]["execute_via"]
 
     @pytest.mark.anyio
     async def test_preserves_standard_fields(self, transform):
@@ -169,7 +169,7 @@ class TestTransformTools:
             _make_tool("ha_restart", destructive=True, description="Restart"),
             _make_tool("ha_get_state", read_only=True, description="Get state"),
             _make_tool("ha_config_set_automation", destructive=True, description="Set auto"),
-            _make_tool("ha_config_remove_area_or_floor", destructive=True, description="Remove area"),
+            _make_tool("ha_config_remove_area", destructive=True, description="Remove area"),
         ]
 
     @pytest.mark.anyio
@@ -188,7 +188,7 @@ class TestTransformTools:
         # Hidden tools should NOT be in the list
         assert "ha_get_state" not in names
         assert "ha_config_set_automation" not in names
-        assert "ha_config_remove_area_or_floor" not in names
+        assert "ha_config_remove_area" not in names
 
     @pytest.mark.anyio
     async def test_total_count(self, transform, sample_tools):
@@ -337,7 +337,7 @@ class TestCategorizedCallDispatch:
             _make_tool("ha_search_entities", read_only=True),
             _make_tool("ha_config_set_automation", destructive=True),
             _make_tool("ha_call_service", destructive=True),
-            _make_tool("ha_config_remove_area_or_floor", destructive=True),
+            _make_tool("ha_config_remove_area", destructive=True),
         ])
         return t
 
@@ -383,7 +383,7 @@ class TestCategorizedCallDispatch:
         """Correct delete tool via delete proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
         fn = self._get_proxy_fn(transform, "delete")
-        result = await fn("ha_config_remove_area_or_floor", {"area_id": "garage"}, ctx)
+        result = await fn("ha_config_remove_area", {"area_id": "garage"}, ctx)
         assert result == {"success": True}
 
     @pytest.mark.anyio
@@ -415,7 +415,7 @@ class TestCategorizedCallDispatch:
         ctx = _make_ctx()
         fn = self._get_proxy_fn(transform, "read")
         with pytest.raises(ToolError) as exc_info:
-            await fn("ha_config_remove_area_or_floor", {}, ctx)
+            await fn("ha_config_remove_area", {}, ctx)
         error = json.loads(str(exc_info.value))
         assert "ha_call_delete_tool" in error["error"]["message"]
 
@@ -454,7 +454,7 @@ class TestDoubleUnwrap:
         _prepopulate_cache(t, [
             _make_tool("ha_get_state", read_only=True),
             _make_tool("ha_config_set_automation", destructive=True),
-            _make_tool("ha_config_remove_area_or_floor", destructive=True),
+            _make_tool("ha_config_remove_area", destructive=True),
         ])
         return t
 
@@ -540,7 +540,7 @@ class TestRebuildCategoryCache:
             _make_tool("ha_get_state", read_only=True),
             _make_tool("ha_list_areas", read_only=True),
             _make_tool("ha_config_set_automation", destructive=True),
-            _make_tool("ha_config_remove_area_or_floor", destructive=True),
+            _make_tool("ha_config_remove_area", destructive=True),
         ]
         with patch.object(transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools):
             await transform._rebuild_category_cache(None)
@@ -548,7 +548,7 @@ class TestRebuildCategoryCache:
         assert "ha_get_state" in transform._read_tools
         assert "ha_list_areas" in transform._read_tools
         assert "ha_config_set_automation" in transform._write_tools
-        assert "ha_config_remove_area_or_floor" in transform._delete_tools
+        assert "ha_config_remove_area" in transform._delete_tools
 
     @pytest.mark.anyio
     async def test_cache_updates_on_catalog_change(self):

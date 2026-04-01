@@ -38,9 +38,9 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_config_set_area_or_floor
+    - ha_config_set_area
     - ha_search_entities
-    - ha_config_list_areas_or_floors
+    - ha_config_list_areas
   description: >
     Agent should create the three areas, then search for light entities,
     and present a recommendation mapping. Should use entity names to infer

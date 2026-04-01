@@ -16,7 +16,7 @@ tags:
 
 setup:
   # Ensure an area exists with entities
-  - tool: ha_config_set_area_or_floor
+  - tool: ha_config_set_area
     args:
       name: "Living Room Test"
 
