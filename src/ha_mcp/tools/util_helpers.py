@@ -388,7 +388,8 @@ async def fetch_entity_category(
         )
         if result.get("success"):
             categories = result.get("result", {}).get("categories", {})
-            return categories.get(scope)
+            cat_id = categories.get(scope)
+            return str(cat_id) if cat_id is not None else None
     except Exception as e:
         logger.debug(f"Failed to fetch category for {entity_id}: {e}")
     return None
