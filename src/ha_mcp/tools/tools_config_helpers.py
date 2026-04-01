@@ -661,7 +661,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if labels:
                             update_message["labels"] = labels
                         if category:
-                            update_message["categories"] = {helper_type: category}
+                            update_message["categories"] = {"helpers": category}
 
                         update_result = await client.send_websocket_message(
                             update_message
@@ -889,8 +889,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ))
                         updated_data = result.get("result", {})
 
-                    # Also update entity registry for icon, area, and labels
-                    if icon or area_id or labels:
+                    # Also update entity registry for icon, area, labels, and category
+                    if icon or area_id or labels or category:
                         registry_update: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
@@ -901,6 +901,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             registry_update["area_id"] = area_id
                         if labels:
                             registry_update["labels"] = labels
+                        if category:
+                            registry_update["categories"] = {"helpers": category}
                         await client.send_websocket_message(registry_update)
 
                 else:
@@ -918,6 +920,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         update_msg["area_id"] = area_id
                     if labels:
                         update_msg["labels"] = labels
+                    if category:
+                        update_msg["categories"] = {"helpers": category}
 
                     result = await client.send_websocket_message(update_msg)
 

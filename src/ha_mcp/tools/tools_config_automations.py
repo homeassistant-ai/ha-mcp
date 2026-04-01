@@ -250,8 +250,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         ):
                             entity_id = state["entity_id"]
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
 
             if entity_id:
                 try:
@@ -263,8 +263,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         cat_id = categories.get("automation")
                         if cat_id:
                             normalized_config["category"] = cat_id
-                except Exception:
-                    pass  # Category lookup is best-effort
+                except Exception as e:
+                    logger.debug(f"Failed to fetch category for automation {entity_id}: {e}")
 
             return {
                 "success": True,

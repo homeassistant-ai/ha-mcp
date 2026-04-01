@@ -94,8 +94,8 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     cat_id = categories.get("script")
                     if cat_id:
                         config_result["category"] = cat_id
-            except Exception:
-                pass  # Category lookup is best-effort
+            except Exception as e:
+                logger.debug(f"Failed to fetch category for script {entity_id}: {e}")
 
             return {
                 "success": True,
