@@ -340,19 +340,6 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Get updated entry info
             require_restart = result.get("result", {}).get("require_restart", False)
 
-            # Verify the config entry reflects the change
-            if not require_restart:
-                try:
-                    entry = await client.get_config_entry(entry_id)
-                    actual_disabled = entry.get("disabled_by") is not None
-                    if actual_disabled == enabled_bool:
-                        logger.warning(
-                            f"Config entry {entry_id} disabled_by={entry.get('disabled_by')} "
-                            f"does not match requested enabled={enabled_bool}"
-                        )
-                except Exception as e:
-                    logger.debug(f"Failed to verify integration enable/disable for {entry_id}: {e}")
-
             if require_restart:
                 note = "Home Assistant restart required for changes to take effect."
             else:
@@ -411,15 +398,6 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             result = await client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)
-
-            # Verify config entry is actually gone (404 = expected/success)
-            if not require_restart:
-                try:
-                    entry = await client.get_config_entry(entry_id)
-                    if entry:
-                        logger.warning(f"Config entry {entry_id} still exists after deletion")
-                except Exception as e:
-                    logger.debug(f"Config entry {entry_id} confirmed gone (or lookup failed): {e}")
 
             return {
                 "success": True,
