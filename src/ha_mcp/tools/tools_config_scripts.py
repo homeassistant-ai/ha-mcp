@@ -20,7 +20,9 @@ from .best_practice_checker import (
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
+    fetch_entity_category,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -85,17 +87,9 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Fetch category from entity registry (best-effort)
             entity_id = f"script.{script_id}"
-            try:
-                reg_result = await client.send_websocket_message(
-                    {"type": "config/entity_registry/get", "entity_id": entity_id}
-                )
-                if reg_result.get("success"):
-                    categories = reg_result.get("result", {}).get("categories", {})
-                    cat_id = categories.get("script")
-                    if cat_id:
-                        config_result["category"] = cat_id
-            except Exception as e:
-                logger.debug(f"Failed to fetch category for script {entity_id}: {e}")
+            cat_id = await fetch_entity_category(client, entity_id, "script")
+            if cat_id:
+                config_result["category"] = cat_id
 
             return {
                 "success": True,
@@ -318,16 +312,9 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Apply category to entity registry if provided
             if effective_category and entity_id:
-                try:
-                    await client.send_websocket_message({
-                        "type": "config/entity_registry/update",
-                        "entity_id": entity_id,
-                        "categories": {"script": effective_category},
-                    })
-                    result["category"] = effective_category
-                except Exception as e:
-                    logger.warning(f"Failed to set category for {entity_id}: {e}")
-                    result["category_warning"] = f"Script saved but failed to set category: {e}"
+                await apply_entity_category(
+                    client, entity_id, effective_category, "script", result, "script"
+                )
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings

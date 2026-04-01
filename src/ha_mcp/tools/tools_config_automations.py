@@ -24,7 +24,9 @@ from .best_practice_checker import (
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
+    fetch_entity_category,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -262,17 +264,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Resolve entity_id and fetch category from entity registry
             entity_id = await _resolve_automation_entity_id(identifier)
             if entity_id:
-                try:
-                    reg_result = await client.send_websocket_message(
-                        {"type": "config/entity_registry/get", "entity_id": entity_id}
-                    )
-                    if reg_result.get("success"):
-                        categories = reg_result.get("result", {}).get("categories", {})
-                        cat_id = categories.get("automation")
-                        if cat_id:
-                            normalized_config["category"] = cat_id
-                except Exception as e:
-                    logger.debug(f"Failed to fetch category for automation {entity_id}: {e}")
+                cat_id = await fetch_entity_category(client, entity_id, "automation")
+                if cat_id:
+                    normalized_config["category"] = cat_id
 
             return {
                 "success": True,
@@ -559,16 +553,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
             # Apply category to entity registry if provided
             if effective_category and entity_id:
-                try:
-                    await client.send_websocket_message({
-                        "type": "config/entity_registry/update",
-                        "entity_id": entity_id,
-                        "categories": {"automation": effective_category},
-                    })
-                    result["category"] = effective_category
-                except Exception as e:
-                    logger.warning(f"Failed to set category for {entity_id}: {e}")
-                    result["category_warning"] = f"Automation saved but failed to set category: {e}"
+                await apply_entity_category(
+                    client, entity_id, effective_category, "automation", result, "automation"
+                )
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
@@ -636,6 +623,10 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         try:
             # Resolve entity_id for wait verification (identifier may be a unique_id)
             entity_id_for_wait = await _resolve_automation_entity_id(identifier)
+            if not entity_id_for_wait:
+                logger.warning(
+                    f"Could not resolve unique_id '{identifier}' to entity_id — wait verification will be skipped"
+                )
 
             result = await client.delete_automation_config(identifier)
 

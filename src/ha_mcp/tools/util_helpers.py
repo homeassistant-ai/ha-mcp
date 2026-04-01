@@ -367,3 +367,63 @@ async def wait_for_state_change(
 
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
     return None
+
+
+async def fetch_entity_category(
+    client: Any, entity_id: str, scope: str
+) -> str | None:
+    """Fetch a category ID for an entity from the entity registry.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity to look up (e.g., 'automation.morning_routine')
+        scope: Category scope (e.g., 'automation', 'script', 'helpers')
+
+    Returns:
+        Category ID string if set, None otherwise
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+        if result.get("success"):
+            categories = result.get("result", {}).get("categories", {})
+            return categories.get(scope)
+    except Exception as e:
+        logger.debug(f"Failed to fetch category for {entity_id}: {e}")
+    return None
+
+
+async def apply_entity_category(
+    client: Any,
+    entity_id: str,
+    category: str,
+    scope: str,
+    result_dict: dict[str, Any],
+    entity_type: str = "entity",
+) -> None:
+    """Apply a category to an entity via the entity registry.
+
+    Updates result_dict in-place with 'category' on success or
+    'category_warning' on failure.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity to update
+        category: Category ID to assign
+        scope: Category scope (e.g., 'automation', 'script')
+        result_dict: Tool result dict to update with category status
+        entity_type: Human-readable type for warning messages
+    """
+    try:
+        await client.send_websocket_message({
+            "type": "config/entity_registry/update",
+            "entity_id": entity_id,
+            "categories": {scope: category},
+        })
+        result_dict["category"] = category
+    except Exception as e:
+        logger.warning(f"Failed to set category for {entity_id}: {e}")
+        result_dict["category_warning"] = (
+            f"{entity_type.capitalize()} saved but failed to set category: {e}"
+        )
