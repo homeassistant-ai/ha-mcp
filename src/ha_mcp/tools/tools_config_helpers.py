@@ -408,7 +408,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         category: Annotated[
             str | None,
             Field(
-                description="Category ID to assign to this helper. Use ha_config_get_category() to list available categories.",
+                description="Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
                 default=None,
             ),
         ] = None,
