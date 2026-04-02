@@ -75,19 +75,22 @@ class TestCodeModeAvailability:
 
     async def test_feature_flag_disabled_by_default(self, ha_container_with_fresh_config):
         """Verify tool is NOT registered when feature flag is disabled."""
-        from fastmcp import Client
-        from ha_mcp import config as config_mod
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         # Ensure flag is OFF for this test
         original = os.environ.pop(FEATURE_FLAG, None)
         try:
-            config_mod._settings = None  # Reset singleton
+            # Reset cached settings singleton so server reads fresh env
+            import ha_mcp.config
+            ha_mcp.config._settings = None
+
+            from ha_mcp.server import HomeAssistantSmartMCPServer
 
             server = HomeAssistantSmartMCPServer(
                 client=None,
                 server_name="test-disabled",
             )
+
+            from fastmcp import Client
+
             client = Client(server.mcp)
             async with client:
                 tools = await client.list_tools()
@@ -100,7 +103,7 @@ class TestCodeModeAvailability:
         finally:
             if original:
                 os.environ[FEATURE_FLAG] = original
-            config_mod._settings = None  # Reset for other tests
+            ha_mcp.config._settings = None  # Reset for other tests
 
     async def test_tool_registered_when_enabled(self, mcp_client_with_code_mode):
         """Verify tool IS registered when feature flag is enabled."""
@@ -269,12 +272,14 @@ class TestCodeModeCallTool:
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "call_tool search")
 
-        # ha_search_entities returns {"success": True, "results": [...], ...}
-        # Entities are in the "results" key, not "entities".
+        # ha_search_entities wraps results with add_timezone_metadata, so
+        # the shape is {"data": {"success": True, "results": [...]}, "metadata": {...}}.
+        # Unwrap the "data" layer first, then access "results".
         code = (
             'result = await call_tool("ha_search_entities", '
-            '{"query": "", "domain_filter": "light"})\n'
-            'results = result.get("results", [])\n'
+            '{"query": "light", "limit": 5})\n'
+            'data = result.get("data", result)\n'
+            'results = data.get("results", [])\n'
             '{"found": len(results) > 0, "count": len(results)}'
         )
         data = await safe_call_tool(
