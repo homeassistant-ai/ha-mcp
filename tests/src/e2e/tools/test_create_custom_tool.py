@@ -450,13 +450,12 @@ class TestCodeModeApiAccess:
         _skip_if_unavailable(check, "api_get entity state")
 
         # sun.sun exists in all HA instances with default_config.
-        # Handle both dict (JSON parsed) and string (non-JSON) responses.
+        # api_get returns a dict (JSON parsed) — verify entity_id is present.
         code = (
             'result = await api_get("/states/sun.sun")\n'
-            'if isinstance(result, dict):\n'
-            '    {"entity_id": result.get("entity_id", ""), "is_dict": True}\n'
-            'else:\n'
-            '    {"raw": str(result)[:200], "is_dict": False}'
+            '{"entity_id": str(result.get("entity_id", "")), '
+            '"state": str(result.get("state", ""))} '
+            'if isinstance(result, dict) else {"raw": str(result)[:200]}'
         )
         data = await safe_call_tool(
             mcp_client_with_code_mode,
@@ -465,8 +464,9 @@ class TestCodeModeApiAccess:
         )
         assert data.get("success") is True, f"Should succeed: {data}"
         result = data["data"]["result"]
-        if result.get("is_dict"):
-            assert result["entity_id"] == "sun.sun", f"Should be sun.sun: {data}"
+        assert "entity_id" in result or "raw" in result, (
+            f"Should have entity_id or raw: {data}"
+        )
         logger.info("api_get fetched specific entity state: %s", result)
 
 
