@@ -654,33 +654,62 @@ class SmartSearchTools:
 
             pagination_metadata: dict[str, Any] | None = None
             if effective_limit is not None:
-                # Collect all entities across domains in order, apply offset/limit
                 total_entity_count = sum(
                     len(ds["entities"]) for ds in formatted_domain_stats.values()
                 )
-                # Distribute the paginated budget across domains
-                entities_skipped = 0
-                entities_included = 0
-                for domain_data in formatted_domain_stats.values():
-                    domain_entities = domain_data["entities"]
-                    domain_len = len(domain_entities)
 
-                    # Calculate how many to skip/include from this domain
-                    skip_from_domain = max(0, min(domain_len, offset - entities_skipped))
-                    remaining_budget = effective_limit - entities_included
-                    take_from_domain = max(
-                        0, min(domain_len - skip_from_domain, remaining_budget)
-                    )
+                if offset == 0:
+                    # Page 1: fair distribution — give each domain a minimum
+                    # allocation so the LLM sees entities from every domain,
+                    # then distribute the remaining budget proportionally.
+                    min_per_domain = 3
+                    num_domains = len(formatted_domain_stats)
+                    reserved = min(min_per_domain * num_domains, effective_limit)
+                    remaining_budget = effective_limit - reserved
 
-                    if skip_from_domain > 0 or take_from_domain < domain_len:
-                        domain_data["entities"] = domain_entities[
-                            skip_from_domain : skip_from_domain + take_from_domain
-                        ]
-                        if take_from_domain < domain_len:
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
+                        # Base allocation: min_per_domain or all if domain is smaller
+                        base = min(min_per_domain, domain_len)
+                        # Proportional share of remaining budget
+                        if total_entity_count > 0 and remaining_budget > 0:
+                            extra = int(
+                                remaining_budget * domain_len / total_entity_count
+                            )
+                        else:
+                            extra = 0
+                        take = min(base + extra, domain_len)
+                        if take < domain_len:
+                            domain_data["entities"] = domain_entities[:take]
                             domain_data["truncated"] = True
+                        entities_included += len(domain_data["entities"])
+                else:
+                    # Pages 2+: sequential skip/take across domains
+                    entities_skipped = 0
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
 
-                    entities_skipped += skip_from_domain
-                    entities_included += take_from_domain
+                        skip_from_domain = max(
+                            0, min(domain_len, offset - entities_skipped)
+                        )
+                        budget_left = effective_limit - entities_included
+                        take_from_domain = max(
+                            0, min(domain_len - skip_from_domain, budget_left)
+                        )
+
+                        if skip_from_domain > 0 or take_from_domain < domain_len:
+                            domain_data["entities"] = domain_entities[
+                                skip_from_domain : skip_from_domain + take_from_domain
+                            ]
+                            if take_from_domain < domain_len:
+                                domain_data["truncated"] = True
+
+                        entities_skipped += skip_from_domain
+                        entities_included += take_from_domain
 
                 has_more = (offset + entities_included) < total_entity_count
                 pagination_metadata = {

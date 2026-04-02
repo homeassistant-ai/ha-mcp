@@ -556,38 +556,49 @@ class TestGetSystemOverview:
 
     @pytest.mark.asyncio
     async def test_pagination_across_multiple_domains(self):
-        """Pagination distributes budget across domains in order."""
+        """Pagination distributes budget fairly across domains on page 1."""
         entities = [
+            {
+                "entity_id": f"sensor.s{i}",
+                "attributes": {"friendly_name": f"Sensor {i}"},
+                "state": "on",
+            }
+            for i in range(150)
+        ] + [
             {
                 "entity_id": f"light.l{i}",
                 "attributes": {"friendly_name": f"Light {i}"},
                 "state": "on",
             }
-            for i in range(150)
+            for i in range(50)
         ] + [
             {
                 "entity_id": f"switch.s{i}",
                 "attributes": {"friendly_name": f"Switch {i}"},
                 "state": "off",
             }
-            for i in range(150)
+            for i in range(50)
         ]
         client = MockClient(entities=entities)
         tools = _make_tools(client)
 
         result = await tools.get_system_overview(
-            detail_level="standard", limit=200
+            detail_level="standard", limit=100
         )
 
-        # Both domains present with full counts
-        assert result["domain_stats"]["light"]["count"] == 150
-        assert result["domain_stats"]["switch"]["count"] == 150
-        # Total entities returned is capped at 200
+        # All domains present with full counts
+        assert result["domain_stats"]["sensor"]["count"] == 150
+        assert result["domain_stats"]["light"]["count"] == 50
+        assert result["domain_stats"]["switch"]["count"] == 50
+        # Every domain gets at least some entities (fair distribution)
+        assert len(result["domain_stats"]["sensor"]["entities"]) >= 3
+        assert len(result["domain_stats"]["light"]["entities"]) >= 3
+        assert len(result["domain_stats"]["switch"]["entities"]) >= 3
+        # Total entities returned is within limit
         total_returned = sum(
             len(ds["entities"]) for ds in result["domain_stats"].values()
         )
-        assert total_returned == 200
-        assert result["pagination"]["entities_returned"] == 200
+        assert total_returned <= 100
         assert result["pagination"]["has_more"] is True
 
     @pytest.mark.asyncio
