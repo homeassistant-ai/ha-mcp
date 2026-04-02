@@ -389,6 +389,8 @@ class SmartSearchTools:
         include_state: bool | None = None,
         include_entity_id: bool | None = None,
         domains_filter: list[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
@@ -402,6 +404,10 @@ class SmartSearchTools:
             include_state: Override whether to include state field
             include_entity_id: Override whether to include entity_id field
             domains_filter: Only include these domains (None = all)
+            limit: Max total entities to include across all domains.
+                Defaults to None (no limit) for minimal, 200 for standard/full.
+                Domain counts and states_summary are always complete regardless.
+            offset: Number of entities to skip for pagination (default: 0)
 
         Returns:
             System overview optimized for AI understanding at requested detail level
@@ -640,6 +646,52 @@ class SmartSearchTools:
                     "truncated": truncated,
                 }
 
+            # Apply global entity pagination (limit/offset across all domains)
+            # Default limit: None for minimal (already capped per-domain), 200 for standard/full
+            effective_limit = limit
+            if effective_limit is None and detail_level != "minimal":
+                effective_limit = 200
+
+            pagination_metadata: dict[str, Any] | None = None
+            if effective_limit is not None:
+                # Collect all entities across domains in order, apply offset/limit
+                total_entity_count = sum(
+                    len(ds["entities"]) for ds in formatted_domain_stats.values()
+                )
+                # Distribute the paginated budget across domains
+                entities_skipped = 0
+                entities_included = 0
+                for domain_data in formatted_domain_stats.values():
+                    domain_entities = domain_data["entities"]
+                    domain_len = len(domain_entities)
+
+                    # Calculate how many to skip/include from this domain
+                    skip_from_domain = max(0, min(domain_len, offset - entities_skipped))
+                    remaining_budget = effective_limit - entities_included
+                    take_from_domain = max(
+                        0, min(domain_len - skip_from_domain, remaining_budget)
+                    )
+
+                    if skip_from_domain > 0 or take_from_domain < domain_len:
+                        domain_data["entities"] = domain_entities[
+                            skip_from_domain : skip_from_domain + take_from_domain
+                        ]
+                        if take_from_domain < domain_len:
+                            domain_data["truncated"] = True
+
+                    entities_skipped += skip_from_domain
+                    entities_included += take_from_domain
+
+                has_more = (offset + entities_included) < total_entity_count
+                pagination_metadata = {
+                    "total_entity_results": total_entity_count,
+                    "offset": offset,
+                    "limit": effective_limit,
+                    "entities_returned": entities_included,
+                    "has_more": has_more,
+                    "next_offset": offset + effective_limit if has_more else None,
+                }
+
             # Build base response — totals always reflect full system
             system_summary: dict[str, Any] = {
                 "total_entities": len(entities),
@@ -661,6 +713,9 @@ class SmartSearchTools:
                 ),
                 "ai_insights": ai_insights,
             }
+
+            if pagination_metadata:
+                base_response["pagination"] = pagination_metadata
 
             if partial_warnings:
                 base_response["partial"] = True

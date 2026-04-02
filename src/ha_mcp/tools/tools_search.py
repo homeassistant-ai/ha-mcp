@@ -525,6 +525,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
+        limit: Annotated[
+            int | str | None,
+            Field(
+                default=None,
+                description=(
+                    "Max total entities across all domains (default: unlimited for minimal, "
+                    "200 for standard/full). Counts and states always complete. "
+                    "Use with offset for pagination."
+                ),
+            ),
+        ] = None,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of entities to skip for pagination (default: 0)",
+            ),
+        ] = 0,
         max_entities_per_domain: Annotated[
             int | None,
             Field(
@@ -559,9 +577,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, entity overview,
         and active persistent notifications (if any).
-        Use 'minimal' (default) for most queries. Each domain always includes total 'count'
-        regardless of entity cap. If the response is too large, retry with a lower
-        max_entities_per_domain or use 'domains' to filter to specific domains.
+        Use 'minimal' (default) for most queries. Domain counts and states_summary
+        are always complete regardless of entity pagination.
+        Standard/full modes paginate entities (default 200 per page) — use offset
+        to fetch more. Use 'domains' filter to narrow scope.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -577,12 +596,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Parse domains filter
         parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
+        # Parse pagination parameters
+        limit_int = coerce_int_param(limit, "limit", default=None, min_value=1)
+        offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+
         result = await smart_tools.get_system_overview(
             detail_level,
             max_entities_per_domain,
             include_state_bool,
             include_entity_id_bool,
             domains_filter=parsed_domains,
+            limit=limit_int,
+            offset=offset_int,
         )
         result = cast(dict[str, Any], result)
 
