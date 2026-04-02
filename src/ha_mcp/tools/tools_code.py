@@ -74,7 +74,7 @@ async def _run_sandboxed_code(
         return result
 
     m = Monty(code, script_name="ha_custom_tool.py")
-    return await m.run_async(  # type: ignore[attr-defined]
+    return await m.run_async(
         external_functions={"call_tool": _call_tool},
         limits=ResourceLimits(
             max_duration_secs=settings.code_mode_max_duration,
