@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ..utilities.assertions import MCPAssertions, safe_call_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
