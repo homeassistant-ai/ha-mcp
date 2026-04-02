@@ -40,6 +40,44 @@ _MAX_CALL_TOOL_INVOCATIONS = 100
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
 
+def _extract_tool_result(result: Any) -> Any:
+    """Convert a FastMCP ToolResult to basic Python types for the sandbox.
+
+    FastMCP call_tool may return a ToolResult, a list of content objects,
+    or a basic type.  Monty can only handle basic Python types (str, int,
+    float, bool, list, dict, None), so we must serialize.
+    """
+    # Already a basic type — pass through
+    if isinstance(result, (str, int, float, bool, type(None))):
+        return result
+    if isinstance(result, dict):
+        return result
+
+    # ToolResult or similar: extract content list
+    content = None
+    if hasattr(result, "content"):
+        content = result.content
+    elif isinstance(result, list):
+        content = result
+
+    if content:
+        texts = []
+        for item in content:
+            if hasattr(item, "text"):
+                texts.append(item.text)
+            elif isinstance(item, str):
+                texts.append(item)
+        if texts:
+            combined = "\n".join(texts)
+            try:
+                return json.loads(combined)
+            except (json.JSONDecodeError, TypeError):
+                return combined
+
+    # Fallback: string representation
+    return str(result)
+
+
 async def _run_sandboxed_code(
     code: str,
     ctx: Context,
@@ -88,22 +126,9 @@ async def _run_sandboxed_code(
                 "error": {"message": f"Tool call failed: {msg}"},
             }
 
-        # FastMCP call_tool returns a list of content objects.
-        # Extract text content and try to parse as JSON for usability.
-        if isinstance(result, list):
-            texts = []
-            for item in result:
-                if hasattr(item, "text"):
-                    texts.append(item.text)
-                elif isinstance(item, str):
-                    texts.append(item)
-            combined = "\n".join(texts) if texts else str(result)
-            try:
-                return json.loads(combined)
-            except (json.JSONDecodeError, TypeError):
-                return combined
-
-        return result
+        # FastMCP call_tool returns a ToolResult or list of content objects.
+        # Monty can only handle basic Python types, so serialize everything.
+        return _extract_tool_result(result)
 
     m = Monty(code, script_name="ha_manage_custom_tool.py")
     run_kwargs: dict[str, Any] = {
