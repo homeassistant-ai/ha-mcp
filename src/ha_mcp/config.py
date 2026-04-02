@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     code_mode_max_memory: int = Field(
         10_485_760, alias="CODE_MODE_MAX_MEMORY"
     )  # 10 MB
+    code_mode_max_recursion: int = Field(100, alias="CODE_MODE_MAX_RECURSION")
 
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
