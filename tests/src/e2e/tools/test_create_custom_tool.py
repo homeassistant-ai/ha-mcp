@@ -352,7 +352,7 @@ class TestCodeModeApiAccess:
         _skip_if_unavailable(check, "api_get config")
 
         code = (
-            'result = await api_get("/api/config")\n'
+            'result = await api_get("/config")\n'
             '{"has_version": "version" in result, "location": result.get("location_name", "")}'
         )
         data = await safe_call_tool(
@@ -371,7 +371,7 @@ class TestCodeModeApiAccess:
         _skip_if_unavailable(check, "api_get states")
 
         code = (
-            'states = await api_get("/api/states")\n'
+            'states = await api_get("/states")\n'
             '{"count": len(states), "has_entities": len(states) > 0}'
         )
         data = await safe_call_tool(
@@ -391,7 +391,7 @@ class TestCodeModeApiAccess:
 
         # Call homeassistant.check_config — a safe, read-only service
         code = (
-            'result = await api_post("/api/services/homeassistant/check_config")\n'
+            'result = await api_post("/services/homeassistant/check_config")\n'
             'isinstance(result, (dict, list))'
         )
         data = await safe_call_tool(
@@ -408,7 +408,7 @@ class TestCodeModeApiAccess:
         _skip_if_unavailable(check, "api_get invalid endpoint")
 
         code = (
-            'result = await api_get("/api/nonexistent_endpoint_xyz")\n'
+            'result = await api_get("/nonexistent_endpoint_xyz")\n'
             '{"has_error": "error" in str(result) or "message" in str(result),'
             ' "type": str(type(result))}'
         )
@@ -428,7 +428,7 @@ class TestCodeModeApiAccess:
 
         # Render a simple Jinja2 template via the template API
         code = (
-            'result = await api_post("/api/template", '
+            'result = await api_post("/template", '
             '{"template": "{{ 40 + 2 }}"})\n'
             'result'
         )

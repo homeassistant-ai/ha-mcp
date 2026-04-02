@@ -269,7 +269,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Example — check repairs (no built-in tool for this):
         ```python
-        repairs = await api_get("/api/repairs/issues")
+        repairs = await api_get("/repairs/issues")
         repairs
         ```
 
