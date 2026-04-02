@@ -1,11 +1,11 @@
 """
-Sandboxed code execution tool for Home Assistant MCP Server.
+Custom tool creation via sandboxed code execution for Home Assistant MCP Server.
 
-Provides an "escape hatch" that lets LLMs write custom one-off Python code
-when no existing tool covers the user's request.  Code runs in pydantic-monty
-— a Rust-based sandboxed Python interpreter with no filesystem or network
-access.  The only I/O channel is ``call_tool(name, args)`` which delegates to
-the registered MCP tools.
+Provides an "escape hatch" that lets LLMs create custom one-off tools by
+writing Python code when no existing tool covers the user's request.  Code
+runs in pydantic-monty — a Rust-based sandboxed Python interpreter with no
+filesystem or network access.  The only I/O channel is ``call_tool(name,
+args)`` which delegates to the registered MCP tools.
 
 **Requires** ``ENABLE_CODE_MODE=true`` (disabled by default).
 
@@ -27,27 +27,29 @@ logger = logging.getLogger(__name__)
 
 
 def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register sandboxed code execution tools.
+    """Register custom tool creation tools.
 
     Skips registration entirely when ``ENABLE_CODE_MODE`` is ``False``
     (the default) so the tool never appears in the tool catalog.
     """
     settings = get_global_settings()
     if not settings.enable_code_mode:
-        logger.debug("Code mode disabled — skipping ha_execute_code registration")
+        logger.debug(
+            "Code mode disabled — skipping ha_create_custom_tool registration"
+        )
         return
 
     try:
         from pydantic_monty import Monty, ResourceLimits
     except ImportError:
         logger.warning(
-            "pydantic-monty is not installed — ha_execute_code will be unavailable. "
-            "Install with: pip install pydantic-monty"
+            "pydantic-monty is not installed — ha_create_custom_tool will be "
+            "unavailable. Install with: pip install pydantic-monty"
         )
         return
 
     logger.info(
-        "Code mode enabled — registering ha_execute_code "
+        "Code mode enabled — registering ha_create_custom_tool "
         "(max_duration=%.1fs, max_memory=%d bytes)",
         settings.code_mode_max_duration,
         settings.code_mode_max_memory,
@@ -56,26 +58,27 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"System"},
         annotations={
-            "title": "Execute Sandboxed Code",
+            "title": "Create Custom Tool",
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
         },
     )
     @log_tool_usage
-    async def ha_execute_code(
+    async def ha_create_custom_tool(
         code: str,
         justification: str,
         ctx: Context,
     ) -> dict[str, Any]:
-        """Run one-off Python code in a secure sandbox to accomplish tasks that no existing tool can handle.
+        """Create and run a one-off custom tool when no existing tool can accomplish the task.
 
         ⚠️  **LAST RESORT ONLY** — You MUST first search for and attempt to use
         existing tools before resorting to this.  Purpose-built tools have proper
         error handling, validation, and tested behavior.  Only use this tool when
         you have confirmed that no existing tool can accomplish the task.
 
-        The sandbox (pydantic-monty) is a minimal Python interpreter with:
+        Write Python code that implements the custom tool logic.  The sandbox
+        (pydantic-monty) is a minimal Python interpreter with:
         - No filesystem or network access
         - No third-party imports (only builtins, sys, re, json, datetime, typing, asyncio)
         - No class definitions or match statements
@@ -85,7 +88,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         is via the ``call_tool`` function, which delegates to the registered
         MCP tools.
 
-        Example usage inside the sandbox:
+        Example — a custom tool to turn off all lights:
         ```python
         # Get all light entities
         result = await call_tool("ha_search_entities", {"query": "light", "domain_filter": "light"})
@@ -104,9 +107,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ```
 
         Args:
-            code: Python code to execute in the sandbox.  The result of the last
-                  expression becomes the tool's return value.  Use ``await`` when
-                  calling ``call_tool`` since it is async.
+            code: Python code that implements the custom tool.  The result of the
+                  last expression becomes the tool's return value.  Use ``await``
+                  when calling ``call_tool`` since it is async.
             justification: A brief explanation of why no existing tool can
                            accomplish this task.  This is logged and may be
                            shown to the user for approval.
@@ -116,7 +119,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "code parameter must not be empty",
-                    suggestions=["Provide Python code to execute in the sandbox"],
+                    suggestions=[
+                        "Provide Python code that implements the custom tool"
+                    ],
                 )
             )
 
@@ -132,7 +137,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         logger.info(
-            "ha_execute_code invoked — justification: %s",
+            "ha_create_custom_tool invoked — justification: %s",
             justification[:200],
         )
 
@@ -172,7 +177,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             return result
 
         try:
-            m = Monty(code, script_name="ha_execute_code.py")
+            m = Monty(code, script_name="ha_create_custom_tool.py")
             result = await m.run_async(
                 external_functions={"call_tool": _call_tool},
                 limits=ResourceLimits(
