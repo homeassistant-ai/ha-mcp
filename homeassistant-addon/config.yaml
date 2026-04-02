@@ -27,6 +27,7 @@ options:
   enable_skills_as_tools: false
   enable_tool_search: false
   enable_yaml_config_editing: false
+  enable_code_mode: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
@@ -34,6 +35,7 @@ schema:
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
   enable_yaml_config_editing: bool?
+  enable_code_mode: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
