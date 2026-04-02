@@ -7,6 +7,9 @@ runs in pydantic-monty — a Rust-based sandboxed Python interpreter with no
 filesystem or network access.  The only I/O channel is ``call_tool(name,
 args)`` which delegates to the registered MCP tools.
 
+Saved tools: LLMs can save frequently-used custom tools by name and re-run
+them without re-synthesizing the code each time.
+
 **Requires** ``ENABLE_CODE_MODE=true`` (disabled by default).
 
 See: https://github.com/homeassistant-ai/ha-mcp/issues/726
@@ -24,6 +27,61 @@ from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache for saved custom tools (session-scoped, not persistent)
+_saved_tools: dict[str, dict[str, str]] = {}
+
+
+async def _run_sandboxed_code(
+    code: str,
+    ctx: Context,
+    settings: Any,
+    Monty: Any,
+    ResourceLimits: Any,
+) -> Any:
+    """Execute code in the pydantic-monty sandbox with call_tool bridge."""
+
+    async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+        """Bridge: sandbox code → MCP tool execution."""
+        try:
+            result = await ctx.fastmcp.call_tool(tool_name, arguments)
+        except ToolError as te:
+            try:
+                return json.loads(str(te))
+            except (json.JSONDecodeError, TypeError):
+                return {"success": False, "error": {"message": str(te)}}
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": {"message": f"Tool call failed: {exc}"},
+            }
+
+        # FastMCP call_tool returns a list of content objects.
+        # Extract text content and try to parse as JSON for usability.
+        if isinstance(result, list):
+            texts = []
+            for item in result:
+                if hasattr(item, "text"):
+                    texts.append(item.text)
+                elif isinstance(item, str):
+                    texts.append(item)
+            combined = "\n".join(texts) if texts else str(result)
+            try:
+                return json.loads(combined)
+            except (json.JSONDecodeError, TypeError):
+                return combined
+
+        return result
+
+    m = Monty(code, script_name="ha_custom_tool.py")
+    return await m.run_async(  # type: ignore[attr-defined]
+        external_functions={"call_tool": _call_tool},
+        limits=ResourceLimits(
+            max_duration_secs=settings.code_mode_max_duration,
+            max_memory=settings.code_mode_max_memory,
+            max_recursion_depth=settings.code_mode_max_recursion,
+        ),
+    )
 
 
 def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -55,6 +113,10 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         settings.code_mode_max_memory,
     )
 
+    # -----------------------------------------------------------------
+    # ha_create_custom_tool — create and run a one-off custom tool
+    # -----------------------------------------------------------------
+
     @mcp.tool(
         tags={"System"},
         annotations={
@@ -69,6 +131,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         code: str,
         justification: str,
         ctx: Context,
+        save_as: str | None = None,
     ) -> dict[str, Any]:
         """Create and run a one-off custom tool when no existing tool can accomplish the task.
 
@@ -113,6 +176,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             justification: A brief explanation of why no existing tool can
                            accomplish this task.  This is logged and may be
                            shown to the user for approval.
+            save_as: Optional name to save this tool for later reuse via
+                     ha_run_saved_tool.  Overwrites any existing tool with
+                     the same name.
         """
         if not code or not code.strip():
             raise_tool_error(
@@ -141,56 +207,14 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             justification[:200],
         )
 
-        # Build the call_tool bridge between sandbox and MCP tools
-        async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
-            """Bridge: sandbox code → MCP tool execution."""
-            try:
-                result = await ctx.fastmcp.call_tool(tool_name, arguments)
-            except ToolError as te:
-                # Return error as a dict so sandbox code can inspect it
-                try:
-                    return json.loads(str(te))
-                except (json.JSONDecodeError, TypeError):
-                    return {"success": False, "error": {"message": str(te)}}
-            except Exception as exc:
-                return {
-                    "success": False,
-                    "error": {"message": f"Tool call failed: {exc}"},
-                }
-
-            # FastMCP call_tool returns a list of content objects.
-            # Extract text content and try to parse as JSON for usability.
-            if isinstance(result, list):
-                texts = []
-                for item in result:
-                    if hasattr(item, "text"):
-                        texts.append(item.text)
-                    elif isinstance(item, str):
-                        texts.append(item)
-                combined = "\n".join(texts) if texts else str(result)
-                try:
-                    return json.loads(combined)
-                except (json.JSONDecodeError, TypeError):
-                    return combined
-
-            # Already a basic type — pass through
-            return result
-
         try:
-            m = Monty(code, script_name="ha_create_custom_tool.py")
-            result = await m.run_async(  # type: ignore[attr-defined]
-                external_functions={"call_tool": _call_tool},
-                limits=ResourceLimits(
-                    max_duration_secs=settings.code_mode_max_duration,
-                    max_memory=settings.code_mode_max_memory,
-                    max_recursion_depth=settings.code_mode_max_recursion,
-                ),
+            result = await _run_sandboxed_code(
+                code, ctx, settings, Monty, ResourceLimits
             )
         except ToolError:
             raise
         except Exception as e:
             error_name = type(e).__name__
-            # MontyRuntimeError and MontySyntaxError have useful messages
             exception_to_structured_error(
                 e,
                 context={
@@ -205,8 +229,120 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "data": result,
             "justification": justification,
+        }
+
+        if save_as:
+            _saved_tools[save_as] = {
+                "code": code,
+                "justification": justification,
+            }
+            response["saved_as"] = save_as
+            logger.info("Saved custom tool as '%s'", save_as)
+
+        return response
+
+    # -----------------------------------------------------------------
+    # ha_run_saved_tool — re-run a previously saved custom tool
+    # -----------------------------------------------------------------
+
+    @mcp.tool(
+        tags={"System"},
+        annotations={
+            "title": "Run Saved Custom Tool",
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "readOnlyHint": False,
+        },
+    )
+    @log_tool_usage
+    async def ha_run_saved_tool(
+        name: str,
+        ctx: Context,
+    ) -> dict[str, Any]:
+        """Re-run a previously saved custom tool by name.
+
+        Custom tools saved via ha_create_custom_tool(save_as="name") can be
+        re-run without re-synthesizing the code.  Saved tools persist for the
+        current server session only (not across restarts).
+
+        Use ha_list_saved_tools to see available saved tools.
+
+        Args:
+            name: Name of the saved tool to run.
+        """
+        if name not in _saved_tools:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"No saved tool named '{name}'",
+                    suggestions=[
+                        "Use ha_list_saved_tools to see available saved tools",
+                        "Use ha_create_custom_tool with save_as to save a tool first",
+                    ],
+                    context={"tool_name": name},
+                )
+            )
+
+        saved = _saved_tools[name]
+        logger.info("Running saved tool '%s'", name)
+
+        try:
+            result = await _run_sandboxed_code(
+                saved["code"], ctx, settings, Monty, ResourceLimits
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            error_name = type(e).__name__
+            exception_to_structured_error(
+                e,
+                context={
+                    "sandbox_error_type": error_name,
+                    "saved_tool_name": name,
+                },
+                suggestions=[
+                    "The saved code may no longer work — check entity/tool availability",
+                    "Use ha_create_custom_tool to create an updated version",
+                ],
+            )
+
+        return {
+            "success": True,
+            "data": result,
+            "saved_tool": name,
+        }
+
+    # -----------------------------------------------------------------
+    # ha_list_saved_tools — list all saved custom tools
+    # -----------------------------------------------------------------
+
+    @mcp.tool(
+        tags={"System"},
+        annotations={
+            "title": "List Saved Custom Tools",
+            "readOnlyHint": True,
+            "idempotentHint": True,
+        },
+    )
+    @log_tool_usage
+    async def ha_list_saved_tools() -> dict[str, Any]:
+        """List all saved custom tools available for re-use.
+
+        Shows the name, code, and original justification for each saved tool.
+        Saved tools persist for the current server session only.
+        """
+        return {
+            "success": True,
+            "data": {
+                name: {
+                    "code": info["code"],
+                    "justification": info["justification"],
+                }
+                for name, info in _saved_tools.items()
+            },
+            "count": len(_saved_tools),
         }
