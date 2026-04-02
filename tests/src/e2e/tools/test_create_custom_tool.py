@@ -403,62 +403,68 @@ class TestSavedTools:
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "Save and run")
 
-        async with MCPAssertions(mcp_client_with_code_mode) as mcp:
-            # Create and save
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "code": "40 + 2",
-                    "justification": "E2E test: save and rerun",
-                    "save_as": "e2e_answer",
-                },
-            )
-            assert data.get("success") is True, f"Should succeed: {data}"
-            assert data.get("data") == 42, f"Should return 42: {data}"
-            assert data.get("saved_as") == "e2e_answer", (
-                f"Should confirm save: {data}"
-            )
+        # Use safe_call_tool because assert_mcp_success doesn't handle
+        # non-dict "data" values (e.g., data=42 from sandbox result).
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "40 + 2",
+                "justification": "E2E test: save and rerun",
+                "save_as": "e2e_answer",
+            },
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        assert data.get("data") == 42, f"Should return 42: {data}"
+        assert data.get("saved_as") == "e2e_answer", (
+            f"Should confirm save: {data}"
+        )
 
-            # Re-run saved tool
-            data2 = await mcp.call_tool_success(
-                "ha_run_saved_tool",
-                {"name": "e2e_answer"},
-            )
-            assert data2.get("success") is True, f"Re-run should succeed: {data2}"
-            assert data2.get("data") == 42, f"Re-run should return 42: {data2}"
-            assert data2.get("saved_tool") == "e2e_answer", (
-                f"Should reference saved tool: {data2}"
-            )
-            logger.info("Save and re-run workflow works correctly")
+        # Re-run saved tool
+        data2 = await safe_call_tool(
+            mcp_client_with_code_mode,
+            "ha_run_saved_tool",
+            {"name": "e2e_answer"},
+        )
+        assert data2.get("success") is True, f"Re-run should succeed: {data2}"
+        assert data2.get("data") == 42, f"Re-run should return 42: {data2}"
+        assert data2.get("saved_tool") == "e2e_answer", (
+            f"Should reference saved tool: {data2}"
+        )
+        logger.info("Save and re-run workflow works correctly")
 
     async def test_list_saved_tools(self, mcp_client_with_code_mode):
         """ha_list_saved_tools returns saved tools."""
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "List saved tools")
 
-        async with MCPAssertions(mcp_client_with_code_mode) as mcp:
-            # Save a tool first
-            await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "code": "'listed'",
-                    "justification": "E2E test: list saved tools",
-                    "save_as": "e2e_listed",
-                },
-            )
+        # Save a tool first
+        save_data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "'listed'",
+                "justification": "E2E test: list saved tools",
+                "save_as": "e2e_listed",
+            },
+        )
+        assert save_data.get("success") is True, (
+            f"Save should succeed: {save_data}"
+        )
 
-            # List
-            data = await mcp.call_tool_success(
-                "ha_list_saved_tools",
-                {},
-            )
-            assert data.get("success") is True, f"Should succeed: {data}"
-            tools = data.get("data", {})
-            assert "e2e_listed" in tools, f"Should contain saved tool: {data}"
-            assert tools["e2e_listed"]["code"] == "'listed'", (
-                f"Code should match: {data}"
-            )
-            logger.info("List saved tools returns correct data")
+        # List
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            "ha_list_saved_tools",
+            {},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        tools = data.get("data", {})
+        assert "e2e_listed" in tools, f"Should contain saved tool: {data}"
+        assert tools["e2e_listed"]["code"] == "'listed'", (
+            f"Code should match: {data}"
+        )
+        logger.info("List saved tools returns correct data")
 
     async def test_run_nonexistent_saved_tool(self, mcp_client_with_code_mode):
         """Running a nonexistent saved tool returns error."""
