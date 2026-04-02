@@ -164,7 +164,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 texts = []
                 for item in result:
                     if hasattr(item, "text"):
-                        texts.append(item.text)  # type: ignore[union-attr]
+                        texts.append(item.text)
                     elif isinstance(item, str):
                         texts.append(item)
                 combined = "\n".join(texts) if texts else str(result)
@@ -178,7 +178,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
             m = Monty(code, script_name="ha_create_custom_tool.py")
-            result = await m.run_async(
+            result = await m.run_async(  # type: ignore[attr-defined]
                 external_functions={"call_tool": _call_tool},
                 limits=ResourceLimits(
                     max_duration_secs=settings.code_mode_max_duration,
