@@ -75,8 +75,8 @@ class TestCodeModeAvailability:
 
     async def test_feature_flag_disabled_by_default(self, ha_container_with_fresh_config):
         """Verify tool is NOT registered when feature flag is disabled."""
-        import ha_mcp.config as config_mod
         from fastmcp import Client
+        from ha_mcp import config as config_mod
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
         # Ensure flag is OFF for this test
