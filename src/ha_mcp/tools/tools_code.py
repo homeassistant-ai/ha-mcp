@@ -183,6 +183,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 limits=ResourceLimits(
                     max_duration_secs=settings.code_mode_max_duration,
                     max_memory=settings.code_mode_max_memory,
+                    max_recursion_depth=settings.code_mode_max_recursion,
                 ),
             )
         except ToolError:
