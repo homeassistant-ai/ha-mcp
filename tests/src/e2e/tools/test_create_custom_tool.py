@@ -402,6 +402,70 @@ class TestCodeModeApiAccess:
         assert data.get("success") is True, f"Should succeed: {data}"
         logger.info("api_post successfully called HA service")
 
+    async def test_api_get_invalid_endpoint(self, mcp_client_with_code_mode):
+        """api_get with nonexistent endpoint returns error dict, not exception."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_get invalid endpoint")
+
+        code = (
+            'result = await api_get("/api/nonexistent_endpoint_xyz")\n'
+            '{"has_error": "error" in str(result) or "message" in str(result),'
+            ' "type": str(type(result))}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_get error handling"},
+        )
+        # Sandbox should succeed — the api_get returns error data, not exception
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        logger.info("api_get correctly returned error for invalid endpoint")
+
+    async def test_api_post_with_data(self, mcp_client_with_code_mode):
+        """api_post can send a JSON data payload."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post with data")
+
+        # Render a simple Jinja2 template via the template API
+        code = (
+            'result = await api_post("/api/template", '
+            '{"template": "{{ 40 + 2 }}"})\n'
+            'result'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_post with data payload"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        # Template API returns the rendered string "42"
+        assert "42" in str(data["data"]["result"]), (
+            f"Template should render to 42: {data}"
+        )
+        logger.info("api_post successfully sent data payload")
+
+    async def test_api_get_specific_entity_state(self, mcp_client_with_code_mode):
+        """api_get can fetch a specific entity state by endpoint."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_get entity state")
+
+        # sun.sun exists in all HA instances
+        code = (
+            'result = await api_get("/api/states/sun.sun")\n'
+            '{"entity_id": result.get("entity_id", ""), '
+            '"has_state": "state" in result}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_get specific entity"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["entity_id"] == "sun.sun", f"Should be sun.sun: {data}"
+        assert result["has_state"] is True, f"Should have state: {data}"
+        logger.info("api_get fetched specific entity state")
+
 
 # ---------------------------------------------------------------------------
 # Sandbox security
