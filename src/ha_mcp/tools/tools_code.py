@@ -220,13 +220,13 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Example:
         ```python
-        result = await call_tool("ha_search_entities", {"query": "light"})
-        entities = result.get("data", {}).get("entities", [])
-        for e in entities:
+        result = await call_tool("ha_search_entities", {"query": "", "domain_filter": "light"})
+        lights = result.get("results", [])
+        for e in lights:
             await call_tool("ha_call_service", {
                 "domain": "light", "service": "turn_off",
                 "entity_id": e["entity_id"]})
-        {"turned_off": len(entities)}
+        {"turned_off": len(lights)}
         ```
 
         Args:

@@ -269,17 +269,13 @@ class TestCodeModeCallTool:
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "call_tool search")
 
-        # Search for "light" which exists in test HA containers.
-        # Inspect the raw result shape to find entities regardless of nesting.
+        # ha_search_entities returns {"success": True, "results": [...], ...}
+        # Entities are in the "results" key, not "entities".
         code = (
-            'result = await call_tool("ha_search_entities", {"query": "light"})\n'
-            '# Entities may be at result["entities"], result["data"]["entities"], etc.\n'
-            'entities = []\n'
-            'if isinstance(result, dict):\n'
-            '    entities = result.get("entities", [])\n'
-            '    if not entities and isinstance(result.get("data"), dict):\n'
-            '        entities = result["data"].get("entities", [])\n'
-            '{"found": len(entities) > 0, "count": len(entities), "type": str(type(result))}'
+            'result = await call_tool("ha_search_entities", '
+            '{"query": "", "domain_filter": "light"})\n'
+            'results = result.get("results", [])\n'
+            '{"found": len(results) > 0, "count": len(results)}'
         )
         data = await safe_call_tool(
             mcp_client_with_code_mode,
