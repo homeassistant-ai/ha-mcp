@@ -27,14 +27,14 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for saved custom tools (session-scoped, not persistent)
+# In-memory cache for saved custom tools (session-scoped, not persistent).
+# WARNING: This is shared across all clients in the same server process.
+# In multi-user modes (OAuth, HTTP), one user's saved tools are visible to
+# all other users.  Scope to per-session/user before multi-user support.
 _saved_tools: dict[str, dict[str, str]] = {}
 
 # Tools that sandbox code must not call (prevents recursive self-invocation)
 _BLOCKED_TOOLS = frozenset({"ha_manage_custom_tool"})
-
-# Max call_tool invocations per sandbox execution (prevents API flooding)
-_MAX_CALL_TOOL_INVOCATIONS = 100
 
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
@@ -48,9 +48,7 @@ def _extract_tool_result(result: Any) -> Any:
     float, bool, list, dict, None), so we must serialize.
     """
     # Already a basic type — pass through
-    if isinstance(result, (str, int, float, bool, type(None))):
-        return result
-    if isinstance(result, dict):
+    if isinstance(result, (str, int, float, bool, type(None), dict)):
         return result
 
     # ToolResult or similar: extract content list
@@ -99,13 +97,13 @@ async def _run_sandboxed_code(
         """GET request to Home Assistant REST API."""
         nonlocal call_count
         call_count += 1
-        if call_count > _MAX_CALL_TOOL_INVOCATIONS:
-            return {"error": f"API call limit exceeded ({_MAX_CALL_TOOL_INVOCATIONS})"}
+        if call_count > settings.code_mode_max_invocations:
+            return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
         try:
             response = await client.httpx_client.request("GET", endpoint)
             try:
                 return response.json()
-            except Exception:
+            except json.JSONDecodeError:
                 return response.text
         except Exception as exc:
             return {"error": str(exc)[:200]}
@@ -114,16 +112,16 @@ async def _run_sandboxed_code(
         """POST request to Home Assistant REST API."""
         nonlocal call_count
         call_count += 1
-        if call_count > _MAX_CALL_TOOL_INVOCATIONS:
-            return {"error": f"API call limit exceeded ({_MAX_CALL_TOOL_INVOCATIONS})"}
+        if call_count > settings.code_mode_max_invocations:
+            return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
         try:
-            kwargs: dict[str, Any] = {}
+            post_kwargs: dict[str, Any] = {}
             if data is not None:
-                kwargs["json"] = data
-            response = await client.httpx_client.request("POST", endpoint, **kwargs)
+                post_kwargs["json"] = data
+            response = await client.httpx_client.request("POST", endpoint, **post_kwargs)
             try:
                 return response.json()
-            except Exception:
+            except json.JSONDecodeError:
                 return response.text
         except Exception as exc:
             return {"error": str(exc)[:200]}
@@ -141,12 +139,12 @@ async def _run_sandboxed_code(
             }
 
         call_count += 1
-        if call_count > _MAX_CALL_TOOL_INVOCATIONS:
+        if call_count > settings.code_mode_max_invocations:
             return {
                 "success": False,
                 "error": {
                     "message": (
-                        f"call_tool limit exceeded ({_MAX_CALL_TOOL_INVOCATIONS} "
+                        f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
                         f"calls per execution)"
                     )
                 },

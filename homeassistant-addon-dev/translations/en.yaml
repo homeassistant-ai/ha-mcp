@@ -40,7 +40,7 @@ configuration:
     description: >-
       Allow AI assistants to write and run custom Python code in a secure
       sandbox when no built-in tool can handle the request. Code runs in
-      an isolated interpreter with no filesystem or network access — the
-      only way to interact with Home Assistant is through registered MCP
-      tools. Includes save/reuse for frequently-used custom tools.
-      Requires restart to take effect.
+      an isolated interpreter with no filesystem or network access.
+      Sandbox code can access the HA REST API directly (api_get/api_post)
+      or call existing MCP tools (call_tool). Includes save/reuse for
+      frequently-used custom tools. Requires restart to take effect.

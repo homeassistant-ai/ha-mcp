@@ -229,7 +229,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Enables the `ha_manage_custom_tool` — a sandboxed "escape hatch" that lets AI agents write and run custom Python code when no existing tool covers the request. Code runs in pydantic-monty, a Rust-based sandbox with no filesystem or network access. The only way to interact with Home Assistant is through registered MCP tools via `call_tool()`.
+Enables the `ha_manage_custom_tool` — a sandboxed "escape hatch" that lets AI agents write and run custom Python code when no existing tool covers the request. Code runs in pydantic-monty, a Rust-based sandbox with no filesystem or network access. Sandbox code can access the HA REST API directly via `api_get()`/`api_post()`, or call existing MCP tools via `call_tool()`.
 
 **Safety guardrails:**
 - Code runs in a sandboxed interpreter (no filesystem, no network, no third-party imports)
