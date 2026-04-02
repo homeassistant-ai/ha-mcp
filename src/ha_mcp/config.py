@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
     # Code Mode — sandboxed Python execution via pydantic-monty.
-    # Provides an "escape hatch" tool (ha_execute_code) that lets LLMs write
+    # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
     # Disabled by default due to the inherent risk of LLM-generated code.
     enable_code_mode: bool = Field(False, alias="ENABLE_CODE_MODE")
