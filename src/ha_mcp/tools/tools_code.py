@@ -74,14 +74,33 @@ async def _run_sandboxed_code(
         return result
 
     m = Monty(code, script_name="ha_custom_tool.py")
-    return await m.run_async(
-        external_functions={"call_tool": _call_tool},
-        limits=ResourceLimits(
+    run_kwargs: dict[str, Any] = {
+        "external_functions": {"call_tool": _call_tool},
+        "limits": ResourceLimits(
             max_duration_secs=settings.code_mode_max_duration,
             max_memory=settings.code_mode_max_memory,
             max_recursion_depth=settings.code_mode_max_recursion,
         ),
-    )
+    }
+
+    # Monty.run_async() is the preferred path but may not be available on
+    # all platforms (e.g., ARM wheels).  Fall back to the deprecated
+    # module-level run_monty_async, then to sync run() in a thread.
+    if hasattr(m, "run_async"):
+        return await m.run_async(**run_kwargs)
+
+    try:
+        from pydantic_monty import run_monty_async
+
+        return await run_monty_async(m, **run_kwargs)
+    except ImportError:
+        pass
+
+    # Last resort: sync run() in a thread (async external functions
+    # will NOT work — only simple code without call_tool).
+    import asyncio
+
+    return await asyncio.to_thread(m.run, **run_kwargs)
 
 
 def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
