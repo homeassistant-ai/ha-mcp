@@ -216,6 +216,7 @@ def main() -> int:
     enable_yaml_config_editing = False  # default
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
+    enable_code_mode = False  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -236,6 +237,8 @@ def main() -> int:
             enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
             raw_custom_component = config.get("enable_custom_component_integration", False)
             enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
+            raw_code_mode = config.get("enable_code_mode", False)
+            enable_code_mode = raw_code_mode if isinstance(raw_code_mode, bool) else False
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
             raw_disabled = config.get("disabled_tools", "")
@@ -274,6 +277,7 @@ def main() -> int:
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
+    os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
     os.environ["PINNED_TOOLS"] = pinned_tools_raw
