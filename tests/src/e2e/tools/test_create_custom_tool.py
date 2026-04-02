@@ -339,6 +339,71 @@ class TestCodeModeCallTool:
 
 
 # ---------------------------------------------------------------------------
+# Direct HA API access (api_get / api_post)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeApiAccess:
+    """Test direct HA REST API access from sandbox."""
+
+    async def test_api_get_config(self, mcp_client_with_code_mode):
+        """api_get can fetch HA config."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_get config")
+
+        code = (
+            'result = await api_get("/api/config")\n'
+            '{"has_version": "version" in result, "location": result.get("location_name", "")}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_get direct HA access"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_version"] is True, f"Should have version in config: {data}"
+        logger.info("api_get successfully fetched HA config")
+
+    async def test_api_get_states(self, mcp_client_with_code_mode):
+        """api_get can fetch all entity states directly."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_get states")
+
+        code = (
+            'states = await api_get("/api/states")\n'
+            '{"count": len(states), "has_entities": len(states) > 0}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_get states"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_entities"] is True, f"Should find entities: {data}"
+        logger.info("api_get fetched %d entity states", result["count"])
+
+    async def test_api_post_service(self, mcp_client_with_code_mode):
+        """api_post can call a HA service directly."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post service")
+
+        # Call homeassistant.check_config — a safe, read-only service
+        code = (
+            'result = await api_post("/api/services/homeassistant/check_config")\n'
+            'isinstance(result, (dict, list))'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: api_post service call"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        logger.info("api_post successfully called HA service")
+
+
+# ---------------------------------------------------------------------------
 # Sandbox security
 # ---------------------------------------------------------------------------
 
