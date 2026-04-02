@@ -341,7 +341,14 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         enabled: Annotated[
             bool | str | None,
             Field(
-                description="True to enable the entity, False to disable it. Single entity only.",
+                description=(
+                    "True to enable the entity, False to disable it. Single entity only. "
+                    "WARNING: Setting enabled=False is a registry-level disable — it completely "
+                    "removes the entity from the state machine and hides it from the UI. "
+                    "A reload or restart is required to restore it after re-enabling. "
+                    "NOT allowed for automation or script entities — use automation.turn_off / "
+                    "script.turn_off via ha_call_service() instead."
+                ),
                 default=None,
             ),
         ] = None,
@@ -431,6 +438,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Expose multiple to Alexa: ha_set_entity(["light.a", "light.b"], expose_to={"cloud.alexa": True})
 
         NOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.
+
+        ENABLED/DISABLED WARNING:
+        Setting enabled=False performs a **registry-level disable** — the entity is completely
+        removed from the Home Assistant state machine and hidden from the UI. It will NOT appear
+        in state queries, dashboards, or automations until re-enabled AND the integration is
+        reloaded. This is NOT the same as "turning off" an entity.
+
+        For automations and scripts, enabled=False is blocked. Use these instead:
+        - ha_call_service("automation", "turn_off", entity_id="automation.xxx")
+        - ha_call_service("script", "turn_off", entity_id="script.xxx")
         """
         try:
             # Parse entity_id - determine if bulk operation
@@ -490,6 +507,42 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ],
                     )
                 )
+
+            # Block registry-disable on automation and script entities.
+            # Registry-disabling (enabled=False) removes the entity from the HA
+            # state machine entirely, making it invisible in the UI and
+            # unqueryable via state APIs until re-enabled AND the integration is
+            # reloaded.  For automations and scripts the correct way to
+            # "disable" them is via their domain services (automation.turn_off /
+            # script.turn_off) which simply prevent them from running while
+            # keeping them visible and manageable.
+            if enabled is not None:
+                try:
+                    _enabled_check = coerce_bool_param(enabled, "enabled")
+                except ValueError:
+                    _enabled_check = None  # will be caught by _update_single_entity
+
+                if _enabled_check is False:
+                    blocked = [
+                        eid for eid in entity_ids
+                        if eid.split(".")[0] in ("automation", "script")
+                    ]
+                    if blocked:
+                        _domain = blocked[0].split(".")[0]
+                        _service_hint = f"{_domain}.turn_off"
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
+                            f"This removes the entity from the state machine and hides it from the UI "
+                            f"until it is re-enabled AND the {_domain}s are reloaded. "
+                            f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
+                            f"to disable it without removing it.",
+                            suggestions=[
+                                f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
+                                f"Use {_domain}.turn_on to re-enable it later",
+                                "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
+                            ],
+                        ))
 
             # Parse list parameters if provided as strings
             parsed_aliases = None
