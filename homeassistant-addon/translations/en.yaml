@@ -35,11 +35,11 @@ configuration:
     name: Enable custom tool sandbox
     description: >-
       Enables the ha_manage_custom_tool tool, which lets AI assistants
-      create and run custom Python code in a secure sandbox when no
-      built-in tool can handle the request, and save tools for reuse.
-      Code runs in an isolated interpreter with no filesystem or network
-      access — the only way to interact with Home Assistant is through
-      registered MCP tools. Requires restart to take effect.
+      create, run, and save custom Python code in a secure sandbox when
+      no built-in tool can handle the request. Code runs in an isolated
+      interpreter with no filesystem or network access. Sandbox code can
+      access the HA REST API directly (api_get/api_post) or call existing
+      MCP tools (call_tool). Requires restart to take effect.
   verify_ssl:
     name: Verify TLS certificate
     description: >-

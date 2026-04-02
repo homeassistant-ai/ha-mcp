@@ -39,10 +39,9 @@ configuration:
       tool, which lets AI assistants create, run, and save custom Python
       code in a secure sandbox when no built-in tool can handle the
       request. Code runs in an isolated interpreter with no filesystem
-      or network access — the only way to interact with Home Assistant
-      is through the HA REST API (api_get/api_post) or registered MCP
-      tools (call_tool). See docs/beta.md for known limitations.
-      Requires restart to take effect.
+      or network access. Sandbox code can access the HA REST API directly
+      (api_get/api_post) or call existing MCP tools (call_tool). See
+      docs/beta.md for known limitations. Requires restart to take effect.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: >-
