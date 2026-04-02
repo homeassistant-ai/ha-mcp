@@ -81,12 +81,52 @@ def _extract_tool_result(result: Any) -> Any:
 async def _run_sandboxed_code(
     code: str,
     ctx: Context,
+    client: Any,
     settings: Any,
     Monty: Any,
     ResourceLimits: Any,
 ) -> Any:
-    """Execute code in the pydantic-monty sandbox with call_tool bridge."""
+    """Execute code in the pydantic-monty sandbox.
+
+    External functions available to sandbox code:
+    - api_get(endpoint) — GET request to HA REST API (primary escape hatch)
+    - api_post(endpoint, data) — POST request to HA REST API
+    - call_tool(name, args) — call a registered MCP tool (for existing tools)
+    """
     call_count = 0
+
+    async def _api_get(endpoint: str) -> Any:
+        """GET request to Home Assistant REST API."""
+        nonlocal call_count
+        call_count += 1
+        if call_count > _MAX_CALL_TOOL_INVOCATIONS:
+            return {"error": f"API call limit exceeded ({_MAX_CALL_TOOL_INVOCATIONS})"}
+        try:
+            response = await client.httpx_client.request("GET", endpoint)
+            try:
+                return response.json()
+            except Exception:
+                return response.text
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+
+    async def _api_post(endpoint: str, data: dict[str, Any] | None = None) -> Any:
+        """POST request to Home Assistant REST API."""
+        nonlocal call_count
+        call_count += 1
+        if call_count > _MAX_CALL_TOOL_INVOCATIONS:
+            return {"error": f"API call limit exceeded ({_MAX_CALL_TOOL_INVOCATIONS})"}
+        try:
+            kwargs: dict[str, Any] = {}
+            if data is not None:
+                kwargs["json"] = data
+            response = await client.httpx_client.request("POST", endpoint, **kwargs)
+            try:
+                return response.json()
+            except Exception:
+                return response.text
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
 
     async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         """Bridge: sandbox code → MCP tool execution."""
@@ -132,7 +172,11 @@ async def _run_sandboxed_code(
 
     m = Monty(code, script_name="ha_manage_custom_tool.py")
     run_kwargs: dict[str, Any] = {
-        "external_functions": {"call_tool": _call_tool},
+        "external_functions": {
+            "api_get": _api_get,
+            "api_post": _api_post,
+            "call_tool": _call_tool,
+        },
         "limits": ResourceLimits(
             max_duration_secs=settings.code_mode_max_duration,
             max_memory=settings.code_mode_max_memory,
@@ -206,7 +250,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         run_saved: str | None = None,
         list_saved: bool = False,
     ) -> dict[str, Any]:
-        """Run custom Python code in a sandbox, or manage saved custom tools.
+        """Create and run a custom tool in a sandbox, or manage saved custom tools.
 
         ⚠️  **LAST RESORT** — search for existing tools first.
 
@@ -215,10 +259,21 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Set ``run_saved`` to re-run a previously saved tool by name
         - Set ``list_saved=True`` to list all saved tools
 
-        The sandbox has no filesystem/network access.  Interact with HA only
-        via ``call_tool(name, args)`` which delegates to registered MCP tools.
+        **Available functions in sandbox:**
+        - ``api_get(endpoint)`` — GET request to HA REST API (primary escape hatch)
+        - ``api_post(endpoint, data)`` — POST request to HA REST API
+        - ``call_tool(name, args)`` — call a registered MCP tool
 
-        Example:
+        Use ``api_get``/``api_post`` for HA operations not covered by existing
+        tools.  Use ``call_tool`` when an existing tool already does what you need.
+
+        Example — check repairs (no built-in tool for this):
+        ```python
+        repairs = await api_get("/api/repairs/issues")
+        repairs
+        ```
+
+        Example — chain existing tools:
         ```python
         result = await call_tool("ha_search_entities", {"query": "light", "limit": 5})
         data = result.get("data", result)
@@ -271,7 +326,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             try:
                 result = await _run_sandboxed_code(
-                    saved["code"], ctx, settings, Monty, ResourceLimits
+                    saved["code"], ctx, client, settings, Monty, ResourceLimits
                 )
             except ToolError:
                 raise
@@ -331,7 +386,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
             result = await _run_sandboxed_code(
-                code, ctx, settings, Monty, ResourceLimits
+                code, ctx, client, settings, Monty, ResourceLimits
             )
         except ToolError:
             raise
