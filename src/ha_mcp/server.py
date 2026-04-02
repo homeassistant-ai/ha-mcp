@@ -424,6 +424,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Build the always_visible list
         pinned = list(self._PINNED_TOOLS)
 
+        # Pin code mode tools so they get individual permission gating
+        if self.settings.enable_code_mode:
+            pinned.extend([
+                "ha_create_custom_tool",
+                "ha_run_saved_tool",
+                "ha_list_saved_tools",
+            ])
+
         # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
             pinned.extend(["list_resources", "read_resource"])
