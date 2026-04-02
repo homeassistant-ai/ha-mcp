@@ -590,17 +590,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         )
         pinned.extend(getattr(self, "_skill_tool_names", []))
 
-        # Pin code mode tools so they get individual permission gating
-        # rather than being hidden behind the BM25 search proxy. Later
-        # commits in this branch consolidate the three names below into
-        # the single ha_manage_custom_tool — this pin list gets updated
-        # in lockstep.
+        # Pin code mode tool so it gets individual permission gating
+        # rather than being hidden behind the BM25 search proxy.
         if self.settings.enable_code_mode:
-            pinned.extend([
-                "ha_create_custom_tool",
-                "ha_run_saved_tool",
-                "ha_list_saved_tools",
-            ])
+            pinned.append("ha_manage_custom_tool")
 
         # The client may not support resources or server instructions — add
         # skills hint to the search tool description (the one place the LLM

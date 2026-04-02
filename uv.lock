@@ -440,7 +440,7 @@ requires-dist = [
     { name = "fastmcp", specifier = "==3.2.0" },
     { name = "httpx", extras = ["socks"], specifier = "==0.28.1" },
     { name = "pydantic", specifier = "==2.12.5" },
-    { name = "pydantic-monty", specifier = ">=0.0.9" },
+    { name = "pydantic-monty", specifier = "==0.0.9" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "truststore", specifier = "==0.10.4" },
     { name = "websockets", specifier = "==16.0" },
