@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # Code Mode — sandboxed Python execution via pydantic-monty.
+    # Provides an "escape hatch" tool (ha_execute_code) that lets LLMs write
+    # custom one-off Python code when no existing tool covers the request.
+    # Disabled by default due to the inherent risk of LLM-generated code.
+    enable_code_mode: bool = Field(False, alias="ENABLE_CODE_MODE")
+    code_mode_max_duration: float = Field(30.0, alias="CODE_MODE_MAX_DURATION")
+    code_mode_max_memory: int = Field(
+        10_485_760, alias="CODE_MODE_MAX_MEMORY"
+    )  # 10 MB
+
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
         """Auto-enable skills (resources) when skills-as-tools is on.
