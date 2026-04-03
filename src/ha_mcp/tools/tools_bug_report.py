@@ -133,6 +133,10 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **If unclear which type, ASK the user:**
         "Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?"
 
+        **BEFORE USING THIS TOOL:**
+        Check ha_get_logs(source="system") and ha_get_logs(source="error_log") for
+        related errors. Include relevant log entries in the bug description.
+
         **WHEN TO USE THIS TOOL:**
         - "I want to file a bug/issue/report"
         - "This isn't working"
