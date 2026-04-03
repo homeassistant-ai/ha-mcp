@@ -57,6 +57,31 @@ class TestParseStringListParam:
         with pytest.raises(ValueError, match="must be a JSON array of strings"):
             parse_string_list_param('[1, 2, 3]')
 
+    def test_csv_rejected_without_allow_csv(self):
+        """Comma-separated string raises ValueError without allow_csv."""
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            parse_string_list_param("light,sensor")
+
+    def test_csv_accepted_with_allow_csv(self):
+        """Comma-separated string parsed when allow_csv=True."""
+        result = parse_string_list_param("light,sensor", allow_csv=True)
+        assert result == ["light", "sensor"]
+
+    def test_csv_with_spaces_trimmed(self):
+        """Comma-separated string with spaces is trimmed when allow_csv=True."""
+        result = parse_string_list_param("light , sensor , switch", allow_csv=True)
+        assert result == ["light", "sensor", "switch"]
+
+    def test_csv_single_value(self):
+        """Single value without commas returns single-element list when allow_csv=True."""
+        result = parse_string_list_param("light", allow_csv=True)
+        assert result == ["light"]
+
+    def test_json_array_still_works_with_allow_csv(self):
+        """JSON arrays still work when allow_csv=True."""
+        result = parse_string_list_param('["light", "sensor"]', allow_csv=True)
+        assert result == ["light", "sensor"]
+
     def test_list_with_non_strings_raises_error(self):
         """List with non-string elements raises ValueError."""
         with pytest.raises(ValueError, match="must be a list of strings"):
