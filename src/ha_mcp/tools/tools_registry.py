@@ -563,11 +563,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
-        tags={"Device Registry"},
+        tags={"Device Registry", "Zigbee", "Z-Wave"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Device"
+            "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)"
         }
     )
     @log_tool_usage
@@ -589,7 +589,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         integration: Annotated[
             str | None,
             Field(
-                description="Filter devices by integration: 'zha', 'zigbee2mqtt', 'mqtt', 'hue', etc.",
+                description="Filter devices by integration: 'zha', 'zigbee2mqtt', 'zwave_js', 'mqtt', 'hue', etc.",
                 default=None,
             ),
         ] = None,
@@ -609,7 +609,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Get device information - list all devices or get details for a specific one.
+        Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.
 
         Without device_id/entity_id: Lists all devices with optional filters.
         With device_id or entity_id: Returns detailed info for that specific device.
@@ -625,15 +625,22 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
-        **Zigbee automation tips:**
+        **Zigbee device support:**
+        - Use integration="zha" or integration="zigbee2mqtt" to list Zigbee devices
+        - Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices
         - ZHA triggers: Use `ieee_address` for zha_event triggers
         - Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)
+
+        **Z-Wave JS device support:**
+        - Use integration="zwave_js" to list Z-Wave devices
+        - Returns node_id extracted from device identifiers
+        - Single device lookup includes node_status (security class, routing, Z-Wave+ version)
 
         **Returns (list mode):**
         - List of devices with device_id, name, manufacturer, model, area_id
 
         **Returns (single device):**
-        - Full device details including integration_type, ieee_address, entities
+        - Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities
         """
         try:
             # Get device registry
@@ -695,9 +702,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 identifiers = device.get("identifiers", [])
                 connections = device.get("connections", [])
 
-                # Determine integration type and extract IEEE address
+                # Determine integration type and extract IEEE/node addresses
                 integration_sources = []
                 ieee_address = None
+                zwave_node_id = None
                 friendly_name = device.get("name_by_user") or device.get("name")
                 is_z2m = False
 
@@ -719,6 +727,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             if "_0x" in value:
                                 ieee_address = "0x" + value.split("_0x")[-1]
 
+                        # Z-Wave JS: identifier is ["zwave_js", "{home_id}-{node_id}"]
+                        if domain == "zwave_js" and "-" in value:
+                            zwave_node_id = value.split("-")[1]
+
                 # Also check connections for IEEE
                 for connection in connections:
                     if isinstance(connection, (list, tuple)) and len(connection) >= 2:
@@ -730,6 +742,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     integration_type = "zha"
                 elif is_z2m:
                     integration_type = "zigbee2mqtt"
+                elif "zwave_js" in integration_sources:
+                    integration_type = "zwave_js"
                 elif "mqtt" in integration_sources:
                     integration_type = "mqtt"
                 elif integration_sources:
@@ -761,6 +775,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_info["zha_trigger_hint"] = (
                         f"Use ieee '{ieee_address}' for zha_event triggers"
                     )
+
+                # Add Z-Wave specific info
+                if integration_type == "zwave_js" and zwave_node_id:
+                    device_info["node_id"] = zwave_node_id
 
                 return device_info
 
@@ -824,6 +842,38 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             e,
                         )
 
+                # Enrich Z-Wave JS devices with node status
+                if device_info.get("integration_type") == "zwave_js" and device_info.get(
+                    "node_id"
+                ):
+                    try:
+                        zwave_result = await client.send_websocket_message(
+                            {"type": "zwave_js/node_status", "device_id": device_id}
+                        )
+                        if zwave_result.get("success"):
+                            node_data = zwave_result.get("result", {})
+                            device_info["node_status"] = {
+                                "node_id": node_data.get("node_id"),
+                                "status": node_data.get("status"),
+                                "is_routing": node_data.get("is_routing"),
+                                "is_secure": node_data.get("is_secure"),
+                                "highest_security_class": node_data.get(
+                                    "highest_security_class"
+                                ),
+                                "zwave_plus_version": node_data.get(
+                                    "zwave_plus_version"
+                                ),
+                                "is_controller_node": node_data.get(
+                                    "is_controller_node"
+                                ),
+                            }
+                    except Exception as e:
+                        logger.warning(
+                            "Could not fetch Z-Wave node status for device %s: %s",
+                            device_info.get("device_id"),
+                            e,
+                        )
+
                 entities = device_info.get("entities", [])
                 return {
                     "success": True,
@@ -854,21 +904,15 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Apply integration filter if specified
                 if integration_lower:
-                    # Match integration
-                    if (
-                        (
-                            integration_lower == "zigbee2mqtt"
-                            and device_info["integration_type"] != "zigbee2mqtt"
-                        )
-                        or (
-                            integration_lower == "zha"
-                            and device_info["integration_type"] != "zha"
-                        )
-                        or (
-                            integration_lower not in ["zigbee2mqtt", "zha"]
-                            and integration_lower
-                            not in device_info.get("integration_sources", [])
-                        )
+                    # Match integration — named types get exact match,
+                    # others match against integration_sources list
+                    named_types = ["zigbee2mqtt", "zha", "zwave_js"]
+                    if integration_lower in named_types:
+                        if device_info["integration_type"] != integration_lower:
+                            continue
+                    elif (
+                        integration_lower
+                        not in device_info.get("integration_sources", [])
                     ):
                         continue
 
@@ -920,6 +964,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             elif integration_lower == "zha":
                 result["usage_hint"] = (
                     "Use 'ieee_address' for zha_event triggers in automations"
+                )
+            elif integration_lower == "zwave_js":
+                result["usage_hint"] = (
+                    "Use node_id for Z-Wave device identification. "
+                    "Single device lookup includes node status (security, routing)."
                 )
 
             return result

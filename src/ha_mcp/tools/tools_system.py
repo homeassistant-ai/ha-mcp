@@ -311,13 +311,13 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health"})
+    @mcp.tool(tags={"System", "Zigbee", "Z-Wave"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)"})
     @log_tool_usage
     async def ha_get_system_health(
         include: str | None = None,
     ) -> dict[str, Any]:
         """
-        Get Home Assistant system health information.
+        Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 
         Returns health check results from integrations, system resources, and connectivity.
         Available information varies by installation type and loaded integrations.
@@ -327,7 +327,8 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           - "repairs": Repair items from Settings > System > Repairs
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details
-          - Example: include="repairs,zha_network"
+          - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
+          - Example: include="repairs,zha_network,zwave_network"
         """
         # Parse include parameter into a set of requested sections
         includes: set[str] = set()
@@ -425,6 +426,58 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     logger.warning("Failed to fetch ZHA network data: %s", e)
                     result["zha_network"]["error"] = f"ZHA integration not available or error: {e}"
+
+            # Fetch Z-Wave JS network data if requested
+            if "zwave_network" in includes:
+                result["zwave_network"] = {"controller": {}, "nodes": [], "count": 0}
+                try:
+                    # Get all zwave_js config entries to find entry_id
+                    entries_result = await ws_client.send_command(
+                        "config/entries/get",
+                    )
+                    zwave_entry_id = None
+                    if entries_result.get("success"):
+                        for entry in entries_result.get("result", []):
+                            if entry.get("domain") == "zwave_js":
+                                zwave_entry_id = entry.get("entry_id")
+                                break
+
+                    if zwave_entry_id:
+                        # Get network status (controller info)
+                        network_result = await ws_client.send_command(
+                            "zwave_js/network_status",
+                            entry_id=zwave_entry_id,
+                        )
+                        if network_result.get("success"):
+                            net_data = network_result.get("result", {})
+                            result["zwave_network"]["controller"] = net_data.get(
+                                "controller", {}
+                            )
+                            # Extract node summaries from controller nodes
+                            nodes = net_data.get("controller", {}).get("nodes", [])
+                            node_summaries = [
+                                {
+                                    "node_id": n.get("node_id"),
+                                    "status": n.get("status"),
+                                    "is_routing": n.get("is_routing"),
+                                    "is_secure": n.get("is_secure"),
+                                    "zwave_plus_version": n.get("zwave_plus_version"),
+                                    "is_controller_node": n.get("is_controller_node"),
+                                }
+                                for n in nodes
+                            ]
+                            if node_summaries:
+                                result["zwave_network"]["nodes"] = node_summaries
+                                result["zwave_network"]["count"] = len(node_summaries)
+                    else:
+                        result["zwave_network"]["error"] = (
+                            "Z-Wave JS integration not found"
+                        )
+                except Exception as e:
+                    logger.warning("Failed to fetch Z-Wave network data: %s", e)
+                    result["zwave_network"]["error"] = (
+                        f"Z-Wave JS integration not available or error: {e}"
+                    )
 
             return result
 
