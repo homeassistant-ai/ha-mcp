@@ -159,9 +159,19 @@ def parse_json_param(
 
 
 def parse_string_list_param(
-    param: str | list[str] | None, param_name: str = "parameter"
+    param: str | list[str] | None,
+    param_name: str = "parameter",
+    allow_csv: bool = False,
 ) -> list[str] | None:
-    """Parse JSON string array or return existing list of strings."""
+    """Parse JSON string array or return existing list of strings.
+
+    Args:
+        param: Value to parse.
+        param_name: Name for error messages.
+        allow_csv: When True, plain strings are split on commas
+            (e.g. ``"light,sensor"`` → ``["light", "sensor"]``).
+            When False (default), non-JSON strings raise ValueError.
+    """
     if param is None:
         return None
 
@@ -171,6 +181,21 @@ def parse_string_list_param(
         raise ValueError(f"{param_name} must be a list of strings")
 
     if isinstance(param, str):
+        # Try JSON array first
+        if param.strip().startswith("["):
+            try:
+                parsed = json.loads(param)
+                if not isinstance(parsed, list):
+                    raise ValueError(f"{param_name} must be a JSON array")
+                if not all(isinstance(item, str) for item in parsed):
+                    raise ValueError(f"{param_name} must be a JSON array of strings")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+        # Comma-separated fallback (opt-in)
+        if allow_csv:
+            return [item.strip() for item in param.split(",") if item.strip()]
+        # Original behavior: attempt JSON parse (will fail for plain strings)
         try:
             parsed = json.loads(param)
             if not isinstance(parsed, list):

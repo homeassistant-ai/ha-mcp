@@ -2139,15 +2139,19 @@
   {
     "name": "ha_get_overview",
     "title": "Get System Overview",
-    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nDefault is 'minimal' — use this unless you specifically need all entities.",
+    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Each domain always includes total 'count'\nregardless of entity cap. If the response is too large, retry with a lower\nmax_entities_per_domain or use 'domains' to filter to specific domains.",
     "inputSchema": {
       "properties": {
         "detail_level": {
-          "type": "Annotated[Literal['minimal', 'standard', 'full'], Field(default='minimal', description=\"'minimal': 10 entities per domain sample (default); 'standard': ALL entities per domain (friendly_name only); 'full': ALL entities with entity_id + friendly_name + state + system_info\")]",
+          "type": "Annotated[Literal['minimal', 'standard', 'full'], Field(default='minimal', description=\"'minimal': 10 entities/domain, top-5 states (default); 'standard': ALL entities, top-10 states (good for context priming); 'full': ALL entities + entity_id + state + full states. Use 'domains' and/or max_entities_per_domain to control size\")]",
           "default": "minimal"
         },
+        "domains": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). None = all domains. Useful to avoid context window overload.\")]",
+          "default": null
+        },
         "max_entities_per_domain": {
-          "type": "Annotated[int | None, Field(default=None, description='Override max entities per domain (None = all). Minimal defaults to 10.')]",
+          "type": "Annotated[int | None, Field(default=None, description='Override default entity cap per domain (minimal=10, standard/full=unlimited). 0 = no limit on entities or states.')]",
           "default": null
         },
         "include_state": {
