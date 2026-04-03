@@ -139,6 +139,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
+        # Apply user-configured tool disabling (after all tools registered,
+        # before tool search transform wraps them)
+        self._apply_tool_visibility()
+
         # Apply tool search transform (must come after all tools and
         # ResourcesAsTools are registered so it can wrap everything)
         self._apply_tool_search()
@@ -304,6 +308,76 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
+    # Tools that can never be disabled regardless of user config.
+    _MANDATORY_TOOLS: ClassVar[set[str]] = {
+        "ha_search_entities",
+        "ha_get_overview",
+        "ha_get_state",
+        "ha_report_issue",
+    }
+
+    # Synthetic tool search tools — mandatory when tool search is enabled.
+    _MANDATORY_SEARCH_TOOLS: ClassVar[set[str]] = {
+        "ha_search_tools",
+        "ha_call_read_tool",
+        "ha_call_write_tool",
+        "ha_call_delete_tool",
+    }
+
+    # Valid group names that map to tool tags.
+    _TOOL_GROUPS: ClassVar[set[str]] = {
+        "Add-ons", "Areas & Floors", "Automations", "Blueprints",
+        "Calendar", "Camera", "Dashboards", "Device Registry",
+        "Entity Registry", "Files", "Groups", "HACS",
+        "Helper Entities", "History & Statistics", "Integrations",
+        "Labels & Categories", "Scripts", "Search & Discovery",
+        "Service & Device Control", "System", "Todo Lists",
+        "Utilities", "Zones",
+    }
+
+    def _apply_tool_visibility(self) -> None:
+        """Disable tools based on the disabled_tools setting.
+
+        Parses the comma-separated disabled_tools config into group names
+        and individual tool names. Groups are disabled via tag-based
+        filtering, individual tools by name. Mandatory tools are
+        re-enabled afterwards to ensure they can never be disabled.
+        """
+        raw = self.settings.disabled_tools.strip()
+        if not raw:
+            return
+
+        entries = {e.strip() for e in raw.split(",") if e.strip()}
+        if not entries:
+            return
+
+        groups = entries & self._TOOL_GROUPS
+        tool_names = entries - self._TOOL_GROUPS
+
+        # Log unrecognized entries (neither group nor ha_* tool name)
+        for name in tool_names:
+            if not name.startswith("ha_"):
+                logger.warning(
+                    "Unrecognized entry in disabled_tools: %r "
+                    "(not a known group or tool name)", name
+                )
+
+        # Disable by tag (groups)
+        for group in groups:
+            self.mcp.disable(tags={group})
+            logger.info("Disabled tool group: %s", group)
+
+        # Disable individual tools by name
+        if tool_names:
+            self.mcp.disable(names=tool_names)
+            logger.info("Disabled individual tools: %s", ", ".join(sorted(tool_names)))
+
+        # Re-enable mandatory tools (later transform wins)
+        mandatory = set(self._MANDATORY_TOOLS)
+        if self.settings.enable_tool_search:
+            mandatory |= self._MANDATORY_SEARCH_TOOLS
+        self.mcp.enable(names=mandatory)
+
     # Tools pinned outside the search transform for individual permission gating.
     # These are always visible in list_tools() regardless of search transform.
     _PINNED_TOOLS: ClassVar[list[str]] = list(DEFAULT_PINNED_TOOLS)
@@ -421,8 +495,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list
+        # Build the always_visible list: defaults + user-configured pins
         pinned = list(self._PINNED_TOOLS)
+
+        # Add user-configured pinned tools
+        user_pinned = self.settings.pinned_tools.strip()
+        if user_pinned:
+            pinned.extend(
+                name.strip() for name in user_pinned.split(",") if name.strip()
+            )
 
         # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
@@ -457,7 +538,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
             self.mcp.add_transform(
                 CategorizedSearchTransform(
-                    max_results=5,
+                    max_results=self.settings.tool_search_max_results,
                     always_visible=pinned,
                     search_tool_description=description,
                 )

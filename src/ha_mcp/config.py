@@ -107,10 +107,16 @@ class Settings(BaseSettings):
     # Dramatically reduces idle context token usage for LLMs.
     enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
 
-    # Managed YAML config editing — allows ha_config_set_yaml to add,
-    # replace, or remove top-level keys in configuration.yaml and package
-    # files. Disabled by default; only for YAML-only features with no UI/API path.
-    enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
+    # User-configurable tool filtering — comma-separated list of tool names
+    # or group names to disable. Group names expand to all tools with that tag.
+    disabled_tools: str = Field("ha_config_set_yaml", alias="DISABLED_TOOLS")
+
+    # Additional tools to pin (always visible) when tool search is active.
+    # Comma-separated tool names, added on top of DEFAULT_PINNED_TOOLS.
+    pinned_tools: str = Field("", alias="PINNED_TOOLS")
+
+    # Max results returned by ha_search_tools (2-10).
+    tool_search_max_results: int = Field(5, alias="TOOL_SEARCH_MAX_RESULTS")
 
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
@@ -170,6 +176,12 @@ class Settings(BaseSettings):
         if v.upper() not in valid_levels:
             raise ValueError(f"Log level must be one of {valid_levels}")
         return v.upper()
+
+    @field_validator("tool_search_max_results")
+    @classmethod
+    def validate_tool_search_max_results(cls, v: int) -> int:
+        """Clamp tool search max results to valid range."""
+        return max(2, min(10, v))
 
     @field_validator("backup_hint")
     @classmethod

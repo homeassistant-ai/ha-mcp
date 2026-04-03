@@ -109,7 +109,9 @@ def main() -> int:
     enable_skills = True  # default
     enable_skills_as_tools = False  # default
     enable_tool_search = False  # default
-    enable_yaml_config_editing = False  # default
+    disabled_tools: list[str] = ["ha_config_set_yaml"]  # default
+    pinned_tools: list[str] = []  # default
+    tool_search_max_results = 5  # default
 
     if config_file.exists():
         try:
@@ -123,8 +125,12 @@ def main() -> int:
             enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
-            raw_yaml_config = config.get("enable_yaml_config_editing", False)
-            enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            raw_disabled = config.get("disabled_tools", ["ha_config_set_yaml"])
+            disabled_tools = raw_disabled if isinstance(raw_disabled, list) else ["ha_config_set_yaml"]
+            raw_pinned = config.get("pinned_tools", [])
+            pinned_tools = raw_pinned if isinstance(raw_pinned, list) else []
+            raw_max_results = config.get("tool_search_max_results", 5)
+            tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -139,7 +145,9 @@ def main() -> int:
     os.environ["ENABLE_SKILLS"] = str(enable_skills).lower()
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
-    os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
+    os.environ["DISABLED_TOOLS"] = ",".join(disabled_tools)
+    os.environ["PINNED_TOOLS"] = ",".join(pinned_tools)
+    os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
 
     # Validate Supervisor token
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")

@@ -225,11 +225,48 @@ Replaces the full tool catalog (~92 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### disabled_tools
+
+**Default:** `["ha_config_set_yaml"]`
+
+A list of tools or tool groups to disable. Accepts:
+
+- **Individual tool names** (e.g., `ha_hacs_download`) — disables that specific tool
+- **Group names** (e.g., `HACS`) — disables all tools in that group
+
+**Available groups:** Add-ons, Areas & Floors, Automations, Blueprints, Calendar, Camera, Dashboards, Device Registry, Entity Registry, Files, Groups, HACS, Helper Entities, History & Statistics, Integrations, Labels & Categories, Scripts, Search & Discovery, Service & Device Control, System, Todo Lists, Utilities, Zones
+
+**Mandatory tools** that cannot be disabled (silently re-enabled): `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`. When tool search is enabled, the search and proxy tools are also mandatory.
+
+Requires add-on restart to take effect.
+
+### pinned_tools
+
+**Default:** `[]` (empty)
+
+Additional tool names to keep always visible when tool search is enabled. These are shown alongside the default pinned tools without requiring a search. Has no effect when tool search is disabled.
+
+Requires add-on restart to take effect.
+
+### tool_search_max_results
+
+**Default:** `5`
+
+Maximum number of results returned by `ha_search_tools` when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10.
+
+Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml
 backup_hint: normal
 secret_path: ""  # Leave empty for auto-generation
+disabled_tools:
+  - "ha_config_set_yaml"
+  - "HACS"
+pinned_tools:
+  - "ha_config_set_automation"
+tool_search_max_results: 3
 ```
 
 ---

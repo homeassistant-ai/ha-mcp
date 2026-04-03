@@ -26,12 +26,28 @@ configuration:
       deferred tools or with smaller context windows. Tools are found via
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
-  enable_yaml_config_editing:
-    name: Enable YAML config editing
+  disabled_tools:
+    name: Disabled tools
     description: >-
-      Allow AI assistants to add, replace, or remove top-level keys in
-      configuration.yaml and packages/*.yaml. Only whitelisted keys are
-      allowed (e.g., template, sensor, command_line, mqtt). Core keys
-      like homeassistant, http, and recorder are blocked. A backup is
-      created before every edit. Use for YAML-only features that have no
-      UI or API alternative. Requires restart to take effect.
+      Tools or tool groups to disable. Accepts individual tool names
+      (e.g., "ha_hacs_download") or group names (e.g., "HACS") to
+      disable all tools in that group. Groups: Add-ons, Areas & Floors,
+      Automations, Blueprints, Calendar, Camera, Dashboards,
+      Device Registry, Entity Registry, Files, Groups, HACS,
+      Helper Entities, History & Statistics, Integrations,
+      Labels & Categories, Scripts, Search & Discovery,
+      Service & Device Control, System, Todo Lists, Utilities, Zones.
+      Some core tools cannot be disabled. Requires restart.
+  pinned_tools:
+    name: Pinned tools
+    description: >-
+      Additional tools to keep always visible when tool search is
+      enabled. These are shown alongside the default pinned tools
+      without needing to search. Has no effect when tool search is
+      disabled. Requires restart.
+  tool_search_max_results:
+    name: Tool search max results
+    description: >-
+      Maximum number of tools returned by ha_search_tools when tool
+      search is enabled. Lower values (2-3) save context tokens but
+      may miss relevant tools. Range: 2-10. Requires restart.
