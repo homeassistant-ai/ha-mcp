@@ -509,9 +509,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default="minimal",
                 description=(
                     "'minimal': 10 entities/domain, top-5 states (default); "
-                    "'standard': ALL entities, top-10 states (good for context priming); "
-                    "'full': ALL entities + entity_id + state + full states. "
-                    "Use 'domains' and/or max_entities_per_domain to control size"
+                    "'standard': 200 entities/page, top-10 states (use offset for more); "
+                    "'full': 200 entities/page + entity_id + state + full states. "
+                    "Use 'domains', 'limit', or max_entities_per_domain to control size"
                 ),
             ),
         ] = "minimal",
