@@ -16,6 +16,7 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -835,7 +836,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "lqi": zha_dev.get("lqi"),
                                     "rssi": zha_dev.get("rssi"),
                                 }
-                    except (TimeoutError, OSError) as e:
+                    except (HomeAssistantConnectionError, HomeAssistantAPIError, TimeoutError, OSError) as e:
                         logger.warning(
                             "Could not fetch ZHA radio metrics for device %s: %s",
                             device_info.get("device_id"),
@@ -867,7 +868,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "is_controller_node"
                                 ),
                             }
-                    except (TimeoutError, OSError) as e:
+                    except (HomeAssistantConnectionError, HomeAssistantAPIError, TimeoutError, OSError) as e:
                         logger.warning(
                             "Could not fetch Z-Wave node status for device %s: %s",
                             device_info.get("device_id"),
