@@ -13,7 +13,7 @@ Create a new worktree in `worktree/<branch-name>` with branch `<branch-name>`.
 
 ```bash
 # Return to repo root
-cd /home/julien/github/ha-mcp
+cd "$(git rev-parse --show-toplevel)"
 
 # Pull latest master
 git checkout master
@@ -21,6 +21,9 @@ git pull origin master
 
 # Create worktree
 git worktree add worktree/$ARGUMENTS -b $ARGUMENTS
+
+# Initialize submodules (skills-vendor)
+git -C worktree/$ARGUMENTS submodule update --init --recursive
 
 # Navigate to worktree
 cd worktree/$ARGUMENTS
