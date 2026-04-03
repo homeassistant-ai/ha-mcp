@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, overload
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -64,9 +64,32 @@ def coerce_bool_param(
     )
 
 
+@overload
+def coerce_int_param(
+    value: int | str | None,
+    param_name: str = ...,
+    *,
+    default: int,
+    min_value: int | None = ...,
+    max_value: int | None = ...,
+) -> int: ...
+
+
+@overload
+def coerce_int_param(
+    value: int | str | None,
+    param_name: str = ...,
+    *,
+    default: None = ...,
+    min_value: int | None = ...,
+    max_value: int | None = ...,
+) -> int | None: ...
+
+
 def coerce_int_param(
     value: int | str | None,
     param_name: str = "parameter",
+    *,
     default: int | None = None,
     min_value: int | None = None,
     max_value: int | None = None,
