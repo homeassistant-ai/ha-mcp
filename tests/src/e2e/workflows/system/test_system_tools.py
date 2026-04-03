@@ -484,6 +484,64 @@ class TestSystemTools:
 
         logger.info("Combined include correctly returns both sections")
 
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_zwave_network(self, mcp_client):
+        """
+        Test: Get system health with Z-Wave JS network data.
+
+        Z-Wave JS may or may not be installed — verify response structure
+        regardless (error isolation means it should still succeed).
+        system_health may raise ToolError in CI (no system_health component).
+        """
+        logger.info("Testing get system health with zwave_network include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "zwave_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with zwave_network failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "zwave_network" in data, "Missing 'zwave_network' when include='zwave_network'"
+
+        zwave = data["zwave_network"]
+        assert "controller" in zwave, "Z-Wave network should contain 'controller'"
+        assert "nodes" in zwave, "Z-Wave network should contain 'nodes' list"
+        assert "count" in zwave, "Z-Wave network should contain 'count'"
+        assert isinstance(zwave["nodes"], list), "Z-Wave nodes should be a list"
+
+        logger.info(f"System health with Z-Wave: {zwave['count']} nodes found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_unknown_include_warns(self, mcp_client):
+        """
+        Test: Unknown include values produce a warning in the response.
+        """
+        logger.info("Testing system health with unknown include value...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs,bogus_section"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with unknown include failed: {error_msg}")
+
+        assert "warning" in data, "Unknown include value should produce a warning"
+        assert "bogus_section" in data["warning"], "Warning should mention the unknown section"
+
+        logger.info(f"Unknown include warning: {data['warning']}")
+
 
 @pytest.mark.system
 class TestSystemToolsIntegration:

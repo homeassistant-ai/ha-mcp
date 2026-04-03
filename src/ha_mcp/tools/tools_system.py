@@ -326,11 +326,12 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - include: Optional comma-separated list of additional data to include.
           - "repairs": Repair items from Settings > System > Repairs
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
-          - "zha_network_full": ZHA Zigbee devices with all device details
+          - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
           - Example: include="repairs,zha_network,zwave_network"
         """
         # Parse include parameter into a set of requested sections
+        VALID_INCLUDES = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
         includes: set[str] = set()
         if include:
             includes = {s.strip().lower() for s in include.split(",") if s.strip()}
@@ -374,6 +375,11 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "message": f"Retrieved health info for {component_count} components",
             }
 
+            # Warn about unrecognized include values
+            unknown = includes - VALID_INCLUDES
+            if unknown:
+                result["warning"] = f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+
             # Fetch repairs if requested
             if "repairs" in includes:
                 result["repairs"] = {"issues": [], "count": 0}
@@ -392,21 +398,25 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result["repairs"]["error"] = f"Repairs data not available: {e}"
 
             # Fetch ZHA network data if requested
+            ZHA_SUMMARY_LIMIT = 50
+            ZHA_FULL_LIMIT = 25
             zha_full = "zha_network_full" in includes
             zha_summary = "zha_network" in includes
             if zha_full or zha_summary:
-                result["zha_network"] = {"devices": [], "count": 0}
+                result["zha_network"] = {"devices": [], "count": 0, "total_count": 0}
                 try:
                     zha_result = await ws_client.send_command(
                         "zha/devices"
                     )
                     if zha_result.get("success"):
                         raw_devices = zha_result.get("result", [])
+                        total = len(raw_devices)
+                        device_limit = ZHA_FULL_LIMIT if zha_full else ZHA_SUMMARY_LIMIT
+                        truncated = total > device_limit
+                        capped_devices = raw_devices[:device_limit]
                         if zha_full:
-                            # Return complete device data
-                            zha_devices = raw_devices
+                            zha_devices = capped_devices
                         else:
-                            # Return only radio-relevant fields to reduce response size
                             zha_devices = [
                                 {
                                     "ieee": d.get("ieee"),
@@ -417,19 +427,27 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "rssi": d.get("rssi"),
                                     "available": d.get("available"),
                                 }
-                                for d in raw_devices
+                                for d in capped_devices
                             ]
                         result["zha_network"] = {
                             "devices": zha_devices,
                             "count": len(zha_devices),
+                            "total_count": total,
                         }
+                        if truncated:
+                            result["zha_network"]["truncated"] = True
+                            result["zha_network"]["hint"] = (
+                                f"Showing {device_limit} of {total} devices. "
+                                "Use ha_get_device(integration='zha') for full device list."
+                            )
                 except Exception as e:
                     logger.warning("Failed to fetch ZHA network data: %s", e)
                     result["zha_network"]["error"] = f"ZHA integration not available or error: {e}"
 
             # Fetch Z-Wave JS network data if requested
+            ZWAVE_NODE_LIMIT = 50
             if "zwave_network" in includes:
-                result["zwave_network"] = {"controller": {}, "nodes": [], "count": 0}
+                result["zwave_network"] = {"controller": {}, "nodes": [], "count": 0, "total_count": 0}
                 try:
                     # Get all zwave_js config entries to find entry_id
                     entries_result = await ws_client.send_command(
@@ -453,8 +471,9 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             result["zwave_network"]["controller"] = net_data.get(
                                 "controller", {}
                             )
-                            # Extract node summaries from controller nodes
                             nodes = net_data.get("controller", {}).get("nodes", [])
+                            total_nodes = len(nodes)
+                            capped_nodes = nodes[:ZWAVE_NODE_LIMIT]
                             node_summaries = [
                                 {
                                     "node_id": n.get("node_id"),
@@ -464,11 +483,17 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "zwave_plus_version": n.get("zwave_plus_version"),
                                     "is_controller_node": n.get("is_controller_node"),
                                 }
-                                for n in nodes
+                                for n in capped_nodes
                             ]
-                            if node_summaries:
-                                result["zwave_network"]["nodes"] = node_summaries
-                                result["zwave_network"]["count"] = len(node_summaries)
+                            result["zwave_network"]["nodes"] = node_summaries
+                            result["zwave_network"]["count"] = len(node_summaries)
+                            result["zwave_network"]["total_count"] = total_nodes
+                            if total_nodes > ZWAVE_NODE_LIMIT:
+                                result["zwave_network"]["truncated"] = True
+                                result["zwave_network"]["hint"] = (
+                                    f"Showing {ZWAVE_NODE_LIMIT} of {total_nodes} nodes. "
+                                    "Use ha_get_device(integration='zwave_js') for full device list."
+                                )
                     else:
                         result["zwave_network"]["error"] = (
                             "Z-Wave JS integration not found"

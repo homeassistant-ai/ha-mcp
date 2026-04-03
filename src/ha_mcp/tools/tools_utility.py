@@ -44,6 +44,23 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     DEFAULT_LIMIT = 50
     DEFAULT_LOG_LIMIT = 100
     MAX_LIMIT = 500
+
+    def _coerce_limit(
+        limit: int | str | None,
+        default: int = DEFAULT_LIMIT,
+        suggestion_example: str = "50",
+    ) -> int:
+        """Coerce and validate a limit parameter, raising a structured tool error on failure."""
+        try:
+            return coerce_int_param(limit, param_name="limit", default=default, min_value=1, max_value=MAX_LIMIT)
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    suggestions=[f"Provide limit as an integer (e.g., {suggestion_example})"],
+                )
+            )
     # Regex to match log level at the start of a log line
     _LOG_LEVEL_RE = re.compile(
         r"(?:^|\s)(DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\s|:|\])", re.IGNORECASE
@@ -71,6 +88,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         entity_id: str | None = None,
         end_time: str | None = None,
         offset: int | str = 0,
+        compact: bool | str = True,
         # System/error_log-specific
         level: str | None = None,
         # Supervisor-specific
@@ -86,7 +104,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "supervisor": Add-on container logs (requires slug parameter)
 
         **Shared params:** limit, search (keyword filter on entries/lines)
-        **Logbook params:** hours_back, entity_id, end_time, offset
+        **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
         **Supervisor params:** slug (add-on slug, e.g. "core_mosquitto")
         """
@@ -104,45 +122,56 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             level = level_upper
 
-        # Warn about source-incompatible parameters
+        # Collect warnings about source-incompatible parameters
+        warnings: list[str] = []
         if source != "logbook" and any(p is not None for p in [entity_id, end_time]):
-            logger.info(
-                "Parameters entity_id/end_time are only used with source='logbook'; "
-                "ignoring for source='%s'",
-                source,
+            ignored = [p for p, v in [("entity_id", entity_id), ("end_time", end_time)] if v is not None]
+            warnings.append(
+                f"Parameters {', '.join(ignored)} only apply to source='logbook'; "
+                f"ignored for source='{source}'"
             )
         if source == "logbook" and level is not None:
-            logger.info(
-                "Parameter 'level' is only used with source='system' or 'error_log'; "
-                "ignoring for source='logbook'"
+            warnings.append(
+                "Parameter 'level' only applies to source='system' or 'error_log'; "
+                "ignored for source='logbook'"
             )
 
         # --- source="logbook" ---
         if source == "logbook":
-            return await _get_logbook(
+            result = await _get_logbook(
                 hours_back=hours_back,
                 entity_id=entity_id,
                 end_time=end_time,
                 limit=limit,
                 offset=offset,
                 search=search,
+                compact=compact,
             )
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
         # --- source="system" ---
         if source == "system":
-            return await _get_system_log(
+            result = await _get_system_log(
                 limit=limit,
                 search=search,
                 level=level,
             )
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
         # --- source="error_log" ---
         if source == "error_log":
-            return await _get_error_log(
+            result = await _get_error_log(
                 limit=limit,
                 search=search,
                 level=level,
             )
+            if warnings:
+                result["warnings"] = warnings
+            return result
 
         # --- source="supervisor" ---
         # source == "supervisor" (Literal type guarantees this)
@@ -157,11 +186,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ],
                 )
             )
-        return await _get_supervisor_log(
+        result = await _get_supervisor_log(
             slug=slug,
             limit=limit,
             search=search,
         )
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     # ---- Logbook source ----
 
@@ -194,22 +226,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
-        try:
-            effective_limit = coerce_int_param(
-                limit,
-                param_name="limit",
-                default=DEFAULT_LIMIT,
-                min_value=1,
-                max_value=MAX_LIMIT,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide limit as an integer (e.g., 50)"],
-                )
-            )
+        effective_limit = _coerce_limit(limit)
 
         try:
             offset_int = coerce_int_param(
@@ -352,22 +369,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         level: str | None = None,
     ) -> dict[str, Any]:
         """Fetch structured system log entries via system_log/list."""
-        try:
-            effective_limit = coerce_int_param(
-                limit,
-                param_name="limit",
-                default=DEFAULT_LIMIT,
-                min_value=1,
-                max_value=MAX_LIMIT,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide limit as an integer (e.g., 50)"],
-                )
-            )
+        effective_limit = _coerce_limit(limit)
 
         try:
             result = await client.send_websocket_message({"type": "system_log/list"})
@@ -447,22 +449,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         level: str | None = None,
     ) -> dict[str, Any]:
         """Fetch raw error log text from home-assistant.log."""
-        try:
-            effective_limit = coerce_int_param(
-                limit,
-                param_name="limit",
-                default=DEFAULT_LOG_LIMIT,
-                min_value=1,
-                max_value=MAX_LIMIT,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide limit as an integer (e.g., 100)"],
-                )
-            )
+        effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
 
         try:
             raw_log = await client.get_error_log()
@@ -529,22 +516,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         search: str | None = None,
     ) -> dict[str, Any]:
         """Fetch add-on container logs via the Supervisor API."""
-        try:
-            effective_limit = coerce_int_param(
-                limit,
-                param_name="limit",
-                default=DEFAULT_LOG_LIMIT,
-                min_value=1,
-                max_value=MAX_LIMIT,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide limit as an integer (e.g., 100)"],
-                )
-            )
+        effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
 
         try:
             result = await client.send_websocket_message(

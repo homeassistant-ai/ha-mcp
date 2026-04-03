@@ -686,6 +686,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ]
         except Exception as e:
             logger.warning("Failed to fetch repairs for overview: %s", e)
+            result["repairs_error"] = f"Could not fetch repairs: {e}"
 
         # Include tool discovery hint when search transform is active
         settings = get_global_settings()
