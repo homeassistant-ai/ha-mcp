@@ -93,6 +93,19 @@ async def _run_sandboxed_code(
     """
     call_count = 0
 
+    def _normalize_endpoint(endpoint: str) -> str:
+        """Normalize endpoint to be relative to the httpx base URL (/api).
+
+        Leading slashes cause httpx to treat the path as absolute from the
+        host root, bypassing the /api base path.  Strip them (and any
+        accidental /api/ prefix) so all three forms work identically:
+        "events", "/events", "/api/events" → "events".
+        """
+        ep = endpoint.lstrip("/")
+        if ep.startswith("api/"):
+            ep = ep[4:]
+        return ep
+
     async def _api_get(endpoint: str) -> Any:
         """GET request to Home Assistant REST API."""
         nonlocal call_count
@@ -100,7 +113,7 @@ async def _run_sandboxed_code(
         if call_count > settings.code_mode_max_invocations:
             return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
         try:
-            response = await client.httpx_client.request("GET", endpoint)
+            response = await client.httpx_client.request("GET", _normalize_endpoint(endpoint))
             try:
                 return response.json()
             except json.JSONDecodeError:
@@ -118,7 +131,7 @@ async def _run_sandboxed_code(
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await client.httpx_client.request("POST", endpoint, **post_kwargs)
+            response = await client.httpx_client.request("POST", _normalize_endpoint(endpoint), **post_kwargs)
             try:
                 return response.json()
             except json.JSONDecodeError:
