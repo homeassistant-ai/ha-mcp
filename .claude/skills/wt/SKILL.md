@@ -20,13 +20,13 @@ git checkout master
 git pull origin master
 
 # Create worktree
-git worktree add worktree/$ARGUMENTS -b $ARGUMENTS
+git worktree add worktree/"$ARGUMENTS" -b "$ARGUMENTS"
 
 # Initialize submodules (skills-vendor)
-git -C worktree/$ARGUMENTS submodule update --init --recursive
+git -C worktree/"$ARGUMENTS" submodule update --init --recursive
 
 # Navigate to worktree
-cd worktree/$ARGUMENTS
+cd worktree/"$ARGUMENTS"
 
 # Confirm location and branch
 echo ""
@@ -40,5 +40,5 @@ echo "You can now work in this isolated environment."
 ## Notes
 
 - Worktree inherits `.claude/agents/` workflows
-- To remove when done: `cd ../.. && git worktree remove worktree/$ARGUMENTS`
+- To remove when done: `cd ../.. && git worktree remove worktree/"$ARGUMENTS"`
 - List all worktrees: `git worktree list`
