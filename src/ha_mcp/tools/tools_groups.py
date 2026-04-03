@@ -227,12 +227,13 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             is_create = entities is not None and name is None and add_entities is None and remove_entities is None
 
             # Verify entity is queryable after creation/update
+            result: dict[str, Any] = {}
             try:
                 registered = await wait_for_entity_registered(client, entity_id)
                 if not registered:
-                    logger.warning(f"Group {entity_id} set but not yet queryable")
+                    result["warning"] = f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
             except Exception as e:
-                logger.debug(f"Verification failed for group {entity_id}: {e}")
+                result["warning"] = f"Group created but verification failed: {e}"
 
             return {
                 "success": True,
@@ -240,6 +241,7 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "object_id": object_id,
                 "updated_fields": updated_fields,
                 "message": f"Successfully {'created' if is_create else 'updated'} group: {entity_id}",
+                **result,
             }
 
         except ToolError:
@@ -295,18 +297,20 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             entity_id = f"group.{object_id}"
 
             # Verify entity is removed
+            result: dict[str, Any] = {}
             try:
                 removed = await wait_for_entity_removed(client, entity_id)
                 if not removed:
-                    logger.warning(f"Group {entity_id} removed but entity still queryable")
+                    result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
             except Exception as e:
-                logger.debug(f"Removal verification failed for group {entity_id}: {e}")
+                result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {
                 "success": True,
                 "entity_id": entity_id,
                 "object_id": object_id,
                 "message": f"Successfully removed group: {entity_id}",
+                **result,
             }
 
         except ToolError:
