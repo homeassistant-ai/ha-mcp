@@ -24,7 +24,7 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   backup_hint: "normal"
   enable_skills: true
-  enable_skills_as_tools: false
+  enable_skills_as_tools: true
   enable_tool_search: false
   enable_yaml_config_editing: false
   tool_search_max_results: 5
