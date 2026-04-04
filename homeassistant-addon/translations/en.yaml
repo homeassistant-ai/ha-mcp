@@ -41,279 +41,377 @@ configuration:
       Maximum number of tools returned by ha_search_tools when tool
       search is enabled. Lower values (2-3) save context tokens but
       may miss relevant tools. Range: 2-10. Requires restart.
-  tools_add-ons:
-    name: "Add-ons"
-    enabled:
-      name: Enable all Add-ons tools
-    ha_call_addon_api:
-      name: "Call Add-on API"
-    ha_get_addon:
-      name: "Get Add-ons"
-  tools_areas_floors:
-    name: "Areas & Floors"
-    enabled:
-      name: Enable all Areas & Floors tools
-    ha_config_list_areas:
-      name: "List Areas"
-    ha_config_list_floors:
-      name: "List Floors"
-    ha_config_remove_area:
-      name: "Remove Area"
-    ha_config_remove_floor:
-      name: "Remove Floor"
-    ha_config_set_area:
-      name: "Create or Update Area"
-    ha_config_set_floor:
-      name: "Create or Update Floor"
-  tools_automations:
-    name: "Automations"
-    enabled:
-      name: Enable all Automations tools
-    ha_config_get_automation:
-      name: "Get Automation Config"
-    ha_config_remove_automation:
-      name: "Remove Automation"
-    ha_config_set_automation:
-      name: "Create or Update Automation"
-  tools_blueprints:
-    name: "Blueprints"
-    enabled:
-      name: Enable all Blueprints tools
-    ha_get_blueprint:
-      name: "Get Blueprint"
-    ha_import_blueprint:
-      name: "Import Blueprint"
-  tools_calendar:
-    name: "Calendar"
-    enabled:
-      name: Enable all Calendar tools
-    ha_config_get_calendar_events:
-      name: "Get Calendar Events"
-    ha_config_remove_calendar_event:
-      name: "Remove Calendar Event"
-    ha_config_set_calendar_event:
-      name: "Create or Update Calendar Event"
-  tools_camera:
-    name: "Camera"
-    enabled:
-      name: Enable all Camera tools
-    ha_get_camera_image:
-      name: "Get Camera Image"
-  tools_dashboards:
-    name: "Dashboards"
-    enabled:
-      name: Enable all Dashboards tools
-    ha_config_delete_dashboard:
-      name: "Delete Dashboard"
-    ha_config_delete_dashboard_resource:
-      name: "Delete Dashboard Resource"
-    ha_config_get_dashboard:
-      name: "Get Dashboard"
-    ha_config_list_dashboard_resources:
-      name: "List Dashboard Resources"
-    ha_config_set_dashboard:
-      name: "Create or Update Dashboard"
-    ha_config_set_dashboard_resource:
-      name: "Set Dashboard Resource"
-    ha_dashboard_find_card:
-      name: "Find Dashboard Card"
-  tools_device_registry:
-    name: "Device Registry"
-    enabled:
-      name: Enable all Device Registry tools
-    ha_get_device:
-      name: "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)"
-    ha_remove_device:
-      name: "Remove Device"
-    ha_rename_entity:
-      name: "Rename Entity"
-    ha_update_device:
-      name: "Update Device"
-  tools_entity_registry:
-    name: "Entity Registry"
-    enabled:
-      name: Enable all Entity Registry tools
-    ha_get_entity:
-      name: "Get Entity"
-    ha_get_entity_exposure:
-      name: "Get Entity Exposure"
-    ha_set_entity:
-      name: "Set Entity"
-  tools_files:
-    name: "Files"
-    enabled:
-      name: Enable all Files tools
-    ha_delete_file:
-      name: "Delete File"
-    ha_list_files:
-      name: "List Files"
-    ha_read_file:
-      name: "Read File"
-    ha_write_file:
-      name: "Write File"
-  tools_groups:
-    name: "Groups"
-    enabled:
-      name: Enable all Groups tools
-    ha_config_list_groups:
-      name: "List Groups"
-    ha_config_remove_group:
-      name: "Remove Group"
-    ha_config_set_group:
-      name: "Create or Update Group"
-  tools_hacs:
-    name: "HACS"
-    enabled:
-      name: Enable all HACS tools
-    ha_hacs_add_repository:
-      name: "Add HACS Repository"
-    ha_hacs_download:
-      name: "Download/Install HACS Repository"
-    ha_hacs_info:
-      name: "Get HACS Info"
-    ha_hacs_list_installed:
-      name: "List HACS Installed"
-    ha_hacs_repository_info:
-      name: "Get HACS Repository Info"
-    ha_hacs_search:
-      name: "Search HACS Store"
-  tools_helper_entities:
-    name: "Helper Entities"
-    enabled:
-      name: Enable all Helper Entities tools
-    ha_config_list_helpers:
-      name: "List Helpers"
-    ha_config_remove_helper:
-      name: "Remove Helper"
-    ha_config_set_helper:
-      name: "Create or Update Helper"
-    ha_get_helper_schema:
-      name: "Get Helper Schema"
-    ha_set_config_entry_helper:
-      name: "Set Config Entry Helper"
-  tools_history_statistics:
-    name: "History & Statistics"
-    enabled:
-      name: Enable all History & Statistics tools
-    ha_get_automation_traces:
-      name: "Get Automation Traces"
-    ha_get_history:
-      name: "Get Entity History"
-    ha_get_logs:
-      name: "Get Logs"
-    ha_get_statistics:
-      name: "Get Statistics"
-  tools_integrations:
-    name: "Integrations"
-    enabled:
-      name: Enable all Integrations tools
-    ha_delete_config_entry:
-      name: "Delete Config Entry"
-    ha_get_integration:
-      name: "Get Integration"
-    ha_set_integration_enabled:
-      name: "Set Integration Enabled"
-  tools_labels_categories:
-    name: "Labels & Categories"
-    enabled:
-      name: Enable all Labels & Categories tools
-    ha_config_get_category:
-      name: "Get Category"
-    ha_config_get_label:
-      name: "Get Label"
-    ha_config_remove_category:
-      name: "Remove Category"
-    ha_config_remove_label:
-      name: "Remove Label"
-    ha_config_set_category:
-      name: "Create or Update Category"
-    ha_config_set_label:
-      name: "Create or Update Label"
-  tools_scripts:
-    name: "Scripts"
-    enabled:
-      name: Enable all Scripts tools
-    ha_config_get_script:
-      name: "Get Script Config"
-    ha_config_remove_script:
-      name: "Remove Script"
-    ha_config_set_script:
-      name: "Create or Update Script"
-  tools_search_discovery:
-    name: "Search & Discovery"
-    enabled:
-      name: Enable all Search & Discovery tools
-    ha_deep_search:
-      name: "Deep Search"
-    ha_get_overview:
-      name: "Get System Overview"
-    ha_get_state:
-      name: "Get Entity State"
-    ha_get_states:
-      name: "Get Multiple Entity States"
-    ha_search_entities:
-      name: "Search Entities"
-  tools_service_device_control:
-    name: "Service & Device Control"
-    enabled:
-      name: Enable all Service & Device Control tools
-    ha_bulk_control:
-      name: "Bulk Control"
-    ha_call_service:
-      name: "Call Service"
-    ha_get_operation_status:
-      name: "Get Operation Status"
-    ha_list_services:
-      name: "List Available Services"
-  tools_system:
-    name: "System"
-    enabled:
-      name: Enable all System tools
-    ha_backup_create:
-      name: "Create Backup"
-    ha_backup_restore:
-      name: "Restore Backup"
-    ha_check_config:
-      name: "Check Configuration"
-    ha_config_set_yaml:
-      name: "Set YAML Config"
-    ha_get_system_health:
-      name: "Get System Health (incl. ZHA/Z-Wave diagnostics)"
-    ha_get_updates:
-      name: "Get Updates"
-    ha_reload_core:
-      name: "Reload Core Components"
-    ha_restart:
-      name: "Restart Home Assistant"
-  tools_todo_lists:
-    name: "Todo Lists"
-    enabled:
-      name: Enable all Todo Lists tools
-    ha_add_todo_item:
-      name: "Add Todo Item"
-    ha_get_todo:
-      name: "Get Todo"
-    ha_remove_todo_item:
-      name: "Remove Todo Item"
-    ha_update_todo_item:
-      name: "Update Todo Item"
-  tools_utilities:
-    name: "Utilities"
-    enabled:
-      name: Enable all Utilities tools
-    ha_eval_template:
-      name: "Evaluate Template"
-    ha_install_mcp_tools:
-      name: "Install MCP Tools Component"
-    ha_report_issue:
-      name: "Report Issue or Feedback"
-  tools_zones:
-    name: "Zones"
-    enabled:
-      name: Enable all Zones tools
-    ha_get_zone:
-      name: "Get Zone"
-    ha_remove_zone:
-      name: "Remove Zone"
-    ha_set_zone:
-      name: "Set Zone"
+  tools:
+    name: Tools
+    description: >-
+      Configure tool availability and pinning. Each tool can be unpinned
+      (enabled), pinned (enabled and always visible in search), or disabled.
+      Mandatory tools cannot be disabled. Requires restart.
+    add-ons:
+      name: "Add-ons"
+      enabled:
+        name: Enable all Add-ons tools
+      ha_call_addon_api:
+        name: "Call Add-on API (destructive)"
+        description: "Call an add-on's HTTP or WebSocket API."
+      ha_get_addon:
+        name: "Get Add-ons (read-only)"
+        description: "Get Home Assistant add-ons - list installed, available, or get details for one."
+    areas_floors:
+      name: "Areas & Floors"
+      enabled:
+        name: Enable all Areas & Floors tools
+      ha_config_list_areas:
+        name: "List Areas (read-only)"
+        description: "List all Home Assistant areas (rooms)."
+      ha_config_list_floors:
+        name: "List Floors (read-only)"
+        description: "List all Home Assistant floors."
+      ha_config_remove_area:
+        name: "Remove Area (destructive)"
+        description: "Delete a Home Assistant area."
+      ha_config_remove_floor:
+        name: "Remove Floor (destructive)"
+        description: "Delete a Home Assistant floor."
+      ha_config_set_area:
+        name: "Create or Update Area (destructive)"
+        description: "Create or update a Home Assistant area (room)."
+      ha_config_set_floor:
+        name: "Create or Update Floor (destructive)"
+        description: "Create or update a Home Assistant floor."
+    automations:
+      name: "Automations"
+      enabled:
+        name: Enable all Automations tools
+      ha_config_get_automation:
+        name: "Get Automation Config (read-only)"
+        description: "Retrieve Home Assistant automation configuration."
+      ha_config_remove_automation:
+        name: "Remove Automation (destructive)"
+        description: "Delete a Home Assistant automation."
+      ha_config_set_automation:
+        name: "Create or Update Automation (destructive)"
+        description: "Create or update a Home Assistant automation."
+    blueprints:
+      name: "Blueprints"
+      enabled:
+        name: Enable all Blueprints tools
+      ha_get_blueprint:
+        name: "Get Blueprint (read-only)"
+        description: "Get blueprint information - list all blueprints or get details for a specific one."
+      ha_import_blueprint:
+        name: "Import Blueprint (destructive)"
+        description: "Import a blueprint from a URL."
+    calendar:
+      name: "Calendar"
+      enabled:
+        name: Enable all Calendar tools
+      ha_config_get_calendar_events:
+        name: "Get Calendar Events (read-only)"
+        description: "Retrieve calendar events from a calendar entity."
+      ha_config_remove_calendar_event:
+        name: "Remove Calendar Event (destructive)"
+        description: "Delete an event from a calendar."
+      ha_config_set_calendar_event:
+        name: "Create or Update Calendar Event (destructive)"
+        description: "Create a new event in a calendar."
+    camera:
+      name: "Camera"
+      enabled:
+        name: Enable all Camera tools
+      ha_get_camera_image:
+        name: "Get Camera Image (read-only)"
+        description: "Retrieve a snapshot image from a Home Assistant camera entity."
+    dashboards:
+      name: "Dashboards"
+      enabled:
+        name: Enable all Dashboards tools
+      ha_config_delete_dashboard:
+        name: "Delete Dashboard (destructive)"
+        description: "Delete a storage-mode dashboard completely."
+      ha_config_delete_dashboard_resource:
+        name: "Delete Dashboard Resource (destructive)"
+        description: "Delete a dashboard resource."
+      ha_config_get_dashboard:
+        name: "Get Dashboard (read-only)"
+        description: "Get dashboard info - list all dashboards or get config for a specific one."
+      ha_config_list_dashboard_resources:
+        name: "List Dashboard Resources (read-only)"
+        description: "List all Lovelace dashboard resources (custom cards, themes, CSS/JS)."
+      ha_config_set_dashboard:
+        name: "Create or Update Dashboard (destructive)"
+        description: "Create or update a Home Assistant dashboard."
+      ha_config_set_dashboard_resource:
+        name: "Set Dashboard Resource (destructive)"
+        description: "Create or update a dashboard resource (inline code or external URL)."
+      ha_dashboard_find_card:
+        name: "Find Dashboard Card (read-only)"
+        description: "Find cards, badges, and header cards in a dashboard by entity_id, type, or heading text."
+    device_registry:
+      name: "Device Registry"
+      enabled:
+        name: Enable all Device Registry tools
+      ha_get_device:
+        name: "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave) (read-only)"
+        description: "Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details."
+      ha_remove_device:
+        name: "Remove Device (destructive)"
+        description: "Remove an orphaned device from the Home Assistant device registry."
+      ha_rename_entity:
+        name: "Rename Entity (destructive)"
+        description: "Rename a Home Assistant entity by changing its entity_id, optionally renaming its device too."
+      ha_update_device:
+        name: "Update Device (destructive)"
+        description: "Update device properties such as name, area, disabled state, or labels."
+    entity_registry:
+      name: "Entity Registry"
+      enabled:
+        name: Enable all Entity Registry tools
+      ha_get_entity:
+        name: "Get Entity (read-only)"
+        description: "Get entity registry information for one or more entities."
+      ha_get_entity_exposure:
+        name: "Get Entity Exposure (read-only)"
+        description: "Get entity exposure settings - list all or get settings for a specific entity."
+      ha_set_entity:
+        name: "Set Entity (destructive)"
+        description: "Update entity properties in the entity registry."
+    files:
+      name: "Files"
+      enabled:
+        name: Enable all Files tools
+      ha_delete_file:
+        name: "Delete File (destructive)"
+        description: "Delete a file from allowed directories in the Home Assistant config."
+      ha_list_files:
+        name: "List Files (read-only)"
+        description: "List files in a directory within the Home Assistant config directory."
+      ha_read_file:
+        name: "Read File (read-only)"
+        description: "Read a file from the Home Assistant config directory."
+      ha_write_file:
+        name: "Write File (destructive)"
+        description: "Write a file to allowed directories in the Home Assistant config."
+    groups:
+      name: "Groups"
+      enabled:
+        name: Enable all Groups tools
+      ha_config_list_groups:
+        name: "List Groups (read-only)"
+        description: "List all Home Assistant entity groups with their member entities."
+      ha_config_remove_group:
+        name: "Remove Group (destructive)"
+        description: "Remove a Home Assistant entity group."
+      ha_config_set_group:
+        name: "Create or Update Group (destructive)"
+        description: "Create or update a Home Assistant entity group."
+    hacs:
+      name: "HACS"
+      enabled:
+        name: Enable all HACS tools
+      ha_hacs_add_repository:
+        name: "Add HACS Repository (destructive)"
+        description: "Add a custom GitHub repository to HACS."
+      ha_hacs_download:
+        name: "Download/Install HACS Repository (destructive)"
+        description: "Download and install a HACS repository."
+      ha_hacs_info:
+        name: "Get HACS Info (read-only)"
+        description: "Get HACS status, version, and enabled categories."
+      ha_hacs_list_installed:
+        name: "List HACS Installed (read-only)"
+        description: "List installed HACS repositories with focused, small response."
+      ha_hacs_repository_info:
+        name: "Get HACS Repository Info (read-only)"
+        description: "Get detailed repository information including README and documentation."
+      ha_hacs_search:
+        name: "Search HACS Store (read-only)"
+        description: "Search HACS store for repositories by keyword with pagination."
+    helper_entities:
+      name: "Helper Entities"
+      enabled:
+        name: Enable all Helper Entities tools
+      ha_config_list_helpers:
+        name: "List Helpers (read-only)"
+        description: "List all Home Assistant helpers of a specific type with their configurations."
+      ha_config_remove_helper:
+        name: "Remove Helper (destructive)"
+        description: "Delete a Home Assistant helper entity."
+      ha_config_set_helper:
+        name: "Create or Update Helper (destructive)"
+        description: "Create or update Home Assistant helper entities."
+      ha_get_helper_schema:
+        name: "Get Helper Schema (read-only)"
+        description: "Get configuration schema for a helper type."
+      ha_set_config_entry_helper:
+        name: "Set Config Entry Helper (destructive)"
+        description: "Create or update a Config Entry Flow helper (template, group, utility_meter, etc.)."
+    history_statistics:
+      name: "History & Statistics"
+      enabled:
+        name: Enable all History & Statistics tools
+      ha_get_automation_traces:
+        name: "Get Automation Traces (read-only)"
+        description: "Retrieve execution traces for automations and scripts to debug issues."
+      ha_get_history:
+        name: "Get Entity History (read-only)"
+        description: "Retrieve raw state change history for entities (last ~10 days)."
+      ha_get_logs:
+        name: "Get Logs (read-only)"
+        description: "Get Home Assistant logs from various sources."
+      ha_get_statistics:
+        name: "Get Statistics (read-only)"
+        description: "Retrieve pre-aggregated long-term statistics for trend analysis."
+    integrations:
+      name: "Integrations"
+      enabled:
+        name: Enable all Integrations tools
+      ha_delete_config_entry:
+        name: "Delete Config Entry (destructive)"
+        description: "Delete config entry permanently."
+      ha_get_integration:
+        name: "Get Integration (read-only)"
+        description: "Get integration (config entry) information - list all or get a specific one."
+      ha_set_integration_enabled:
+        name: "Set Integration Enabled (destructive)"
+        description: "Enable/disable integration (config entry)."
+    labels_categories:
+      name: "Labels & Categories"
+      enabled:
+        name: Enable all Labels & Categories tools
+      ha_config_get_category:
+        name: "Get Category (read-only)"
+        description: "Get category info - list all categories for a scope or get a specific one by ID."
+      ha_config_get_label:
+        name: "Get Label (read-only)"
+        description: "Get label info - list all labels or get a specific one by ID."
+      ha_config_remove_category:
+        name: "Remove Category (destructive)"
+        description: "Delete a Home Assistant category."
+      ha_config_remove_label:
+        name: "Remove Label (destructive)"
+        description: "Delete a Home Assistant label."
+      ha_config_set_category:
+        name: "Create or Update Category (destructive)"
+        description: "Create or update a Home Assistant category."
+      ha_config_set_label:
+        name: "Create or Update Label (destructive)"
+        description: "Create or update a Home Assistant label."
+    scripts:
+      name: "Scripts"
+      enabled:
+        name: Enable all Scripts tools
+      ha_config_get_script:
+        name: "Get Script Config (read-only)"
+        description: "Retrieve Home Assistant script configuration."
+      ha_config_remove_script:
+        name: "Remove Script (destructive)"
+        description: "Delete a Home Assistant script."
+      ha_config_set_script:
+        name: "Create or Update Script (destructive)"
+        description: "Create or update a Home Assistant script."
+    search_discovery:
+      name: "Search & Discovery"
+      enabled:
+        name: Enable all Search & Discovery tools
+      ha_deep_search:
+        name: "Deep Search (read-only)"
+        description: "Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs."
+      ha_get_overview:
+        name: "Get System Overview (read-only) [mandatory]"
+        description: "Get AI-friendly system overview with intelligent categorization."
+      ha_get_state:
+        name: "Get Entity State (read-only) [mandatory]"
+        description: "Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.)."
+      ha_get_states:
+        name: "Get Multiple Entity States (read-only)"
+        description: "Get state information for multiple Home Assistant entities in a single call."
+      ha_search_entities:
+        name: "Search Entities (read-only) [mandatory]"
+        description: "PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain."
+    service_device_control:
+      name: "Service & Device Control"
+      enabled:
+        name: Enable all Service & Device Control tools
+      ha_bulk_control:
+        name: "Bulk Control (destructive)"
+        description: "Control multiple devices with bulk operation support and WebSocket tracking."
+      ha_call_service:
+        name: "Call Service (destructive)"
+        description: "Execute Home Assistant services to control entities and trigger automations."
+      ha_get_operation_status:
+        name: "Get Operation Status (read-only)"
+        description: "Check status of one or more device operations with real-time WebSocket verification."
+      ha_list_services:
+        name: "List Available Services (read-only)"
+        description: "List available Home Assistant services with their parameters."
+    system:
+      name: "System"
+      enabled:
+        name: Enable all System tools
+      ha_backup_create:
+        name: "Create Backup (destructive)"
+        description: "Create a fast Home Assistant backup (local only)."
+      ha_backup_restore:
+        name: "Restore Backup (destructive)"
+        description: "Restore Home Assistant from a backup (LAST RESORT - use with extreme caution)."
+      ha_check_config:
+        name: "Check Configuration (read-only)"
+        description: "Check Home Assistant configuration for errors."
+      ha_config_set_yaml:
+        name: "Set YAML Config (destructive)"
+        description: "Add, replace, or remove a top-level key in configuration.yaml or package files."
+      ha_get_system_health:
+        name: "Get System Health (incl. ZHA/Z-Wave diagnostics) (read-only)"
+        description: "Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics."
+      ha_get_updates:
+        name: "Get Updates (read-only)"
+        description: "Get update information - list all updates or get details for a specific one."
+      ha_reload_core:
+        name: "Reload Core Components (destructive)"
+        description: "Reload Home Assistant configuration without full restart."
+      ha_restart:
+        name: "Restart Home Assistant (destructive)"
+        description: "Restart Home Assistant."
+    todo_lists:
+      name: "Todo Lists"
+      enabled:
+        name: Enable all Todo Lists tools
+      ha_add_todo_item:
+        name: "Add Todo Item (destructive)"
+        description: "Add an item to a Home Assistant todo list."
+      ha_get_todo:
+        name: "Get Todo (read-only)"
+        description: "Get todo lists or items - list all todo lists or get items from a specific list."
+      ha_remove_todo_item:
+        name: "Remove Todo Item (destructive)"
+        description: "Remove an item from a Home Assistant todo list."
+      ha_update_todo_item:
+        name: "Update Todo Item (destructive)"
+        description: "Update or complete a todo item in Home Assistant."
+    utilities:
+      name: "Utilities"
+      enabled:
+        name: Enable all Utilities tools
+      ha_eval_template:
+        name: "Evaluate Template (read-only)"
+        description: "Evaluate Jinja2 templates using Home Assistant's template engine."
+      ha_install_mcp_tools:
+        name: "Install MCP Tools Component (destructive)"
+        description: "Install the ha_mcp_tools custom component via HACS."
+      ha_report_issue:
+        name: "Report Issue or Feedback (read-only) [mandatory]"
+        description: "Collect diagnostic information for filing issue reports or feedback."
+    zones:
+      name: "Zones"
+      enabled:
+        name: Enable all Zones tools
+      ha_get_zone:
+        name: "Get Zone (read-only)"
+        description: "Get zone information - list all zones or get details for a specific one."
+      ha_remove_zone:
+        name: "Remove Zone (destructive)"
+        description: "Remove a Home Assistant zone."
+      ha_set_zone:
+        name: "Set Zone (destructive)"
+        description: "Create or update a Home Assistant zone."

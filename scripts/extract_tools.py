@@ -219,32 +219,54 @@ def _group_tools(tools: list[dict]) -> dict[str, list[dict]]:
 
 
 def _default_state(tool: dict) -> str:
-    """Return the default state for a tool: enabled, pinned, or disabled."""
-    name = tool["name"]
-    if name in DEFAULT_PINNED:
+    """Return the default state for a tool: unpinned, pinned, or disabled."""
+    if tool["name"] in DEFAULT_PINNED:
         return "pinned"
-    return "enabled"
+    return "unpinned"
+
+
+def _tool_hint(tool: dict) -> str:
+    """Return a hint string like '(read-only)' or '(destructive)' from annotations."""
+    ann = tool.get("annotations", {})
+    if ann.get("readOnlyHint"):
+        return "read-only"
+    if ann.get("destructiveHint"):
+        return "destructive"
+    return ""
+
+
+def _brief_description(tool: dict) -> str:
+    """Return the first sentence of the tool description."""
+    desc = tool.get("description", "")
+    # Take first sentence (up to first period followed by space or newline)
+    for i, ch in enumerate(desc):
+        if ch == "." and (i + 1 >= len(desc) or desc[i + 1] in (" ", "\n")):
+            return desc[: i + 1]
+    # No period found — take first line
+    return desc.split("\n")[0][:120]
 
 
 def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
     """Generate the options and schema sections for tools in config.yaml.
 
+    Tools are nested under a single 'tools:' parent for one collapsible section.
+    Each tool uses list(unpinned|pinned|disabled) dropdown.
     Returns (options_block, schema_block) as strings to insert between markers.
     """
     groups = _group_tools(tools)
-    opt_lines = [CONFIG_TOOLS_START]
-    sch_lines = [SCHEMA_TOOLS_START]
+    opt_lines = [CONFIG_TOOLS_START, "  tools:"]
+    sch_lines = [SCHEMA_TOOLS_START, "  tools:"]
 
     for tag, group_tools in groups.items():
         slug = _group_slug(tag)
-        opt_lines.append(f"  tools_{slug}:")
-        opt_lines.append("    enabled: true")
-        sch_lines.append(f"  tools_{slug}:")
-        sch_lines.append("    enabled: bool?")
+        opt_lines.append(f"    {slug}:")
+        opt_lines.append("      enabled: true")
+        sch_lines.append(f"    {slug}:")
+        sch_lines.append("      enabled: bool?")
         for tool in group_tools:
             state = _default_state(tool)
-            opt_lines.append(f"    {tool['name']}: \"{state}\"")
-            sch_lines.append(f"    {tool['name']}: \"list(enabled|pinned|disabled)?\"")
+            opt_lines.append(f"      {tool['name']}: \"{state}\"")
+            sch_lines.append(f"      {tool['name']}: \"list(unpinned|pinned|disabled)?\"")
 
     opt_lines.append(CONFIG_TOOLS_END)
     sch_lines.append(SCHEMA_TOOLS_END)
@@ -252,7 +274,11 @@ def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
 
 
 def generate_addon_translations(tools: list[dict]) -> str:
-    """Generate the full translations/en.yaml for the addon."""
+    """Generate the full translations/en.yaml for the addon.
+
+    Tool entries include friendly name with hint tags and brief description.
+    Mandatory tools are marked. Destructive/read-only hints are shown.
+    """
     groups = _group_tools(tools)
     lines = [
         "---",
@@ -298,17 +324,41 @@ def generate_addon_translations(tools: list[dict]) -> str:
         "      Maximum number of tools returned by ha_search_tools when tool",
         "      search is enabled. Lower values (2-3) save context tokens but",
         "      may miss relevant tools. Range: 2-10. Requires restart.",
+        "  tools:",
+        "    name: Tools",
+        "    description: >-",
+        "      Configure tool availability and pinning. Each tool can be unpinned",
+        "      (enabled), pinned (enabled and always visible in search), or disabled.",
+        "      Mandatory tools cannot be disabled. Requires restart.",
     ]
 
     for tag, group_tools in groups.items():
         slug = _group_slug(tag)
-        lines.append(f"  tools_{slug}:")
-        lines.append(f"    name: \"{tag}\"")
-        lines.append("    enabled:")
-        lines.append(f"      name: Enable all {tag} tools")
+        lines.append(f"    {slug}:")
+        lines.append(f"      name: \"{tag}\"")
+        lines.append("      enabled:")
+        lines.append(f"        name: Enable all {tag} tools")
         for tool in group_tools:
-            lines.append(f"    {tool['name']}:")
-            lines.append(f"      name: \"{tool['title']}\"")
+            name = tool["name"]
+            title = tool["title"]
+            hint = _tool_hint(tool)
+            mandatory = name in MANDATORY_TOOLS
+            brief = _brief_description(tool)
+
+            # Build display name: "Title [hint] [mandatory]"
+            label_parts = [title]
+            if hint:
+                label_parts.append(f"({hint})")
+            if mandatory:
+                label_parts.append("[mandatory]")
+            label = " ".join(label_parts)
+
+            lines.append(f"      {name}:")
+            lines.append(f"        name: \"{label}\"")
+            if brief:
+                # Escape quotes in description
+                safe_brief = brief.replace('"', '\\"')
+                lines.append(f"        description: \"{safe_brief}\"")
 
     return "\n".join(lines) + "\n"
 

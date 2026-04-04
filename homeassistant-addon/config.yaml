@@ -29,144 +29,145 @@ options:
   enable_yaml_config_editing: false
   tool_search_max_results: 5
   # --- GENERATED TOOL CONFIG START (do not edit) ---
-  tools_add-ons:
-    enabled: true
-    ha_call_addon_api: "enabled"
-    ha_get_addon: "enabled"
-  tools_areas_floors:
-    enabled: true
-    ha_config_list_areas: "enabled"
-    ha_config_list_floors: "enabled"
-    ha_config_remove_area: "enabled"
-    ha_config_remove_floor: "enabled"
-    ha_config_set_area: "enabled"
-    ha_config_set_floor: "enabled"
-  tools_automations:
-    enabled: true
-    ha_config_get_automation: "pinned"
-    ha_config_remove_automation: "enabled"
-    ha_config_set_automation: "pinned"
-  tools_blueprints:
-    enabled: true
-    ha_get_blueprint: "enabled"
-    ha_import_blueprint: "enabled"
-  tools_calendar:
-    enabled: true
-    ha_config_get_calendar_events: "enabled"
-    ha_config_remove_calendar_event: "enabled"
-    ha_config_set_calendar_event: "enabled"
-  tools_camera:
-    enabled: true
-    ha_get_camera_image: "enabled"
-  tools_dashboards:
-    enabled: true
-    ha_config_delete_dashboard: "enabled"
-    ha_config_delete_dashboard_resource: "enabled"
-    ha_config_get_dashboard: "enabled"
-    ha_config_list_dashboard_resources: "enabled"
-    ha_config_set_dashboard: "enabled"
-    ha_config_set_dashboard_resource: "enabled"
-    ha_dashboard_find_card: "enabled"
-  tools_device_registry:
-    enabled: true
-    ha_get_device: "enabled"
-    ha_remove_device: "enabled"
-    ha_rename_entity: "enabled"
-    ha_update_device: "enabled"
-  tools_entity_registry:
-    enabled: true
-    ha_get_entity: "enabled"
-    ha_get_entity_exposure: "enabled"
-    ha_set_entity: "enabled"
-  tools_files:
-    enabled: true
-    ha_delete_file: "enabled"
-    ha_list_files: "enabled"
-    ha_read_file: "enabled"
-    ha_write_file: "enabled"
-  tools_groups:
-    enabled: true
-    ha_config_list_groups: "enabled"
-    ha_config_remove_group: "enabled"
-    ha_config_set_group: "enabled"
-  tools_hacs:
-    enabled: true
-    ha_hacs_add_repository: "enabled"
-    ha_hacs_download: "enabled"
-    ha_hacs_info: "enabled"
-    ha_hacs_list_installed: "enabled"
-    ha_hacs_repository_info: "enabled"
-    ha_hacs_search: "enabled"
-  tools_helper_entities:
-    enabled: true
-    ha_config_list_helpers: "enabled"
-    ha_config_remove_helper: "enabled"
-    ha_config_set_helper: "enabled"
-    ha_get_helper_schema: "enabled"
-    ha_set_config_entry_helper: "enabled"
-  tools_history_statistics:
-    enabled: true
-    ha_get_automation_traces: "enabled"
-    ha_get_history: "enabled"
-    ha_get_logs: "enabled"
-    ha_get_statistics: "enabled"
-  tools_integrations:
-    enabled: true
-    ha_delete_config_entry: "enabled"
-    ha_get_integration: "enabled"
-    ha_set_integration_enabled: "enabled"
-  tools_labels_categories:
-    enabled: true
-    ha_config_get_category: "enabled"
-    ha_config_get_label: "enabled"
-    ha_config_remove_category: "enabled"
-    ha_config_remove_label: "enabled"
-    ha_config_set_category: "enabled"
-    ha_config_set_label: "enabled"
-  tools_scripts:
-    enabled: true
-    ha_config_get_script: "enabled"
-    ha_config_remove_script: "enabled"
-    ha_config_set_script: "enabled"
-  tools_search_discovery:
-    enabled: true
-    ha_deep_search: "enabled"
-    ha_get_overview: "pinned"
-    ha_get_state: "enabled"
-    ha_get_states: "enabled"
-    ha_search_entities: "pinned"
-  tools_service_device_control:
-    enabled: true
-    ha_bulk_control: "enabled"
-    ha_call_service: "enabled"
-    ha_get_operation_status: "enabled"
-    ha_list_services: "enabled"
-  tools_system:
-    enabled: true
-    ha_backup_create: "pinned"
-    ha_backup_restore: "pinned"
-    ha_check_config: "enabled"
-    ha_config_set_yaml: "pinned"
-    ha_get_system_health: "enabled"
-    ha_get_updates: "enabled"
-    ha_reload_core: "pinned"
-    ha_restart: "pinned"
-  tools_todo_lists:
-    enabled: true
-    ha_add_todo_item: "enabled"
-    ha_get_todo: "enabled"
-    ha_remove_todo_item: "enabled"
-    ha_update_todo_item: "enabled"
-  tools_utilities:
-    enabled: true
-    ha_eval_template: "enabled"
-    ha_install_mcp_tools: "enabled"
-    ha_report_issue: "pinned"
-  tools_zones:
-    enabled: true
-    ha_get_zone: "enabled"
-    ha_remove_zone: "enabled"
-    ha_set_zone: "enabled"
+  tools:
+    add-ons:
+      enabled: true
+      ha_call_addon_api: "unpinned"
+      ha_get_addon: "unpinned"
+    areas_floors:
+      enabled: true
+      ha_config_list_areas: "unpinned"
+      ha_config_list_floors: "unpinned"
+      ha_config_remove_area: "unpinned"
+      ha_config_remove_floor: "unpinned"
+      ha_config_set_area: "unpinned"
+      ha_config_set_floor: "unpinned"
+    automations:
+      enabled: true
+      ha_config_get_automation: "pinned"
+      ha_config_remove_automation: "unpinned"
+      ha_config_set_automation: "pinned"
+    blueprints:
+      enabled: true
+      ha_get_blueprint: "unpinned"
+      ha_import_blueprint: "unpinned"
+    calendar:
+      enabled: true
+      ha_config_get_calendar_events: "unpinned"
+      ha_config_remove_calendar_event: "unpinned"
+      ha_config_set_calendar_event: "unpinned"
+    camera:
+      enabled: true
+      ha_get_camera_image: "unpinned"
+    dashboards:
+      enabled: true
+      ha_config_delete_dashboard: "unpinned"
+      ha_config_delete_dashboard_resource: "unpinned"
+      ha_config_get_dashboard: "unpinned"
+      ha_config_list_dashboard_resources: "unpinned"
+      ha_config_set_dashboard: "unpinned"
+      ha_config_set_dashboard_resource: "unpinned"
+      ha_dashboard_find_card: "unpinned"
+    device_registry:
+      enabled: true
+      ha_get_device: "unpinned"
+      ha_remove_device: "unpinned"
+      ha_rename_entity: "unpinned"
+      ha_update_device: "unpinned"
+    entity_registry:
+      enabled: true
+      ha_get_entity: "unpinned"
+      ha_get_entity_exposure: "unpinned"
+      ha_set_entity: "unpinned"
+    files:
+      enabled: true
+      ha_delete_file: "unpinned"
+      ha_list_files: "unpinned"
+      ha_read_file: "unpinned"
+      ha_write_file: "unpinned"
+    groups:
+      enabled: true
+      ha_config_list_groups: "unpinned"
+      ha_config_remove_group: "unpinned"
+      ha_config_set_group: "unpinned"
+    hacs:
+      enabled: true
+      ha_hacs_add_repository: "unpinned"
+      ha_hacs_download: "unpinned"
+      ha_hacs_info: "unpinned"
+      ha_hacs_list_installed: "unpinned"
+      ha_hacs_repository_info: "unpinned"
+      ha_hacs_search: "unpinned"
+    helper_entities:
+      enabled: true
+      ha_config_list_helpers: "unpinned"
+      ha_config_remove_helper: "unpinned"
+      ha_config_set_helper: "unpinned"
+      ha_get_helper_schema: "unpinned"
+      ha_set_config_entry_helper: "unpinned"
+    history_statistics:
+      enabled: true
+      ha_get_automation_traces: "unpinned"
+      ha_get_history: "unpinned"
+      ha_get_logs: "unpinned"
+      ha_get_statistics: "unpinned"
+    integrations:
+      enabled: true
+      ha_delete_config_entry: "unpinned"
+      ha_get_integration: "unpinned"
+      ha_set_integration_enabled: "unpinned"
+    labels_categories:
+      enabled: true
+      ha_config_get_category: "unpinned"
+      ha_config_get_label: "unpinned"
+      ha_config_remove_category: "unpinned"
+      ha_config_remove_label: "unpinned"
+      ha_config_set_category: "unpinned"
+      ha_config_set_label: "unpinned"
+    scripts:
+      enabled: true
+      ha_config_get_script: "unpinned"
+      ha_config_remove_script: "unpinned"
+      ha_config_set_script: "unpinned"
+    search_discovery:
+      enabled: true
+      ha_deep_search: "unpinned"
+      ha_get_overview: "pinned"
+      ha_get_state: "unpinned"
+      ha_get_states: "unpinned"
+      ha_search_entities: "pinned"
+    service_device_control:
+      enabled: true
+      ha_bulk_control: "unpinned"
+      ha_call_service: "unpinned"
+      ha_get_operation_status: "unpinned"
+      ha_list_services: "unpinned"
+    system:
+      enabled: true
+      ha_backup_create: "pinned"
+      ha_backup_restore: "pinned"
+      ha_check_config: "unpinned"
+      ha_config_set_yaml: "pinned"
+      ha_get_system_health: "unpinned"
+      ha_get_updates: "unpinned"
+      ha_reload_core: "pinned"
+      ha_restart: "pinned"
+    todo_lists:
+      enabled: true
+      ha_add_todo_item: "unpinned"
+      ha_get_todo: "unpinned"
+      ha_remove_todo_item: "unpinned"
+      ha_update_todo_item: "unpinned"
+    utilities:
+      enabled: true
+      ha_eval_template: "unpinned"
+      ha_install_mcp_tools: "unpinned"
+      ha_report_issue: "pinned"
+    zones:
+      enabled: true
+      ha_get_zone: "unpinned"
+      ha_remove_zone: "unpinned"
+      ha_set_zone: "unpinned"
   # --- GENERATED TOOL CONFIG END ---
 schema:
   backup_hint: list(strong|normal|weak|auto)
@@ -177,144 +178,145 @@ schema:
   enable_yaml_config_editing: bool?
   tool_search_max_results: int?
   # --- GENERATED TOOL SCHEMA START (do not edit) ---
-  tools_add-ons:
-    enabled: bool?
-    ha_call_addon_api: "list(enabled|pinned|disabled)?"
-    ha_get_addon: "list(enabled|pinned|disabled)?"
-  tools_areas_floors:
-    enabled: bool?
-    ha_config_list_areas: "list(enabled|pinned|disabled)?"
-    ha_config_list_floors: "list(enabled|pinned|disabled)?"
-    ha_config_remove_area: "list(enabled|pinned|disabled)?"
-    ha_config_remove_floor: "list(enabled|pinned|disabled)?"
-    ha_config_set_area: "list(enabled|pinned|disabled)?"
-    ha_config_set_floor: "list(enabled|pinned|disabled)?"
-  tools_automations:
-    enabled: bool?
-    ha_config_get_automation: "list(enabled|pinned|disabled)?"
-    ha_config_remove_automation: "list(enabled|pinned|disabled)?"
-    ha_config_set_automation: "list(enabled|pinned|disabled)?"
-  tools_blueprints:
-    enabled: bool?
-    ha_get_blueprint: "list(enabled|pinned|disabled)?"
-    ha_import_blueprint: "list(enabled|pinned|disabled)?"
-  tools_calendar:
-    enabled: bool?
-    ha_config_get_calendar_events: "list(enabled|pinned|disabled)?"
-    ha_config_remove_calendar_event: "list(enabled|pinned|disabled)?"
-    ha_config_set_calendar_event: "list(enabled|pinned|disabled)?"
-  tools_camera:
-    enabled: bool?
-    ha_get_camera_image: "list(enabled|pinned|disabled)?"
-  tools_dashboards:
-    enabled: bool?
-    ha_config_delete_dashboard: "list(enabled|pinned|disabled)?"
-    ha_config_delete_dashboard_resource: "list(enabled|pinned|disabled)?"
-    ha_config_get_dashboard: "list(enabled|pinned|disabled)?"
-    ha_config_list_dashboard_resources: "list(enabled|pinned|disabled)?"
-    ha_config_set_dashboard: "list(enabled|pinned|disabled)?"
-    ha_config_set_dashboard_resource: "list(enabled|pinned|disabled)?"
-    ha_dashboard_find_card: "list(enabled|pinned|disabled)?"
-  tools_device_registry:
-    enabled: bool?
-    ha_get_device: "list(enabled|pinned|disabled)?"
-    ha_remove_device: "list(enabled|pinned|disabled)?"
-    ha_rename_entity: "list(enabled|pinned|disabled)?"
-    ha_update_device: "list(enabled|pinned|disabled)?"
-  tools_entity_registry:
-    enabled: bool?
-    ha_get_entity: "list(enabled|pinned|disabled)?"
-    ha_get_entity_exposure: "list(enabled|pinned|disabled)?"
-    ha_set_entity: "list(enabled|pinned|disabled)?"
-  tools_files:
-    enabled: bool?
-    ha_delete_file: "list(enabled|pinned|disabled)?"
-    ha_list_files: "list(enabled|pinned|disabled)?"
-    ha_read_file: "list(enabled|pinned|disabled)?"
-    ha_write_file: "list(enabled|pinned|disabled)?"
-  tools_groups:
-    enabled: bool?
-    ha_config_list_groups: "list(enabled|pinned|disabled)?"
-    ha_config_remove_group: "list(enabled|pinned|disabled)?"
-    ha_config_set_group: "list(enabled|pinned|disabled)?"
-  tools_hacs:
-    enabled: bool?
-    ha_hacs_add_repository: "list(enabled|pinned|disabled)?"
-    ha_hacs_download: "list(enabled|pinned|disabled)?"
-    ha_hacs_info: "list(enabled|pinned|disabled)?"
-    ha_hacs_list_installed: "list(enabled|pinned|disabled)?"
-    ha_hacs_repository_info: "list(enabled|pinned|disabled)?"
-    ha_hacs_search: "list(enabled|pinned|disabled)?"
-  tools_helper_entities:
-    enabled: bool?
-    ha_config_list_helpers: "list(enabled|pinned|disabled)?"
-    ha_config_remove_helper: "list(enabled|pinned|disabled)?"
-    ha_config_set_helper: "list(enabled|pinned|disabled)?"
-    ha_get_helper_schema: "list(enabled|pinned|disabled)?"
-    ha_set_config_entry_helper: "list(enabled|pinned|disabled)?"
-  tools_history_statistics:
-    enabled: bool?
-    ha_get_automation_traces: "list(enabled|pinned|disabled)?"
-    ha_get_history: "list(enabled|pinned|disabled)?"
-    ha_get_logs: "list(enabled|pinned|disabled)?"
-    ha_get_statistics: "list(enabled|pinned|disabled)?"
-  tools_integrations:
-    enabled: bool?
-    ha_delete_config_entry: "list(enabled|pinned|disabled)?"
-    ha_get_integration: "list(enabled|pinned|disabled)?"
-    ha_set_integration_enabled: "list(enabled|pinned|disabled)?"
-  tools_labels_categories:
-    enabled: bool?
-    ha_config_get_category: "list(enabled|pinned|disabled)?"
-    ha_config_get_label: "list(enabled|pinned|disabled)?"
-    ha_config_remove_category: "list(enabled|pinned|disabled)?"
-    ha_config_remove_label: "list(enabled|pinned|disabled)?"
-    ha_config_set_category: "list(enabled|pinned|disabled)?"
-    ha_config_set_label: "list(enabled|pinned|disabled)?"
-  tools_scripts:
-    enabled: bool?
-    ha_config_get_script: "list(enabled|pinned|disabled)?"
-    ha_config_remove_script: "list(enabled|pinned|disabled)?"
-    ha_config_set_script: "list(enabled|pinned|disabled)?"
-  tools_search_discovery:
-    enabled: bool?
-    ha_deep_search: "list(enabled|pinned|disabled)?"
-    ha_get_overview: "list(enabled|pinned|disabled)?"
-    ha_get_state: "list(enabled|pinned|disabled)?"
-    ha_get_states: "list(enabled|pinned|disabled)?"
-    ha_search_entities: "list(enabled|pinned|disabled)?"
-  tools_service_device_control:
-    enabled: bool?
-    ha_bulk_control: "list(enabled|pinned|disabled)?"
-    ha_call_service: "list(enabled|pinned|disabled)?"
-    ha_get_operation_status: "list(enabled|pinned|disabled)?"
-    ha_list_services: "list(enabled|pinned|disabled)?"
-  tools_system:
-    enabled: bool?
-    ha_backup_create: "list(enabled|pinned|disabled)?"
-    ha_backup_restore: "list(enabled|pinned|disabled)?"
-    ha_check_config: "list(enabled|pinned|disabled)?"
-    ha_config_set_yaml: "list(enabled|pinned|disabled)?"
-    ha_get_system_health: "list(enabled|pinned|disabled)?"
-    ha_get_updates: "list(enabled|pinned|disabled)?"
-    ha_reload_core: "list(enabled|pinned|disabled)?"
-    ha_restart: "list(enabled|pinned|disabled)?"
-  tools_todo_lists:
-    enabled: bool?
-    ha_add_todo_item: "list(enabled|pinned|disabled)?"
-    ha_get_todo: "list(enabled|pinned|disabled)?"
-    ha_remove_todo_item: "list(enabled|pinned|disabled)?"
-    ha_update_todo_item: "list(enabled|pinned|disabled)?"
-  tools_utilities:
-    enabled: bool?
-    ha_eval_template: "list(enabled|pinned|disabled)?"
-    ha_install_mcp_tools: "list(enabled|pinned|disabled)?"
-    ha_report_issue: "list(enabled|pinned|disabled)?"
-  tools_zones:
-    enabled: bool?
-    ha_get_zone: "list(enabled|pinned|disabled)?"
-    ha_remove_zone: "list(enabled|pinned|disabled)?"
-    ha_set_zone: "list(enabled|pinned|disabled)?"
+  tools:
+    add-ons:
+      enabled: bool?
+      ha_call_addon_api: "list(unpinned|pinned|disabled)?"
+      ha_get_addon: "list(unpinned|pinned|disabled)?"
+    areas_floors:
+      enabled: bool?
+      ha_config_list_areas: "list(unpinned|pinned|disabled)?"
+      ha_config_list_floors: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_area: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_floor: "list(unpinned|pinned|disabled)?"
+      ha_config_set_area: "list(unpinned|pinned|disabled)?"
+      ha_config_set_floor: "list(unpinned|pinned|disabled)?"
+    automations:
+      enabled: bool?
+      ha_config_get_automation: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_automation: "list(unpinned|pinned|disabled)?"
+      ha_config_set_automation: "list(unpinned|pinned|disabled)?"
+    blueprints:
+      enabled: bool?
+      ha_get_blueprint: "list(unpinned|pinned|disabled)?"
+      ha_import_blueprint: "list(unpinned|pinned|disabled)?"
+    calendar:
+      enabled: bool?
+      ha_config_get_calendar_events: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_calendar_event: "list(unpinned|pinned|disabled)?"
+      ha_config_set_calendar_event: "list(unpinned|pinned|disabled)?"
+    camera:
+      enabled: bool?
+      ha_get_camera_image: "list(unpinned|pinned|disabled)?"
+    dashboards:
+      enabled: bool?
+      ha_config_delete_dashboard: "list(unpinned|pinned|disabled)?"
+      ha_config_delete_dashboard_resource: "list(unpinned|pinned|disabled)?"
+      ha_config_get_dashboard: "list(unpinned|pinned|disabled)?"
+      ha_config_list_dashboard_resources: "list(unpinned|pinned|disabled)?"
+      ha_config_set_dashboard: "list(unpinned|pinned|disabled)?"
+      ha_config_set_dashboard_resource: "list(unpinned|pinned|disabled)?"
+      ha_dashboard_find_card: "list(unpinned|pinned|disabled)?"
+    device_registry:
+      enabled: bool?
+      ha_get_device: "list(unpinned|pinned|disabled)?"
+      ha_remove_device: "list(unpinned|pinned|disabled)?"
+      ha_rename_entity: "list(unpinned|pinned|disabled)?"
+      ha_update_device: "list(unpinned|pinned|disabled)?"
+    entity_registry:
+      enabled: bool?
+      ha_get_entity: "list(unpinned|pinned|disabled)?"
+      ha_get_entity_exposure: "list(unpinned|pinned|disabled)?"
+      ha_set_entity: "list(unpinned|pinned|disabled)?"
+    files:
+      enabled: bool?
+      ha_delete_file: "list(unpinned|pinned|disabled)?"
+      ha_list_files: "list(unpinned|pinned|disabled)?"
+      ha_read_file: "list(unpinned|pinned|disabled)?"
+      ha_write_file: "list(unpinned|pinned|disabled)?"
+    groups:
+      enabled: bool?
+      ha_config_list_groups: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_group: "list(unpinned|pinned|disabled)?"
+      ha_config_set_group: "list(unpinned|pinned|disabled)?"
+    hacs:
+      enabled: bool?
+      ha_hacs_add_repository: "list(unpinned|pinned|disabled)?"
+      ha_hacs_download: "list(unpinned|pinned|disabled)?"
+      ha_hacs_info: "list(unpinned|pinned|disabled)?"
+      ha_hacs_list_installed: "list(unpinned|pinned|disabled)?"
+      ha_hacs_repository_info: "list(unpinned|pinned|disabled)?"
+      ha_hacs_search: "list(unpinned|pinned|disabled)?"
+    helper_entities:
+      enabled: bool?
+      ha_config_list_helpers: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_helper: "list(unpinned|pinned|disabled)?"
+      ha_config_set_helper: "list(unpinned|pinned|disabled)?"
+      ha_get_helper_schema: "list(unpinned|pinned|disabled)?"
+      ha_set_config_entry_helper: "list(unpinned|pinned|disabled)?"
+    history_statistics:
+      enabled: bool?
+      ha_get_automation_traces: "list(unpinned|pinned|disabled)?"
+      ha_get_history: "list(unpinned|pinned|disabled)?"
+      ha_get_logs: "list(unpinned|pinned|disabled)?"
+      ha_get_statistics: "list(unpinned|pinned|disabled)?"
+    integrations:
+      enabled: bool?
+      ha_delete_config_entry: "list(unpinned|pinned|disabled)?"
+      ha_get_integration: "list(unpinned|pinned|disabled)?"
+      ha_set_integration_enabled: "list(unpinned|pinned|disabled)?"
+    labels_categories:
+      enabled: bool?
+      ha_config_get_category: "list(unpinned|pinned|disabled)?"
+      ha_config_get_label: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_category: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_label: "list(unpinned|pinned|disabled)?"
+      ha_config_set_category: "list(unpinned|pinned|disabled)?"
+      ha_config_set_label: "list(unpinned|pinned|disabled)?"
+    scripts:
+      enabled: bool?
+      ha_config_get_script: "list(unpinned|pinned|disabled)?"
+      ha_config_remove_script: "list(unpinned|pinned|disabled)?"
+      ha_config_set_script: "list(unpinned|pinned|disabled)?"
+    search_discovery:
+      enabled: bool?
+      ha_deep_search: "list(unpinned|pinned|disabled)?"
+      ha_get_overview: "list(unpinned|pinned|disabled)?"
+      ha_get_state: "list(unpinned|pinned|disabled)?"
+      ha_get_states: "list(unpinned|pinned|disabled)?"
+      ha_search_entities: "list(unpinned|pinned|disabled)?"
+    service_device_control:
+      enabled: bool?
+      ha_bulk_control: "list(unpinned|pinned|disabled)?"
+      ha_call_service: "list(unpinned|pinned|disabled)?"
+      ha_get_operation_status: "list(unpinned|pinned|disabled)?"
+      ha_list_services: "list(unpinned|pinned|disabled)?"
+    system:
+      enabled: bool?
+      ha_backup_create: "list(unpinned|pinned|disabled)?"
+      ha_backup_restore: "list(unpinned|pinned|disabled)?"
+      ha_check_config: "list(unpinned|pinned|disabled)?"
+      ha_config_set_yaml: "list(unpinned|pinned|disabled)?"
+      ha_get_system_health: "list(unpinned|pinned|disabled)?"
+      ha_get_updates: "list(unpinned|pinned|disabled)?"
+      ha_reload_core: "list(unpinned|pinned|disabled)?"
+      ha_restart: "list(unpinned|pinned|disabled)?"
+    todo_lists:
+      enabled: bool?
+      ha_add_todo_item: "list(unpinned|pinned|disabled)?"
+      ha_get_todo: "list(unpinned|pinned|disabled)?"
+      ha_remove_todo_item: "list(unpinned|pinned|disabled)?"
+      ha_update_todo_item: "list(unpinned|pinned|disabled)?"
+    utilities:
+      enabled: bool?
+      ha_eval_template: "list(unpinned|pinned|disabled)?"
+      ha_install_mcp_tools: "list(unpinned|pinned|disabled)?"
+      ha_report_issue: "list(unpinned|pinned|disabled)?"
+    zones:
+      enabled: bool?
+      ha_get_zone: "list(unpinned|pinned|disabled)?"
+      ha_remove_zone: "list(unpinned|pinned|disabled)?"
+      ha_set_zone: "list(unpinned|pinned|disabled)?"
   # --- GENERATED TOOL SCHEMA END ---
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:

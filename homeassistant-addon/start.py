@@ -131,19 +131,21 @@ def main() -> int:
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
 
-            # Parse tool groups: each tool has state "enabled", "pinned", or "disabled".
+            # Parse tools config: tools > group > tool with unpinned/pinned/disabled.
             # Group "enabled" toggle overrides individual tools when false.
-            for key, group_val in config.items():
-                if not key.startswith("tools_") or not isinstance(group_val, dict):
-                    continue
-                group_enabled = group_val.get("enabled", True)
-                for tool_name, state in group_val.items():
-                    if tool_name == "enabled":
+            tools_config = config.get("tools", {})
+            if isinstance(tools_config, dict):
+                for group_val in tools_config.values():
+                    if not isinstance(group_val, dict):
                         continue
-                    if not group_enabled or state == "disabled":
-                        disabled_tools.append(tool_name)
-                    elif state == "pinned":
-                        pinned_tools.append(tool_name)
+                    group_enabled = group_val.get("enabled", True)
+                    for tool_name, state in group_val.items():
+                        if tool_name == "enabled":
+                            continue
+                        if not group_enabled or state == "disabled":
+                            disabled_tools.append(tool_name)
+                        elif state == "pinned":
+                            pinned_tools.append(tool_name)
 
             # If YAML config editing is disabled, ensure ha_config_set_yaml is in the list
             if not enable_yaml_config_editing and "ha_config_set_yaml" not in disabled_tools:
