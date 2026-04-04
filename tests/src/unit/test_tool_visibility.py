@@ -253,7 +253,7 @@ class TestStartPyConfigParsing:
             }
         }
         disabled: list[str] = []
-        for _group_key, group_val in config["enabled_tools"].items():
+        for group_val in config["enabled_tools"].values():
             if not isinstance(group_val, dict):
                 continue
             group_enabled = group_val.get("enabled", True)
@@ -284,7 +284,7 @@ class TestStartPyConfigParsing:
             }
         }
         pinned: list[str] = []
-        for _group_key, group_val in config["pinned_tools"].items():
+        for group_val in config["pinned_tools"].values():
             if not isinstance(group_val, dict):
                 continue
             for tool_name, tool_val in group_val.items():

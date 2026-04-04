@@ -135,7 +135,7 @@ def main() -> int:
             # Tools with false value or whose group "enabled" is false get disabled.
             enabled_tools_config = config.get("enabled_tools", {})
             if isinstance(enabled_tools_config, dict):
-                for _group_key, group_val in enabled_tools_config.items():
+                for group_val in enabled_tools_config.values():
                     if not isinstance(group_val, dict):
                         continue
                     group_enabled = group_val.get("enabled", True)
@@ -153,7 +153,7 @@ def main() -> int:
             # Tools with true value get pinned.
             pinned_tools_config = config.get("pinned_tools", {})
             if isinstance(pinned_tools_config, dict):
-                for _group_key, group_val in pinned_tools_config.items():
+                for group_val in pinned_tools_config.values():
                     if not isinstance(group_val, dict):
                         continue
                     for tool_name, tool_val in group_val.items():
