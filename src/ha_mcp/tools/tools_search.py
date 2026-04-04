@@ -508,17 +508,46 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 default="minimal",
                 description=(
-                    "'minimal': 10 entities per domain sample (default); "
-                    "'standard': ALL entities per domain (friendly_name only); "
-                    "'full': ALL entities with entity_id + friendly_name + state + system_info"
+                    "'minimal': 10 entities/domain, top-5 states (default); "
+                    "'standard': 200 entities/page, top-10 states (use offset for more); "
+                    "'full': 200 entities/page + entity_id + state + full states. "
+                    "Use 'domains', 'limit', or max_entities_per_domain to control size"
                 ),
             ),
         ] = "minimal",
+        domains: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). "
+                    "None = all domains. Useful to avoid context window overload."
+                ),
+            ),
+        ] = None,
+        limit: Annotated[
+            int | str | None,
+            Field(
+                default=None,
+                description=(
+                    "Max total entities across all domains (default: unlimited for minimal, "
+                    "200 for standard/full). Counts and states always complete. "
+                    "Use with offset for pagination."
+                ),
+            ),
+        ] = None,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of entities to skip for pagination (default: 0)",
+            ),
+        ] = 0,
         max_entities_per_domain: Annotated[
             int | None,
             Field(
                 default=None,
-                description="Override max entities per domain (None = all). Minimal defaults to 10.",
+                description="Override default entity cap per domain (minimal=10, standard/full=unlimited). 0 = no limit on entities or states.",
             ),
         ] = None,
         include_state: Annotated[
@@ -548,7 +577,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns comprehensive system information at the requested detail level,
         including Home Assistant base_url, version, location, timezone, entity overview,
         and active persistent notifications (if any).
-        Default is 'minimal' — use this unless you specifically need all entities.
+        Use 'minimal' (default) for most queries. Domain counts and states_summary
+        are always complete regardless of entity pagination.
+        Standard/full modes paginate entities (default 200 per page) — use offset
+        to fetch more. Use 'domains' filter to narrow scope.
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -561,11 +593,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             include_notifications, "include_notifications", default=True
         )
 
+        # Parse domains filter
+        parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
+
+        # Parse pagination parameters
+        limit_int = coerce_int_param(limit, "limit", default=None, min_value=1)
+        offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+
         result = await smart_tools.get_system_overview(
             detail_level,
             max_entities_per_domain,
             include_state_bool,
             include_entity_id_bool,
+            domains_filter=parsed_domains,
+            limit=limit_int,
+            offset=offset_int,
         )
         result = cast(dict[str, Any], result)
 
@@ -622,6 +664,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ]
             except Exception as e:
                 logger.warning(f"Failed to fetch notifications for overview: {e}")
+
+        # Include active repair issues
+        result["repair_count"] = 0
+        try:
+            repairs_result = await client.send_websocket_message(
+                {"type": "repairs/list_issues"}
+            )
+            if repairs_result.get("success"):
+                issues = repairs_result.get("result", {}).get("issues", [])
+                result["repair_count"] = len(issues)
+                if issues:
+                    result["repairs"] = [
+                        {
+                            "issue_id": r.get("issue_id"),
+                            "domain": r.get("domain"),
+                            "severity": r.get("severity"),
+                            "translation_key": r.get("translation_key"),
+                        }
+                        for r in issues
+                    ]
+        except Exception as e:
+            logger.warning("Failed to fetch repairs for overview: %s", e)
+            result["repairs_error"] = f"Could not fetch repairs: {e}"
 
         # Include tool discovery hint when search transform is active
         settings = get_global_settings()
