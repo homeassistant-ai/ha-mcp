@@ -34,6 +34,7 @@ from .const import (
     DOMAIN,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
+    YAML_WRITE_BLOCKED_FILES,
 )
 from .yaml_rt import make_yaml, yaml_dumps
 
@@ -45,6 +46,7 @@ SERVICE_READ_FILE = "read_file"
 SERVICE_WRITE_FILE = "write_file"
 SERVICE_DELETE_FILE = "delete_file"
 SERVICE_EDIT_YAML_CONFIG = "edit_yaml_config"
+SERVICE_WRITE_YAML_FILE = "write_yaml_file"
 
 # Service schemas
 SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
@@ -83,6 +85,14 @@ SERVICE_WRITE_FILE_SCHEMA = vol.Schema(
 SERVICE_DELETE_FILE_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
+    }
+)
+
+SERVICE_WRITE_YAML_FILE_SCHEMA = vol.Schema(
+    {
+        vol.Required("path"): cv.string,
+        vol.Required("content"): cv.string,
+        vol.Optional("backup", default=True): cv.boolean,
     }
 )
 
@@ -739,6 +749,139 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "error": str(err),
             }
 
+    async def handle_write_yaml_file(call: ServiceCall) -> ServiceResponse:
+        """Handle the write_yaml_file service call.
+
+        Writes any YAML file within the config directory.
+        secrets.yaml is always blocked. Path traversal is blocked.
+        Optionally creates a timestamped backup before overwriting.
+        Validates the provided content is parseable YAML before writing.
+        """
+        rel_path = call.data["path"]
+        content = call.data["content"]
+        do_backup = call.data.get("backup", True)
+
+        # Block path traversal
+        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+        if normalized.startswith("..") or normalized.startswith("/"):
+            return {"success": False, "error": "Path traversal is not allowed."}
+
+        # Only allow .yaml files
+        if not normalized.endswith(".yaml"):
+            return {
+                "success": False,
+                "error": f"Only .yaml files are allowed. Got: {rel_path}",
+            }
+
+        # Block secrets.yaml and any other blocked files
+        base_name = os.path.basename(normalized)  # noqa: ASYNC240
+        if base_name in YAML_WRITE_BLOCKED_FILES:
+            return {
+                "success": False,
+                "error": f"Writing '{base_name}' is not allowed for security reasons.",
+            }
+
+        # Resolve and verify the path stays within config_dir
+        target_file = config_dir / normalized
+        try:
+            resolved = target_file.resolve()
+            config_resolved = config_dir.resolve()
+            if not str(resolved).startswith(str(config_resolved)):
+                return {"success": False, "error": "Path escapes config directory."}
+        except (OSError, ValueError) as err:
+            return {"success": False, "error": f"Invalid path: {err}"}
+
+        # Validate the new content is parseable YAML
+        try:
+            yaml.safe_load(content)
+        except yaml.YAMLError as err:
+            return {"success": False, "error": f"Invalid YAML content: {err}"}
+
+        backup_path_str: str | None = None
+
+        try:
+            # Create backup of the existing file if requested
+            if do_backup and target_file.exists():
+                backup_dir = config_dir / "www" / "yaml_backups"
+                await hass.async_add_executor_job(
+                    backup_dir.mkdir, parents=True, exist_ok=True
+                )
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = normalized.replace(os.sep, "_")
+                backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
+                raw_existing = await hass.async_add_executor_job(target_file.read_text)
+                await hass.async_add_executor_job(backup_file.write_text, raw_existing)
+                backup_path_str = str(backup_file.relative_to(config_dir))
+                _LOGGER.info("Backup created: %s", backup_path_str)
+
+            # Create parent directories if needed
+            if not target_file.parent.exists():
+                await hass.async_add_executor_job(
+                    target_file.parent.mkdir, parents=True, exist_ok=True
+                )
+
+            is_new = not target_file.exists()
+
+            # Atomic write: write to temp file then rename into place
+            def _atomic_write() -> None:
+                tmp_file = target_file.with_suffix(".tmp")
+                tmp_file.write_text(content)
+                os.replace(str(tmp_file), str(target_file))
+
+            await hass.async_add_executor_job(_atomic_write)
+
+            stat = target_file.stat()
+            modified_dt = datetime.fromtimestamp(stat.st_mtime)
+
+            _LOGGER.info(
+                "YAML file written: %s (%d bytes, new=%s)", rel_path, stat.st_size, is_new
+            )
+
+            result: dict[str, Any] = {
+                "success": True,
+                "path": rel_path,
+                "size": stat.st_size,
+                "modified": modified_dt.isoformat(),
+                "created": is_new,
+            }
+            if backup_path_str:
+                result["backup_path"] = backup_path_str
+
+            # Run HA config check to verify the file is loadable
+            try:
+                check_result = await hass.services.async_call(
+                    "homeassistant",
+                    "check_config",
+                    {},
+                    blocking=True,
+                    return_response=True,
+                )
+                if isinstance(check_result, dict):
+                    errors = check_result.get("errors")
+                    if errors:
+                        result["config_check"] = "errors"
+                        result["config_check_errors"] = errors
+                        _LOGGER.warning(
+                            "Config check found errors after writing %s: %s",
+                            rel_path,
+                            errors,
+                        )
+                    else:
+                        result["config_check"] = "ok"
+            except Exception as check_err:
+                result["config_check"] = "unavailable"
+                result["config_check_error"] = str(check_err)
+                _LOGGER.debug("Config check unavailable: %s", check_err)
+
+            return result
+
+        except PermissionError:
+            _LOGGER.error("Permission denied writing YAML file: %s", rel_path)
+            return {"success": False, "error": f"Permission denied: {rel_path}"}
+        except OSError as err:
+            _LOGGER.error("Error writing YAML file %s: %s", rel_path, err)
+            return {"success": False, "error": str(err)}
+
     # Register all services with response support
     hass.services.async_register(
         DOMAIN,
@@ -780,6 +923,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         supports_response=SupportsResponse.ONLY,
     )
 
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_WRITE_YAML_FILE,
+        handle_write_yaml_file,
+        schema=SERVICE_WRITE_YAML_FILE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     _LOGGER.info("HA MCP Tools initialized with file management services")
     return True
 
@@ -792,4 +943,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_DELETE_FILE)
+    hass.services.async_remove(DOMAIN, SERVICE_WRITE_YAML_FILE)
     return True

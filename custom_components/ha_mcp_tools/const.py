@@ -10,6 +10,9 @@ ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates"]
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # Also allows packages/*.yaml via pattern matching
 
+# Files that can never be written via write_yaml_file, regardless of other settings
+YAML_WRITE_BLOCKED_FILES = frozenset({"secrets.yaml"})
+
 # Top-level YAML keys allowed for editing.
 # ONLY keys that have no UI/API alternative belong here.
 # Keys manageable via ha_config_set_helper (input_*, counter, timer, schedule)

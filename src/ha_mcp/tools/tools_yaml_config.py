@@ -24,7 +24,8 @@ from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
 )
-from .util_helpers import coerce_bool_param, unwrap_service_response
+SERVICE_WRITE_YAML_FILE = "write_yaml_file"
+from .util_helpers import add_timezone_metadata, coerce_bool_param, unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -205,4 +206,106 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "action": action,
                     "yaml_path": yaml_path,
                 },
+            )
+
+    @mcp.tool(
+        tags={"System"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Write YAML Config File",
+        },
+    )
+    @log_tool_usage
+    async def ha_write_yaml_config(
+        path: Annotated[
+            str,
+            Field(
+                description=(
+                    "Relative path to the YAML file within the HA config directory. "
+                    "Must end with .yaml. Writing secrets.yaml is blocked. "
+                    "Examples: 'automations.yaml', 'scripts.yaml', 'packages/sensors.yaml'"
+                ),
+            ),
+        ],
+        content: Annotated[
+            str,
+            Field(
+                description=(
+                    "Full YAML content to write. Must be valid YAML. "
+                    "Replaces the entire file."
+                ),
+            ),
+        ],
+        backup: Annotated[
+            bool | str,
+            Field(
+                default=True,
+                description=(
+                    "Create a timestamped backup in www/yaml_backups/ before overwriting. "
+                    "Default is True. No backup is created if the file does not yet exist."
+                ),
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
+        """Write a YAML file anywhere in the Home Assistant config directory.
+
+        Replaces the full content of any .yaml file in the config directory.
+        Use this for files that have no dedicated API (e.g. custom package files,
+        scripts.yaml, scenes.yaml, or any packages/*.yaml file).
+
+        For surgical key-level edits to configuration.yaml, prefer ha_config_set_yaml.
+        For automations, prefer ha_config_set_automation.
+
+        **Security:**
+        - secrets.yaml cannot be written
+        - Path traversal (../) is blocked
+        - Only .yaml files are accepted
+        - Content is validated as parseable YAML before any write
+
+        **Backup:**
+        - When backup=True (default), the original file is copied to
+          www/yaml_backups/<name>.<timestamp>.bak before overwriting
+        - Set backup=False to skip (e.g. for new files or when managing
+          your own version control)
+
+        **After writing:**
+        - Check 'config_check' in the response — errors mean HA won't reload cleanly
+        - Most files require a restart or domain reload to take effect
+
+        **Returns:**
+        - success, path, size, modified, created (bool), backup_path (if backed up),
+          config_check (ok/errors/unavailable), config_check_errors (if any)
+        """
+        try:
+            backup_bool = coerce_bool_param(backup, "backup", default=True)
+
+            await _assert_mcp_tools_available(client)
+
+            result = await client.call_service(
+                MCP_TOOLS_DOMAIN,
+                SERVICE_WRITE_YAML_FILE,
+                {"path": path, "content": content, "backup": backup_bool},
+                return_response=True,
+            )
+
+            if isinstance(result, dict):
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return await add_timezone_metadata(client, result)
+
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from write_yaml_file service",
+                    context={"path": path},
+                )
+            )
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"tool": "ha_write_yaml_config", "path": path},
             )

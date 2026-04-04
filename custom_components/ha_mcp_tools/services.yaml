@@ -146,3 +146,39 @@ delete_file:
       example: "www/old-file.css"
       selector:
         text:
+
+write_yaml_file:
+  name: Write YAML File
+  description: >-
+    Write any YAML file within the Home Assistant config directory.
+    Validates YAML syntax before writing. Optionally creates a timestamped
+    backup in www/yaml_backups/ before overwriting. secrets.yaml is always
+    blocked. Runs a config check after writing.
+  fields:
+    path:
+      name: Path
+      description: >-
+        Relative path from config directory. Must end with .yaml.
+        Writing secrets.yaml is blocked. Path traversal (../) is blocked.
+        Examples: automations.yaml, scripts.yaml, packages/sensors.yaml
+      required: true
+      example: "packages/my_sensors.yaml"
+      selector:
+        text:
+    content:
+      name: Content
+      description: Full YAML content to write to the file. Must be valid YAML.
+      required: true
+      example: "sensor:\n  - name: My Sensor\n    state: '{{ now() }}'"
+      selector:
+        text:
+          multiline: true
+    backup:
+      name: Backup
+      description: >-
+        Create a timestamped backup in www/yaml_backups/ before overwriting.
+        Default is true. No backup is created if the file does not yet exist.
+      required: false
+      default: true
+      selector:
+        boolean:
