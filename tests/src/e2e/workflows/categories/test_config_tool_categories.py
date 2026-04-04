@@ -356,12 +356,11 @@ class TestConfigToolCategories:
         assert category_id, f"Missing category_id: {cat_data}"
         cleanup_tracker.track("category", category_id)
 
-        # Create input_boolean helper with category
+        # Create input_boolean helper with category (no helper_id = create)
         helper_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
-                "action": "create",
                 "name": "E2E Category Test Toggle",
                 "category": category_id,
             },
@@ -380,10 +379,9 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_set_helper",
+            "ha_config_remove_helper",
             {
                 "helper_type": "input_boolean",
-                "action": "delete",
                 "helper_id": entity_id,
             },
         )

@@ -543,6 +543,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Wait for automation to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = result.get("entity_id")
+            # On updates, entity_id may not be in the result — derive from identifier
+            if not entity_id and identifier and identifier.startswith("automation."):
+                entity_id = identifier
             if wait_bool and entity_id:
                 try:
                     registered = await wait_for_entity_registered(client, entity_id)
