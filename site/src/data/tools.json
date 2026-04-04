@@ -1116,6 +1116,10 @@
       "properties": {
         "object_id": {
           "type": "Annotated[str, Field(description=\"Group identifier without 'group.' prefix (e.g., 'living_room_lights')\")]"
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for group to be fully removed before returning. Default: True.', default=True)]",
+          "default": true
         }
       },
       "required": [
@@ -1163,6 +1167,10 @@
         "remove_entities": {
           "type": "Annotated[list[str] | None, Field(description='Remove these entities from an existing group (mutually exclusive with entities)', default=None)]",
           "default": null
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "default": true
         }
       },
       "required": [
