@@ -36,8 +36,8 @@ schema:
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
-  disabled_tools: [str]?
-  pinned_tools: [str]?
+  disabled_tools: "[str]?"
+  pinned_tools: "[str]?"
   tool_search_max_results: "int(2,10)?"
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
