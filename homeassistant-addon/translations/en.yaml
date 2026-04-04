@@ -5,569 +5,315 @@ configuration:
     description: Controls when backup reminders are shown before risky operations.
   secret_path:
     name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
-
-      '
+    description: |
+      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
   enable_skills:
     name: Enable skills
-    description: Serve bundled Home Assistant best-practice skills as MCP resources. Skills provide automation patterns, helper
-      selection guides, and device control best practices. Clients must explicitly request them.
+    description: >-
+      Serve bundled Home Assistant best-practice skills as MCP resources.
+      Skills provide automation patterns, helper selection guides, and device
+      control best practices. Clients must explicitly request them.
   enable_skills_as_tools:
     name: Enable skills as tools
-    description: Expose skills via list_resources/read_resource tools for MCP clients that don't support resources natively.
-      Adds 3 extra tools.
+    description: >-
+      Expose skills via list_resources/read_resource tools for MCP clients
+      that don't support resources natively. Adds 3 extra tools.
   enable_tool_search:
     name: Enable tool search
-    description: Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens.
-      Use this if using an LLM without deferred tools or with smaller context windows. Tools are found via ha_search_tools
-      and executed via categorized proxies (read/write/delete). Requires restart to take effect.
+    description: >-
+      Replace the full tool catalog with search-based discovery. Reduces
+      idle context from ~46K to ~5K tokens. Use this if using an LLM without
+      deferred tools or with smaller context windows. Tools are found via
+      ha_search_tools and executed via categorized proxies (read/write/delete).
+      Requires restart to take effect.
   enable_yaml_config_editing:
     name: Enable YAML config editing
-    description: Allow AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml.
-      Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt). Core keys like homeassistant, http,
-      and recorder are blocked. A backup is created before every edit. Use for YAML-only features that have no UI or API alternative.
-      Requires restart to take effect.
+    description: >-
+      Allow AI assistants to add, replace, or remove top-level keys in
+      configuration.yaml and packages/*.yaml. Only whitelisted keys are
+      allowed (e.g., template, sensor, command_line, mqtt). Core keys
+      like homeassistant, http, and recorder are blocked. A backup is
+      created before every edit. Use for YAML-only features that have no
+      UI or API alternative. Requires restart to take effect.
   tool_search_max_results:
     name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save
-      context tokens but may miss relevant tools. Range: 2-10. Requires restart.'
-  enabled_tools:
-    name: Enabled tools
-    description: Control which tools are available to AI assistants. Toggle groups on/off to enable or disable all tools in
-      a category, or toggle individual tools. Mandatory tools (Search Entities, Get Overview, Get State, Report Issue) cannot
-      be disabled. Requires restart.
-    addons:
-      name: Add-ons
-      enabled:
-        name: Enable all Add-ons tools
-        description: Master toggle for the Add-ons group.
-      ha_get_addon:
-        name: Get Add-ons
-      ha_call_addon_api:
-        name: Call Add-on API
-    areas_floors:
-      name: Areas & Floors
-      enabled:
-        name: Enable all Areas & Floors tools
-        description: Master toggle for the Areas & Floors group.
-      ha_config_list_areas:
-        name: List Areas
-      ha_config_list_floors:
-        name: List Floors
-      ha_config_set_area:
-        name: Create or Update Area
-      ha_config_set_floor:
-        name: Create or Update Floor
-      ha_config_remove_area:
-        name: Remove Area
-      ha_config_remove_floor:
-        name: Remove Floor
-    automations:
-      name: Automations
-      enabled:
-        name: Enable all Automations tools
-        description: Master toggle for the Automations group.
-      ha_config_get_automation:
-        name: Get Automation Config
-      ha_config_set_automation:
-        name: Create or Update Automation
-      ha_config_remove_automation:
-        name: Remove Automation
-    blueprints:
-      name: Blueprints
-      enabled:
-        name: Enable all Blueprints tools
-        description: Master toggle for the Blueprints group.
-      ha_get_blueprint:
-        name: Get Blueprint
-      ha_import_blueprint:
-        name: Import Blueprint
-    calendar:
-      name: Calendar
-      enabled:
-        name: Enable all Calendar tools
-        description: Master toggle for the Calendar group.
-      ha_config_get_calendar_events:
-        name: Get Calendar Events
-      ha_config_set_calendar_event:
-        name: Create or Update Calendar Event
-      ha_config_remove_calendar_event:
-        name: Remove Calendar Event
-    camera:
-      name: Camera
-      enabled:
-        name: Enable all Camera tools
-        description: Master toggle for the Camera group.
-      ha_get_camera_image:
-        name: Get Camera Image
-    dashboards:
-      name: Dashboards
-      enabled:
-        name: Enable all Dashboards tools
-        description: Master toggle for the Dashboards group.
-      ha_config_get_dashboard:
-        name: Get Dashboard
-      ha_config_set_dashboard:
-        name: Create or Update Dashboard
-      ha_config_delete_dashboard:
-        name: Delete Dashboard
-      ha_dashboard_find_card:
-        name: Find Dashboard Card
-      ha_config_list_dashboard_resources:
-        name: List Dashboard Resources
-      ha_config_set_dashboard_resource:
-        name: Set Dashboard Resource
-      ha_config_delete_dashboard_resource:
-        name: Delete Dashboard Resource
-    device_registry:
-      name: Device Registry
-      enabled:
-        name: Enable all Device Registry tools
-        description: Master toggle for the Device Registry group.
-      ha_get_device:
-        name: Get Device
-      ha_update_device:
-        name: Update Device
-      ha_remove_device:
-        name: Remove Device
-      ha_rename_entity:
-        name: Rename Entity
-    entity_registry:
-      name: Entity Registry
-      enabled:
-        name: Enable all Entity Registry tools
-        description: Master toggle for the Entity Registry group.
-      ha_get_entity:
-        name: Get Entity
-      ha_set_entity:
-        name: Set Entity
-      ha_get_entity_exposure:
-        name: Get Entity Exposure
-    files:
-      name: Files
-      enabled:
-        name: Enable all Files tools
-        description: Master toggle for the Files group.
-      ha_list_files:
-        name: List Files
-      ha_read_file:
-        name: Read File
-      ha_write_file:
-        name: Write File
-      ha_delete_file:
-        name: Delete File
-    groups:
-      name: Groups
-      enabled:
-        name: Enable all Groups tools
-        description: Master toggle for the Groups group.
-      ha_config_list_groups:
-        name: List Groups
-      ha_config_set_group:
-        name: Create or Update Group
-      ha_config_remove_group:
-        name: Remove Group
-    hacs:
-      name: HACS
-      enabled:
-        name: Enable all HACS tools
-        description: Master toggle for the HACS group.
-      ha_hacs_info:
-        name: Get HACS Info
-      ha_hacs_search:
-        name: Search HACS Store
-      ha_hacs_list_installed:
-        name: List HACS Installed
-      ha_hacs_repository_info:
-        name: Get HACS Repository Info
-      ha_hacs_download:
-        name: Download HACS Repository
-      ha_hacs_add_repository:
-        name: Add HACS Repository
-    helper_entities:
-      name: Helper Entities
-      enabled:
-        name: Enable all Helper Entities tools
-        description: Master toggle for the Helper Entities group.
-      ha_config_list_helpers:
-        name: List Helpers
-      ha_config_set_helper:
-        name: Create or Update Helper
-      ha_config_remove_helper:
-        name: Remove Helper
-      ha_get_helper_schema:
-        name: Get Helper Schema
-      ha_set_config_entry_helper:
-        name: Set Config Entry Helper
-    history_statistics:
-      name: History & Statistics
-      enabled:
-        name: Enable all History & Statistics tools
-        description: Master toggle for the History & Statistics group.
-      ha_get_history:
-        name: Get Entity History
-      ha_get_statistics:
-        name: Get Statistics
-      ha_get_automation_traces:
-        name: Get Automation Traces
-      ha_get_logs:
-        name: Get Logs
-    integrations:
-      name: Integrations
-      enabled:
-        name: Enable all Integrations tools
-        description: Master toggle for the Integrations group.
-      ha_get_integration:
-        name: Get Integration
-      ha_set_integration_enabled:
-        name: Set Integration Enabled
-      ha_delete_config_entry:
-        name: Delete Config Entry
-    labels_categories:
-      name: Labels & Categories
-      enabled:
-        name: Enable all Labels & Categories tools
-        description: Master toggle for the Labels & Categories group.
-      ha_config_get_label:
-        name: Get Label
-      ha_config_set_label:
-        name: Create or Update Label
-      ha_config_remove_label:
-        name: Remove Label
-      ha_config_get_category:
-        name: Get Category
-      ha_config_set_category:
-        name: Create or Update Category
-      ha_config_remove_category:
-        name: Remove Category
-    scripts:
-      name: Scripts
-      enabled:
-        name: Enable all Scripts tools
-        description: Master toggle for the Scripts group.
-      ha_config_get_script:
-        name: Get Script Config
-      ha_config_set_script:
-        name: Create or Update Script
-      ha_config_remove_script:
-        name: Remove Script
-    search_discovery:
-      name: Search & Discovery
-      enabled:
-        name: Enable all Search & Discovery tools
-        description: 'Master toggle for the Search & Discovery group. Note: ha_search_entities, ha_get_overview, ha_get_state,
-          and ha_report_issue are mandatory and will remain enabled.'
-      ha_search_entities:
-        name: Search Entities (mandatory)
-      ha_get_overview:
-        name: Get System Overview (mandatory)
-      ha_get_state:
-        name: Get Entity State (mandatory)
-      ha_get_states:
-        name: Get Multiple Entity States
-      ha_deep_search:
-        name: Deep Search
-    service_device_control:
-      name: Service & Device Control
-      enabled:
-        name: Enable all Service & Device Control tools
-        description: Master toggle for the Service & Device Control group.
-      ha_call_service:
-        name: Call Service
-      ha_bulk_control:
-        name: Bulk Control
-      ha_get_operation_status:
-        name: Get Operation Status
-      ha_list_services:
-        name: List Available Services
-    system:
-      name: System
-      enabled:
-        name: Enable all System tools
-        description: Master toggle for the System group.
-      ha_restart:
-        name: Restart Home Assistant
-      ha_reload_core:
-        name: Reload Core Components
-      ha_check_config:
-        name: Check Configuration
-      ha_config_set_yaml:
-        name: Set YAML Config
-      ha_get_updates:
-        name: Get Updates
-      ha_get_system_health:
-        name: Get System Health
-      ha_backup_create:
-        name: Create Backup
-      ha_backup_restore:
-        name: Restore Backup
-    todo_lists:
-      name: Todo Lists
-      enabled:
-        name: Enable all Todo Lists tools
-        description: Master toggle for the Todo Lists group.
-      ha_get_todo:
-        name: Get Todo
-      ha_add_todo_item:
-        name: Add Todo Item
-      ha_update_todo_item:
-        name: Update Todo Item
-      ha_remove_todo_item:
-        name: Remove Todo Item
-    utilities:
-      name: Utilities
-      enabled:
-        name: Enable all Utilities tools
-        description: Master toggle for the Utilities group.
-      ha_eval_template:
-        name: Evaluate Template
-      ha_report_issue:
-        name: Report Issue (mandatory)
-      ha_install_mcp_tools:
-        name: Install MCP Tools Component
-    zones:
-      name: Zones
-      enabled:
-        name: Enable all Zones tools
-        description: Master toggle for the Zones group.
-      ha_get_zone:
-        name: Get Zone
-      ha_set_zone:
-        name: Set Zone
-      ha_remove_zone:
-        name: Remove Zone
-  pinned_tools:
-    name: Pinned tools
-    description: Tools to keep always visible when tool search is enabled. Pinned tools are shown without needing to search.
-      Mandatory pinned tools (Search Entities, Get Overview, Report Issue) cannot be unpinned. Has no effect when tool search
-      is disabled. Requires restart.
-    search_discovery:
-      name: Search & Discovery
-      ha_search_entities:
-        name: Search Entities (always pinned)
-      ha_get_overview:
-        name: Get System Overview (always pinned)
-      ha_get_state:
-        name: Get Entity State
-      ha_get_states:
-        name: Get Multiple Entity States
-      ha_deep_search:
-        name: Deep Search
-    automations:
-      name: Automations
-      ha_config_get_automation:
-        name: Get Automation Config
-      ha_config_set_automation:
-        name: Create or Update Automation
-      ha_config_remove_automation:
-        name: Remove Automation
-    system:
-      name: System
-      ha_restart:
-        name: Restart Home Assistant
-      ha_reload_core:
-        name: Reload Core Components
-      ha_backup_create:
-        name: Create Backup
-      ha_backup_restore:
-        name: Restore Backup
-      ha_config_set_yaml:
-        name: Set YAML Config
-      ha_check_config:
-        name: Check Configuration
-      ha_get_updates:
-        name: Get Updates
-      ha_get_system_health:
-        name: Get System Health
-    utilities:
-      name: Utilities
-      ha_report_issue:
-        name: Report Issue (always pinned)
-      ha_eval_template:
-        name: Evaluate Template
-      ha_install_mcp_tools:
-        name: Install MCP Tools Component
-    addons:
-      name: Add-ons
-      ha_get_addon:
-        name: Get Add-ons
-      ha_call_addon_api:
-        name: Call Add-on API
-    areas_floors:
-      name: Areas & Floors
-      ha_config_list_areas:
-        name: List Areas
-      ha_config_list_floors:
-        name: List Floors
-      ha_config_set_area:
-        name: Create or Update Area
-      ha_config_set_floor:
-        name: Create or Update Floor
-      ha_config_remove_area:
-        name: Remove Area
-      ha_config_remove_floor:
-        name: Remove Floor
-    blueprints:
-      name: Blueprints
-      ha_get_blueprint:
-        name: Get Blueprint
-      ha_import_blueprint:
-        name: Import Blueprint
-    calendar:
-      name: Calendar
-      ha_config_get_calendar_events:
-        name: Get Calendar Events
-      ha_config_set_calendar_event:
-        name: Create Calendar Event
-      ha_config_remove_calendar_event:
-        name: Remove Calendar Event
-    camera:
-      name: Camera
-      ha_get_camera_image:
-        name: Get Camera Image
-    dashboards:
-      name: Dashboards
-      ha_config_get_dashboard:
-        name: Get Dashboard
-      ha_config_set_dashboard:
-        name: Create or Update Dashboard
-      ha_config_delete_dashboard:
-        name: Delete Dashboard
-      ha_dashboard_find_card:
-        name: Find Dashboard Card
-      ha_config_list_dashboard_resources:
-        name: List Dashboard Resources
-      ha_config_set_dashboard_resource:
-        name: Set Dashboard Resource
-      ha_config_delete_dashboard_resource:
-        name: Delete Dashboard Resource
-    device_registry:
-      name: Device Registry
-      ha_get_device:
-        name: Get Device
-      ha_update_device:
-        name: Update Device
-      ha_remove_device:
-        name: Remove Device
-      ha_rename_entity:
-        name: Rename Entity
-    entity_registry:
-      name: Entity Registry
-      ha_get_entity:
-        name: Get Entity
-      ha_set_entity:
-        name: Set Entity
-      ha_get_entity_exposure:
-        name: Get Entity Exposure
-    files:
-      name: Files
-      ha_list_files:
-        name: List Files
-      ha_read_file:
-        name: Read File
-      ha_write_file:
-        name: Write File
-      ha_delete_file:
-        name: Delete File
-    groups:
-      name: Groups
-      ha_config_list_groups:
-        name: List Groups
-      ha_config_set_group:
-        name: Create or Update Group
-      ha_config_remove_group:
-        name: Remove Group
-    hacs:
-      name: HACS
-      ha_hacs_info:
-        name: Get HACS Info
-      ha_hacs_search:
-        name: Search HACS Store
-      ha_hacs_list_installed:
-        name: List HACS Installed
-      ha_hacs_repository_info:
-        name: Get HACS Repository Info
-      ha_hacs_download:
-        name: Download HACS Repository
-      ha_hacs_add_repository:
-        name: Add HACS Repository
-    helper_entities:
-      name: Helper Entities
-      ha_config_list_helpers:
-        name: List Helpers
-      ha_config_set_helper:
-        name: Create or Update Helper
-      ha_config_remove_helper:
-        name: Remove Helper
-      ha_get_helper_schema:
-        name: Get Helper Schema
-      ha_set_config_entry_helper:
-        name: Set Config Entry Helper
-    history_statistics:
-      name: History & Statistics
-      ha_get_history:
-        name: Get Entity History
-      ha_get_statistics:
-        name: Get Statistics
-      ha_get_automation_traces:
-        name: Get Automation Traces
-      ha_get_logs:
-        name: Get Logs
-    integrations:
-      name: Integrations
-      ha_get_integration:
-        name: Get Integration
-      ha_set_integration_enabled:
-        name: Set Integration Enabled
-      ha_delete_config_entry:
-        name: Delete Config Entry
-    labels_categories:
-      name: Labels & Categories
-      ha_config_get_label:
-        name: Get Label
-      ha_config_set_label:
-        name: Create or Update Label
-      ha_config_remove_label:
-        name: Remove Label
-      ha_config_get_category:
-        name: Get Category
-      ha_config_set_category:
-        name: Create or Update Category
-      ha_config_remove_category:
-        name: Remove Category
-    scripts:
-      name: Scripts
-      ha_config_get_script:
-        name: Get Script Config
-      ha_config_set_script:
-        name: Create or Update Script
-      ha_config_remove_script:
-        name: Remove Script
-    service_device_control:
-      name: Service & Device Control
-      ha_call_service:
-        name: Call Service
-      ha_bulk_control:
-        name: Bulk Control
-      ha_get_operation_status:
-        name: Get Operation Status
-      ha_list_services:
-        name: List Available Services
-    todo_lists:
-      name: Todo Lists
-      ha_get_todo:
-        name: Get Todo
-      ha_add_todo_item:
-        name: Add Todo Item
-      ha_update_todo_item:
-        name: Update Todo Item
-      ha_remove_todo_item:
-        name: Remove Todo Item
-    zones:
-      name: Zones
-      ha_get_zone:
-        name: Get Zone
-      ha_set_zone:
-        name: Set Zone
-      ha_remove_zone:
-        name: Remove Zone
+    description: >-
+      Maximum number of tools returned by ha_search_tools when tool
+      search is enabled. Lower values (2-3) save context tokens but
+      may miss relevant tools. Range: 2-10. Requires restart.
+  tools_add-ons:
+    name: "Add-ons"
+    enabled:
+      name: Enable all Add-ons tools
+    ha_call_addon_api:
+      name: "Call Add-on API"
+    ha_get_addon:
+      name: "Get Add-ons"
+  tools_areas_floors:
+    name: "Areas & Floors"
+    enabled:
+      name: Enable all Areas & Floors tools
+    ha_config_list_areas:
+      name: "List Areas"
+    ha_config_list_floors:
+      name: "List Floors"
+    ha_config_remove_area:
+      name: "Remove Area"
+    ha_config_remove_floor:
+      name: "Remove Floor"
+    ha_config_set_area:
+      name: "Create or Update Area"
+    ha_config_set_floor:
+      name: "Create or Update Floor"
+  tools_automations:
+    name: "Automations"
+    enabled:
+      name: Enable all Automations tools
+    ha_config_get_automation:
+      name: "Get Automation Config"
+    ha_config_remove_automation:
+      name: "Remove Automation"
+    ha_config_set_automation:
+      name: "Create or Update Automation"
+  tools_blueprints:
+    name: "Blueprints"
+    enabled:
+      name: Enable all Blueprints tools
+    ha_get_blueprint:
+      name: "Get Blueprint"
+    ha_import_blueprint:
+      name: "Import Blueprint"
+  tools_calendar:
+    name: "Calendar"
+    enabled:
+      name: Enable all Calendar tools
+    ha_config_get_calendar_events:
+      name: "Get Calendar Events"
+    ha_config_remove_calendar_event:
+      name: "Remove Calendar Event"
+    ha_config_set_calendar_event:
+      name: "Create or Update Calendar Event"
+  tools_camera:
+    name: "Camera"
+    enabled:
+      name: Enable all Camera tools
+    ha_get_camera_image:
+      name: "Get Camera Image"
+  tools_dashboards:
+    name: "Dashboards"
+    enabled:
+      name: Enable all Dashboards tools
+    ha_config_delete_dashboard:
+      name: "Delete Dashboard"
+    ha_config_delete_dashboard_resource:
+      name: "Delete Dashboard Resource"
+    ha_config_get_dashboard:
+      name: "Get Dashboard"
+    ha_config_list_dashboard_resources:
+      name: "List Dashboard Resources"
+    ha_config_set_dashboard:
+      name: "Create or Update Dashboard"
+    ha_config_set_dashboard_resource:
+      name: "Set Dashboard Resource"
+    ha_dashboard_find_card:
+      name: "Find Dashboard Card"
+  tools_device_registry:
+    name: "Device Registry"
+    enabled:
+      name: Enable all Device Registry tools
+    ha_get_device:
+      name: "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)"
+    ha_remove_device:
+      name: "Remove Device"
+    ha_rename_entity:
+      name: "Rename Entity"
+    ha_update_device:
+      name: "Update Device"
+  tools_entity_registry:
+    name: "Entity Registry"
+    enabled:
+      name: Enable all Entity Registry tools
+    ha_get_entity:
+      name: "Get Entity"
+    ha_get_entity_exposure:
+      name: "Get Entity Exposure"
+    ha_set_entity:
+      name: "Set Entity"
+  tools_files:
+    name: "Files"
+    enabled:
+      name: Enable all Files tools
+    ha_delete_file:
+      name: "Delete File"
+    ha_list_files:
+      name: "List Files"
+    ha_read_file:
+      name: "Read File"
+    ha_write_file:
+      name: "Write File"
+  tools_groups:
+    name: "Groups"
+    enabled:
+      name: Enable all Groups tools
+    ha_config_list_groups:
+      name: "List Groups"
+    ha_config_remove_group:
+      name: "Remove Group"
+    ha_config_set_group:
+      name: "Create or Update Group"
+  tools_hacs:
+    name: "HACS"
+    enabled:
+      name: Enable all HACS tools
+    ha_hacs_add_repository:
+      name: "Add HACS Repository"
+    ha_hacs_download:
+      name: "Download/Install HACS Repository"
+    ha_hacs_info:
+      name: "Get HACS Info"
+    ha_hacs_list_installed:
+      name: "List HACS Installed"
+    ha_hacs_repository_info:
+      name: "Get HACS Repository Info"
+    ha_hacs_search:
+      name: "Search HACS Store"
+  tools_helper_entities:
+    name: "Helper Entities"
+    enabled:
+      name: Enable all Helper Entities tools
+    ha_config_list_helpers:
+      name: "List Helpers"
+    ha_config_remove_helper:
+      name: "Remove Helper"
+    ha_config_set_helper:
+      name: "Create or Update Helper"
+    ha_get_helper_schema:
+      name: "Get Helper Schema"
+    ha_set_config_entry_helper:
+      name: "Set Config Entry Helper"
+  tools_history_statistics:
+    name: "History & Statistics"
+    enabled:
+      name: Enable all History & Statistics tools
+    ha_get_automation_traces:
+      name: "Get Automation Traces"
+    ha_get_history:
+      name: "Get Entity History"
+    ha_get_logs:
+      name: "Get Logs"
+    ha_get_statistics:
+      name: "Get Statistics"
+  tools_integrations:
+    name: "Integrations"
+    enabled:
+      name: Enable all Integrations tools
+    ha_delete_config_entry:
+      name: "Delete Config Entry"
+    ha_get_integration:
+      name: "Get Integration"
+    ha_set_integration_enabled:
+      name: "Set Integration Enabled"
+  tools_labels_categories:
+    name: "Labels & Categories"
+    enabled:
+      name: Enable all Labels & Categories tools
+    ha_config_get_category:
+      name: "Get Category"
+    ha_config_get_label:
+      name: "Get Label"
+    ha_config_remove_category:
+      name: "Remove Category"
+    ha_config_remove_label:
+      name: "Remove Label"
+    ha_config_set_category:
+      name: "Create or Update Category"
+    ha_config_set_label:
+      name: "Create or Update Label"
+  tools_scripts:
+    name: "Scripts"
+    enabled:
+      name: Enable all Scripts tools
+    ha_config_get_script:
+      name: "Get Script Config"
+    ha_config_remove_script:
+      name: "Remove Script"
+    ha_config_set_script:
+      name: "Create or Update Script"
+  tools_search_discovery:
+    name: "Search & Discovery"
+    enabled:
+      name: Enable all Search & Discovery tools
+    ha_deep_search:
+      name: "Deep Search"
+    ha_get_overview:
+      name: "Get System Overview"
+    ha_get_state:
+      name: "Get Entity State"
+    ha_get_states:
+      name: "Get Multiple Entity States"
+    ha_search_entities:
+      name: "Search Entities"
+  tools_service_device_control:
+    name: "Service & Device Control"
+    enabled:
+      name: Enable all Service & Device Control tools
+    ha_bulk_control:
+      name: "Bulk Control"
+    ha_call_service:
+      name: "Call Service"
+    ha_get_operation_status:
+      name: "Get Operation Status"
+    ha_list_services:
+      name: "List Available Services"
+  tools_system:
+    name: "System"
+    enabled:
+      name: Enable all System tools
+    ha_backup_create:
+      name: "Create Backup"
+    ha_backup_restore:
+      name: "Restore Backup"
+    ha_check_config:
+      name: "Check Configuration"
+    ha_config_set_yaml:
+      name: "Set YAML Config"
+    ha_get_system_health:
+      name: "Get System Health (incl. ZHA/Z-Wave diagnostics)"
+    ha_get_updates:
+      name: "Get Updates"
+    ha_reload_core:
+      name: "Reload Core Components"
+    ha_restart:
+      name: "Restart Home Assistant"
+  tools_todo_lists:
+    name: "Todo Lists"
+    enabled:
+      name: Enable all Todo Lists tools
+    ha_add_todo_item:
+      name: "Add Todo Item"
+    ha_get_todo:
+      name: "Get Todo"
+    ha_remove_todo_item:
+      name: "Remove Todo Item"
+    ha_update_todo_item:
+      name: "Update Todo Item"
+  tools_utilities:
+    name: "Utilities"
+    enabled:
+      name: Enable all Utilities tools
+    ha_eval_template:
+      name: "Evaluate Template"
+    ha_install_mcp_tools:
+      name: "Install MCP Tools Component"
+    ha_report_issue:
+      name: "Report Issue or Feedback"
+  tools_zones:
+    name: "Zones"
+    enabled:
+      name: Enable all Zones tools
+    ha_get_zone:
+      name: "Get Zone"
+    ha_remove_zone:
+      name: "Remove Zone"
+    ha_set_zone:
+      name: "Set Zone"

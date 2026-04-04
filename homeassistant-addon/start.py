@@ -131,34 +131,23 @@ def main() -> int:
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
 
-            # Parse nested enabled_tools structure into a flat disabled list.
-            # Tools with false value or whose group "enabled" is false get disabled.
-            enabled_tools_config = config.get("enabled_tools", {})
-            if isinstance(enabled_tools_config, dict):
-                for group_val in enabled_tools_config.values():
-                    if not isinstance(group_val, dict):
+            # Parse tool groups: each tool has state "enabled", "pinned", or "disabled".
+            # Group "enabled" toggle overrides individual tools when false.
+            for key, group_val in config.items():
+                if not key.startswith("tools_") or not isinstance(group_val, dict):
+                    continue
+                group_enabled = group_val.get("enabled", True)
+                for tool_name, state in group_val.items():
+                    if tool_name == "enabled":
                         continue
-                    group_enabled = group_val.get("enabled", True)
-                    for tool_name, tool_val in group_val.items():
-                        if tool_name == "enabled":
-                            continue
-                        if not group_enabled or not tool_val:
-                            disabled_tools.append(tool_name)
+                    if not group_enabled or state == "disabled":
+                        disabled_tools.append(tool_name)
+                    elif state == "pinned":
+                        pinned_tools.append(tool_name)
 
             # If YAML config editing is disabled, ensure ha_config_set_yaml is in the list
             if not enable_yaml_config_editing and "ha_config_set_yaml" not in disabled_tools:
                 disabled_tools.append("ha_config_set_yaml")
-
-            # Parse nested pinned_tools structure into a flat pinned list.
-            # Tools with true value get pinned.
-            pinned_tools_config = config.get("pinned_tools", {})
-            if isinstance(pinned_tools_config, dict):
-                for group_val in pinned_tools_config.values():
-                    if not isinstance(group_val, dict):
-                        continue
-                    for tool_name, tool_val in group_val.items():
-                        if tool_val:
-                            pinned_tools.append(tool_name)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 

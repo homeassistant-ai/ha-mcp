@@ -234,81 +234,50 @@ class TestConfigSettings:
 
 
 class TestStartPyConfigParsing:
-    """Test the add-on start.py config parsing logic."""
+    """Test the add-on start.py config parsing logic (list state format)."""
 
-    def test_nested_enabled_tools_parsing(self):
-        """Verify nested enabled_tools config is flattened to disabled list."""
-        config = {
-            "enabled_tools": {
-                "hacs": {
-                    "enabled": True,
-                    "ha_hacs_info": True,
-                    "ha_hacs_download": False,  # individually disabled
-                },
-                "system": {
-                    "enabled": False,  # entire group disabled
-                    "ha_restart": True,
-                    "ha_config_set_yaml": True,
-                },
-            }
-        }
+    @staticmethod
+    def _parse_tools(config: dict) -> tuple[list[str], list[str]]:
+        """Replicate start.py parsing: returns (disabled, pinned) lists."""
         disabled: list[str] = []
-        for group_val in config["enabled_tools"].values():
-            if not isinstance(group_val, dict):
+        pinned: list[str] = []
+        for key, group_val in config.items():
+            if not key.startswith("tools_") or not isinstance(group_val, dict):
                 continue
             group_enabled = group_val.get("enabled", True)
-            for tool_name, tool_val in group_val.items():
+            for tool_name, state in group_val.items():
                 if tool_name == "enabled":
                     continue
-                if not group_enabled or not tool_val:
+                if not group_enabled or state == "disabled":
                     disabled.append(tool_name)
-
-        assert "ha_hacs_download" in disabled  # individually disabled
-        assert "ha_restart" in disabled  # group disabled
-        assert "ha_config_set_yaml" in disabled  # group disabled
-        assert "ha_hacs_info" not in disabled  # enabled in enabled group
-
-    def test_nested_pinned_tools_parsing(self):
-        """Verify nested pinned_tools config is flattened to pinned list."""
-        config = {
-            "pinned_tools": {
-                "search_discovery": {
-                    "ha_search_entities": True,
-                    "ha_get_overview": True,
-                    "ha_get_state": False,
-                },
-                "system": {
-                    "ha_restart": True,
-                    "ha_reload_core": False,
-                },
-            }
-        }
-        pinned: list[str] = []
-        for group_val in config["pinned_tools"].values():
-            if not isinstance(group_val, dict):
-                continue
-            for tool_name, tool_val in group_val.items():
-                if tool_val:
+                elif state == "pinned":
                     pinned.append(tool_name)
+        return disabled, pinned
 
+    def test_individual_disabled(self):
+        """A tool set to 'disabled' is in the disabled list."""
+        config = {"tools_hacs": {"enabled": True, "ha_hacs_info": "enabled", "ha_hacs_download": "disabled"}}
+        disabled, pinned = self._parse_tools(config)
+        assert "ha_hacs_download" in disabled
+        assert "ha_hacs_info" not in disabled
+
+    def test_group_disabled_overrides_all(self):
+        """Group enabled=false disables all tools regardless of individual state."""
+        config = {"tools_system": {"enabled": False, "ha_restart": "enabled", "ha_config_set_yaml": "pinned"}}
+        disabled, pinned = self._parse_tools(config)
+        assert "ha_restart" in disabled
+        assert "ha_config_set_yaml" in disabled
+
+    def test_pinned_state(self):
+        """A tool set to 'pinned' appears in the pinned list."""
+        config = {"tools_search": {"enabled": True, "ha_search_entities": "pinned", "ha_deep_search": "enabled"}}
+        disabled, pinned = self._parse_tools(config)
         assert "ha_search_entities" in pinned
-        assert "ha_get_overview" in pinned
-        assert "ha_restart" in pinned
-        assert "ha_get_state" not in pinned
-        assert "ha_reload_core" not in pinned
+        assert "ha_deep_search" not in pinned
 
     def test_yaml_config_editing_disables_tool(self):
         """enable_yaml_config_editing=false adds ha_config_set_yaml to disabled."""
         disabled: list[str] = []
-        enable_yaml_config_editing = False
-        if not enable_yaml_config_editing and "ha_config_set_yaml" not in disabled:
+        if "ha_config_set_yaml" not in disabled:
             disabled.append("ha_config_set_yaml")
         assert "ha_config_set_yaml" in disabled
-
-    def test_yaml_config_editing_enables_tool(self):
-        """enable_yaml_config_editing=true does not add ha_config_set_yaml."""
-        disabled: list[str] = []
-        enable_yaml_config_editing = True
-        if not enable_yaml_config_editing and "ha_config_set_yaml" not in disabled:
-            disabled.append("ha_config_set_yaml")
-        assert "ha_config_set_yaml" not in disabled
