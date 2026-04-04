@@ -401,7 +401,7 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - `ha_backup_restore` - Restore from backup
 
 ### Utility
-- `ha_get_logbook` - Historical events
+- `ha_get_logs` - Logs (logbook, system, error, supervisor)
 - `ha_eval_template` - Evaluate Jinja2 templates
 - Domain documentation available via the `ha_get_skill_home_assistant_best_practices` skill
 - `ha_get_integration` - List or get integration info

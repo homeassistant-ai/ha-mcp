@@ -731,8 +731,8 @@
   },
   {
     "name": "ha_get_device",
-    "title": "Get Device",
-    "description": "Get device information - list all devices or get details for a specific one.\n\nWithout device_id/entity_id: Lists all devices with optional filters.\nWith device_id or entity_id: Returns detailed info for that specific device.\n\n**List all devices:**\n- All devices: ha_get_device()\n- By area: ha_get_device(area_id=\"living_room\")\n- By manufacturer: ha_get_device(manufacturer=\"Philips\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Combined filters: ha_get_device(integration=\"zha\", area_id=\"kitchen\")\n\n**Single device lookup:**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee automation tips:**\n- ZHA triggers: Use `ieee_address` for zha_event triggers\n- Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)\n\n**Returns (list mode):**\n- List of devices with device_id, name, manufacturer, model, area_id\n\n**Returns (single device):**\n- Full device details including integration_type, ieee_address, entities",
+    "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
+    "description": "Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.\n\nWithout device_id/entity_id: Lists all devices with optional filters.\nWith device_id or entity_id: Returns detailed info for that specific device.\n\n**List all devices:**\n- All devices: ha_get_device()\n- By area: ha_get_device(area_id=\"living_room\")\n- By manufacturer: ha_get_device(manufacturer=\"Philips\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Combined filters: ha_get_device(integration=\"zha\", area_id=\"kitchen\")\n\n**Single device lookup:**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee device support:**\n- Use integration=\"zha\" or integration=\"zigbee2mqtt\" to list Zigbee devices\n- Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices\n- ZHA triggers: Use `ieee_address` for zha_event triggers\n- Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)\n\n**Z-Wave JS device support:**\n- Use integration=\"zwave_js\" to list Z-Wave devices\n- Returns node_id extracted from device identifiers\n- Single device lookup includes node_status (security class, routing, Z-Wave+ version)\n\n**Returns (list mode):**\n- List of devices with device_id, name, manufacturer, model, area_id\n\n**Returns (single device):**\n- Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -744,7 +744,7 @@
           "default": null
         },
         "integration": {
-          "type": "Annotated[str | None, Field(description=\"Filter devices by integration: 'zha', 'zigbee2mqtt', 'mqtt', 'hue', etc.\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Filter devices by integration: 'zha', 'zigbee2mqtt', 'zwave_js', 'mqtt', 'hue', etc.\", default=None)]",
           "default": null
         },
         "area_id": {
@@ -762,7 +762,9 @@
       "readOnlyHint": true
     },
     "tags": [
-      "Device Registry"
+      "Device Registry",
+      "Z-Wave",
+      "Zigbee"
     ],
     "source_file": "tools_registry.py"
   },
@@ -1671,11 +1673,23 @@
     "source_file": "tools_history.py"
   },
   {
-    "name": "ha_get_logbook",
-    "title": "Get Logbook Entries",
-    "description": "Get Home Assistant logbook entries for the specified time period.\n\nReturns paginated logbook entries to prevent excessively large responses.\n\n**Parameters:**\n- hours_back: Number of hours to look back (default: 1)\n- entity_id: Optional entity ID to filter entries\n- end_time: Optional end time in ISO format (defaults to now)\n- limit: Maximum number of entries to return (default: 50, max: 500)\n- offset: Number of entries to skip for pagination (default: 0)\n- compact: Return only essential fields per entry (default: True).\n  When True, each entry contains only: when, entity_id, state, name, message, domain, context_id.\n  Set to False to include full attribute dictionaries and all fields.\n\n**Pagination:**\nWhen the logbook has more entries than the limit, use offset to get\nadditional pages. The response includes `has_more` to indicate if\nmore entries are available.\n\n**IMPORTANT - Pagination Stability:**\nPagination is performed client-side on the full result set returned\nby Home Assistant. If new logbook entries are created between page\nrequests, results may shift and items could be missed or duplicated\nacross pages. For best results, use consistent time ranges (start/end)\nand retrieve pages in quick succession.\n\n**Example:**\n- First page: ha_get_logbook(hours_back=24, limit=50, offset=0)\n- Second page: ha_get_logbook(hours_back=24, limit=50, offset=50)\n- Full details: ha_get_logbook(hours_back=1, compact=False)",
+    "name": "ha_get_logs",
+    "title": "Get Logs",
+    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug parameter)\n\n**Shared params:** limit, search (keyword filter on entries/lines)\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug (add-on slug, e.g. \"core_mosquitto\")",
     "inputSchema": {
       "properties": {
+        "source": {
+          "type": "Literal['logbook', 'system', 'error_log', 'supervisor']",
+          "default": "logbook"
+        },
+        "limit": {
+          "type": "int | str | None",
+          "default": null
+        },
+        "search": {
+          "type": "str | None",
+          "default": null
+        },
         "hours_back": {
           "type": "int | str",
           "default": 1
@@ -1688,10 +1702,6 @@
           "type": "str | None",
           "default": null
         },
-        "limit": {
-          "type": "int | str | None",
-          "default": null
-        },
         "offset": {
           "type": "int | str",
           "default": 0
@@ -1699,6 +1709,14 @@
         "compact": {
           "type": "bool | str",
           "default": true
+        },
+        "level": {
+          "type": "str | None",
+          "default": null
+        },
+        "slug": {
+          "type": "str | None",
+          "default": null
         }
       }
     },
@@ -2498,15 +2516,24 @@
   },
   {
     "name": "ha_get_system_health",
-    "title": "Get System Health",
-    "description": "Get Home Assistant system health information.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.",
-    "inputSchema": {},
+    "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - Example: include=\"repairs,zha_network,zwave_network\"",
+    "inputSchema": {
+      "properties": {
+        "include": {
+          "type": "str | None",
+          "default": null
+        }
+      }
+    },
     "annotations": {
       "idempotentHint": true,
       "readOnlyHint": true
     },
     "tags": [
-      "System"
+      "System",
+      "Z-Wave",
+      "Zigbee"
     ],
     "source_file": "tools_system.py"
   },
