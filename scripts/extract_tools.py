@@ -237,7 +237,7 @@ def _tool_hint(tool: dict) -> str:
 
 def _brief_description(tool: dict) -> str:
     """Return the first sentence of the tool description."""
-    desc = tool.get("description", "")
+    desc: str = tool.get("description", "")
     # Take first sentence (up to first period followed by space or newline)
     for i, ch in enumerate(desc):
         if ch == "." and (i + 1 >= len(desc) or desc[i + 1] in (" ", "\n")):
