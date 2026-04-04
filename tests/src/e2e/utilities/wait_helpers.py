@@ -283,7 +283,7 @@ async def wait_for_logbook_entry(
     while time.time() - start_time < timeout:
         try:
             logbook_result = await mcp_client.call_tool(
-                "ha_get_logbook", {"hours_back": hours_back}
+                "ha_get_logs", {"hours_back": hours_back}
             )
 
             logbook_data = parse_mcp_result(logbook_result)
