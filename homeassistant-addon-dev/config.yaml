@@ -20,9 +20,8 @@ options:
   enable_skills: true
   enable_skills_as_tools: false
   enable_tool_search: false
-  disabled_tools:
-    - "ha_config_set_yaml"
-  pinned_tools: []
+  disabled_tools: "ha_config_set_yaml"
+  pinned_tools: ""
   tool_search_max_results: 5
 schema:
   backup_hint: list(strong|normal|weak|auto)
@@ -30,8 +29,8 @@ schema:
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
-  disabled_tools: "[str]?"
-  pinned_tools: "[str]?"
-  tool_search_max_results: "int(2,10)?"
+  disabled_tools: str?
+  pinned_tools: str?
+  tool_search_max_results: int?
 ports:
   9583/tcp: 9583
