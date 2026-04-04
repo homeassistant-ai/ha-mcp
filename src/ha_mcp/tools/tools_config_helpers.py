@@ -639,6 +639,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if result.get("success"):
                     helper_data = result.get("result", {})
                     entity_id = helper_data.get("entity_id")
+                    # Some helper types don't return entity_id — derive from result id
+                    if not entity_id and helper_data.get("id"):
+                        entity_id = f"{helper_type}.{helper_data['id']}"
 
                     # Wait for entity to be properly registered before proceeding
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
