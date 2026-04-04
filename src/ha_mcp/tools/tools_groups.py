@@ -13,7 +13,11 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import wait_for_entity_registered, wait_for_entity_removed
+from .util_helpers import (
+    coerce_bool_param,
+    wait_for_entity_registered,
+    wait_for_entity_removed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +138,13 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant entity group.
@@ -227,13 +238,15 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             is_create = entities is not None and name is None and add_entities is None and remove_entities is None
 
             # Verify entity is queryable after creation/update
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
             result: dict[str, Any] = {}
-            try:
-                registered = await wait_for_entity_registered(client, entity_id)
-                if not registered:
-                    result["warning"] = f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
-            except Exception as e:
-                result["warning"] = f"Group created but verification failed: {e}"
+            if wait_bool:
+                try:
+                    registered = await wait_for_entity_registered(client, entity_id)
+                    if not registered:
+                        result["warning"] = f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
+                except Exception as e:
+                    result["warning"] = f"Group created but verification failed: {e}"
 
             return {
                 "success": True,
@@ -264,6 +277,13 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Group identifier without 'group.' prefix (e.g., 'living_room_lights')"
             ),
         ],
+        wait: Annotated[
+            bool | str,
+            Field(
+                description="Wait for group to be fully removed before returning. Default: True.",
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Remove a Home Assistant entity group.
@@ -297,13 +317,15 @@ def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             entity_id = f"group.{object_id}"
 
             # Verify entity is removed
+            wait_bool = coerce_bool_param(wait, "wait", default=True)
             result: dict[str, Any] = {}
-            try:
-                removed = await wait_for_entity_removed(client, entity_id)
-                if not removed:
-                    result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
-            except Exception as e:
-                result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+            if wait_bool:
+                try:
+                    removed = await wait_for_entity_removed(client, entity_id)
+                    if not removed:
+                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                except Exception as e:
+                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {
                 "success": True,
