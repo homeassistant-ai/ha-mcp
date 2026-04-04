@@ -30,6 +30,38 @@ AUTOMATION_CONFIG_TIME_BUDGET = (
 SCRIPT_CONFIG_TIME_BUDGET = 10.0  # Max time for fetching script configs individually
 
 
+def _simplify_states_summary(
+    states_summary: dict[str, int],
+    detail_level: str,
+    max_states: int | None = None,
+) -> dict[str, int]:
+    """Keep only the most common states, aggregate the rest into _other.
+
+    Args:
+        states_summary: Original {state: count} mapping.
+        detail_level: "minimal", "standard", or "full".
+        max_states: Override cap (None = 5 for minimal, 10 for standard).
+
+    Returns:
+        Capped states_summary with ``_other`` count when truncated.
+    """
+    if detail_level == "full":
+        return states_summary
+
+    if max_states is None:
+        max_states = 5 if detail_level == "minimal" else 10
+
+    if len(states_summary) <= max_states:
+        return states_summary
+
+    sorted_states = sorted(states_summary.items(), key=lambda x: x[1], reverse=True)
+    top = dict(sorted_states[:max_states])
+    other_count = sum(count for _, count in sorted_states[max_states:])
+    if other_count > 0:
+        top["_other"] = other_count
+    return top
+
+
 class SmartSearchTools:
     """Smart search tools with fuzzy matching and AI optimization."""
 
@@ -356,18 +388,26 @@ class SmartSearchTools:
         max_entities_per_domain: int | None = None,
         include_state: bool | None = None,
         include_entity_id: bool | None = None,
+        domains_filter: list[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
 
         Args:
             detail_level: Level of detail to return:
-                - "minimal": 10 random entities per domain (friendly_name only)
-                - "standard": ALL entities per domain (friendly_name only) [DEFAULT]
-                - "full": ALL entities with full details (entity_id, friendly_name, state)
-            max_entities_per_domain: Override max entities per domain (None = all)
+                - "minimal": 10 entities/domain sample, top-5 states (friendly_name only)
+                - "standard": ALL entities, top-10 states (friendly_name only)
+                - "full": ALL entities with entity_id + friendly_name + state + full states
+            max_entities_per_domain: Override default entity cap (0 = no limit)
             include_state: Override whether to include state field
             include_entity_id: Override whether to include entity_id field
+            domains_filter: Only include these domains (None = all)
+            limit: Max total entities to include across all domains.
+                Defaults to None (no limit) for minimal, 200 for standard/full.
+                Domain counts and states_summary are always complete regardless.
+            offset: Number of entities to skip for pagination (default: 0)
 
         Returns:
             System overview optimized for AI understanding at requested detail level
@@ -449,8 +489,12 @@ class SmartSearchTools:
                     entity_area_map[entity_id] = area_id
 
             # Determine defaults based on detail_level
+            # max_entities_per_domain=0 means "uncap everything" (entities + states)
+            uncap_all = max_entities_per_domain == 0
             if max_entities_per_domain is None:
-                max_entities_per_domain = 10 if detail_level == "minimal" else None
+                if detail_level == "minimal":
+                    max_entities_per_domain = 10
+                # standard and full: no default cap (None = all entities)
             if include_state is None:
                 include_state = detail_level == "full"
             if include_entity_id is None:
@@ -467,6 +511,14 @@ class SmartSearchTools:
                         "domains": {},
                     }
 
+            # Normalize domains filter
+            domains_filter_set: set[str] | None = None
+            if domains_filter:
+                domains_filter_set = {d.strip().lower() for d in domains_filter}
+
+            # Count all domains before filtering (for system_summary)
+            all_domains = {e["entity_id"].split(".")[0] for e in entities}
+
             # Analyze entities by domain
             domain_stats: dict[str, dict[str, Any]] = {}
             device_types: dict[str, int] = {}
@@ -474,6 +526,11 @@ class SmartSearchTools:
             for entity in entities:
                 entity_id = entity["entity_id"]
                 domain = entity_id.split(".")[0]
+
+                # Skip domains not in the filter
+                if domains_filter_set and domain not in domains_filter_set:
+                    continue
+
                 attributes = entity.get("attributes", {})
                 state = entity.get("state", "unknown")
 
@@ -581,24 +638,113 @@ class SmartSearchTools:
 
                 formatted_domain_stats[domain] = {
                     "count": stats["count"],
-                    "states_summary": stats["states_summary"],
+                    "states_summary": _simplify_states_summary(
+                        stats["states_summary"],
+                        "full" if uncap_all else detail_level,
+                    ),
                     "entities": selected_entities,
                     "truncated": truncated,
                 }
 
-            # Build base response
+            # Apply global entity pagination (limit/offset across all domains)
+            # Default limit: None for minimal (already capped per-domain), 200 for standard/full
+            effective_limit = limit
+            if effective_limit is None and detail_level != "minimal":
+                effective_limit = 200
+
+            pagination_metadata: dict[str, Any] | None = None
+            if effective_limit is not None:
+                total_entity_count = sum(
+                    len(ds["entities"]) for ds in formatted_domain_stats.values()
+                )
+
+                if offset == 0:
+                    # Page 1: fair distribution — give each domain a minimum
+                    # allocation so the LLM sees entities from every domain,
+                    # then distribute the remaining budget proportionally.
+                    min_per_domain = 3
+                    num_domains = len(formatted_domain_stats)
+                    reserved = min(min_per_domain * num_domains, effective_limit)
+                    remaining_budget = effective_limit - reserved
+
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
+                        # Base allocation: min_per_domain or all if domain is smaller
+                        base = min(min_per_domain, domain_len)
+                        # Proportional share of remaining budget
+                        if total_entity_count > 0 and remaining_budget > 0:
+                            extra = int(
+                                remaining_budget * domain_len / total_entity_count
+                            )
+                        else:
+                            extra = 0
+                        take = min(base + extra, domain_len)
+                        if take < domain_len:
+                            domain_data["entities"] = domain_entities[:take]
+                            domain_data["truncated"] = True
+                        entities_included += len(domain_data["entities"])
+                else:
+                    # Pages 2+: sequential skip/take across domains
+                    entities_skipped = 0
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
+
+                        skip_from_domain = max(
+                            0, min(domain_len, offset - entities_skipped)
+                        )
+                        budget_left = effective_limit - entities_included
+                        take_from_domain = max(
+                            0, min(domain_len - skip_from_domain, budget_left)
+                        )
+
+                        if skip_from_domain > 0 or take_from_domain < domain_len:
+                            domain_data["entities"] = domain_entities[
+                                skip_from_domain : skip_from_domain + take_from_domain
+                            ]
+                            if take_from_domain < domain_len:
+                                domain_data["truncated"] = True
+
+                        entities_skipped += skip_from_domain
+                        entities_included += take_from_domain
+
+                has_more = (offset + entities_included) < total_entity_count
+                pagination_metadata = {
+                    "total_entity_results": total_entity_count,
+                    "offset": offset,
+                    "limit": effective_limit,
+                    "entities_returned": entities_included,
+                    "has_more": has_more,
+                    "next_offset": offset + effective_limit if has_more else None,
+                }
+
+            # Build base response — totals always reflect full system
+            system_summary: dict[str, Any] = {
+                "total_entities": len(entities),
+                "total_domains": len(all_domains),
+                "total_services": total_services,
+                "total_areas": len(area_registry),
+            }
+            if domains_filter_set:
+                system_summary["filtered_domains"] = sorted(domains_filter_set)
+
             base_response: dict[str, Any] = {
                 "success": True,
-                "system_summary": {
-                    "total_entities": len(entities),
-                    "total_domains": len(domain_stats),
-                    "total_services": total_services,
-                    "total_areas": len(area_registry),
-                },
+                "system_summary": system_summary,
                 "domain_stats": formatted_domain_stats,
-                "area_analysis": area_stats,  # Now included in all detail levels
+                "area_analysis": (
+                    {area: {"count": info["count"]} for area, info in area_stats.items()}
+                    if detail_level == "minimal"
+                    else area_stats
+                ),
                 "ai_insights": ai_insights,
             }
+
+            if pagination_metadata:
+                base_response["pagination"] = pagination_metadata
 
             if partial_warnings:
                 base_response["partial"] = True
