@@ -473,7 +473,8 @@ async def apply_entity_category(
         if ws_result.get("success"):
             result_dict["category"] = category
         else:
-            error_msg = ws_result.get("error", {}).get("message", "Unknown error")
+            error_detail = ws_result.get("error", {})
+            error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
             logger.warning(f"Failed to set category for {entity_id}: {error_msg}")
             result_dict["category_warning"] = (
                 f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"

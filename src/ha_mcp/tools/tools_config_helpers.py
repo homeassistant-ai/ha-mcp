@@ -16,6 +16,7 @@ from pydantic import Field
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
     parse_string_list_param,
     wait_for_entity_registered,
@@ -653,8 +654,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         except Exception as e:
                             helper_data["warning"] = f"Helper created but verification failed: {e}"
 
-                    # Update entity registry if area_id, labels, or category specified
-                    if (area_id or labels or category) and entity_id:
+                    # Update entity registry if area_id or labels specified
+                    if (area_id or labels) and entity_id:
                         update_message: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
@@ -663,8 +664,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_message["area_id"] = area_id
                         if labels:
                             update_message["labels"] = labels
-                        if category:
-                            update_message["categories"] = {"helpers": category}
 
                         update_result = await client.send_websocket_message(
                             update_message
@@ -672,14 +671,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if update_result.get("success"):
                             helper_data["area_id"] = area_id
                             helper_data["labels"] = labels
-                            if category:
-                                helper_data["category"] = category
                         else:
                             error_detail = update_result.get("error", {})
                             error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
                             helper_data["warning"] = (
                                 f"Helper created but entity registry update failed: {error_msg}"
                             )
+
+                    # Apply category via shared helper (consistent with automations/scripts)
+                    if category and entity_id:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", helper_data, "helper"
+                        )
 
                     return {
                         "success": True,
@@ -898,8 +901,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ))
                         updated_data = result.get("result", {})
 
-                    # Also update entity registry for icon, area, labels, and category
-                    if icon or area_id or labels or category:
+                    # Also update entity registry for icon, area, and labels
+                    if icon or area_id or labels:
                         registry_update: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
@@ -910,8 +913,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             registry_update["area_id"] = area_id
                         if labels:
                             registry_update["labels"] = labels
-                        if category:
-                            registry_update["categories"] = {"helpers": category}
                         reg_result = await client.send_websocket_message(registry_update)
                         if not reg_result.get("success"):
                             error_detail = reg_result.get("error", {})
@@ -920,6 +921,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             updated_data["warning"] = (
                                 f"Config updated but entity registry update failed: {error_msg}"
                             )
+
+                    # Apply category via shared helper
+                    if category:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", updated_data, "helper"
+                        )
 
                 else:
                     # Standard helpers: entity registry update only
@@ -936,8 +943,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         update_msg["area_id"] = area_id
                     if labels:
                         update_msg["labels"] = labels
-                    if category:
-                        update_msg["categories"] = {"helpers": category}
 
                     result = await client.send_websocket_message(update_msg)
 
@@ -949,6 +954,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f"Failed to update helper: {result.get('error', 'Unknown error')}",
                             context={"helper_type": helper_type, "entity_id": entity_id},
                         ))
+
+                    # Apply category via shared helper
+                    if category:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", updated_data, "helper"
+                        )
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)
