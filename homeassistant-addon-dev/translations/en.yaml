@@ -26,28 +26,874 @@ configuration:
       deferred tools or with smaller context windows. Tools are found via
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
-  disabled_tools:
-    name: Disabled tools
+  enable_yaml_config_editing:
+    name: Enable YAML config editing
     description: >-
-      Tools or tool groups to disable. Accepts individual tool names
-      (e.g., "ha_hacs_download") or group names (e.g., "HACS") to
-      disable all tools in that group. Groups: Add-ons, Areas & Floors,
-      Automations, Blueprints, Calendar, Camera, Dashboards,
-      Device Registry, Entity Registry, Files, Groups, HACS,
-      Helper Entities, History & Statistics, Integrations,
-      Labels & Categories, Scripts, Search & Discovery,
-      Service & Device Control, System, Todo Lists, Utilities, Zones.
-      Some core tools cannot be disabled. Requires restart.
-  pinned_tools:
-    name: Pinned tools
-    description: >-
-      Additional tools to keep always visible when tool search is
-      enabled. These are shown alongside the default pinned tools
-      without needing to search. Has no effect when tool search is
-      disabled. Requires restart.
+      Allow AI assistants to add, replace, or remove top-level keys in
+      configuration.yaml and packages/*.yaml. Only whitelisted keys are
+      allowed (e.g., template, sensor, command_line, mqtt). Core keys
+      like homeassistant, http, and recorder are blocked. A backup is
+      created before every edit. Use for YAML-only features that have no
+      UI or API alternative. Requires restart to take effect.
   tool_search_max_results:
     name: Tool search max results
     description: >-
       Maximum number of tools returned by ha_search_tools when tool
       search is enabled. Lower values (2-3) save context tokens but
       may miss relevant tools. Range: 2-10. Requires restart.
+  enabled_tools:
+    name: Enabled tools
+    description: >-
+      Control which tools are available to AI assistants. Toggle groups
+      on/off to enable or disable all tools in a category, or toggle
+      individual tools. Mandatory tools (Search Entities, Get Overview,
+      Get State, Report Issue) cannot be disabled. Requires restart.
+    addons:
+      name: Add-ons
+      description: Manage Home Assistant add-ons.
+      enabled:
+        name: Enable all Add-ons tools
+        description: Master toggle for the Add-ons group.
+      ha_get_addon:
+        name: Get Add-ons
+        description: >-
+          List installed or available add-ons, or get details for a specific one. (read-only)
+      ha_call_addon_api:
+        name: Call Add-on API
+        description: >-
+          Call an add-on's HTTP or WebSocket API. (destructive)
+    areas_floors:
+      name: Areas & Floors
+      description: Manage areas (rooms) and floors.
+      enabled:
+        name: Enable all Areas & Floors tools
+        description: Master toggle for the Areas & Floors group.
+      ha_config_list_areas:
+        name: List Areas
+        description: >-
+          List all Home Assistant areas (rooms). (read-only)
+      ha_config_list_floors:
+        name: List Floors
+        description: >-
+          List all Home Assistant floors. (read-only)
+      ha_config_set_area:
+        name: Create or Update Area
+        description: >-
+          Create or update a Home Assistant area (room). (destructive)
+      ha_config_set_floor:
+        name: Create or Update Floor
+        description: >-
+          Create or update a Home Assistant floor. (destructive)
+      ha_config_remove_area:
+        name: Remove Area
+        description: >-
+          Delete a Home Assistant area. (destructive)
+      ha_config_remove_floor:
+        name: Remove Floor
+        description: >-
+          Delete a Home Assistant floor. (destructive)
+    automations:
+      name: Automations
+      description: Create, read, and manage automations.
+      enabled:
+        name: Enable all Automations tools
+        description: Master toggle for the Automations group.
+      ha_config_get_automation:
+        name: Get Automation Config
+        description: >-
+          Retrieve Home Assistant automation configuration. (read-only)
+      ha_config_set_automation:
+        name: Create or Update Automation
+        description: >-
+          Create or update a Home Assistant automation. (destructive)
+      ha_config_remove_automation:
+        name: Remove Automation
+        description: >-
+          Delete a Home Assistant automation. (destructive)
+    blueprints:
+      name: Blueprints
+      description: Manage automation and script blueprints.
+      enabled:
+        name: Enable all Blueprints tools
+        description: Master toggle for the Blueprints group.
+      ha_get_blueprint:
+        name: Get Blueprint
+        description: >-
+          List all blueprints or get details for a specific one. (read-only)
+      ha_import_blueprint:
+        name: Import Blueprint
+        description: >-
+          Import a blueprint from a URL. (destructive)
+    calendar:
+      name: Calendar
+      description: Manage calendar events.
+      enabled:
+        name: Enable all Calendar tools
+        description: Master toggle for the Calendar group.
+      ha_config_get_calendar_events:
+        name: Get Calendar Events
+        description: >-
+          Retrieve calendar events from a calendar entity. (read-only)
+      ha_config_set_calendar_event:
+        name: Create or Update Calendar Event
+        description: >-
+          Create a new event in a calendar. (destructive)
+      ha_config_remove_calendar_event:
+        name: Remove Calendar Event
+        description: >-
+          Delete an event from a calendar. (destructive)
+    camera:
+      name: Camera
+      description: Access camera snapshots.
+      enabled:
+        name: Enable all Camera tools
+        description: Master toggle for the Camera group.
+      ha_get_camera_image:
+        name: Get Camera Image
+        description: >-
+          Retrieve a snapshot image from a camera entity. (read-only)
+    dashboards:
+      name: Dashboards
+      description: Manage Lovelace dashboards, cards, and resources.
+      enabled:
+        name: Enable all Dashboards tools
+        description: Master toggle for the Dashboards group.
+      ha_config_get_dashboard:
+        name: Get Dashboard
+        description: >-
+          List all dashboards or get config for a specific one. (read-only)
+      ha_config_set_dashboard:
+        name: Create or Update Dashboard
+        description: >-
+          Create or update a Home Assistant dashboard. (destructive)
+      ha_config_delete_dashboard:
+        name: Delete Dashboard
+        description: >-
+          Delete a storage-mode dashboard completely. (destructive)
+      ha_dashboard_find_card:
+        name: Find Dashboard Card
+        description: >-
+          Find cards in a dashboard by entity_id, type, or heading text. (read-only)
+      ha_config_list_dashboard_resources:
+        name: List Dashboard Resources
+        description: >-
+          List all Lovelace dashboard resources (custom cards, themes). (read-only)
+      ha_config_set_dashboard_resource:
+        name: Set Dashboard Resource
+        description: >-
+          Create or update a dashboard resource. (destructive)
+      ha_config_delete_dashboard_resource:
+        name: Delete Dashboard Resource
+        description: >-
+          Delete a dashboard resource. (destructive)
+    device_registry:
+      name: Device Registry
+      description: Manage devices and entity renaming.
+      enabled:
+        name: Enable all Device Registry tools
+        description: Master toggle for the Device Registry group.
+      ha_get_device:
+        name: Get Device
+        description: >-
+          Get device information including Zigbee and Z-Wave details. (read-only)
+      ha_update_device:
+        name: Update Device
+        description: >-
+          Update device properties such as name, area, or labels. (destructive)
+      ha_remove_device:
+        name: Remove Device
+        description: >-
+          Remove an orphaned device from the registry. (destructive)
+      ha_rename_entity:
+        name: Rename Entity
+        description: >-
+          Rename an entity by changing its entity_id. (destructive)
+    entity_registry:
+      name: Entity Registry
+      description: Manage entity properties and exposure settings.
+      enabled:
+        name: Enable all Entity Registry tools
+        description: Master toggle for the Entity Registry group.
+      ha_get_entity:
+        name: Get Entity
+        description: >-
+          Get entity registry information for one or more entities. (read-only)
+      ha_set_entity:
+        name: Set Entity
+        description: >-
+          Update entity properties in the entity registry. (destructive)
+      ha_get_entity_exposure:
+        name: Get Entity Exposure
+        description: >-
+          Get entity exposure settings for voice assistants. (read-only)
+    files:
+      name: Files
+      description: Read, write, and manage files in the config directory.
+      enabled:
+        name: Enable all Files tools
+        description: Master toggle for the Files group.
+      ha_list_files:
+        name: List Files
+        description: >-
+          List files in a directory within the config directory. (read-only)
+      ha_read_file:
+        name: Read File
+        description: >-
+          Read a file from the config directory. (read-only)
+      ha_write_file:
+        name: Write File
+        description: >-
+          Write a file to allowed directories. (destructive)
+      ha_delete_file:
+        name: Delete File
+        description: >-
+          Delete a file from allowed directories. (destructive)
+    groups:
+      name: Groups
+      description: Manage entity groups.
+      enabled:
+        name: Enable all Groups tools
+        description: Master toggle for the Groups group.
+      ha_config_list_groups:
+        name: List Groups
+        description: >-
+          List all entity groups with their member entities. (read-only)
+      ha_config_set_group:
+        name: Create or Update Group
+        description: >-
+          Create or update an entity group. (destructive)
+      ha_config_remove_group:
+        name: Remove Group
+        description: >-
+          Remove an entity group. (destructive)
+    hacs:
+      name: HACS
+      description: Manage HACS (Home Assistant Community Store) repositories.
+      enabled:
+        name: Enable all HACS tools
+        description: Master toggle for the HACS group.
+      ha_hacs_info:
+        name: Get HACS Info
+        description: >-
+          Get HACS status, version, and enabled categories. (read-only)
+      ha_hacs_search:
+        name: Search HACS Store
+        description: >-
+          Search HACS store for repositories by keyword. (read-only)
+      ha_hacs_list_installed:
+        name: List HACS Installed
+        description: >-
+          List installed HACS repositories. (read-only)
+      ha_hacs_repository_info:
+        name: Get HACS Repository Info
+        description: >-
+          Get detailed repository information including README. (read-only)
+      ha_hacs_download:
+        name: Download HACS Repository
+        description: >-
+          Download and install a HACS repository. (destructive)
+      ha_hacs_add_repository:
+        name: Add HACS Repository
+        description: >-
+          Add a custom GitHub repository to HACS. (destructive)
+    helper_entities:
+      name: Helper Entities
+      description: Create and manage helper entities (input_boolean, counters, etc.).
+      enabled:
+        name: Enable all Helper Entities tools
+        description: Master toggle for the Helper Entities group.
+      ha_config_list_helpers:
+        name: List Helpers
+        description: >-
+          List all helpers of a specific type with configurations. (read-only)
+      ha_config_set_helper:
+        name: Create or Update Helper
+        description: >-
+          Create or update helper entities. (destructive)
+      ha_config_remove_helper:
+        name: Remove Helper
+        description: >-
+          Delete a helper entity. (destructive)
+      ha_get_helper_schema:
+        name: Get Helper Schema
+        description: >-
+          Get configuration schema for a helper type. (read-only)
+      ha_set_config_entry_helper:
+        name: Set Config Entry Helper
+        description: >-
+          Create or update a Config Entry Flow helper (template, group, etc.). (destructive)
+    history_statistics:
+      name: History & Statistics
+      description: Access historical data, logs, and automation traces.
+      enabled:
+        name: Enable all History & Statistics tools
+        description: Master toggle for the History & Statistics group.
+      ha_get_history:
+        name: Get Entity History
+        description: >-
+          Retrieve raw state change history for entities. (read-only)
+      ha_get_statistics:
+        name: Get Statistics
+        description: >-
+          Retrieve pre-aggregated long-term statistics for trends. (read-only)
+      ha_get_automation_traces:
+        name: Get Automation Traces
+        description: >-
+          Retrieve execution traces for automations and scripts. (read-only)
+      ha_get_logs:
+        name: Get Logs
+        description: >-
+          Get Home Assistant logs from various sources. (read-only)
+    integrations:
+      name: Integrations
+      description: Manage config entries and integrations.
+      enabled:
+        name: Enable all Integrations tools
+        description: Master toggle for the Integrations group.
+      ha_get_integration:
+        name: Get Integration
+        description: >-
+          List all integrations or get a specific config entry. (read-only)
+      ha_set_integration_enabled:
+        name: Set Integration Enabled
+        description: >-
+          Enable or disable an integration (config entry). (destructive)
+      ha_delete_config_entry:
+        name: Delete Config Entry
+        description: >-
+          Delete a config entry permanently. Requires confirm=True. (destructive)
+    labels_categories:
+      name: Labels & Categories
+      description: Manage labels and categories for organizing entities.
+      enabled:
+        name: Enable all Labels & Categories tools
+        description: Master toggle for the Labels & Categories group.
+      ha_config_get_label:
+        name: Get Label
+        description: >-
+          List all labels or get a specific one by ID. (read-only)
+      ha_config_set_label:
+        name: Create or Update Label
+        description: >-
+          Create or update a label. (destructive)
+      ha_config_remove_label:
+        name: Remove Label
+        description: >-
+          Delete a label. (destructive)
+      ha_config_get_category:
+        name: Get Category
+        description: >-
+          List all categories for a scope or get a specific one. (read-only)
+      ha_config_set_category:
+        name: Create or Update Category
+        description: >-
+          Create or update a category. (destructive)
+      ha_config_remove_category:
+        name: Remove Category
+        description: >-
+          Delete a category. (destructive)
+    scripts:
+      name: Scripts
+      description: Create, read, and manage scripts.
+      enabled:
+        name: Enable all Scripts tools
+        description: Master toggle for the Scripts group.
+      ha_config_get_script:
+        name: Get Script Config
+        description: >-
+          Retrieve script configuration. (read-only)
+      ha_config_set_script:
+        name: Create or Update Script
+        description: >-
+          Create or update a script. (destructive)
+      ha_config_remove_script:
+        name: Remove Script
+        description: >-
+          Delete a script. (destructive)
+    search_discovery:
+      name: Search & Discovery
+      description: >-
+        Find entities and get system state. Core tools in this group
+        (Search Entities, Get Overview, Get State, Report Issue)
+        are mandatory and cannot be disabled.
+      enabled:
+        name: Enable all Search & Discovery tools
+        description: >-
+          Master toggle for the Search & Discovery group. Note:
+          ha_search_entities, ha_get_overview, ha_get_state, and
+          ha_report_issue are mandatory and will remain enabled.
+      ha_search_entities:
+        name: Search Entities (mandatory)
+        description: >-
+          Find entities by name, area, or domain. This is a mandatory
+          tool and cannot be disabled. (read-only)
+      ha_get_overview:
+        name: Get System Overview (mandatory)
+        description: >-
+          Get AI-friendly system overview with categorization. This is a
+          mandatory tool and cannot be disabled. (read-only)
+      ha_get_state:
+        name: Get Entity State (mandatory)
+        description: >-
+          Get current state and attributes of any entity. This is a
+          mandatory tool and cannot be disabled. (read-only)
+      ha_get_states:
+        name: Get Multiple Entity States
+        description: >-
+          Get state for multiple entities in a single call. (read-only)
+      ha_deep_search:
+        name: Deep Search
+        description: >-
+          Search inside automation, script, and helper configurations. (read-only)
+    service_device_control:
+      name: Service & Device Control
+      description: Control devices and call services.
+      enabled:
+        name: Enable all Service & Device Control tools
+        description: Master toggle for the Service & Device Control group.
+      ha_call_service:
+        name: Call Service
+        description: >-
+          Execute HA services to control entities and trigger automations. (destructive)
+      ha_bulk_control:
+        name: Bulk Control
+        description: >-
+          Control multiple devices with bulk operation support. (destructive)
+      ha_get_operation_status:
+        name: Get Operation Status
+        description: >-
+          Check status of device operations with WebSocket verification. (read-only)
+      ha_list_services:
+        name: List Available Services
+        description: >-
+          List available services with their parameters. (read-only)
+    system:
+      name: System
+      description: System management, backups, and YAML config editing.
+      enabled:
+        name: Enable all System tools
+        description: Master toggle for the System group.
+      ha_restart:
+        name: Restart Home Assistant
+        description: >-
+          Restart Home Assistant. (destructive)
+      ha_reload_core:
+        name: Reload Core Components
+        description: >-
+          Reload configuration without full restart. (destructive)
+      ha_check_config:
+        name: Check Configuration
+        description: >-
+          Check Home Assistant configuration for errors. (read-only)
+      ha_config_set_yaml:
+        name: Set YAML Config
+        description: >-
+          Add, replace, or remove top-level keys in configuration.yaml.
+          Also gated by the "Enable YAML config editing" toggle. (destructive)
+      ha_get_updates:
+        name: Get Updates
+        description: >-
+          List available updates or get details for a specific one. (read-only)
+      ha_get_system_health:
+        name: Get System Health
+        description: >-
+          Get system health including Zigbee and Z-Wave diagnostics. (read-only)
+      ha_backup_create:
+        name: Create Backup
+        description: >-
+          Create a fast Home Assistant backup. (destructive)
+      ha_backup_restore:
+        name: Restore Backup
+        description: >-
+          Restore from a backup. Use with extreme caution. (destructive)
+    todo_lists:
+      name: Todo Lists
+      description: Manage todo list items.
+      enabled:
+        name: Enable all Todo Lists tools
+        description: Master toggle for the Todo Lists group.
+      ha_get_todo:
+        name: Get Todo
+        description: >-
+          List all todo lists or get items from a specific list. (read-only)
+      ha_add_todo_item:
+        name: Add Todo Item
+        description: >-
+          Add an item to a todo list. (destructive)
+      ha_update_todo_item:
+        name: Update Todo Item
+        description: >-
+          Update or complete a todo item. (destructive)
+      ha_remove_todo_item:
+        name: Remove Todo Item
+        description: >-
+          Remove an item from a todo list. (destructive)
+    utilities:
+      name: Utilities
+      description: Templates, diagnostics, and MCP tools component installer.
+      enabled:
+        name: Enable all Utilities tools
+        description: Master toggle for the Utilities group.
+      ha_eval_template:
+        name: Evaluate Template
+        description: >-
+          Evaluate Jinja2 templates using HA's template engine. (read-only)
+      ha_report_issue:
+        name: Report Issue (mandatory)
+        description: >-
+          Collect diagnostic information for issue reports. This is a
+          mandatory tool and cannot be disabled. (read-only)
+      ha_install_mcp_tools:
+        name: Install MCP Tools Component
+        description: >-
+          Install the ha_mcp_tools custom component via HACS. (destructive)
+    zones:
+      name: Zones
+      description: Manage geographic zones.
+      enabled:
+        name: Enable all Zones tools
+        description: Master toggle for the Zones group.
+      ha_get_zone:
+        name: Get Zone
+        description: >-
+          List all zones or get details for a specific one. (read-only)
+      ha_set_zone:
+        name: Set Zone
+        description: >-
+          Create or update a zone. (destructive)
+      ha_remove_zone:
+        name: Remove Zone
+        description: >-
+          Remove a zone. (destructive)
+  pinned_tools:
+    name: Pinned tools
+    description: >-
+      Tools to keep always visible when tool search is enabled. Pinned
+      tools are shown without needing to search. Mandatory pinned tools
+      (Search Entities, Get Overview, Report Issue) cannot be unpinned.
+      Has no effect when tool search is disabled. Requires restart.
+    search_discovery:
+      name: Search & Discovery
+      ha_search_entities:
+        name: Search Entities (always pinned)
+        description: >-
+          Cannot be unpinned. Always visible in tool search.
+      ha_get_overview:
+        name: Get System Overview (always pinned)
+        description: >-
+          Cannot be unpinned. Always visible in tool search.
+      ha_get_state:
+        name: Get Entity State
+        description: Pin to always show in tool search results.
+      ha_get_states:
+        name: Get Multiple Entity States
+        description: Pin to always show in tool search results.
+      ha_deep_search:
+        name: Deep Search
+        description: Pin to always show in tool search results.
+    automations:
+      name: Automations
+      ha_config_get_automation:
+        name: Get Automation Config
+        description: Pin to always show in tool search results.
+      ha_config_set_automation:
+        name: Create or Update Automation
+        description: Pin to always show in tool search results.
+      ha_config_remove_automation:
+        name: Remove Automation
+        description: Pin to always show in tool search results.
+    system:
+      name: System
+      ha_restart:
+        name: Restart Home Assistant
+        description: Pin to always show in tool search results.
+      ha_reload_core:
+        name: Reload Core Components
+        description: Pin to always show in tool search results.
+      ha_backup_create:
+        name: Create Backup
+        description: Pin to always show in tool search results.
+      ha_backup_restore:
+        name: Restore Backup
+        description: Pin to always show in tool search results.
+      ha_config_set_yaml:
+        name: Set YAML Config
+        description: Pin to always show in tool search results.
+      ha_check_config:
+        name: Check Configuration
+        description: Pin to always show in tool search results.
+      ha_get_updates:
+        name: Get Updates
+        description: Pin to always show in tool search results.
+      ha_get_system_health:
+        name: Get System Health
+        description: Pin to always show in tool search results.
+    utilities:
+      name: Utilities
+      ha_report_issue:
+        name: Report Issue (always pinned)
+        description: >-
+          Cannot be unpinned. Always visible in tool search.
+      ha_eval_template:
+        name: Evaluate Template
+        description: Pin to always show in tool search results.
+      ha_install_mcp_tools:
+        name: Install MCP Tools Component
+        description: Pin to always show in tool search results.
+    addons:
+      name: Add-ons
+      ha_get_addon:
+        name: Get Add-ons
+        description: Pin to always show in tool search results.
+      ha_call_addon_api:
+        name: Call Add-on API
+        description: Pin to always show in tool search results.
+    areas_floors:
+      name: Areas & Floors
+      ha_config_list_areas:
+        name: List Areas
+        description: Pin to always show in tool search results.
+      ha_config_list_floors:
+        name: List Floors
+        description: Pin to always show in tool search results.
+      ha_config_set_area:
+        name: Create or Update Area
+        description: Pin to always show in tool search results.
+      ha_config_set_floor:
+        name: Create or Update Floor
+        description: Pin to always show in tool search results.
+      ha_config_remove_area:
+        name: Remove Area
+        description: Pin to always show in tool search results.
+      ha_config_remove_floor:
+        name: Remove Floor
+        description: Pin to always show in tool search results.
+    blueprints:
+      name: Blueprints
+      ha_get_blueprint:
+        name: Get Blueprint
+        description: Pin to always show in tool search results.
+      ha_import_blueprint:
+        name: Import Blueprint
+        description: Pin to always show in tool search results.
+    calendar:
+      name: Calendar
+      ha_config_get_calendar_events:
+        name: Get Calendar Events
+        description: Pin to always show in tool search results.
+      ha_config_set_calendar_event:
+        name: Create Calendar Event
+        description: Pin to always show in tool search results.
+      ha_config_remove_calendar_event:
+        name: Remove Calendar Event
+        description: Pin to always show in tool search results.
+    camera:
+      name: Camera
+      ha_get_camera_image:
+        name: Get Camera Image
+        description: Pin to always show in tool search results.
+    dashboards:
+      name: Dashboards
+      ha_config_get_dashboard:
+        name: Get Dashboard
+        description: Pin to always show in tool search results.
+      ha_config_set_dashboard:
+        name: Create or Update Dashboard
+        description: Pin to always show in tool search results.
+      ha_config_delete_dashboard:
+        name: Delete Dashboard
+        description: Pin to always show in tool search results.
+      ha_dashboard_find_card:
+        name: Find Dashboard Card
+        description: Pin to always show in tool search results.
+      ha_config_list_dashboard_resources:
+        name: List Dashboard Resources
+        description: Pin to always show in tool search results.
+      ha_config_set_dashboard_resource:
+        name: Set Dashboard Resource
+        description: Pin to always show in tool search results.
+      ha_config_delete_dashboard_resource:
+        name: Delete Dashboard Resource
+        description: Pin to always show in tool search results.
+    device_registry:
+      name: Device Registry
+      ha_get_device:
+        name: Get Device
+        description: Pin to always show in tool search results.
+      ha_update_device:
+        name: Update Device
+        description: Pin to always show in tool search results.
+      ha_remove_device:
+        name: Remove Device
+        description: Pin to always show in tool search results.
+      ha_rename_entity:
+        name: Rename Entity
+        description: Pin to always show in tool search results.
+    entity_registry:
+      name: Entity Registry
+      ha_get_entity:
+        name: Get Entity
+        description: Pin to always show in tool search results.
+      ha_set_entity:
+        name: Set Entity
+        description: Pin to always show in tool search results.
+      ha_get_entity_exposure:
+        name: Get Entity Exposure
+        description: Pin to always show in tool search results.
+    files:
+      name: Files
+      ha_list_files:
+        name: List Files
+        description: Pin to always show in tool search results.
+      ha_read_file:
+        name: Read File
+        description: Pin to always show in tool search results.
+      ha_write_file:
+        name: Write File
+        description: Pin to always show in tool search results.
+      ha_delete_file:
+        name: Delete File
+        description: Pin to always show in tool search results.
+    groups:
+      name: Groups
+      ha_config_list_groups:
+        name: List Groups
+        description: Pin to always show in tool search results.
+      ha_config_set_group:
+        name: Create or Update Group
+        description: Pin to always show in tool search results.
+      ha_config_remove_group:
+        name: Remove Group
+        description: Pin to always show in tool search results.
+    hacs:
+      name: HACS
+      ha_hacs_info:
+        name: Get HACS Info
+        description: Pin to always show in tool search results.
+      ha_hacs_search:
+        name: Search HACS Store
+        description: Pin to always show in tool search results.
+      ha_hacs_list_installed:
+        name: List HACS Installed
+        description: Pin to always show in tool search results.
+      ha_hacs_repository_info:
+        name: Get HACS Repository Info
+        description: Pin to always show in tool search results.
+      ha_hacs_download:
+        name: Download HACS Repository
+        description: Pin to always show in tool search results.
+      ha_hacs_add_repository:
+        name: Add HACS Repository
+        description: Pin to always show in tool search results.
+    helper_entities:
+      name: Helper Entities
+      ha_config_list_helpers:
+        name: List Helpers
+        description: Pin to always show in tool search results.
+      ha_config_set_helper:
+        name: Create or Update Helper
+        description: Pin to always show in tool search results.
+      ha_config_remove_helper:
+        name: Remove Helper
+        description: Pin to always show in tool search results.
+      ha_get_helper_schema:
+        name: Get Helper Schema
+        description: Pin to always show in tool search results.
+      ha_set_config_entry_helper:
+        name: Set Config Entry Helper
+        description: Pin to always show in tool search results.
+    history_statistics:
+      name: History & Statistics
+      ha_get_history:
+        name: Get Entity History
+        description: Pin to always show in tool search results.
+      ha_get_statistics:
+        name: Get Statistics
+        description: Pin to always show in tool search results.
+      ha_get_automation_traces:
+        name: Get Automation Traces
+        description: Pin to always show in tool search results.
+      ha_get_logs:
+        name: Get Logs
+        description: Pin to always show in tool search results.
+    integrations:
+      name: Integrations
+      ha_get_integration:
+        name: Get Integration
+        description: Pin to always show in tool search results.
+      ha_set_integration_enabled:
+        name: Set Integration Enabled
+        description: Pin to always show in tool search results.
+      ha_delete_config_entry:
+        name: Delete Config Entry
+        description: Pin to always show in tool search results.
+    labels_categories:
+      name: Labels & Categories
+      ha_config_get_label:
+        name: Get Label
+        description: Pin to always show in tool search results.
+      ha_config_set_label:
+        name: Create or Update Label
+        description: Pin to always show in tool search results.
+      ha_config_remove_label:
+        name: Remove Label
+        description: Pin to always show in tool search results.
+      ha_config_get_category:
+        name: Get Category
+        description: Pin to always show in tool search results.
+      ha_config_set_category:
+        name: Create or Update Category
+        description: Pin to always show in tool search results.
+      ha_config_remove_category:
+        name: Remove Category
+        description: Pin to always show in tool search results.
+    scripts:
+      name: Scripts
+      ha_config_get_script:
+        name: Get Script Config
+        description: Pin to always show in tool search results.
+      ha_config_set_script:
+        name: Create or Update Script
+        description: Pin to always show in tool search results.
+      ha_config_remove_script:
+        name: Remove Script
+        description: Pin to always show in tool search results.
+    service_device_control:
+      name: Service & Device Control
+      ha_call_service:
+        name: Call Service
+        description: Pin to always show in tool search results.
+      ha_bulk_control:
+        name: Bulk Control
+        description: Pin to always show in tool search results.
+      ha_get_operation_status:
+        name: Get Operation Status
+        description: Pin to always show in tool search results.
+      ha_list_services:
+        name: List Available Services
+        description: Pin to always show in tool search results.
+    todo_lists:
+      name: Todo Lists
+      ha_get_todo:
+        name: Get Todo
+        description: Pin to always show in tool search results.
+      ha_add_todo_item:
+        name: Add Todo Item
+        description: Pin to always show in tool search results.
+      ha_update_todo_item:
+        name: Update Todo Item
+        description: Pin to always show in tool search results.
+      ha_remove_todo_item:
+        name: Remove Todo Item
+        description: Pin to always show in tool search results.
+    zones:
+      name: Zones
+      ha_get_zone:
+        name: Get Zone
+        description: Pin to always show in tool search results.
+      ha_set_zone:
+        name: Set Zone
+        description: Pin to always show in tool search results.
+      ha_remove_zone:
+        name: Remove Zone
+        description: Pin to always show in tool search results.

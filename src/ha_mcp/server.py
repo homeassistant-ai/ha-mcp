@@ -338,16 +338,23 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     def _apply_tool_visibility(self) -> None:
         """Disable tools based on the disabled_tools setting.
 
-        Parses the comma-separated disabled_tools config into group names
-        and individual tool names. Groups are disabled via tag-based
-        filtering, individual tools by name. Mandatory tools are
+        Parses the comma-separated disabled_tools config (populated by the
+        add-on from the nested enabled_tools UI) into group names and
+        individual tool names. Groups are disabled via tag-based filtering,
+        individual tools by name. The enable_yaml_config_editing toggle
+        gates ha_config_set_yaml independently. Mandatory tools are
         re-enabled afterwards to ensure they can never be disabled.
         """
+        # Collect disabled tools from the flat comma-separated list
         raw = self.settings.disabled_tools.strip()
-        if not raw:
-            return
+        entries: set[str] = set()
+        if raw:
+            entries = {e.strip() for e in raw.split(",") if e.strip()}
 
-        entries = {e.strip() for e in raw.split(",") if e.strip()}
+        # Also disable ha_config_set_yaml if YAML editing is off
+        if not self.settings.enable_yaml_config_editing:
+            entries.add("ha_config_set_yaml")
+
         if not entries:
             return
 

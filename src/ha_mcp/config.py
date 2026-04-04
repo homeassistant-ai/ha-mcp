@@ -107,8 +107,14 @@ class Settings(BaseSettings):
     # Dramatically reduces idle context token usage for LLMs.
     enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
 
+    # Managed YAML config editing — allows ha_config_set_yaml to add,
+    # replace, or remove top-level keys in configuration.yaml and package
+    # files. Disabled by default; only for YAML-only features with no UI/API path.
+    enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
+
     # User-configurable tool filtering — comma-separated list of tool names
     # or group names to disable. Group names expand to all tools with that tag.
+    # Populated by the add-on from the nested enabled_tools config structure.
     disabled_tools: str = Field("ha_config_set_yaml", alias="DISABLED_TOOLS")
 
     # Additional tools to pin (always visible) when tool search is active.

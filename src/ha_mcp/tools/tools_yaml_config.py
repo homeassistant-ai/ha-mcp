@@ -8,8 +8,8 @@ only in YAML and have no REST/WebSocket API equivalent.
 **Dependency:** Requires the ha_mcp_tools custom component to be installed.
 The tools will gracefully fail with installation instructions if the component is not available.
 
-Disabled by default via the ``disabled_tools`` add-on setting.
-Users remove ``ha_config_set_yaml`` from that list to enable.
+Feature Flag: Set ENABLE_YAML_CONFIG_EDITING=true to enable.
+Also gated by the add-on's ``enabled_tools`` config (disabled by default).
 """
 
 import logging
@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
 
-    Tool is always registered but disabled by default via the
-    ``disabled_tools`` add-on setting (contains ``ha_config_set_yaml``).
+    Tool is always registered but disabled by default via both the
+    ``enable_yaml_config_editing`` toggle and the ``enabled_tools``
+    config (ha_config_set_yaml defaults to enabled, but the toggle
+    gates it). The server's ``_apply_tool_visibility`` handles disabling.
     """
 
     @mcp.tool(

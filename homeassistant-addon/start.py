@@ -109,8 +109,9 @@ def main() -> int:
     enable_skills = True  # default
     enable_skills_as_tools = False  # default
     enable_tool_search = False  # default
-    disabled_tools: list[str] = ["ha_config_set_yaml"]  # default
-    pinned_tools: list[str] = []  # default
+    enable_yaml_config_editing = False  # default
+    disabled_tools: list[str] = []  # default (computed from enabled_tools)
+    pinned_tools: list[str] = []  # default (computed from pinned_tools)
     tool_search_max_results = 5  # default
 
     if config_file.exists():
@@ -125,12 +126,39 @@ def main() -> int:
             enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
-            raw_disabled = config.get("disabled_tools", ["ha_config_set_yaml"])
-            disabled_tools = raw_disabled if isinstance(raw_disabled, list) else ["ha_config_set_yaml"]
-            raw_pinned = config.get("pinned_tools", [])
-            pinned_tools = raw_pinned if isinstance(raw_pinned, list) else []
+            raw_yaml_config = config.get("enable_yaml_config_editing", False)
+            enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
+
+            # Parse nested enabled_tools structure into a flat disabled list.
+            # Tools with false value or whose group "enabled" is false get disabled.
+            enabled_tools_config = config.get("enabled_tools", {})
+            if isinstance(enabled_tools_config, dict):
+                for _group_key, group_val in enabled_tools_config.items():
+                    if not isinstance(group_val, dict):
+                        continue
+                    group_enabled = group_val.get("enabled", True)
+                    for tool_name, tool_val in group_val.items():
+                        if tool_name == "enabled":
+                            continue
+                        if not group_enabled or not tool_val:
+                            disabled_tools.append(tool_name)
+
+            # If YAML config editing is disabled, ensure ha_config_set_yaml is in the list
+            if not enable_yaml_config_editing and "ha_config_set_yaml" not in disabled_tools:
+                disabled_tools.append("ha_config_set_yaml")
+
+            # Parse nested pinned_tools structure into a flat pinned list.
+            # Tools with true value get pinned.
+            pinned_tools_config = config.get("pinned_tools", {})
+            if isinstance(pinned_tools_config, dict):
+                for _group_key, group_val in pinned_tools_config.items():
+                    if not isinstance(group_val, dict):
+                        continue
+                    for tool_name, tool_val in group_val.items():
+                        if tool_val:
+                            pinned_tools.append(tool_name)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -145,6 +173,7 @@ def main() -> int:
     os.environ["ENABLE_SKILLS"] = str(enable_skills).lower()
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
+    os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["DISABLED_TOOLS"] = ",".join(disabled_tools)
     os.environ["PINNED_TOOLS"] = ",".join(pinned_tools)
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)

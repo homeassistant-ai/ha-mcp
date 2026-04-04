@@ -26,18 +26,526 @@ options:
   enable_skills: true
   enable_skills_as_tools: false
   enable_tool_search: false
-  disabled_tools: "ha_config_set_yaml"
-  pinned_tools: ""
+  enable_yaml_config_editing: false
   tool_search_max_results: 5
+  enabled_tools:
+    addons:
+      enabled: true
+      ha_get_addon: true
+      ha_call_addon_api: true
+    areas_floors:
+      enabled: true
+      ha_config_list_areas: true
+      ha_config_list_floors: true
+      ha_config_set_area: true
+      ha_config_set_floor: true
+      ha_config_remove_area: true
+      ha_config_remove_floor: true
+    automations:
+      enabled: true
+      ha_config_get_automation: true
+      ha_config_set_automation: true
+      ha_config_remove_automation: true
+    blueprints:
+      enabled: true
+      ha_get_blueprint: true
+      ha_import_blueprint: true
+    calendar:
+      enabled: true
+      ha_config_get_calendar_events: true
+      ha_config_set_calendar_event: true
+      ha_config_remove_calendar_event: true
+    camera:
+      enabled: true
+      ha_get_camera_image: true
+    dashboards:
+      enabled: true
+      ha_config_get_dashboard: true
+      ha_config_set_dashboard: true
+      ha_config_delete_dashboard: true
+      ha_dashboard_find_card: true
+      ha_config_list_dashboard_resources: true
+      ha_config_set_dashboard_resource: true
+      ha_config_delete_dashboard_resource: true
+    device_registry:
+      enabled: true
+      ha_get_device: true
+      ha_update_device: true
+      ha_remove_device: true
+      ha_rename_entity: true
+    entity_registry:
+      enabled: true
+      ha_get_entity: true
+      ha_set_entity: true
+      ha_get_entity_exposure: true
+    files:
+      enabled: true
+      ha_list_files: true
+      ha_read_file: true
+      ha_write_file: true
+      ha_delete_file: true
+    groups:
+      enabled: true
+      ha_config_list_groups: true
+      ha_config_set_group: true
+      ha_config_remove_group: true
+    hacs:
+      enabled: true
+      ha_hacs_info: true
+      ha_hacs_search: true
+      ha_hacs_list_installed: true
+      ha_hacs_repository_info: true
+      ha_hacs_download: true
+      ha_hacs_add_repository: true
+    helper_entities:
+      enabled: true
+      ha_config_list_helpers: true
+      ha_config_set_helper: true
+      ha_config_remove_helper: true
+      ha_get_helper_schema: true
+      ha_set_config_entry_helper: true
+    history_statistics:
+      enabled: true
+      ha_get_history: true
+      ha_get_statistics: true
+      ha_get_automation_traces: true
+      ha_get_logs: true
+    integrations:
+      enabled: true
+      ha_get_integration: true
+      ha_set_integration_enabled: true
+      ha_delete_config_entry: true
+    labels_categories:
+      enabled: true
+      ha_config_get_label: true
+      ha_config_set_label: true
+      ha_config_remove_label: true
+      ha_config_get_category: true
+      ha_config_set_category: true
+      ha_config_remove_category: true
+    scripts:
+      enabled: true
+      ha_config_get_script: true
+      ha_config_set_script: true
+      ha_config_remove_script: true
+    search_discovery:
+      enabled: true
+      ha_search_entities: true
+      ha_get_overview: true
+      ha_get_state: true
+      ha_get_states: true
+      ha_deep_search: true
+    service_device_control:
+      enabled: true
+      ha_call_service: true
+      ha_bulk_control: true
+      ha_get_operation_status: true
+      ha_list_services: true
+    system:
+      enabled: true
+      ha_restart: true
+      ha_reload_core: true
+      ha_check_config: true
+      ha_config_set_yaml: true
+      ha_get_updates: true
+      ha_get_system_health: true
+      ha_backup_create: true
+      ha_backup_restore: true
+    todo_lists:
+      enabled: true
+      ha_get_todo: true
+      ha_add_todo_item: true
+      ha_update_todo_item: true
+      ha_remove_todo_item: true
+    utilities:
+      enabled: true
+      ha_eval_template: true
+      ha_report_issue: true
+      ha_install_mcp_tools: true
+    zones:
+      enabled: true
+      ha_get_zone: true
+      ha_set_zone: true
+      ha_remove_zone: true
+  pinned_tools:
+    search_discovery:
+      ha_search_entities: true
+      ha_get_overview: true
+      ha_get_state: false
+      ha_get_states: false
+      ha_deep_search: false
+    automations:
+      ha_config_get_automation: true
+      ha_config_set_automation: true
+      ha_config_remove_automation: false
+    system:
+      ha_restart: true
+      ha_reload_core: true
+      ha_backup_create: true
+      ha_backup_restore: true
+      ha_config_set_yaml: true
+      ha_check_config: false
+      ha_get_updates: false
+      ha_get_system_health: false
+    utilities:
+      ha_report_issue: true
+      ha_eval_template: false
+      ha_install_mcp_tools: false
+    addons:
+      ha_get_addon: false
+      ha_call_addon_api: false
+    areas_floors:
+      ha_config_list_areas: false
+      ha_config_list_floors: false
+      ha_config_set_area: false
+      ha_config_set_floor: false
+      ha_config_remove_area: false
+      ha_config_remove_floor: false
+    blueprints:
+      ha_get_blueprint: false
+      ha_import_blueprint: false
+    calendar:
+      ha_config_get_calendar_events: false
+      ha_config_set_calendar_event: false
+      ha_config_remove_calendar_event: false
+    camera:
+      ha_get_camera_image: false
+    dashboards:
+      ha_config_get_dashboard: false
+      ha_config_set_dashboard: false
+      ha_config_delete_dashboard: false
+      ha_dashboard_find_card: false
+      ha_config_list_dashboard_resources: false
+      ha_config_set_dashboard_resource: false
+      ha_config_delete_dashboard_resource: false
+    device_registry:
+      ha_get_device: false
+      ha_update_device: false
+      ha_remove_device: false
+      ha_rename_entity: false
+    entity_registry:
+      ha_get_entity: false
+      ha_set_entity: false
+      ha_get_entity_exposure: false
+    files:
+      ha_list_files: false
+      ha_read_file: false
+      ha_write_file: false
+      ha_delete_file: false
+    groups:
+      ha_config_list_groups: false
+      ha_config_set_group: false
+      ha_config_remove_group: false
+    hacs:
+      ha_hacs_info: false
+      ha_hacs_search: false
+      ha_hacs_list_installed: false
+      ha_hacs_repository_info: false
+      ha_hacs_download: false
+      ha_hacs_add_repository: false
+    helper_entities:
+      ha_config_list_helpers: false
+      ha_config_set_helper: false
+      ha_config_remove_helper: false
+      ha_get_helper_schema: false
+      ha_set_config_entry_helper: false
+    history_statistics:
+      ha_get_history: false
+      ha_get_statistics: false
+      ha_get_automation_traces: false
+      ha_get_logs: false
+    integrations:
+      ha_get_integration: false
+      ha_set_integration_enabled: false
+      ha_delete_config_entry: false
+    labels_categories:
+      ha_config_get_label: false
+      ha_config_set_label: false
+      ha_config_remove_label: false
+      ha_config_get_category: false
+      ha_config_set_category: false
+      ha_config_remove_category: false
+    scripts:
+      ha_config_get_script: false
+      ha_config_set_script: false
+      ha_config_remove_script: false
+    service_device_control:
+      ha_call_service: false
+      ha_bulk_control: false
+      ha_get_operation_status: false
+      ha_list_services: false
+    todo_lists:
+      ha_get_todo: false
+      ha_add_todo_item: false
+      ha_update_todo_item: false
+      ha_remove_todo_item: false
+    zones:
+      ha_get_zone: false
+      ha_set_zone: false
+      ha_remove_zone: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
-  disabled_tools: str?
-  pinned_tools: str?
+  enable_yaml_config_editing: bool?
   tool_search_max_results: int?
+  enabled_tools:
+    addons:
+      enabled: bool?
+      ha_get_addon: bool?
+      ha_call_addon_api: bool?
+    areas_floors:
+      enabled: bool?
+      ha_config_list_areas: bool?
+      ha_config_list_floors: bool?
+      ha_config_set_area: bool?
+      ha_config_set_floor: bool?
+      ha_config_remove_area: bool?
+      ha_config_remove_floor: bool?
+    automations:
+      enabled: bool?
+      ha_config_get_automation: bool?
+      ha_config_set_automation: bool?
+      ha_config_remove_automation: bool?
+    blueprints:
+      enabled: bool?
+      ha_get_blueprint: bool?
+      ha_import_blueprint: bool?
+    calendar:
+      enabled: bool?
+      ha_config_get_calendar_events: bool?
+      ha_config_set_calendar_event: bool?
+      ha_config_remove_calendar_event: bool?
+    camera:
+      enabled: bool?
+      ha_get_camera_image: bool?
+    dashboards:
+      enabled: bool?
+      ha_config_get_dashboard: bool?
+      ha_config_set_dashboard: bool?
+      ha_config_delete_dashboard: bool?
+      ha_dashboard_find_card: bool?
+      ha_config_list_dashboard_resources: bool?
+      ha_config_set_dashboard_resource: bool?
+      ha_config_delete_dashboard_resource: bool?
+    device_registry:
+      enabled: bool?
+      ha_get_device: bool?
+      ha_update_device: bool?
+      ha_remove_device: bool?
+      ha_rename_entity: bool?
+    entity_registry:
+      enabled: bool?
+      ha_get_entity: bool?
+      ha_set_entity: bool?
+      ha_get_entity_exposure: bool?
+    files:
+      enabled: bool?
+      ha_list_files: bool?
+      ha_read_file: bool?
+      ha_write_file: bool?
+      ha_delete_file: bool?
+    groups:
+      enabled: bool?
+      ha_config_list_groups: bool?
+      ha_config_set_group: bool?
+      ha_config_remove_group: bool?
+    hacs:
+      enabled: bool?
+      ha_hacs_info: bool?
+      ha_hacs_search: bool?
+      ha_hacs_list_installed: bool?
+      ha_hacs_repository_info: bool?
+      ha_hacs_download: bool?
+      ha_hacs_add_repository: bool?
+    helper_entities:
+      enabled: bool?
+      ha_config_list_helpers: bool?
+      ha_config_set_helper: bool?
+      ha_config_remove_helper: bool?
+      ha_get_helper_schema: bool?
+      ha_set_config_entry_helper: bool?
+    history_statistics:
+      enabled: bool?
+      ha_get_history: bool?
+      ha_get_statistics: bool?
+      ha_get_automation_traces: bool?
+      ha_get_logs: bool?
+    integrations:
+      enabled: bool?
+      ha_get_integration: bool?
+      ha_set_integration_enabled: bool?
+      ha_delete_config_entry: bool?
+    labels_categories:
+      enabled: bool?
+      ha_config_get_label: bool?
+      ha_config_set_label: bool?
+      ha_config_remove_label: bool?
+      ha_config_get_category: bool?
+      ha_config_set_category: bool?
+      ha_config_remove_category: bool?
+    scripts:
+      enabled: bool?
+      ha_config_get_script: bool?
+      ha_config_set_script: bool?
+      ha_config_remove_script: bool?
+    search_discovery:
+      enabled: bool?
+      ha_search_entities: bool?
+      ha_get_overview: bool?
+      ha_get_state: bool?
+      ha_get_states: bool?
+      ha_deep_search: bool?
+    service_device_control:
+      enabled: bool?
+      ha_call_service: bool?
+      ha_bulk_control: bool?
+      ha_get_operation_status: bool?
+      ha_list_services: bool?
+    system:
+      enabled: bool?
+      ha_restart: bool?
+      ha_reload_core: bool?
+      ha_check_config: bool?
+      ha_config_set_yaml: bool?
+      ha_get_updates: bool?
+      ha_get_system_health: bool?
+      ha_backup_create: bool?
+      ha_backup_restore: bool?
+    todo_lists:
+      enabled: bool?
+      ha_get_todo: bool?
+      ha_add_todo_item: bool?
+      ha_update_todo_item: bool?
+      ha_remove_todo_item: bool?
+    utilities:
+      enabled: bool?
+      ha_eval_template: bool?
+      ha_report_issue: bool?
+      ha_install_mcp_tools: bool?
+    zones:
+      enabled: bool?
+      ha_get_zone: bool?
+      ha_set_zone: bool?
+      ha_remove_zone: bool?
+  pinned_tools:
+    search_discovery:
+      ha_search_entities: bool?
+      ha_get_overview: bool?
+      ha_get_state: bool?
+      ha_get_states: bool?
+      ha_deep_search: bool?
+    automations:
+      ha_config_get_automation: bool?
+      ha_config_set_automation: bool?
+      ha_config_remove_automation: bool?
+    system:
+      ha_restart: bool?
+      ha_reload_core: bool?
+      ha_backup_create: bool?
+      ha_backup_restore: bool?
+      ha_config_set_yaml: bool?
+      ha_check_config: bool?
+      ha_get_updates: bool?
+      ha_get_system_health: bool?
+    utilities:
+      ha_report_issue: bool?
+      ha_eval_template: bool?
+      ha_install_mcp_tools: bool?
+    addons:
+      ha_get_addon: bool?
+      ha_call_addon_api: bool?
+    areas_floors:
+      ha_config_list_areas: bool?
+      ha_config_list_floors: bool?
+      ha_config_set_area: bool?
+      ha_config_set_floor: bool?
+      ha_config_remove_area: bool?
+      ha_config_remove_floor: bool?
+    blueprints:
+      ha_get_blueprint: bool?
+      ha_import_blueprint: bool?
+    calendar:
+      ha_config_get_calendar_events: bool?
+      ha_config_set_calendar_event: bool?
+      ha_config_remove_calendar_event: bool?
+    camera:
+      ha_get_camera_image: bool?
+    dashboards:
+      ha_config_get_dashboard: bool?
+      ha_config_set_dashboard: bool?
+      ha_config_delete_dashboard: bool?
+      ha_dashboard_find_card: bool?
+      ha_config_list_dashboard_resources: bool?
+      ha_config_set_dashboard_resource: bool?
+      ha_config_delete_dashboard_resource: bool?
+    device_registry:
+      ha_get_device: bool?
+      ha_update_device: bool?
+      ha_remove_device: bool?
+      ha_rename_entity: bool?
+    entity_registry:
+      ha_get_entity: bool?
+      ha_set_entity: bool?
+      ha_get_entity_exposure: bool?
+    files:
+      ha_list_files: bool?
+      ha_read_file: bool?
+      ha_write_file: bool?
+      ha_delete_file: bool?
+    groups:
+      ha_config_list_groups: bool?
+      ha_config_set_group: bool?
+      ha_config_remove_group: bool?
+    hacs:
+      ha_hacs_info: bool?
+      ha_hacs_search: bool?
+      ha_hacs_list_installed: bool?
+      ha_hacs_repository_info: bool?
+      ha_hacs_download: bool?
+      ha_hacs_add_repository: bool?
+    helper_entities:
+      ha_config_list_helpers: bool?
+      ha_config_set_helper: bool?
+      ha_config_remove_helper: bool?
+      ha_get_helper_schema: bool?
+      ha_set_config_entry_helper: bool?
+    history_statistics:
+      ha_get_history: bool?
+      ha_get_statistics: bool?
+      ha_get_automation_traces: bool?
+      ha_get_logs: bool?
+    integrations:
+      ha_get_integration: bool?
+      ha_set_integration_enabled: bool?
+      ha_delete_config_entry: bool?
+    labels_categories:
+      ha_config_get_label: bool?
+      ha_config_set_label: bool?
+      ha_config_remove_label: bool?
+      ha_config_get_category: bool?
+      ha_config_set_category: bool?
+      ha_config_remove_category: bool?
+    scripts:
+      ha_config_get_script: bool?
+      ha_config_set_script: bool?
+      ha_config_remove_script: bool?
+    service_device_control:
+      ha_call_service: bool?
+      ha_bulk_control: bool?
+      ha_get_operation_status: bool?
+      ha_list_services: bool?
+    todo_lists:
+      ha_get_todo: bool?
+      ha_add_todo_item: bool?
+      ha_update_todo_item: bool?
+      ha_remove_todo_item: bool?
+    zones:
+      ha_get_zone: bool?
+      ha_set_zone: bool?
+      ha_remove_zone: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

@@ -225,16 +225,21 @@ Replaces the full tool catalog (~92 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
-### disabled_tools
+### enable_yaml_config_editing
 
-**Default:** `["ha_config_set_yaml"]`
+**Default:** `false`
 
-A list of tools or tool groups to disable. Accepts:
+Allow AI assistants to add, replace, or remove top-level keys in `configuration.yaml` and `packages/*.yaml`. Only whitelisted keys are allowed (e.g., `template`, `sensor`, `command_line`, `mqtt`). Core keys like `homeassistant`, `http`, and `recorder` are blocked. A backup is created before every edit.
 
-- **Individual tool names** (e.g., `ha_hacs_download`) — disables that specific tool
-- **Group names** (e.g., `HACS`) — disables all tools in that group
+Use for YAML-only features that have no UI or API alternative.
 
-**Available groups:** Add-ons, Areas & Floors, Automations, Blueprints, Calendar, Camera, Dashboards, Device Registry, Entity Registry, Files, Groups, HACS, Helper Entities, History & Statistics, Integrations, Labels & Categories, Scripts, Search & Discovery, Service & Device Control, System, Todo Lists, Utilities, Zones
+Requires add-on restart to take effect.
+
+### enabled_tools
+
+A nested configuration structure for enabling/disabling individual tools or entire tool groups. Tools are organized by category (Add-ons, Automations, HACS, System, etc.). Each group has an `enabled` master toggle plus individual tool toggles.
+
+**Group toggle behavior:** Setting a group's `enabled` to `false` disables all tools in that group regardless of individual tool settings.
 
 **Mandatory tools** that cannot be disabled (silently re-enabled): `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`. When tool search is enabled, the search and proxy tools are also mandatory.
 
@@ -242,9 +247,11 @@ Requires add-on restart to take effect.
 
 ### pinned_tools
 
-**Default:** `[]` (empty)
+A nested configuration structure for pinning tools (keeping them always visible when tool search is enabled). Tools are organized by the same groups as `enabled_tools`. Only pinned tools (set to `true`) are shown without needing to search.
 
-Additional tool names to keep always visible when tool search is enabled. These are shown alongside the default pinned tools without requiring a search. Has no effect when tool search is disabled.
+**Default pinned tools** include: `ha_search_entities`, `ha_get_overview`, `ha_restart`, `ha_reload_core`, `ha_backup_create`, `ha_backup_restore`, `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_set_yaml`, `ha_report_issue`.
+
+Has no effect when tool search is disabled.
 
 Requires add-on restart to take effect.
 
@@ -261,11 +268,17 @@ Requires add-on restart to take effect.
 ```yaml
 backup_hint: normal
 secret_path: ""  # Leave empty for auto-generation
-disabled_tools:
-  - "ha_config_set_yaml"
-  - "HACS"
+enable_yaml_config_editing: false
+enabled_tools:
+  hacs:
+    enabled: false  # Disable all HACS tools
+  system:
+    enabled: true
+    ha_config_set_yaml: true  # Enabled here, but gated by enable_yaml_config_editing toggle
 pinned_tools:
-  - "ha_config_set_automation"
+  system:
+    ha_restart: true
+    ha_backup_create: true
 tool_search_max_results: 3
 ```
 
