@@ -671,6 +671,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             helper_data["labels"] = labels
                             if category:
                                 helper_data["category"] = category
+                        else:
+                            error_detail = update_result.get("error", {})
+                            error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
+                            helper_data["warning"] = (
+                                f"Helper created but entity registry update failed: {error_msg}"
+                            )
 
                     return {
                         "success": True,
@@ -903,7 +909,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             registry_update["labels"] = labels
                         if category:
                             registry_update["categories"] = {"helpers": category}
-                        await client.send_websocket_message(registry_update)
+                        reg_result = await client.send_websocket_message(registry_update)
+                        if not reg_result.get("success"):
+                            error_detail = reg_result.get("error", {})
+                            error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
+                            logger.warning(f"Entity registry update failed for {entity_id}: {error_msg}")
+                            updated_data["warning"] = (
+                                f"Config updated but entity registry update failed: {error_msg}"
+                            )
 
                 else:
                     # Standard helpers: entity registry update only

@@ -278,7 +278,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Extract category before sending to HA REST API (which rejects unknown keys).
             # Parameter takes precedence over config dict value.
             config_category = config_dict.pop("category", None)
-            effective_category = category or config_category
+            effective_category = category if category is not None else config_category
 
             # Validate required fields based on script type
             # Blueprint scripts only need use_blueprint, regular scripts need sequence

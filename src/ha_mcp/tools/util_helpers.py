@@ -439,7 +439,7 @@ async def fetch_entity_category(
             cat_id = categories.get(scope)
             return str(cat_id) if cat_id is not None else None
     except Exception as e:
-        logger.debug(f"Failed to fetch category for {entity_id}: {e}")
+        logger.warning(f"Failed to fetch category for {entity_id}: {e}")
     return None
 
 
@@ -465,12 +465,19 @@ async def apply_entity_category(
         entity_type: Human-readable type for warning messages
     """
     try:
-        await client.send_websocket_message({
+        ws_result = await client.send_websocket_message({
             "type": "config/entity_registry/update",
             "entity_id": entity_id,
             "categories": {scope: category},
         })
-        result_dict["category"] = category
+        if ws_result.get("success"):
+            result_dict["category"] = category
+        else:
+            error_msg = ws_result.get("error", {}).get("message", "Unknown error")
+            logger.warning(f"Failed to set category for {entity_id}: {error_msg}")
+            result_dict["category_warning"] = (
+                f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"
+            )
     except Exception as e:
         logger.warning(f"Failed to set category for {entity_id}: {e}")
         result_dict["category_warning"] = (
