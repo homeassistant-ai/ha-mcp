@@ -1229,3 +1229,96 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         result = await set_entity_tool(entity_id="sensor.temperature", enabled=False)
         assert result["success"] is True
+
+
+class TestHaRemoveEntity:
+    """Test ha_remove_entity tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def remove_entity_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_remove_entity function."""
+        register_entity_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_remove_entity"]
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_success(self, remove_entity_tool, mock_client):
+        """Successfully removing an entity should return success with entity_id."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": None}
+        )
+        entity_id = "input_boolean.test_entity"
+
+        result = await remove_entity_tool(entity_id=entity_id)
+
+        assert result["success"] is True
+        assert result["entity_id"] == entity_id
+
+        # Verify correct WebSocket message type and payload
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "config/entity_registry/remove"
+        assert call_args["entity_id"] == entity_id
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_not_found(self, remove_entity_tool, mock_client):
+        """Removing a non-existent entity should raise ToolError containing 'not found'.
+
+        Note: send_websocket_message returns errors as plain strings, never as dicts.
+        Detection: "not found" in error_msg.lower() -- NOT error.get("code").
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Entity not found",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.definitely_not_real_12345")
+
+        error_msg = str(exc_info.value).lower()
+        assert "not found" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
+        """WebSocket connection failure should raise ToolError."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=Exception("conn failed")
+        )
+
+        with pytest.raises(ToolError):
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_general_failure(self, remove_entity_tool, mock_client):
+        """Generic failures should raise ToolError with SERVICE_CALL_FAILED message."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "Permission denied"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+        error_msg = str(exc_info.value).lower()
+        assert "permission denied" in error_msg
