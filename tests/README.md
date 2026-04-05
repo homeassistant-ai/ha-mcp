@@ -22,11 +22,11 @@ uv run hamcp-test-env --no-interactive
 ### Direct pytest
 
 ```bash
-# All E2E tests
-uv run pytest tests/src/e2e/ -v
+# All E2E tests (parallel — 2 workers)
+uv run pytest tests/src/e2e/ -n2 --dist loadscope -v
 
 # Fast tests only
-uv run pytest tests/src/e2e/ -v -m "not slow"
+uv run pytest tests/src/e2e/ -n2 --dist loadscope -v -m "not slow"
 
 # Specific categories
 uv run pytest tests/src/e2e/basic/ -v               # Basic connectivity
