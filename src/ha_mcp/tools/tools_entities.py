@@ -946,7 +946,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         tags={"Entity Registry"},
         annotations={
             "destructiveHint": True,
-            "idempotentHint": False,
+            "idempotentHint": True,
             "title": "Remove Entity",
         },
     )
@@ -991,7 +991,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not result.get("success"):
-                error_msg = str(result.get("error", "Unknown error"))
+                error = result.get("error", {})
+                error_msg = (
+                    error.get("message", str(error))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
                 if "not found" in error_msg.lower():
                     raise_tool_error(
                         create_error_response(
