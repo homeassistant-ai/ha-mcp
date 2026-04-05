@@ -936,6 +936,29 @@
     "source_file": "tools_voice_assistant.py"
   },
   {
+    "name": "ha_remove_entity",
+    "title": "Remove Entity",
+    "description": "Remove an entity from the Home Assistant entity registry.\n\nPermanently removes the entity registration from Home Assistant.\nThe entity will no longer appear in the UI or be available to automations.\n\nWARNING: This permanently removes the entity registration.\n- Use only for orphaned or stale entity entries\n- If the underlying device or integration is still active, the entity\n  may be re-added automatically on the next HA restart or reload\n- This action cannot be undone without restoring from backup\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Remove stale helper entry: ha_remove_entity(\"input_boolean.deleted_helper\")\n\nNOTE: For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False)\n\nRELATED TOOLS:\n- ha_search_entities: Find entities to verify the entity_id before removing\n- ha_get_entity: Check entity details before removal",
+    "inputSchema": {
+      "properties": {
+        "entity_id": {
+          "type": "Annotated[str, Field(description=\"Entity ID to remove from the entity registry (e.g., 'sensor.old_temperature'). This permanently removes the entity registration.\")]"
+        }
+      },
+      "required": [
+        "entity_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Entity Registry"
+    ],
+    "source_file": "tools_entities.py"
+  },
+  {
     "name": "ha_set_entity",
     "title": "Set Entity",
     "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, enabled/disabled state, visibility, aliases, labels, and voice\nassistant exposure in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels and expose_to parameters are supported.\nOther parameters (area_id, name, icon, enabled, hidden, aliases) require single entity.\n\nLABEL OPERATIONS:\n- label_operation=\"set\" (default): Replace all labels with the provided list. Use [] to clear.\n- label_operation=\"add\": Add labels to existing ones without removing any.\n- label_operation=\"remove\": Remove specified labels from the entity.\n\nUse ha_search_entities() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\nSingle entity:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Rename: ha_set_entity(\"sensor.temp\", name=\"Living Room Temperature\")\n- Set labels: ha_set_entity(\"light.lamp\", labels=[\"outdoor\", \"smart\"])\n- Add labels: ha_set_entity(\"light.lamp\", labels=[\"new_label\"], label_operation=\"add\")\n- Remove labels: ha_set_entity(\"light.lamp\", labels=[\"old_label\"], label_operation=\"remove\")\n- Clear labels: ha_set_entity(\"light.lamp\", labels=[])\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nBulk operations:\n- Set labels on multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"outdoor\"])\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose multiple to Alexa: ha_set_entity([\"light.a\", \"light.b\"], expose_to={\"cloud.alexa\": True})\n\nNOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.\n\nENABLED/DISABLED WARNING:\nSetting enabled=False performs a **registry-level disable** — the entity is completely\nremoved from the Home Assistant state machine and hidden from the UI. It will NOT appear\nin state queries, dashboards, or automations until re-enabled AND the integration is\nreloaded. This is NOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. Use these instead:\n- ha_call_service(\"automation\", \"turn_off\", entity_id=\"automation.xxx\")\n- ha_call_service(\"script\", \"turn_off\", entity_id=\"script.xxx\")",
