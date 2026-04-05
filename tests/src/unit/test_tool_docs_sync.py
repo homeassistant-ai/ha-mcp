@@ -68,7 +68,7 @@ class TestToolDocsSync:
         )
         assert section is not None, "Sync markers not found in DOCS.md"
 
-        section_tools = set(re.findall(r"`(ha_[a-z_]+)`", section.group(0)))
+        section_tools = set(re.findall(r"`(ha_[a-z0-9_]+)`", section.group(0)))
         missing = real_names - section_tools
         assert not missing, (
             f"Tools missing from DOCS.md auto-generated section ({len(missing)}): "
