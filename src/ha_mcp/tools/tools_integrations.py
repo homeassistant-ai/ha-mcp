@@ -124,11 +124,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exact_match_bool = coerce_bool_param(
                 exact_match, "exact_match", default=True
             )
-            limit_int = (
-                coerce_int_param(limit, "limit", default=50, min_value=1, max_value=200)
-                or 50
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
             )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
             # Auto-enable options when domain filter is set
             if domain is not None:
                 include_opts = True

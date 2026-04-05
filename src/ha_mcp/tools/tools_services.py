@@ -13,11 +13,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import (
-    add_timezone_metadata,
-    build_pagination_metadata,
-    coerce_int_param,
-)
+from .util_helpers import build_pagination_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +86,10 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ha_list_services(offset=50)
         """
         try:
-            limit_int = (
-                coerce_int_param(limit, "limit", default=50, min_value=1, max_value=200)
-                or 50
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
             )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
 
             # Get services from REST API (includes parameter definitions)
             rest_services = await client.get_services()
@@ -113,7 +108,7 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 detail_level=detail_level or "summary",
             )
 
-            return await add_timezone_metadata(client, result)
+            return result
 
         except ToolError:
             raise
@@ -164,7 +159,7 @@ def _process_services(
     query_filter: str | None = None,
     limit: int = 50,
     offset: int = 0,
-    detail_level: str = "summary",
+    detail_level: Literal["summary", "full"] = "summary",
 ) -> dict[str, Any]:
     """
     Process raw service data into structured output.

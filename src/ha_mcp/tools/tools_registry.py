@@ -11,7 +11,7 @@ Important: Device renaming does NOT cascade to entities - they are independent r
 
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -635,11 +635,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = 0,
         detail_level: Annotated[
-            str | None,
+            Literal["summary", "full"],
             Field(
                 default="summary",
                 description=(
-                    "'summary': name, manufacturer, model, area (default for list mode). "
+                    "'summary': basic device info and protocol identifiers (default for list mode). "
                     "'full': include entities and all integration details. "
                     "Single device lookups always return full detail."
                 ),
@@ -666,12 +666,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
         """
         try:
-            limit_int = (
-                coerce_int_param(limit, "limit", default=50, min_value=1, max_value=200)
-                or 50
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
             )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
-            effective_detail = detail_level or "summary"
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            effective_detail = detail_level
 
             # Get device registry
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
