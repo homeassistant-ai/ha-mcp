@@ -939,7 +939,7 @@
     },
     "annotations": {
       "destructiveHint": true,
-      "idempotentHint": true
+      "idempotentHint": false
     },
     "tags": [
       "Entity Registry"
@@ -1002,7 +1002,7 @@
     },
     "annotations": {
       "destructiveHint": true,
-      "idempotentHint": false
+      "idempotentHint": true
     },
     "tags": [
       "Entity Registry"
