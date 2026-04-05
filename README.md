@@ -164,6 +164,38 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
+## 🔌 Custom Component (ha_mcp_tools)
+
+Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.
+
+**Tools that require the component:**
+
+| Tool | Description |
+|------|-------------|
+| `ha_config_set_yaml` | Safely add, replace, or remove top-level YAML keys in `configuration.yaml` and package files (automatic backup, validation, and config check) |
+| `ha_list_files` | List files in allowed directories (www/, themes/, custom_templates/) |
+| `ha_read_file` | Read configuration and log files |
+| `ha_write_file` | Write files to allowed directories |
+| `ha_delete_file` | Delete files from allowed directories |
+
+All other tools work without the component. These five return an error with installation instructions if the component is missing.
+
+These tools also require feature flags: `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (file tools) and `ENABLE_YAML_CONFIG_EDITING=true` (YAML editing).
+
+### Install using HACS (recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+
+To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
+
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA MCP Tools**.
+
+### Install manually
+
+Copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory. Restart Home Assistant, then add the integration as described above.
+
+---
+
 ## 🧠 Better Results with Agent Skills
 
 This server gives your AI agent tools to control Home Assistant. For better configurations, pair it with [Home Assistant Agent Skills](https://github.com/homeassistant-ai/skills) — domain knowledge that teaches the agent Home Assistant best practices.
