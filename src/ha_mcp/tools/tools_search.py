@@ -36,9 +36,16 @@ def _build_pagination_metadata(
     ``total_matches`` as the key name expected by search tools).
     """
     meta = build_pagination_metadata(total_matches, offset, limit, len(results))
-    # Search tools use "total_matches" instead of "total_count"
-    meta["total_matches"] = meta.pop("total_count")
-    return meta
+    # Search tools use "total_matches" instead of "total_count" —
+    # construct explicitly to avoid fragile dependency on shared helper's key names
+    return {
+        "total_matches": meta["total_count"],
+        "offset": meta["offset"],
+        "limit": meta["limit"],
+        "count": meta["count"],
+        "has_more": meta["has_more"],
+        "next_offset": meta["next_offset"],
+    }
 
 
 async def _exact_match_search(

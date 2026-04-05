@@ -130,9 +130,10 @@ def coerce_int_param(
             f"{param_name} must be int or string, got {type(value).__name__}"
         )
 
-    # Apply constraints
+    # Apply constraints — raise for below-minimum (indicates caller bug),
+    # clamp for above-maximum (soft cap for oversized requests)
     if min_value is not None and result < min_value:
-        result = min_value
+        raise ValueError(f"{param_name} must be at least {min_value}, got {result}")
     if max_value is not None and result > max_value:
         result = max_value
 
@@ -236,9 +237,11 @@ def build_pagination_metadata(
     Args:
         total_count: Total number of items matching filters (before pagination).
         offset: Current pagination offset.
-        limit: Maximum items per page.
+        limit: Maximum items per page (must be positive).
         count: Number of items in this page.
     """
+    if limit <= 0:
+        raise ValueError("limit must be positive")
     has_more = (offset + count) < total_count
     return {
         "total_count": total_count,

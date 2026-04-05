@@ -286,7 +286,6 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 **build_pagination_metadata(
                     total_entries, offset_int, limit_int, len(paginated_entries)
                 ),
-                "total": total_entries,
                 "entries": paginated_entries,
                 "state_summary": state_summary,
                 "query": query if query else None,

@@ -670,9 +670,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 limit, "limit", default=50, min_value=1, max_value=200
             )
             offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
-            effective_detail = (
-                "full" if (integration or area_id or manufacturer) else detail_level
-            )
+            effective_detail = detail_level
 
             # Get device registry
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
@@ -695,7 +693,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_result.get("result", []) if entity_result.get("success") else []
             )
 
-            # Build entity -> device_id map
+            # Build entity -> device_id map (always needed for entity_id param lookup)
+            # Build device -> entities map only when needed (single device lookup or full detail)
+            need_entity_details = device_id or entity_id or effective_detail == "full"
             entity_to_device: dict[str, str] = {}
             device_to_entities: dict[str, list[dict[str, Any]]] = {}
             for e in all_entities:
@@ -703,15 +703,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 did = e.get("device_id")
                 if eid and did:
                     entity_to_device[eid] = did
-                    if did not in device_to_entities:
-                        device_to_entities[did] = []
-                    device_to_entities[did].append(
-                        {
-                            "entity_id": eid,
-                            "name": e.get("name") or e.get("original_name"),
-                            "platform": e.get("platform"),
-                        }
-                    )
+                    if need_entity_details:
+                        if did not in device_to_entities:
+                            device_to_entities[did] = []
+                        device_to_entities[did].append(
+                            {
+                                "entity_id": eid,
+                                "name": e.get("name") or e.get("original_name"),
+                                "platform": e.get("platform"),
+                            }
+                        )
 
             # If entity_id provided, find the device_id
             if entity_id and not device_id:
