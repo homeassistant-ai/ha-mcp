@@ -96,6 +96,7 @@ def _skip_if_unavailable(result: tuple[bool, str | None], test_name: str):
         pytest.skip(f"{test_name}: {error}")
 
 
+
 # ---------------------------------------------------------------------------
 # Feature flag / registration
 # ---------------------------------------------------------------------------
@@ -143,60 +144,60 @@ class TestYamlConfigSecurity:
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Path traversal")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "content": "- sensor:\n    - name: test\n      state: 'ok'",
-                    "file": "../etc/passwd",
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, f"Path traversal should fail: {data}"
-            logger.info("Correctly blocked path traversal")
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": "- sensor:\n    - name: test\n      state: 'ok'",
+                "file": "../etc/passwd",
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, f"Path traversal should fail: {data}"
+        logger.info("Correctly blocked path traversal")
 
     async def test_disallowed_file_rejected(self, mcp_client_with_yaml_config):
         """Files outside the allowlist must be rejected."""
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Disallowed file")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "content": "- sensor:\n    - name: test\n      state: 'ok'",
-                    "file": "automations.yaml",
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, f"Disallowed file should fail: {data}"
-            assert "not allowed" in inner.get("error", "").lower()
-            logger.info("Correctly rejected disallowed file")
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": "- sensor:\n    - name: test\n      state: 'ok'",
+                "file": "automations.yaml",
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, f"Disallowed file should fail: {data}"
+        assert "not allowed" in inner.get("error", "").lower()
+        logger.info("Correctly rejected disallowed file")
 
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
         """Keys not in the allowlist must be rejected."""
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Blocked key")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            # 'homeassistant' is not in ALLOWED_YAML_KEYS
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "homeassistant",
-                    "action": "replace",
-                    "content": "name: Hacked",
-                    "file": "configuration.yaml",
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, f"Blocked key should fail: {data}"
-            assert "not in the allowed list" in inner.get("error", "").lower()
-            logger.info("Correctly rejected blocked key")
+        # 'homeassistant' is not in ALLOWED_YAML_KEYS
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "homeassistant",
+                "action": "replace",
+                "content": "name: Hacked",
+                "file": "configuration.yaml",
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, f"Blocked key should fail: {data}"
+        assert "not in the allowed list" in inner.get("error", "").lower()
+        logger.info("Correctly rejected blocked key")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
         """Keys manageable via ha_config_set_helper must not be in the allowlist."""
@@ -215,23 +216,23 @@ class TestYamlConfigSecurity:
             "schedule",
         ]
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            for key in helper_keys:
-                data = await mcp.call_tool_success(
-                    TOOL_NAME,
-                    {
-                        "yaml_path": key,
-                        "action": "add",
-                        "content": "test: true",
-                        "file": "configuration.yaml",
-                        "backup": False,
-                    },
-                )
-                inner = data.get("data", data)
-                assert inner.get("success") is False, (
-                    f"Helper key '{key}' should be rejected: {data}"
-                )
-            logger.info("All helper-manageable keys correctly rejected")
+        for key in helper_keys:
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "add",
+                    "content": "test: true",
+                    "file": "configuration.yaml",
+                    "backup": False,
+                },
+            )
+            inner = data
+            assert inner.get("success") is False, (
+                f"Helper key '{key}' should be rejected: {data}"
+            )
+        logger.info("All helper-manageable keys correctly rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -248,65 +249,65 @@ class TestYamlConfigValidation:
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Null content")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            # "null" parses to None via yaml.safe_load
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "content": "null",
-                    "file": "packages/_test_null.yaml",
-                    "backup": False,
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, (
-                f"Null content should be rejected: {data}"
-            )
-            logger.info("Correctly rejected null content")
+        # "null" parses to None via yaml.safe_load
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": "null",
+                "file": "packages/_test_null.yaml",
+                "backup": False,
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, (
+            f"Null content should be rejected: {data}"
+        )
+        logger.info("Correctly rejected null content")
 
     async def test_invalid_yaml_rejected(self, mcp_client_with_yaml_config):
         """Invalid YAML syntax must be rejected."""
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Invalid YAML")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "content": "  bad:\n yaml: [\n  unclosed",
-                    "file": "packages/_test_invalid.yaml",
-                    "backup": False,
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, (
-                f"Invalid YAML should be rejected: {data}"
-            )
-            logger.info("Correctly rejected invalid YAML")
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": "  bad:\n yaml: [\n  unclosed",
+                "file": "packages/_test_invalid.yaml",
+                "backup": False,
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, (
+            f"Invalid YAML should be rejected: {data}"
+        )
+        logger.info("Correctly rejected invalid YAML")
 
     async def test_missing_content_for_add(self, mcp_client_with_yaml_config):
         """add/replace actions require content."""
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Missing content")
 
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "file": "packages/_test_no_content.yaml",
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, (
-                f"Missing content should fail: {data}"
-            )
-            logger.info("Correctly rejected missing content")
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "file": "packages/_test_no_content.yaml",
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, (
+            f"Missing content should fail: {data}"
+        )
+        logger.info("Correctly rejected missing content")
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +337,7 @@ class TestYamlConfigOperations:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Add should succeed: {data}"
             assert inner.get("action") == "add"
             logger.info("Successfully added template to new package file")
@@ -372,7 +373,7 @@ class TestYamlConfigOperations:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Replace should succeed: {data}"
             assert inner.get("action") == "replace"
             logger.info("Successfully replaced template key")
@@ -407,7 +408,7 @@ class TestYamlConfigOperations:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Remove should succeed: {data}"
             assert inner.get("action") == "remove"
             logger.info("Successfully removed template key")
@@ -430,27 +431,29 @@ class TestYamlConfigOperations:
                 },
             )
 
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "remove",
-                    "file": "packages/_e2e_test_remove_missing.yaml",
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, (
-                f"Removing nonexistent key should fail: {data}"
-            )
-            logger.info("Correctly rejected removing nonexistent key")
+        # Now attempt to remove a key that doesn't exist — expect failure
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "remove",
+                "file": "packages/_e2e_test_remove_missing.yaml",
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, (
+            f"Removing nonexistent key should fail: {data}"
+        )
+        logger.info("Correctly rejected removing nonexistent key")
 
     async def test_add_type_mismatch_errors(self, mcp_client_with_yaml_config):
         """Adding with type mismatch (e.g., list + dict) should error, not silently replace."""
         service_check = await _check_service_available(mcp_client_with_yaml_config)
         _skip_if_unavailable(service_check, "Type mismatch")
 
+        # Create a file with a list value
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            # Create a file with a list value
             await mcp.call_tool_success(
                 TOOL_NAME,
                 {
@@ -462,23 +465,24 @@ class TestYamlConfigOperations:
                 },
             )
 
-            # Try to add a dict to the existing list
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "sensor",
-                    "action": "add",
-                    "content": "key: value",
-                    "file": "packages/_e2e_test_mismatch.yaml",
-                    "backup": False,
-                },
-            )
-            inner = data.get("data", data)
-            assert inner.get("success") is False, (
-                f"Type mismatch should error: {data}"
-            )
-            assert "type mismatch" in inner.get("error", "").lower()
-            logger.info("Correctly errored on type mismatch")
+        # Try to add a dict to the existing list — expect failure
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "sensor",
+                "action": "add",
+                "content": "key: value",
+                "file": "packages/_e2e_test_mismatch.yaml",
+                "backup": False,
+            },
+        )
+        inner = data
+        assert inner.get("success") is False, (
+            f"Type mismatch should error: {data}"
+        )
+        assert "type mismatch" in inner.get("error", "").lower()
+        logger.info("Correctly errored on type mismatch")
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +525,7 @@ class TestYamlConfigSafeguards:
                     "backup": True,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Replace should succeed: {data}"
             assert inner.get("backup_path"), (
                 f"Backup path should be present: {data}"
@@ -547,7 +551,7 @@ class TestYamlConfigSafeguards:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Add should succeed: {data}"
             # config_check should be present (ok, errors, or unavailable)
             assert "config_check" in inner, (
@@ -573,7 +577,7 @@ class TestYamlConfigSafeguards:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Add should succeed: {data}"
             assert inner.get("post_action") == "reload_available", (
                 f"template should have post_action=reload_available: {data}"
@@ -602,7 +606,7 @@ class TestYamlConfigSafeguards:
                     "backup": False,
                 },
             )
-            inner = data.get("data", data)
+            inner = data
             assert inner.get("success") is True, f"Add should succeed: {data}"
             assert inner.get("post_action") == "restart_required", (
                 f"shell_command should have post_action=restart_required: {data}"

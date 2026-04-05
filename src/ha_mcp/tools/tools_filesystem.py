@@ -13,6 +13,7 @@ The tools will gracefully fail with installation instructions if the component i
 Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
 """
 
+import json
 import logging
 import os
 from typing import Annotated, Any
@@ -22,7 +23,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
+from .util_helpers import coerce_bool_param, coerce_int_param, unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -174,18 +175,14 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # The service returns the response directly
             if isinstance(result, dict):
-                return await add_timezone_metadata(client, result)
+                return unwrap_service_response(result)
 
-            return await add_timezone_metadata(
-                client,
-                {
-                    "success": True,
-                    "path": path,
-                    "pattern": pattern,
-                    "files": [],
-                    "count": 0,
-                    "note": "Unexpected response format from service",
-                },
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from list_files service",
+                    context={"path": path},
+                )
             )
 
         except ToolError:
@@ -289,15 +286,14 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if isinstance(result, dict):
-                return await add_timezone_metadata(client, result)
+                return unwrap_service_response(result)
 
-            return await add_timezone_metadata(
-                client,
-                {
-                    "success": False,
-                    "error": "Unexpected response format from service",
-                    "path": path,
-                },
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from read_file service",
+                    context={"path": path},
+                )
             )
 
         except ToolError:
@@ -419,15 +415,14 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if isinstance(result, dict):
-                return await add_timezone_metadata(client, result)
+                return unwrap_service_response(result)
 
-            return await add_timezone_metadata(
-                client,
-                {
-                    "success": False,
-                    "error": "Unexpected response format from service",
-                    "path": path,
-                },
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from write_file service",
+                    context={"path": path},
+                )
             )
 
         except ToolError:
@@ -503,20 +498,15 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
 
             if not confirm_bool:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": "Deletion not confirmed",
-                        "message": (
-                            "You must set confirm=True to delete a file. "
-                            "This is a safety measure to prevent accidental deletions."
-                        ),
-                        "path": path,
-                        "suggestions": [
-                            f"Call ha_delete_file(path='{path}', confirm=True) to proceed",
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Deletion not confirmed. Set confirm=True to delete a file.",
+                        suggestions=[
+                            f"Call ha_delete_file(path={json.dumps(path)}, confirm=True) to proceed",
                         ],
-                    },
+                        context={"path": path},
+                    )
                 )
 
             # Check if custom component is available
@@ -534,15 +524,14 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if isinstance(result, dict):
-                return await add_timezone_metadata(client, result)
+                return unwrap_service_response(result)
 
-            return await add_timezone_metadata(
-                client,
-                {
-                    "success": False,
-                    "error": "Unexpected response format from service",
-                    "path": path,
-                },
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from delete_file service",
+                    context={"path": path},
+                )
             )
 
         except ToolError:
