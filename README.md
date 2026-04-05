@@ -174,7 +174,7 @@ Some tools require a companion custom component installed in Home Assistant. Sta
 |------|-------------|
 | `ha_config_set_yaml` | Safely add, replace, or remove top-level YAML keys in `configuration.yaml` and package files (automatic backup, validation, and config check) |
 | `ha_list_files` | List files in allowed directories (www/, themes/, custom_templates/) |
-| `ha_read_file` | Read configuration and log files |
+| `ha_read_file` | Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/) |
 | `ha_write_file` | Write files to allowed directories |
 | `ha_delete_file` | Delete files from allowed directories |
 
