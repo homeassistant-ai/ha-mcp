@@ -1,4 +1,4 @@
-"""Unit tests for ha_get_states bulk state retrieval tool."""
+"""Unit tests for ha_get_state bulk state retrieval tool."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,7 +8,7 @@ from ha_mcp.tools.tools_search import register_search_tools
 
 
 class TestHaGetStates:
-    """Test ha_get_states bulk entity state retrieval."""
+    """Test ha_get_state bulk entity state retrieval."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -20,6 +20,7 @@ class TestHaGetStates:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -40,21 +41,25 @@ class TestHaGetStates:
 
     @pytest.fixture
     def get_states_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        """Register tools and return the ha_get_states function."""
+        """Register tools and return the ha_get_state function."""
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_states"]
+        return self.registered_tools["ha_get_state"]
 
     @pytest.mark.asyncio
     async def test_all_entities_succeed(self, mock_client, get_states_tool):
         """All entities return states keyed by entity_id; no errors in response."""
         mock_client.get_entity_state = AsyncMock(
             side_effect=[
-                {"entity_id": "light.kitchen", "state": "on", "attributes": {"brightness": 255}},
+                {
+                    "entity_id": "light.kitchen",
+                    "state": "on",
+                    "attributes": {"brightness": 255},
+                },
                 {"entity_id": "light.living_room", "state": "off", "attributes": {}},
             ]
         )
 
-        result = await get_states_tool(entity_ids=["light.kitchen", "light.living_room"])
+        result = await get_states_tool(entity_id=["light.kitchen", "light.living_room"])
 
         data = result["data"]
         assert data["success"] is True
@@ -79,7 +84,9 @@ class TestHaGetStates:
             ]
         )
 
-        result = await get_states_tool(entity_ids=["light.kitchen", "sensor.nonexistent"])
+        result = await get_states_tool(
+            entity_id=["light.kitchen", "sensor.nonexistent"]
+        )
 
         data = result["data"]
         assert data["success"] is True
@@ -103,7 +110,7 @@ class TestHaGetStates:
             ]
         )
 
-        result = await get_states_tool(entity_ids=["sensor.bad1", "sensor.bad2"])
+        result = await get_states_tool(entity_id=["sensor.bad1", "sensor.bad2"])
 
         data = result["data"]
         assert data["success"] is False
@@ -119,18 +126,18 @@ class TestHaGetStates:
     @pytest.mark.asyncio
     async def test_empty_list_rejected(self, mock_client, get_states_tool):
         """Empty entity_ids list returns structured validation error."""
-        result = await get_states_tool(entity_ids=[])
+        result = await get_states_tool(entity_id=[])
 
         data = result["data"]
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_FAILED"
-        assert data["parameter"] == "entity_ids"
+        assert data["parameter"] == "entity_id"
         mock_client.get_entity_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_string_ids_rejected(self, mock_client, get_states_tool):
         """Non-string values in entity_ids returns structured validation error."""
-        result = await get_states_tool(entity_ids=["light.ok", 123])
+        result = await get_states_tool(entity_id=["light.ok", 123])
 
         data = result["data"]
         assert data["success"] is False
@@ -142,7 +149,7 @@ class TestHaGetStates:
         """More than 100 entity IDs returns structured validation error."""
         ids = [f"sensor.test_{i}" for i in range(101)]
 
-        result = await get_states_tool(entity_ids=ids)
+        result = await get_states_tool(entity_id=ids)
 
         data = result["data"]
         assert data["success"] is False
@@ -158,7 +165,7 @@ class TestHaGetStates:
         )
 
         result = await get_states_tool(
-            entity_ids=["light.kitchen", "light.kitchen", "light.kitchen"]
+            entity_id=["light.kitchen", "light.kitchen", "light.kitchen"]
         )
 
         data = result["data"]
@@ -170,11 +177,9 @@ class TestHaGetStates:
     @pytest.mark.asyncio
     async def test_404_uses_entity_not_found_error(self, mock_client, get_states_tool):
         """404 exceptions produce structured ENTITY_NOT_FOUND error with entity_id in message."""
-        mock_client.get_entity_state = AsyncMock(
-            side_effect=Exception("404 Not Found")
-        )
+        mock_client.get_entity_state = AsyncMock(side_effect=Exception("404 Not Found"))
 
-        result = await get_states_tool(entity_ids=["sensor.nonexistent"])
+        result = await get_states_tool(entity_id=["sensor.nonexistent"])
 
         data = result["data"]
         error = data["errors"][0]["error"]
@@ -190,7 +195,7 @@ class TestHaGetStates:
             side_effect=Exception("Connection refused")
         )
 
-        result = await get_states_tool(entity_ids=["sensor.temp"])
+        result = await get_states_tool(entity_id=["sensor.temp"])
 
         data = result["data"]
         assert data["success"] is False

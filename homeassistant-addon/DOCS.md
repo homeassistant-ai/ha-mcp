@@ -329,14 +329,14 @@ The add-on provides 80+ MCP tools for controlling Home Assistant:
 - **Zones**: `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`
 
 ### Todo & Calendar
-- **Todo Lists**: `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item`
+- **Todo Lists**: `ha_get_todo`, `ha_set_todo_item`, `ha_remove_todo_item`
 - **Calendar**: `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event`
 
 ### Device Control
 - `ha_bulk_control` - Multi-device control with verification
 - `ha_get_operation_status` - Check operation status
 - `ha_get_device`, `ha_update_device`, `ha_remove_device`
-- `ha_rename_entity` - Rename entity ID
+- `ha_set_entity` - Update entity properties (including entity_id rename via new_entity_id)
 
 ### History & Monitoring
 - `ha_get_history` - Query entity state history with time ranges
