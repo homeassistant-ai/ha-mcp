@@ -77,8 +77,8 @@ class TestToolDocsSync:
         )
     def test_about_section_tool_count_synced(self) -> None:
         """Tool count in About section must match the actual tool registry."""
-        tools = json.loads((REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text())
-        docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text()
+        tools = json.loads((REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(encoding="utf-8"))
+        docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text(encoding="utf-8")
         expected = f"provides {len(tools)}+ tools"
         assert expected in docs, (
             "About section tool count is stale. "
