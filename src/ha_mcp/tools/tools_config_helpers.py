@@ -1031,7 +1031,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 update_msg["max"] = max_value
                             if step is not None:
                                 update_msg["step"] = step
-                            if unit_of_measurement:
+                            if unit_of_measurement is not None:
                                 update_msg["unit_of_measurement"] = unit_of_measurement
                             if mode in ["box", "slider"]:
                                 update_msg["mode"] = mode
@@ -1043,7 +1043,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 update_msg["max"] = int(max_value)
                             if mode in ["text", "password"]:
                                 update_msg["mode"] = mode
-                            if initial:
+                            if initial is not None:
                                 update_msg["initial"] = initial
 
                         elif helper_type == "input_boolean":
@@ -1061,7 +1061,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 update_msg["has_date"] = has_date
                             if has_time is not None:
                                 update_msg["has_time"] = has_time
-                            if initial:
+                            if initial is not None:
                                 update_msg["initial"] = initial
 
                         elif helper_type == "counter":
@@ -1081,7 +1081,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 update_msg["restore"] = restore
 
                         elif helper_type == "timer":
-                            if duration:
+                            if duration is not None:
                                 update_msg["duration"] = duration
                             if restore is not None:
                                 update_msg["restore"] = restore

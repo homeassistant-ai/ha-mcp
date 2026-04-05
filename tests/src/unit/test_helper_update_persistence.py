@@ -92,6 +92,7 @@ class TestInputSelectUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
+                name="My Dropdown",
                 helper_id="my_dropdown",
                 options=["Option A", "Option B", "Option C"],
             )
@@ -125,6 +126,7 @@ class TestInputSelectUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
+                name="My Dropdown",
                 helper_id="my_dropdown",
                 options=["A", "B"],
                 initial="B",
@@ -154,6 +156,7 @@ class TestInputNumberUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
+                name="My Number",
                 helper_id="my_number",
                 min_value=0,
                 max_value=200,
@@ -194,6 +197,7 @@ class TestInputTextUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
+                name="My Text",
                 helper_id="my_text",
                 min_value=1,
                 max_value=50,
@@ -261,6 +265,7 @@ class TestInputDatetimeUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
+                name="My Datetime",
                 helper_id="my_datetime",
                 has_date=True,
                 has_time=False,
@@ -294,6 +299,7 @@ class TestCounterUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="counter",
+                name="My Counter",
                 helper_id="my_counter",
                 initial="10",
                 min_value=0,
@@ -333,6 +339,7 @@ class TestTimerUpdatePersistence:
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="timer",
+                name="My Timer",
                 helper_id="my_timer",
                 duration="00:30:00",
                 restore=False,
