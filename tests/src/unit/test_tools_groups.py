@@ -21,6 +21,8 @@ class TestGroupToolsValidation:
         """Create a mock Home Assistant client."""
         client = MagicMock()
         client.get_states = AsyncMock(return_value=[])
+        # Required by wait_for_entity_registered/removed in tool internals
+        client.get_entity_state = AsyncMock(return_value={"state": "on"})
         client.call_service = AsyncMock(return_value=None)
         return client
 
@@ -287,7 +289,13 @@ class TestGroupToolsValidation:
 
     async def test_remove_group_success(self, mock_client):
         """Test successful group removal."""
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
         from ha_mcp.tools.tools_groups import register_group_tools
+
+        # After removal, entity state should return 404
+        mock_client.get_entity_state = AsyncMock(
+            side_effect=HomeAssistantAPIError("Not found", status_code=404)
+        )
 
         registered_tools: dict[str, Any] = {}
 

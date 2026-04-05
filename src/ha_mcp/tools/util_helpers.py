@@ -327,8 +327,6 @@ async def wait_for_entity_registered(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id}: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Unexpected error polling {entity_id}: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} not registered within {timeout}s")
     return False
@@ -373,8 +371,6 @@ async def wait_for_entity_removed(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id} removal: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Unexpected error polling {entity_id} removal: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} still exists after {timeout}s")
     return False
@@ -421,8 +417,6 @@ async def wait_for_state_change(
                 f"Connection/auth error fetching initial state for {entity_id}: {e}"
             )
             raise
-        except Exception as e:
-            logger.debug(f"Error fetching initial state for {entity_id}: {e}")
 
     start = time.monotonic()
     while time.monotonic() - start < timeout:
@@ -459,8 +453,6 @@ async def wait_for_state_change(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id} state: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Error polling {entity_id} state: {e}")
         await asyncio.sleep(poll_interval)
 
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
