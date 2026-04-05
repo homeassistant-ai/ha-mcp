@@ -218,35 +218,17 @@ def _group_tools(tools: list[dict]) -> dict[str, list[dict]]:
     return dict(sorted(groups.items()))
 
 
-_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled"
+_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled|mandatory"
 
 
 def _default_state(tool: dict) -> str:
     """Return the default state for a tool."""
+    if tool["name"] in MANDATORY_TOOLS:
+        return "mandatory"
     if tool["name"] in DEFAULT_PINNED:
         return "enabled-pinned"
     return "enabled-unpinned"
 
-
-def _tool_hint(tool: dict) -> str:
-    """Return a hint string like '(read-only)' or '(destructive)' from annotations."""
-    ann = tool.get("annotations", {})
-    if ann.get("readOnlyHint"):
-        return "read-only"
-    if ann.get("destructiveHint"):
-        return "destructive"
-    return ""
-
-
-def _brief_description(tool: dict) -> str:
-    """Return the first sentence of the tool description."""
-    desc: str = tool.get("description", "")
-    # Take first sentence (up to first period followed by space or newline)
-    for i, ch in enumerate(desc):
-        if ch == "." and (i + 1 >= len(desc) or desc[i + 1] in (" ", "\n")):
-            return desc[: i + 1]
-    # No period found — take first line
-    return desc.split("\n")[0][:120]
 
 
 def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
@@ -335,33 +317,10 @@ def generate_addon_translations(tools: list[dict]) -> str:
         "      Mandatory tools cannot be disabled. Requires restart.",
     ]
 
-    for tag, group_tools in groups.items():
+    for tag in groups:
         slug = _group_slug(tag)
         lines.append(f"    {slug}:")
         lines.append(f"      name: \"{tag}\"")
-        lines.append("      enabled:")
-        lines.append(f"        name: Enable all {tag} tools")
-        for tool in group_tools:
-            name = tool["name"]
-            title = tool["title"]
-            hint = _tool_hint(tool)
-            mandatory = name in MANDATORY_TOOLS
-            brief = _brief_description(tool)
-
-            # Build display name: "Title [hint] [mandatory]"
-            label_parts = [title]
-            if hint:
-                label_parts.append(f"({hint})")
-            if mandatory:
-                label_parts.append("[mandatory]")
-            label = " ".join(label_parts)
-
-            lines.append(f"      {name}:")
-            lines.append(f"        name: \"{label}\"")
-            if brief:
-                # Escape quotes in description
-                safe_brief = brief.replace('"', '\\"')
-                lines.append(f"        description: \"{safe_brief}\"")
 
     return "\n".join(lines) + "\n"
 
