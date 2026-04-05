@@ -299,7 +299,7 @@
   {
     "name": "ha_config_set_automation",
     "title": "Create or Update Automation",
-    "description": "Create or update a Home Assistant automation.\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n})\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
+    "description": "Create or update a Home Assistant automation.\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n})\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
     "inputSchema": {
       "properties": {
         "config": {
@@ -307,6 +307,10 @@
         },
         "identifier": {
           "type": "Annotated[str | None, Field(description='Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.', default=None)]",
+          "default": null
+        },
+        "category": {
+          "type": "Annotated[str | None, Field(description=\"Category ID to assign to this automation. Use ha_config_get_category(scope='automation') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
           "default": null
         },
         "wait": {
@@ -732,7 +736,7 @@
   {
     "name": "ha_get_device",
     "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
-    "description": "Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.\n\nWithout device_id/entity_id: Lists all devices with optional filters.\nWith device_id or entity_id: Returns detailed info for that specific device.\n\n**List all devices:**\n- All devices: ha_get_device()\n- By area: ha_get_device(area_id=\"living_room\")\n- By manufacturer: ha_get_device(manufacturer=\"Philips\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Combined filters: ha_get_device(integration=\"zha\", area_id=\"kitchen\")\n\n**Single device lookup:**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee device support:**\n- Use integration=\"zha\" or integration=\"zigbee2mqtt\" to list Zigbee devices\n- Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices\n- ZHA triggers: Use `ieee_address` for zha_event triggers\n- Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)\n\n**Z-Wave JS device support:**\n- Use integration=\"zwave_js\" to list Z-Wave devices\n- Returns node_id extracted from device identifiers\n- Single device lookup includes node_status (security class, routing, Z-Wave+ version)\n\n**Returns (list mode):**\n- List of devices with device_id, name, manufacturer, model, area_id\n\n**Returns (single device):**\n- Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities",
+    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -754,6 +758,18 @@
         "manufacturer": {
           "type": "Annotated[str | None, Field(description=\"Filter devices by manufacturer name (e.g., 'Philips')\", default=None)]",
           "default": null
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max devices to return per page in list mode (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of devices to skip for pagination (default: 0)')]",
+          "default": 0
+        },
+        "detail_level": {
+          "type": "Annotated[Literal['summary', 'full'], Field(default='summary', description=\"'summary': basic device info and protocol identifiers (default for list mode). 'full': include entities and all integration details. Single device lookups always return full detail.\")]",
+          "default": "summary"
         }
       }
     },
@@ -918,6 +934,29 @@
       "Entity Registry"
     ],
     "source_file": "tools_voice_assistant.py"
+  },
+  {
+    "name": "ha_remove_entity",
+    "title": "Remove Entity",
+    "description": "Remove an entity from the Home Assistant entity registry.\n\nPermanently removes the entity registration from Home Assistant.\nThe entity will no longer appear in the UI or be available to automations.\n\nWARNING: This permanently removes the entity registration.\n- Use only for orphaned or stale entity entries\n- If the underlying device or integration is still active, the entity\n  may be re-added automatically on the next HA restart or reload\n- This action cannot be undone without restoring from backup\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Remove stale helper entry: ha_remove_entity(\"input_boolean.deleted_helper\")\n\nNOTE: For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False)\n\nRELATED TOOLS:\n- ha_search_entities: Find entities to verify the entity_id before removing\n- ha_get_entity: Check entity details before removal",
+    "inputSchema": {
+      "properties": {
+        "entity_id": {
+          "type": "Annotated[str, Field(description=\"Entity ID to remove from the entity registry (e.g., 'sensor.old_temperature'). This permanently removes the entity registration.\")]"
+        }
+      },
+      "required": [
+        "entity_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Entity Registry"
+    ],
+    "source_file": "tools_entities.py"
   },
   {
     "name": "ha_set_entity",
@@ -1116,6 +1155,10 @@
       "properties": {
         "object_id": {
           "type": "Annotated[str, Field(description=\"Group identifier without 'group.' prefix (e.g., 'living_room_lights')\")]"
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for group to be fully removed before returning. Default: True.', default=True)]",
+          "default": true
         }
       },
       "required": [
@@ -1163,6 +1206,10 @@
         "remove_entities": {
           "type": "Annotated[list[str] | None, Field(description='Remove these entities from an existing group (mutually exclusive with entities)', default=None)]",
           "default": null
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "default": true
         }
       },
       "required": [
@@ -1512,6 +1559,10 @@
           "type": "Annotated[str | None, Field(description='Description for tag', default=None)]",
           "default": null
         },
+        "category": {
+          "type": "Annotated[str | None, Field(description=\"Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
+          "default": null
+        },
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
@@ -1797,7 +1848,7 @@
   {
     "name": "ha_get_integration",
     "title": "Get Integration",
-    "description": "Get integration (config entry) information - list all or get a specific one.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nUse this to audit existing configurations (e.g. template sensor Jinja code).\nWhen creating new functionality, prefer UI-based helpers over templates when possible.\n\nEXAMPLES:\n- List all integrations: ha_get_integration()\n- Search integrations: ha_get_integration(query=\"zigbee\")\n- Get specific entry: ha_get_integration(entry_id=\"abc123\")\n- Get entry with editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- List template entries with definitions: ha_get_integration(domain=\"template\")\n- List all with options: ha_get_integration(include_options=True)\n\nSTATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',\n'failed_unload', 'migration_error'.\n\nRETURNS (when listing):\n- entries: List of integrations with domain, title, state, capabilities\n- state_summary: Count of entries in each state\n- When domain filter or include_options is set, each entry includes the 'options' object\n\nRETURNS (when getting specific entry):\n- entry: Full config entry details including options/configuration\n- options_schema: Options flow schema when include_schema=True and supports_options=true",
+    "description": "Get integration (config entry) information with pagination.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nEXAMPLES:\n- List all integrations: ha_get_integration()\n- Paginate: ha_get_integration(offset=50)\n- Search: ha_get_integration(query=\"zigbee\")\n- Get specific entry: ha_get_integration(entry_id=\"abc123\")\n- Get entry with editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- List template entries: ha_get_integration(domain=\"template\")\n\nSTATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',\n'failed_unload', 'migration_error'.",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -1823,6 +1874,14 @@
         "exact_match": {
           "type": "Annotated[bool | str, Field(description='Use exact substring matching for query filter (default: True). Set to False for fuzzy matching when the query may contain typos.', default=True)]",
           "default": true
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max entries to return per page in list mode (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of entries to skip for pagination (default: 0)')]",
+          "default": 0
         }
       }
     },
@@ -2092,6 +2151,10 @@
         },
         "config": {
           "type": "Annotated[str | dict[str, Any], Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'\")]"
+        },
+        "category": {
+          "type": "Annotated[str | None, Field(description=\"Category ID to assign to this script. Use ha_config_get_category(scope='script') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
+          "default": null
         },
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
@@ -2393,7 +2456,7 @@
   {
     "name": "ha_list_services",
     "title": "List Available Services",
-    "description": "List available Home Assistant services with their parameters.\n\nDiscovers services/actions that can be called via ha_call_service.\nReturns service definitions including field names, types, and descriptions.\n\nArgs:\n    domain: Filter by domain (e.g., 'light', 'switch', 'climate').\n           If not provided, returns services from all domains.\n    query: Search in service names and descriptions.\n           Matches against service IDs and their descriptions.\n\nReturns:\n    Dictionary with:\n    - success: Whether the operation succeeded\n    - domains: List of available domains (when no domain filter)\n    - services: Dictionary of service definitions keyed by domain.service\n    - total_count: Total number of services returned\n\nExamples:\n    # List all light services\n    ha_list_services(domain=\"light\")\n\n    # Search for services related to temperature\n    ha_list_services(query=\"temperature\")\n\n    # Get all available services (may be large)\n    ha_list_services()",
+    "description": "List available Home Assistant services with optional pagination and detail control.\n\nDiscovers services/actions that can be called via ha_call_service.\nUse domain or query filters to narrow results. Defaults to summary mode\n(name + description only) to keep responses compact.\n\nArgs:\n    domain: Filter by domain (e.g., 'light', 'switch', 'climate').\n    query: Search in service names and descriptions.\n    limit: Max services per page (default: 50).\n    offset: Pagination offset (default: 0).\n    detail_level: 'summary' (default) returns name/description only;\n                 'full' includes parameter field schemas.\n\nExamples:\n    # Browse first page of all services (compact)\n    ha_list_services()\n\n    # List all light services with full parameter details\n    ha_list_services(domain=\"light\", detail_level=\"full\")\n\n    # Search for temperature-related services\n    ha_list_services(query=\"temperature\")\n\n    # Paginate through all services\n    ha_list_services(offset=50)",
     "inputSchema": {
       "properties": {
         "domain": {
@@ -2403,6 +2466,18 @@
         "query": {
           "type": "str | None",
           "default": null
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max services to return per page (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of services to skip for pagination (default: 0)')]",
+          "default": 0
+        },
+        "detail_level": {
+          "type": "Annotated[Literal['summary', 'full'], Field(default='summary', description=\"'summary': service name + description only (default). 'full': include parameter field schemas.\")]",
+          "default": "summary"
         }
       }
     },
@@ -2478,7 +2553,7 @@
   {
     "name": "ha_config_set_yaml",
     "title": "Set YAML Config",
-    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nNote: YAML comments are not preserved after editing. The backup\nretains the original file with comments intact.",
+    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nYAML comments and Home Assistant tags (!include, !secret, etc.)\nare preserved through edits.",
     "inputSchema": {
       "properties": {
         "yaml_path": {

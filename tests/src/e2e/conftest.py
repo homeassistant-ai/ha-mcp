@@ -125,48 +125,39 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             logger.warning("HACS tests may be skipped without the frontend")
 
 
-def _install_mcp_proxy_component(config_path: Path) -> None:
-    """Dynamically install mcp_proxy from the webhook proxy addon source.
+def _install_custom_component(
+    config_path: Path,
+    component_src: Path,
+    domain: str,
+    title: str,
+) -> bool:
+    """Install a custom component into the test HA config.
 
-    Copies the integration source, writes the test config file, and injects
-    a config entry into HA storage. This avoids duplicating source files in
-    initial_test_state and survives test environment rebuilds.
+    Copies component source into custom_components/<domain> and injects a
+    config entry so HA loads it on startup. Returns True if installed.
     """
-    import json
+    if not component_src.exists():
+        logger.info("%s source not found — skipping installation", domain)
+        return False
 
-    repo_root = Path(__file__).parent.parent.parent.parent
-    addon_mcp_proxy = repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy"
-
-    if not addon_mcp_proxy.exists():
-        logger.info("mcp_proxy addon source not found — skipping installation")
-        return
-
-    # Copy component source
-    dest = config_path / "custom_components" / "mcp_proxy"
+    dest = config_path / "custom_components" / domain
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(addon_mcp_proxy, dest, dirs_exist_ok=True)
-
-    # Write config file (target_url points at HA's own API for testing)
-    proxy_config = {
-        "target_url": "http://localhost:8123/api/",
-        "webhook_id": "mcp_e2e_test_webhook_proxy",
-    }
-    (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
+    shutil.copytree(component_src, dest, dirs_exist_ok=True)
 
     # Inject config entry if not already present
     storage_file = config_path / ".storage" / "core.config_entries"
     if storage_file.exists():
         data = json.loads(storage_file.read_text())
         entries = data.get("data", {}).get("entries", [])
-        if not any(e.get("domain") == "mcp_proxy" for e in entries):
+        if not any(e.get("domain") == domain for e in entries):
             entries.append(
                 {
                     "created_at": "2025-09-07T23:56:28.040744+00:00",
                     "data": {},
                     "disabled_by": None,
                     "discovery_keys": {},
-                    "domain": "mcp_proxy",
-                    "entry_id": "e2e_test_mcp_proxy_entry",
+                    "domain": domain,
+                    "entry_id": f"e2e_test_{domain}_entry",
                     "minor_version": 1,
                     "modified_at": "2025-09-07T23:56:28.040747+00:00",
                     "options": {},
@@ -174,22 +165,15 @@ def _install_mcp_proxy_component(config_path: Path) -> None:
                     "pref_disable_polling": False,
                     "source": "import",
                     "subentries": [],
-                    "title": "MCP Webhook Proxy",
-                    "unique_id": "mcp_proxy",
+                    "title": title,
+                    "unique_id": domain,
                     "version": 1,
                 }
             )
             storage_file.write_text(json.dumps(data, indent=2))
 
-    logger.info("Installed mcp_proxy component from addon source")
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+    logger.info("Installed %s component", domain)
+    return True
 
 
 @pytest.fixture(scope="session")
@@ -247,8 +231,28 @@ def ha_container_with_fresh_config():
                     break
             storage_file.write_text(json.dumps(ce_data, indent=2))
 
-    # Install mcp_proxy from addon source (avoids duplicating files in test state)
-    _install_mcp_proxy_component(config_path)
+    # Install custom components from repo source
+    repo_root = Path(__file__).parent.parent.parent.parent
+    if _install_custom_component(
+        config_path,
+        repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy",
+        "mcp_proxy",
+        "MCP Webhook Proxy",
+    ):
+        # mcp_proxy needs a config file pointing at HA's own API
+        proxy_config = {
+            "target_url": "http://localhost:8123/api/",
+            "webhook_id": "mcp_e2e_test_webhook_proxy",
+        }
+        (config_path / ".mcp_proxy_config.json").write_text(
+            json.dumps(proxy_config)
+        )
+    _install_custom_component(
+        config_path,
+        repo_root / "custom_components" / "ha_mcp_tools",
+        "ha_mcp_tools",
+        "HA MCP Tools",
+    )
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)
@@ -295,6 +299,9 @@ def ha_container_with_fresh_config():
         # Set environment variables for the dynamic URL so WebSocket client uses correct port
         os.environ["HOMEASSISTANT_URL"] = base_url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
+        # Enable feature flags for e2e tests
+        os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
 
         # Reset cached settings so WebSocket client picks up the dynamic URL
         import ha_mcp.config
@@ -324,9 +331,6 @@ def ha_container_with_fresh_config():
             logger.info(f"📄 Container logs:\n{logs}")
         except Exception as e:
             logger.warning(f"⚠️ Could not inspect container: {e}")
-
-        logger.info("⏳ Waiting 5 seconds for Home Assistant to initialize...")
-        time.sleep(5)
 
         # Wait for API to be ready
         import requests
@@ -358,12 +362,47 @@ def ha_container_with_fresh_config():
                 "The container may have failed to start. Check Docker logs for details."
             )
 
-        # Additional stabilization period to allow components to fully load
-        logger.info(
-            "⏳ Waiting additional 10 seconds for Home Assistant components to stabilize..."
-        )
-        time.sleep(10)
-        logger.info("✅ Home Assistant should now be fully stabilized")
+        # Poll until HA components are fully loaded.  HA typically loads 80+
+        # components; 50 is the minimum needed for tests (covers automation,
+        # script, input_*, group, scene, and other commonly-tested domains).
+        MIN_COMPONENTS = 50
+        STABILIZATION_TIMEOUT = 20
+
+        logger.info("⏳ Waiting for Home Assistant components to stabilize...")
+        last_count = 0
+        for stabilize_attempt in range(STABILIZATION_TIMEOUT):
+            try:
+                config_resp = requests.get(
+                    f"{base_url}/api/config", timeout=2, headers=headers
+                )
+                if config_resp.status_code == 200:
+                    component_count = len(
+                        config_resp.json().get("components", [])
+                    )
+                    if component_count >= MIN_COMPONENTS:
+                        logger.info(
+                            f"✅ Home Assistant stabilized with {component_count} components "
+                            f"after {stabilize_attempt + 1}s"
+                        )
+                        break
+                    if component_count != last_count:
+                        logger.info(
+                            f"⏳ {component_count} components loaded, waiting for more..."
+                        )
+                        last_count = component_count
+                elif config_resp.status_code >= 400:
+                    logger.warning(
+                        f"⚠️ Stabilization check returned HTTP {config_resp.status_code}"
+                    )
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                logger.debug(f"Stabilization check failed: {exc}")
+            time.sleep(1)
+        else:
+            pytest.fail(
+                f"Home Assistant component stabilization timed out after {STABILIZATION_TIMEOUT}s. "
+                f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS}). "
+                f"Check Docker logs."
+            )
 
         # Store connection info for other fixtures
         container_info = {
@@ -409,7 +448,7 @@ async def ha_client(
     await client.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
@@ -433,7 +472,7 @@ async def mcp_server(
     # Server cleanup handled by server.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
     """Create FastMCP client connected to our server."""
     client = Client(mcp_server.mcp)
