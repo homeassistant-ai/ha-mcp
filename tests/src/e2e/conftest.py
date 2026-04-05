@@ -468,7 +468,7 @@ async def mcp_server(
     # Server cleanup handled by server.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
     """Create FastMCP client connected to our server."""
     client = Client(mcp_server.mcp)
