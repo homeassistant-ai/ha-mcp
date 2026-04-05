@@ -97,8 +97,8 @@ class TestServiceDiscovery:
         if "light.turn_on" in services:
             turn_on = services["light.turn_on"]
             assert "name" in turn_on, "Service should have name"
-            # Domain filter auto-enables full detail — fields should be present
-            assert "fields" in turn_on, "Domain filter should auto-enable full detail"
+            # Default is summary mode — fields are omitted even with domain filter
+            assert "fields" not in turn_on, "Summary mode should omit fields"
 
         logger.info("Domain filter test passed")
 
