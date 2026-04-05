@@ -926,7 +926,7 @@
   {
     "name": "ha_remove_entity",
     "title": "Remove Entity",
-    "description": "Remove an entity from the Home Assistant entity registry.\n\nPermanently removes the entity registration from Home Assistant.\nThe entity will no longer appear in the UI or be available to automations.\n\nUse this to clean up orphaned or unwanted entity registrations.\n\nRELATED TOOLS:\n- ha_search_entities: Find entities to verify the entity_id before removing\n- ha_get_entity: Check entity details before removal",
+    "description": "Remove an entity from the Home Assistant entity registry.\n\nPermanently removes the entity registration from Home Assistant.\nThe entity will no longer appear in the UI or be available to automations.\n\nWARNING: This permanently removes the entity registration.\n- Use only for orphaned or stale entity entries\n- If the underlying device or integration is still active, the entity\n  may be re-added automatically on the next HA restart or reload\n- This action cannot be undone without restoring from backup\n\nEXAMPLES:\n- Remove orphaned sensor: ha_remove_entity(\"sensor.old_temperature\")\n- Remove stale helper entry: ha_remove_entity(\"input_boolean.deleted_helper\")\n\nNOTE: For most use cases, consider disabling instead:\nha_set_entity(entity_id=\"sensor.old\", enabled=False)\n\nRELATED TOOLS:\n- ha_search_entities: Find entities to verify the entity_id before removing\n- ha_get_entity: Check entity details before removal",
     "inputSchema": {
       "properties": {
         "entity_id": {

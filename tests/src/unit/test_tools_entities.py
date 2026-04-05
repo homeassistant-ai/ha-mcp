@@ -1309,3 +1309,16 @@ class TestHaRemoveEntity:
 
         with pytest.raises(ToolError):
             await remove_entity_tool(entity_id="sensor.test_entity")
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_general_failure(self, remove_entity_tool, mock_client):
+        """Generic failures should raise ToolError with SERVICE_CALL_FAILED message."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "Permission denied"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+        error_msg = str(exc_info.value).lower()
+        assert "permission denied" in error_msg

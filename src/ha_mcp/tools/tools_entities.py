@@ -968,7 +968,18 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Permanently removes the entity registration from Home Assistant.
         The entity will no longer appear in the UI or be available to automations.
 
-        Use this to clean up orphaned or unwanted entity registrations.
+        WARNING: This permanently removes the entity registration.
+        - Use only for orphaned or stale entity entries
+        - If the underlying device or integration is still active, the entity
+          may be re-added automatically on the next HA restart or reload
+        - This action cannot be undone without restoring from backup
+
+        EXAMPLES:
+        - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
+        - Remove stale helper entry: ha_remove_entity("input_boolean.deleted_helper")
+
+        NOTE: For most use cases, consider disabling instead:
+        ha_set_entity(entity_id="sensor.old", enabled=False)
 
         RELATED TOOLS:
         - ha_search_entities: Find entities to verify the entity_id before removing
