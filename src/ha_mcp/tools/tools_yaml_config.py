@@ -123,8 +123,8 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         a full HA restart ('restart_required'). Only template, mqtt, and
         group support reload ('reload_available' with 'reload_service').
 
-        Note: YAML comments are not preserved after editing. The backup
-        retains the original file with comments intact.
+        YAML comments and Home Assistant tags (!include, !secret, etc.)
+        are preserved through edits.
         """
         try:
             # Validate action

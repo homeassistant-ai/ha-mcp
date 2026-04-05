@@ -11,11 +11,11 @@ import logging
 import os
 import re
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-import yaml
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -24,6 +24,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from ruamel.yaml import YAMLError
 
 from .const import (
     ALLOWED_READ_DIRS,
@@ -34,6 +35,7 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
+from .yaml_rt import make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -502,6 +504,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_edit_yaml_config(call: ServiceCall) -> ServiceResponse:
         """Handle the edit_yaml_config service call."""
+        ry = make_yaml()
         rel_path = call.data["file"]
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
@@ -548,8 +551,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "error": f"'content' is required for action '{action}'.",
                 }
             try:
-                parsed_content = yaml.safe_load(content)
-            except yaml.YAMLError as err:
+                parsed_content = ry.load(StringIO(content))
+            except YAMLError as err:
                 return {
                     "success": False,
                     "error": f"Invalid YAML content: {err}",
@@ -568,16 +571,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if target_file.exists():
                 raw_content = await hass.async_add_executor_job(target_file.read_text)
                 try:
-                    data = yaml.safe_load(raw_content) or {}
-                except yaml.YAMLError as err:
+                    data = ry.load(StringIO(raw_content)) or {}
+                except YAMLError as err:
                     return {
                         "success": False,
-                        "error": (
-                            f"Cannot parse existing file '{rel_path}': {err}. "
-                            "The file may contain !include or !secret directives "
-                            "that require Home Assistant's YAML loader. "
-                            "This tool only supports standard YAML."
-                        ),
+                        "error": f"Cannot parse existing file '{rel_path}': {err}",
                     }
                 if not isinstance(data, dict):
                     return {
@@ -642,17 +640,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 del data[yaml_path]
 
             # Serialize back to YAML
-            new_content = yaml.dump(
-                data,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False,
-            )
+            try:
+                new_content = yaml_dumps(ry, data)
+            except YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Failed to serialize YAML: {err}",
+                }
 
             # Validate the result parses cleanly
             try:
-                yaml.safe_load(new_content)
-            except yaml.YAMLError as err:
+                ry.load(StringIO(new_content))
+            except YAMLError as err:
                 return {
                     "success": False,
                     "error": f"Generated YAML failed validation: {err}",
