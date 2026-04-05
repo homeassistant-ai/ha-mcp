@@ -736,7 +736,7 @@
   {
     "name": "ha_get_device",
     "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
-    "description": "Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.\n\nWithout device_id/entity_id: Lists all devices with optional filters.\nWith device_id or entity_id: Returns detailed info for that specific device.\n\n**List all devices:**\n- All devices: ha_get_device()\n- By area: ha_get_device(area_id=\"living_room\")\n- By manufacturer: ha_get_device(manufacturer=\"Philips\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Combined filters: ha_get_device(integration=\"zha\", area_id=\"kitchen\")\n\n**Single device lookup:**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee device support:**\n- Use integration=\"zha\" or integration=\"zigbee2mqtt\" to list Zigbee devices\n- Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices\n- ZHA triggers: Use `ieee_address` for zha_event triggers\n- Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)\n\n**Z-Wave JS device support:**\n- Use integration=\"zwave_js\" to list Z-Wave devices\n- Returns node_id extracted from device identifiers\n- Single device lookup includes node_status (security class, routing, Z-Wave+ version)\n\n**Returns (list mode):**\n- List of devices with device_id, name, manufacturer, model, area_id\n\n**Returns (single device):**\n- Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities",
+    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -758,6 +758,18 @@
         "manufacturer": {
           "type": "Annotated[str | None, Field(description=\"Filter devices by manufacturer name (e.g., 'Philips')\", default=None)]",
           "default": null
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max devices to return per page in list mode (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of devices to skip for pagination (default: 0)')]",
+          "default": 0
+        },
+        "detail_level": {
+          "type": "Annotated[Literal['summary', 'full'], Field(default='summary', description=\"'summary': basic device info and protocol identifiers (default for list mode). 'full': include entities and all integration details. Single device lookups always return full detail.\")]",
+          "default": "summary"
         }
       }
     },
@@ -1813,7 +1825,7 @@
   {
     "name": "ha_get_integration",
     "title": "Get Integration",
-    "description": "Get integration (config entry) information - list all or get a specific one.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nUse this to audit existing configurations (e.g. template sensor Jinja code).\nWhen creating new functionality, prefer UI-based helpers over templates when possible.\n\nEXAMPLES:\n- List all integrations: ha_get_integration()\n- Search integrations: ha_get_integration(query=\"zigbee\")\n- Get specific entry: ha_get_integration(entry_id=\"abc123\")\n- Get entry with editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- List template entries with definitions: ha_get_integration(domain=\"template\")\n- List all with options: ha_get_integration(include_options=True)\n\nSTATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',\n'failed_unload', 'migration_error'.\n\nRETURNS (when listing):\n- entries: List of integrations with domain, title, state, capabilities\n- state_summary: Count of entries in each state\n- When domain filter or include_options is set, each entry includes the 'options' object\n\nRETURNS (when getting specific entry):\n- entry: Full config entry details including options/configuration\n- options_schema: Options flow schema when include_schema=True and supports_options=true",
+    "description": "Get integration (config entry) information with pagination.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nEXAMPLES:\n- List all integrations: ha_get_integration()\n- Paginate: ha_get_integration(offset=50)\n- Search: ha_get_integration(query=\"zigbee\")\n- Get specific entry: ha_get_integration(entry_id=\"abc123\")\n- Get entry with editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- List template entries: ha_get_integration(domain=\"template\")\n\nSTATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',\n'failed_unload', 'migration_error'.",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -1839,6 +1851,14 @@
         "exact_match": {
           "type": "Annotated[bool | str, Field(description='Use exact substring matching for query filter (default: True). Set to False for fuzzy matching when the query may contain typos.', default=True)]",
           "default": true
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max entries to return per page in list mode (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of entries to skip for pagination (default: 0)')]",
+          "default": 0
         }
       }
     },
@@ -2413,7 +2433,7 @@
   {
     "name": "ha_list_services",
     "title": "List Available Services",
-    "description": "List available Home Assistant services with their parameters.\n\nDiscovers services/actions that can be called via ha_call_service.\nReturns service definitions including field names, types, and descriptions.\n\nArgs:\n    domain: Filter by domain (e.g., 'light', 'switch', 'climate').\n           If not provided, returns services from all domains.\n    query: Search in service names and descriptions.\n           Matches against service IDs and their descriptions.\n\nReturns:\n    Dictionary with:\n    - success: Whether the operation succeeded\n    - domains: List of available domains (when no domain filter)\n    - services: Dictionary of service definitions keyed by domain.service\n    - total_count: Total number of services returned\n\nExamples:\n    # List all light services\n    ha_list_services(domain=\"light\")\n\n    # Search for services related to temperature\n    ha_list_services(query=\"temperature\")\n\n    # Get all available services (may be large)\n    ha_list_services()",
+    "description": "List available Home Assistant services with optional pagination and detail control.\n\nDiscovers services/actions that can be called via ha_call_service.\nUse domain or query filters to narrow results. Defaults to summary mode\n(name + description only) to keep responses compact.\n\nArgs:\n    domain: Filter by domain (e.g., 'light', 'switch', 'climate').\n    query: Search in service names and descriptions.\n    limit: Max services per page (default: 50).\n    offset: Pagination offset (default: 0).\n    detail_level: 'summary' (default) returns name/description only;\n                 'full' includes parameter field schemas.\n\nExamples:\n    # Browse first page of all services (compact)\n    ha_list_services()\n\n    # List all light services with full parameter details\n    ha_list_services(domain=\"light\", detail_level=\"full\")\n\n    # Search for temperature-related services\n    ha_list_services(query=\"temperature\")\n\n    # Paginate through all services\n    ha_list_services(offset=50)",
     "inputSchema": {
       "properties": {
         "domain": {
@@ -2423,6 +2443,18 @@
         "query": {
           "type": "str | None",
           "default": null
+        },
+        "limit": {
+          "type": "Annotated[int | str, Field(default=50, description='Max services to return per page (default: 50)')]",
+          "default": 50
+        },
+        "offset": {
+          "type": "Annotated[int | str, Field(default=0, description='Number of services to skip for pagination (default: 0)')]",
+          "default": 0
+        },
+        "detail_level": {
+          "type": "Annotated[Literal['summary', 'full'], Field(default='summary', description=\"'summary': service name + description only (default). 'full': include parameter field schemas.\")]",
+          "default": "summary"
         }
       }
     },
