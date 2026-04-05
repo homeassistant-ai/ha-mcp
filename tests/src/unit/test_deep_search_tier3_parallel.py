@@ -14,6 +14,13 @@ import pytest
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
+def _make_tools(client):
+    """Create SmartSearchTools with mocked global settings."""
+    with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+        mock_settings.return_value.fuzzy_threshold = 60
+        return SmartSearchTools(client=client)
+
+
 def _make_entity(entity_id: str, friendly_name: str) -> dict:
     return {
         "entity_id": entity_id,
@@ -53,7 +60,7 @@ class TestTier3ParallelFetch:
 
     @pytest.fixture
     def smart_tools(self, mock_client):
-        return SmartSearchTools(mock_client)
+        return _make_tools(mock_client)
 
     @pytest.mark.asyncio
     async def test_tier3_fetches_all_configs_not_just_name_matches(

@@ -955,13 +955,13 @@ class SmartSearchTools:
                             )
                             break
                         batch = uids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
-                        results = await asyncio.gather(
+                        batch_results = await asyncio.gather(
                             *[_fetch_automation_config(uid) for uid in batch],
                             return_exceptions=True,
                         )
-                        for result in results:
-                            if isinstance(result, tuple) and result[1] is not None:
-                                all_automation_configs[result[0]] = result[1]
+                        for br in batch_results:
+                            if isinstance(br, tuple) and br[1] is not None:
+                                all_automation_configs[br[0]] = br[1]
                                 fetched_count += 1
 
                 # Phase 3: Score with whatever configs we have
@@ -1105,13 +1105,13 @@ class SmartSearchTools:
                             )
                             break
                         batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
-                        results = await asyncio.gather(
+                        batch_results = await asyncio.gather(
                             *[_fetch_script_config(sid) for sid in batch],
                             return_exceptions=True,
                         )
-                        for result in results:
-                            if isinstance(result, tuple) and result[1] is not None:
-                                all_script_configs[result[0]] = result[1]
+                        for br in batch_results:
+                            if isinstance(br, tuple) and br[1] is not None:
+                                all_script_configs[br[0]] = br[1]
                                 fetched_count += 1
 
                 # Phase 3: Score scripts
