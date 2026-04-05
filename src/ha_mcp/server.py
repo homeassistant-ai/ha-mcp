@@ -351,9 +351,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if raw:
             entries = {e.strip() for e in raw.split(",") if e.strip()}
 
-        # Also disable ha_config_set_yaml if YAML editing is off
+        # Gate ha_config_set_yaml on the enable_yaml_config_editing toggle
         if not self.settings.enable_yaml_config_editing:
             entries.add("ha_config_set_yaml")
+        else:
+            entries.discard("ha_config_set_yaml")
 
         if not entries:
             return
