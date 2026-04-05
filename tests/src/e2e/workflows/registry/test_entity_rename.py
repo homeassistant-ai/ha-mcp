@@ -86,7 +86,7 @@ class TestEntityRename:
 
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
         assert rename_data.get("old_entity_id") == original_entity_id
-        assert rename_data.get("new_entity_id") == new_entity_id
+        assert rename_data.get("entity_id") == new_entity_id
         logger.info(f"Renamed entity: {original_entity_id} -> {new_entity_id}")
 
         # Wait for rename to propagate (retry with backoff)
