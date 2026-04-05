@@ -174,6 +174,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",
+    "ruamel.yaml>=0.18.0",
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
     "ast-grep-cli>=0.42.0",
