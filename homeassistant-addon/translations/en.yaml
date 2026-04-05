@@ -42,54 +42,8 @@ configuration:
       search is enabled. Lower values (2-3) save context tokens but
       may miss relevant tools. Range: 2-10. Requires restart.
   tools:
-    name: Tools
+    name: Advanced tool configuration
     description: >-
-      Configure tool availability and pinning. Each tool can be unpinned
-      (enabled), pinned (enabled and always visible in search), or disabled.
-      Mandatory tools cannot be disabled. Requires restart.
-    add-ons:
-      name: "Add-ons"
-    areas_floors:
-      name: "Areas & Floors"
-    automations:
-      name: "Automations"
-    blueprints:
-      name: "Blueprints"
-    calendar:
-      name: "Calendar"
-    camera:
-      name: "Camera"
-    dashboards:
-      name: "Dashboards"
-    device_registry:
-      name: "Device Registry"
-    entity_registry:
-      name: "Entity Registry"
-    files:
-      name: "Files"
-    groups:
-      name: "Groups"
-    hacs:
-      name: "HACS"
-    helper_entities:
-      name: "Helper Entities"
-    history_statistics:
-      name: "History & Statistics"
-    integrations:
-      name: "Integrations"
-    labels_categories:
-      name: "Labels & Categories"
-    scripts:
-      name: "Scripts"
-    search_discovery:
-      name: "Search & Discovery"
-    service_device_control:
-      name: "Service & Device Control"
-    system:
-      name: "System"
-    todo_lists:
-      name: "Todo Lists"
-    utilities:
-      name: "Utilities"
-    zones:
-      name: "Zones"
+      Configure tool availability and pinning per tool. Each tool can be
+      enabled-unpinned, enabled-pinned (always visible in search), disabled,
+      or mandatory (cannot be disabled). Requires restart.

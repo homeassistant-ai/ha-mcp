@@ -259,12 +259,11 @@ def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
 
 
 def generate_addon_translations(tools: list[dict]) -> str:
-    """Generate the full translations/en.yaml for the addon.
+    """Generate the translations/en.yaml for the addon.
 
-    Tool entries include friendly name with hint tags and brief description.
-    Mandatory tools are marked. Destructive/read-only hints are shown.
+    Only top-level config keys get translations (Supervisor doesn't
+    render translations deeper than 1 level under configuration).
     """
-    groups = _group_tools(tools)
     lines = [
         "---",
         "configuration:",
@@ -310,17 +309,12 @@ def generate_addon_translations(tools: list[dict]) -> str:
         "      search is enabled. Lower values (2-3) save context tokens but",
         "      may miss relevant tools. Range: 2-10. Requires restart.",
         "  tools:",
-        "    name: Tools",
+        "    name: Advanced tool configuration",
         "    description: >-",
-        "      Configure tool availability and pinning. Each tool can be unpinned",
-        "      (enabled), pinned (enabled and always visible in search), or disabled.",
-        "      Mandatory tools cannot be disabled. Requires restart.",
+        "      Configure tool availability and pinning per tool. Each tool can be",
+        "      enabled-unpinned, enabled-pinned (always visible in search), disabled,",
+        "      or mandatory (cannot be disabled). Requires restart.",
     ]
-
-    for tag in groups:
-        slug = _group_slug(tag)
-        lines.append(f"    {slug}:")
-        lines.append(f"      name: \"{tag}\"")
 
     return "\n".join(lines) + "\n"
 
