@@ -472,13 +472,12 @@ class TestRenameEntityWithDevice:
 
         assert rename_data.get("success"), f"Failed to rename: {rename_data}"
         assert rename_data.get("old_entity_id") == original_entity_id
-        assert rename_data.get("new_entity_id") == new_entity_id
+        assert rename_data.get("entity_id") == new_entity_id
 
         # Check device rename was skipped (no device for helper)
-        results = rename_data.get("results", {})
-        device_result = results.get("device_rename", {})
-        assert device_result.get("skipped"), (
-            "Device rename should be skipped for helper entity"
+        device_result = rename_data.get("device_rename", {})
+        assert "warning" in device_result, (
+            "Device rename should have warning for helper entity (no device)"
         )
         logger.info(f"Device rename result: {device_result}")
 

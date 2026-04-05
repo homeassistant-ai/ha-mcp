@@ -109,18 +109,18 @@ class TestRenameConsolidationEdgeCases:
 
         assert rename_data.get("success"), f"Rename failed: {rename_data}"
 
-        # Combined format SHOULD have these keys
-        assert "results" in rename_data, (
-            f"Combined rename should have 'results' key: {rename_data.keys()}"
-        )
+        # Consolidated ha_set_entity response format
         assert "old_entity_id" in rename_data, (
             f"Should have old_entity_id: {rename_data.keys()}"
         )
-        assert "new_entity_id" in rename_data, (
-            f"Should have new_entity_id: {rename_data.keys()}"
+        assert "entity_id" in rename_data, (
+            f"Should have entity_id: {rename_data.keys()}"
+        )
+        assert "device_rename" in rename_data, (
+            f"Should have device_rename: {rename_data.keys()}"
         )
         assert rename_data["old_entity_id"] == original_entity_id
-        assert rename_data["new_entity_id"] == new_entity_id
+        assert rename_data["entity_id"] == new_entity_id
 
         logger.info(f"Verified combined response format: {list(rename_data.keys())}")
 

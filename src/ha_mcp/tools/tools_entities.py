@@ -214,6 +214,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
+        # Save original entity_id before potential rename
+        original_entity_id = entity_id
+
         # Send entity registry update (covers all fields except expose_to)
         has_registry_updates = len(message) > 2  # more than just type + entity_id
         entity_entry: dict[str, Any] = {}
@@ -258,11 +261,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if new_device_name is not None:
             # If no registry update was sent, fetch entity_entry to get device_id
             if not entity_entry:
-                get_msg: dict[str, Any] = {
+                device_lookup_msg: dict[str, Any] = {
                     "type": "config/entity_registry/get",
                     "entity_id": entity_id,
                 }
-                get_result = await client.send_websocket_message(get_msg)
+                get_result = await client.send_websocket_message(device_lookup_msg)
                 if get_result.get("success"):
                     entity_entry = get_result.get("result", {})
 
@@ -379,13 +382,19 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "message": f"Entity updated: {', '.join(updates_made)}",
         }
 
+        # Include old_entity_id when a rename was performed
+        if new_entity_id is not None:
+            response_data["old_entity_id"] = original_entity_id
+
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
 
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
-            if "warning" in device_rename_result and not device_rename_result.get(
-                "success"
+            # Only mark partial when device rename was attempted and failed
+            # (not when entity simply has no device)
+            if "warning" in device_rename_result and device_rename_result.get(
+                "device_id"
             ):
                 response_data["partial"] = True
 
