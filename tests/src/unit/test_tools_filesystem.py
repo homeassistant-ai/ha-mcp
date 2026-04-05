@@ -1,5 +1,6 @@
 """Unit tests for tools_filesystem module."""
 
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -223,7 +224,7 @@ class TestHaListFilesTool:
                 {"path": "www/", "pattern": "*.css"},
                 return_response=True,
             )
-            assert result["data"]["success"] is True
+            assert result["success"] is True
 
 
 class TestHaReadFileTool:
@@ -346,7 +347,7 @@ class TestHaWriteFileTool:
                 },
                 return_response=True,
             )
-            assert result["data"]["success"] is True
+            assert result["success"] is True
 
 
 class TestHaDeleteFileTool:
@@ -381,10 +382,11 @@ class TestHaDeleteFileTool:
 
         if registered_func:
             inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
-            result = await inner_func(path="www/test.css", confirm=False)
+            with pytest.raises(ToolError) as exc_info:
+                await inner_func(path="www/test.css", confirm=False)
 
-            assert result["data"]["success"] is False
-            assert "not confirmed" in result["data"]["error"].lower()
+            error_data = json.loads(str(exc_info.value))
+            assert "not confirmed" in error_data["error"]["message"].lower()
             # Service should not have been called
             client.call_service.assert_not_called()
 
@@ -431,4 +433,4 @@ class TestHaDeleteFileTool:
                 {"path": "www/test.css"},
                 return_response=True,
             )
-            assert result["data"]["success"] is True
+            assert result["success"] is True

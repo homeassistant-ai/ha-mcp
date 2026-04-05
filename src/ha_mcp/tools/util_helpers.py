@@ -232,6 +232,17 @@ def parse_string_list_param(
     raise ValueError(f"{param_name} must be string, list, or None")
 
 
+def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract service_response from HA call_service result.
+
+    HA's call_service with return_response wraps results in
+    {"changed_states": [...], "service_response": {...}}.
+    Returns service_response if present and is a dict, otherwise the original result.
+    """
+    sr = result.get("service_response")
+    return sr if isinstance(sr, dict) else result
+
+
 async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses for local time context."""
     try:

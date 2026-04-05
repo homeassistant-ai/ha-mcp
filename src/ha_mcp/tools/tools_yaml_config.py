@@ -24,7 +24,7 @@ from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
 )
-from .util_helpers import add_timezone_metadata, coerce_bool_param
+from .util_helpers import coerce_bool_param, unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +179,10 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if isinstance(result, dict):
+                result = unwrap_service_response(result)
                 if not result.get("success", True):
                     raise_tool_error(result)
-                return await add_timezone_metadata(client, result)
+                return result
 
             raise_tool_error(
                 create_error_response(

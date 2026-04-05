@@ -402,7 +402,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Create parent directories if needed
             if create_dirs:
                 await hass.async_add_executor_job(
-                    target_file.parent.mkdir, parents=True, exist_ok=True
+                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
                 )
 
             # Check parent directory exists
@@ -597,7 +597,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if do_backup and raw_content:
                 backup_dir = config_dir / "www" / "yaml_backups"
                 await hass.async_add_executor_job(
-                    backup_dir.mkdir, parents=True, exist_ok=True
+                    lambda: backup_dir.mkdir(parents=True, exist_ok=True)
                 )
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_name = normalized.replace(os.sep, "_")
@@ -661,7 +661,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Create parent directories if needed (for new package files)
             if not target_file.parent.exists():
                 await hass.async_add_executor_job(
-                    target_file.parent.mkdir, parents=True, exist_ok=True
+                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
                 )
 
             # Atomic write: write to temp file, then rename into place
