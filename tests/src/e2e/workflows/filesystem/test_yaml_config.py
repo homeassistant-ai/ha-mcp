@@ -10,7 +10,7 @@ This test suite validates:
 
 These tests require:
 1. The ha_mcp_tools custom component to be installed in Home Assistant
-2. The ENABLE_YAML_CONFIG_EDITING feature flag to be enabled
+2. ENABLE_YAML_CONFIG_EDITING=true (disabled by default)
 
 Note: Most tests will be SKIPPED in CI environments where the ha_mcp_tools
 custom component is not pre-installed.
@@ -28,17 +28,22 @@ from ...utilities.assertions import MCPAssertions, safe_call_tool
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 TOOL_NAME = "ha_config_set_yaml"
 
 
 @pytest.fixture(scope="module")
 def yaml_config_tools_enabled(ha_container_with_fresh_config):
-    """Enable YAML config editing feature flag for the test module."""
-    os.environ[FEATURE_FLAG] = "true"
-    logger.info("YAML config editing feature flag enabled")
+    """Enable YAML config editing for the test module."""
+    old_yaml = os.environ.get("ENABLE_YAML_CONFIG_EDITING", "")
+    old_disabled = os.environ.get("DISABLED_TOOLS", "")
+    os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+    # Also remove ha_config_set_yaml from disabled list if present
+    entries = [e.strip() for e in old_disabled.split(",") if e.strip() and e.strip() != TOOL_NAME]
+    os.environ["DISABLED_TOOLS"] = ",".join(entries)
+    logger.info("YAML config editing enabled for testing")
     yield
-    os.environ.pop(FEATURE_FLAG, None)
+    os.environ["ENABLE_YAML_CONFIG_EDITING"] = old_yaml
+    os.environ["DISABLED_TOOLS"] = old_disabled
 
 
 @pytest.fixture
@@ -105,19 +110,14 @@ def _skip_if_unavailable(result: tuple[bool, str | None], test_name: str):
 class TestYamlConfigAvailability:
     """Test ha_config_set_yaml availability and feature flag behavior."""
 
-    async def test_feature_flag_disabled_by_default(self, mcp_client):
-        """Verify tool is NOT registered when feature flag is disabled."""
-        original = os.environ.pop(FEATURE_FLAG, None)
-        try:
-            tools = await mcp_client.list_tools()
-            tool_names = [t.name for t in tools]
-            if TOOL_NAME not in tool_names:
-                logger.info("Tool not registered (feature flag disabled at startup)")
-                return
-            logger.info("Tool registered — flag was enabled at server startup")
-        finally:
-            if original:
-                os.environ[FEATURE_FLAG] = original
+    async def test_tool_disabled_by_default(self, mcp_client):
+        """Verify tool is disabled by default (ENABLE_YAML_CONFIG_EDITING=false)."""
+        tools = await mcp_client.list_tools()
+        tool_names = [t.name for t in tools]
+        if TOOL_NAME not in tool_names:
+            logger.info("Tool not visible (disabled by default)")
+            return
+        logger.info("Tool visible — YAML config editing was enabled at startup")
 
     async def test_tool_registered_when_enabled(self, mcp_client_with_yaml_config):
         """Verify tool IS registered when feature flag is enabled."""

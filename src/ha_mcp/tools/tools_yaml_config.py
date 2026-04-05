@@ -9,6 +9,7 @@ only in YAML and have no REST/WebSocket API equivalent.
 The tools will gracefully fail with installation instructions if the component is not available.
 
 Feature Flag: Set ENABLE_YAML_CONFIG_EDITING=true to enable.
+Also gated by the add-on's ``enabled_tools`` config (disabled by default).
 """
 
 import logging
@@ -17,7 +18,6 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .tools_filesystem import (
@@ -32,16 +32,11 @@ logger = logging.getLogger(__name__)
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
 
-    Requires ENABLE_YAML_CONFIG_EDITING=true.
+    Tool is always registered but disabled by default via both the
+    ``enable_yaml_config_editing`` toggle and the ``enabled_tools``
+    config (ha_config_set_yaml defaults to enabled, but the toggle
+    gates it). The server's ``_apply_tool_visibility`` handles disabling.
     """
-    settings = get_global_settings()
-    if not settings.enable_yaml_config_editing:
-        logger.debug(
-            "YAML config tools disabled (set ENABLE_YAML_CONFIG_EDITING=true to enable)"
-        )
-        return
-
-    logger.info("YAML config editing tools enabled")
 
     @mcp.tool(
         tags={"System"},

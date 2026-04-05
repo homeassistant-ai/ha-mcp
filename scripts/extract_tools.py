@@ -24,9 +24,27 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
 TOOLS_JSON_PATH = REPO_ROOT / "site" / "src" / "data" / "tools.json"
 README_PATH = REPO_ROOT / "README.md"
+ADDON_DIR = REPO_ROOT / "homeassistant-addon"
+ADDON_DEV_DIR = REPO_ROOT / "homeassistant-addon-dev"
 
 README_START_MARKER = "<!-- TOOLS_TABLE_START -->"
 README_END_MARKER = "<!-- TOOLS_TABLE_END -->"
+
+# Markers for generated tool sections in config.yaml
+CONFIG_TOOLS_START = "  # --- GENERATED TOOL CONFIG START (do not edit) ---"
+CONFIG_TOOLS_END = "  # --- GENERATED TOOL CONFIG END ---"
+SCHEMA_TOOLS_START = "  # --- GENERATED TOOL SCHEMA START (do not edit) ---"
+SCHEMA_TOOLS_END = "  # --- GENERATED TOOL SCHEMA END ---"
+
+# Tools that are pinned by default (always visible in tool search)
+DEFAULT_PINNED = {
+    "ha_restart", "ha_reload_core", "ha_backup_create", "ha_backup_restore",
+    "ha_get_overview", "ha_report_issue", "ha_search_entities",
+    "ha_config_get_automation", "ha_config_set_automation", "ha_config_set_yaml",
+}
+
+# Tools that cannot be disabled (mandatory)
+MANDATORY_TOOLS = {"ha_search_entities", "ha_get_overview", "ha_get_state", "ha_report_issue"}
 
 TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
 
@@ -186,6 +204,168 @@ def update_readme(tools: list[dict]) -> str:
     return readme
 
 
+def _group_slug(tag: str) -> str:
+    """Convert a tag like 'Areas & Floors' to a slug like 'areas_floors'."""
+    return tag.lower().replace(" & ", "_").replace(" ", "_")
+
+
+def _group_tools(tools: list[dict]) -> dict[str, list[dict]]:
+    """Group tools by their first tag, sorted by tag name."""
+    groups: dict[str, list[dict]] = {}
+    for tool in tools:
+        tag = tool["tags"][0] if tool["tags"] else "Other"
+        groups.setdefault(tag, []).append(tool)
+    return dict(sorted(groups.items()))
+
+
+_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled"
+
+
+def _default_state(tool: dict) -> str:
+    """Return the default state for a tool."""
+    if tool["name"] in MANDATORY_TOOLS or tool["name"] in DEFAULT_PINNED:
+        return "enabled-pinned"
+    return "enabled-unpinned"
+
+
+
+def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
+    """Generate the options and schema sections for tools in config.yaml.
+
+    Tools are nested under a single 'tools:' parent for one collapsible section.
+    Each tool uses list(unpinned|pinned|disabled) dropdown.
+    Returns (options_block, schema_block) as strings to insert between markers.
+    """
+    groups = _group_tools(tools)
+    opt_lines = [CONFIG_TOOLS_START, "  tools:"]
+    sch_lines = [SCHEMA_TOOLS_START, "  tools:"]
+
+    for tag, group_tools in groups.items():
+        slug = _group_slug(tag)
+        opt_lines.append(f"    {slug}:")
+        opt_lines.append("      enabled: true")
+        sch_lines.append(f"    {slug}:")
+        sch_lines.append("      enabled: bool?")
+        for tool in group_tools:
+            state = _default_state(tool)
+            opt_lines.append(f"      {tool['name']}: \"{state}\"")
+            sch_lines.append(f"      {tool['name']}: \"list({_TOOL_STATES})?\"")
+
+    opt_lines.append(CONFIG_TOOLS_END)
+    sch_lines.append(SCHEMA_TOOLS_END)
+    return "\n".join(opt_lines), "\n".join(sch_lines)
+
+
+def generate_addon_translations(tools: list[dict]) -> str:
+    """Generate the translations/en.yaml for the addon.
+
+    Only top-level config keys get translations (Supervisor doesn't
+    render translations deeper than 1 level under configuration).
+    """
+    lines = [
+        "---",
+        "configuration:",
+        "  backup_hint:",
+        "    name: Backup hint",
+        "    description: Controls when backup reminders are shown before risky operations.",
+        "  secret_path:",
+        "    name: Secret path override",
+        "    description: |",
+        "      Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.",
+        "  enable_skills:",
+        "    name: Enable skills",
+        "    description: >-",
+        "      Serve bundled Home Assistant best-practice skills as MCP resources.",
+        "      Skills provide automation patterns, helper selection guides, and device",
+        "      control best practices. Clients must explicitly request them.",
+        "  enable_skills_as_tools:",
+        "    name: Enable skills as tools",
+        "    description: >-",
+        "      Expose skills via list_resources/read_resource tools for MCP clients",
+        "      that don't support resources natively. Adds 3 extra tools.",
+        "  enable_tool_search:",
+        "    name: Enable tool search",
+        "    description: >-",
+        "      Replace the full tool catalog with search-based discovery. Reduces",
+        "      idle context from ~46K to ~5K tokens. Use this if using an LLM without",
+        "      deferred tools or with smaller context windows. Tools are found via",
+        "      ha_search_tools and executed via categorized proxies (read/write/delete).",
+        "      Requires restart to take effect.",
+        "  tool_search_max_results:",
+        "    name: Tool search max results",
+        "    description: >-",
+        "      Maximum number of tools returned by ha_search_tools when tool",
+        "      search is enabled. Lower values (2-3) save context tokens but",
+        "      may miss relevant tools. Range: 2-10. Requires restart.",
+        "  enable_yaml_config_editing:",
+        "    name: Enable YAML config editing",
+        "    description: >-",
+        "      Allow AI assistants to add, replace, or remove top-level keys in",
+        "      configuration.yaml and packages/*.yaml. Only whitelisted keys are",
+        "      allowed (e.g., template, sensor, command_line, mqtt). Core keys",
+        "      like homeassistant, http, and recorder are blocked. A backup is",
+        "      created before every edit. Use for YAML-only features that have no",
+        "      UI or API alternative. Requires restart to take effect.",
+        "  tools:",
+        "    name: Advanced tool configuration",
+        "    description: >-",
+        "      Configure tool availability and pinning per tool. Each tool can be",
+        "      enabled-unpinned, enabled-pinned (always visible in tool search),",
+        "      or disabled. Some core tools (ha_search_entities, ha_get_overview,",
+        "      ha_get_state, ha_report_issue) cannot be disabled. For full tool",
+        "      descriptions visit https://homeassistant-ai.github.io/ha-mcp/tools",
+        "      — Requires restart.",
+    ]
+
+    return "\n".join(lines) + "\n"
+
+
+def update_addon_config(tools: list[dict]) -> None:
+    """Update config.yaml files with generated tool sections."""
+    opt_block, sch_block = generate_addon_config_tools(tools)
+
+    for addon_dir in (ADDON_DIR, ADDON_DEV_DIR):
+        config_path = addon_dir / "config.yaml"
+        if not config_path.exists():
+            continue
+        content = config_path.read_text()
+
+        # Replace or insert options block
+        if CONFIG_TOOLS_START in content:
+            content = re.sub(
+                rf"{re.escape(CONFIG_TOOLS_START)}.*?{re.escape(CONFIG_TOOLS_END)}",
+                opt_block, content, flags=re.DOTALL,
+            )
+        else:
+            content = content.replace("schema:", f"{opt_block}\nschema:")
+
+        # Replace or insert schema block
+        if SCHEMA_TOOLS_START in content:
+            content = re.sub(
+                rf"{re.escape(SCHEMA_TOOLS_START)}.*?{re.escape(SCHEMA_TOOLS_END)}",
+                sch_block, content, flags=re.DOTALL,
+            )
+        else:
+            content = content.rstrip() + "\n" + sch_block + "\n"
+
+        config_path.write_text(content)
+        print(f"Updated {config_path.relative_to(REPO_ROOT)} tool sections")
+
+
+def update_addon_translations(tools: list[dict]) -> None:
+    """Write generated translations/en.yaml."""
+    content = generate_addon_translations(tools)
+    translations_path = ADDON_DIR / "translations" / "en.yaml"
+    translations_path.write_text(content)
+    print(f"Updated {translations_path.relative_to(REPO_ROOT)}")
+
+    # addon-dev uses a symlink; if it's a regular file, overwrite it too
+    dev_path = ADDON_DEV_DIR / "translations" / "en.yaml"
+    if dev_path.exists() and not dev_path.is_symlink():
+        dev_path.write_text(content)
+        print(f"Updated {dev_path.relative_to(REPO_ROOT)}")
+
+
 def check_sync(tools: list[dict]) -> bool:
     in_sync = True
 
@@ -227,6 +407,9 @@ def main() -> None:
 
         README_PATH.write_text(update_readme(tools))
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
+
+        update_addon_config(tools)
+        update_addon_translations(tools)
 
 
 if __name__ == "__main__":
