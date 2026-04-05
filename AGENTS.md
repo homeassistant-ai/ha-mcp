@@ -438,6 +438,9 @@ an isolated Docker HA instance — Docker daemon must be running.
 
 ```bash
 # Run FULL E2E suite (required before claiming all tests pass)
+# -n2 is optimal locally (each worker spins up its own HA container;
+# more workers add memory pressure without proportional speedup).
+# CI uses -n3 tuned for 2-vCPU GitHub runners with 15GB RAM.
 cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short
 
 # Run specific file (partial coverage only — never substitute for full suite)
