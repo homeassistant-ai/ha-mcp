@@ -169,7 +169,7 @@ class TestTier3ParallelFetch:
             if url.rstrip("/") == "/config/automation/config":
                 raise Exception("Bulk unavailable")
             call_count += 1
-            await asyncio.sleep(0.5)  # Simulate slow fetches
+            await asyncio.sleep(1.5)  # Simulate slow fetches
             return {"id": uid, "action": []}
 
         mock_client._request = AsyncMock(side_effect=_slow_fetch)
@@ -186,8 +186,8 @@ class TestTier3ParallelFetch:
                 limit=10,
             )
 
-        # With 2s budget and 0.5s per fetch in batches of 10,
-        # we should fetch some but not all 30
+        # With 2s budget and 1.5s per fetch (parallel batches of 10),
+        # first batch takes ~1.5s, second batch would exceed budget
         assert call_count < 30, (
             f"Should stop before fetching all 30, but fetched {call_count}"
         )

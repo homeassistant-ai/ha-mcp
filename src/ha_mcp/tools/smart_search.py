@@ -26,12 +26,14 @@ INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
 # Time budgets for fallback individual fetching (in seconds).
 # Configurable via env vars for instances with many automations/scripts.
-AUTOMATION_CONFIG_TIME_BUDGET = float(
-    os.environ.get("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", "30")
-)
-SCRIPT_CONFIG_TIME_BUDGET = float(
-    os.environ.get("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", "20")
-)
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
+SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
 
 # Batch size for parallel individual config fetches (Tier 3 fallback)
 INDIVIDUAL_FETCH_BATCH_SIZE = 10
