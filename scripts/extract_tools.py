@@ -164,7 +164,7 @@ def generate_docs_section(tools: list[dict]) -> str:
 
 def update_docs(tools: list[dict]) -> str:
     """Replace the auto-generated section in DOCS.md between sync markers."""
-    docs = DOCS_PATH.read_text()
+    docs = DOCS_PATH.read_text(encoding="utf-8")
     if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
         print(
             f"ERROR: {DOCS_PATH} is missing sync markers.\n"
@@ -252,7 +252,7 @@ def check_sync(tools: list[dict]) -> bool:
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
 
-    if DOCS_PATH.exists() and DOCS_PATH.read_text() != update_docs(tools):
+    if DOCS_PATH.exists() and DOCS_PATH.read_text(encoding="utf-8") != update_docs(tools):
         print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
         in_sync = False
 
@@ -282,7 +282,7 @@ def main() -> None:
         README_PATH.write_text(update_readme(tools))
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
 
-        DOCS_PATH.write_text(update_docs(tools))
+        DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
         print(f"Updated {DOCS_PATH.relative_to(REPO_ROOT)}")
 
 
