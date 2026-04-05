@@ -45,5 +45,8 @@ configuration:
     name: Advanced tool configuration
     description: >-
       Configure tool availability and pinning per tool. Each tool can be
-      enabled-unpinned, enabled-pinned (always visible in search), disabled,
-      or mandatory (cannot be disabled). Requires restart.
+      enabled-unpinned, enabled-pinned (always visible in tool search),
+      or disabled. Some core tools (ha_search_entities, ha_get_overview,
+      ha_get_state, ha_report_issue) cannot be disabled. For full tool
+      descriptions visit https://homeassistant-ai.github.io/ha-mcp/tools
+      — Requires restart.

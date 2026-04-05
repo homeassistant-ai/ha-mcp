@@ -218,14 +218,12 @@ def _group_tools(tools: list[dict]) -> dict[str, list[dict]]:
     return dict(sorted(groups.items()))
 
 
-_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled|mandatory"
+_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled"
 
 
 def _default_state(tool: dict) -> str:
     """Return the default state for a tool."""
-    if tool["name"] in MANDATORY_TOOLS:
-        return "mandatory"
-    if tool["name"] in DEFAULT_PINNED:
+    if tool["name"] in MANDATORY_TOOLS or tool["name"] in DEFAULT_PINNED:
         return "enabled-pinned"
     return "enabled-unpinned"
 
@@ -312,8 +310,11 @@ def generate_addon_translations(tools: list[dict]) -> str:
         "    name: Advanced tool configuration",
         "    description: >-",
         "      Configure tool availability and pinning per tool. Each tool can be",
-        "      enabled-unpinned, enabled-pinned (always visible in search), disabled,",
-        "      or mandatory (cannot be disabled). Requires restart.",
+        "      enabled-unpinned, enabled-pinned (always visible in tool search),",
+        "      or disabled. Some core tools (ha_search_entities, ha_get_overview,",
+        "      ha_get_state, ha_report_issue) cannot be disabled. For full tool",
+        "      descriptions visit https://homeassistant-ai.github.io/ha-mcp/tools",
+        "      — Requires restart.",
     ]
 
     return "\n".join(lines) + "\n"
