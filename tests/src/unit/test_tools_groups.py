@@ -21,6 +21,7 @@ class TestGroupToolsValidation:
         """Create a mock Home Assistant client."""
         client = MagicMock()
         client.get_states = AsyncMock(return_value=[])
+        # Required by wait_for_entity_registered/removed in tool internals
         client.get_entity_state = AsyncMock(return_value={"state": "on"})
         client.call_service = AsyncMock(return_value=None)
         return client
