@@ -6,12 +6,14 @@ allowing AI to explore available Home Assistant services/actions.
 """
 
 import logging
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .util_helpers import build_pagination_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -19,42 +21,76 @@ logger = logging.getLogger(__name__)
 def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register service discovery tools with the MCP server."""
 
-    @mcp.tool(tags={"Service & Device Control"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Available Services"})
+    @mcp.tool(
+        tags={"Service & Device Control"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "List Available Services",
+        },
+    )
     @log_tool_usage
     async def ha_list_services(
         domain: str | None = None,
         query: str | None = None,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=50,
+                description="Max services to return per page (default: 50)",
+            ),
+        ] = 50,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of services to skip for pagination (default: 0)",
+            ),
+        ] = 0,
+        detail_level: Annotated[
+            Literal["summary", "full"],
+            Field(
+                default="summary",
+                description=(
+                    "'summary': service name + description only (default). "
+                    "'full': include parameter field schemas."
+                ),
+            ),
+        ] = "summary",
     ) -> dict[str, Any]:
-        """
-        List available Home Assistant services with their parameters.
+        """List available Home Assistant services with optional pagination and detail control.
 
         Discovers services/actions that can be called via ha_call_service.
-        Returns service definitions including field names, types, and descriptions.
+        Use domain or query filters to narrow results. Defaults to summary mode
+        (name + description only) to keep responses compact.
 
         Args:
             domain: Filter by domain (e.g., 'light', 'switch', 'climate').
-                   If not provided, returns services from all domains.
             query: Search in service names and descriptions.
-                   Matches against service IDs and their descriptions.
-
-        Returns:
-            Dictionary with:
-            - success: Whether the operation succeeded
-            - domains: List of available domains (when no domain filter)
-            - services: Dictionary of service definitions keyed by domain.service
-            - total_count: Total number of services returned
+            limit: Max services per page (default: 50).
+            offset: Pagination offset (default: 0).
+            detail_level: 'summary' (default) returns name/description only;
+                         'full' includes parameter field schemas.
 
         Examples:
-            # List all light services
-            ha_list_services(domain="light")
+            # Browse first page of all services (compact)
+            ha_list_services()
 
-            # Search for services related to temperature
+            # List all light services with full parameter details
+            ha_list_services(domain="light", detail_level="full")
+
+            # Search for temperature-related services
             ha_list_services(query="temperature")
 
-            # Get all available services (may be large)
-            ha_list_services()
+            # Paginate through all services
+            ha_list_services(offset=50)
         """
         try:
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
+            )
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+
             # Get services from REST API (includes parameter definitions)
             rest_services = await client.get_services()
 
@@ -67,6 +103,9 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 translations=translations,
                 domain_filter=domain,
                 query_filter=query,
+                limit=limit_int,
+                offset=offset_int,
+                detail_level=detail_level,
             )
 
             return result
@@ -75,11 +114,14 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise
         except Exception as e:
             logger.error(f"Failed to list services: {e}")
-            exception_to_structured_error(e, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket API is available",
-                "Try with a specific domain filter",
-            ])
+            exception_to_structured_error(
+                e,
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket API is available",
+                    "Try with a specific domain filter",
+                ],
+            )
 
 
 async def _get_service_translations(client: Any) -> dict[str, Any]:
@@ -115,6 +157,9 @@ def _process_services(
     translations: dict[str, Any],
     domain_filter: str | None = None,
     query_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    detail_level: Literal["summary", "full"] = "summary",
 ) -> dict[str, Any]:
     """
     Process raw service data into structured output.
@@ -124,9 +169,12 @@ def _process_services(
         translations: Service translations from WebSocket
         domain_filter: Optional domain to filter by
         query_filter: Optional search query
+        limit: Maximum number of services per page
+        offset: Number of services to skip
+        detail_level: 'summary' or 'full'
 
     Returns:
-        Processed service dictionary
+        Processed service dictionary with pagination metadata
     """
     services: dict[str, dict[str, Any]] = {}
     domains_seen: set[str] = set()
@@ -142,14 +190,16 @@ def _process_services(
             for domain, data in rest_services.items()
         ]
     else:
-        raise_tool_error(create_error_response(
-            ErrorCode.INTERNAL_UNEXPECTED,
-            "Unexpected service data format",
-            suggestions=[
-                "Retry the request — this may be a transient issue",
-                "Check Home Assistant is running and responding correctly",
-            ],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                "Unexpected service data format",
+                suggestions=[
+                    "Retry the request — this may be a transient issue",
+                    "Check Home Assistant is running and responding correctly",
+                ],
+            )
+        )
 
     query_lower = query_filter.lower() if query_filter else None
 
@@ -185,34 +235,45 @@ def _process_services(
                 if query_lower not in searchable:
                     continue
 
-            # Process fields/parameters
-            fields = _process_service_fields(
-                service_def.get("fields", {}),
-                service_trans.get("fields", {}),
-            )
-
             # Build service entry
-            services[service_key] = {
+            entry: dict[str, Any] = {
                 "name": name,
                 "description": description,
                 "domain": domain,
                 "service": service_name,
-                "fields": fields,
             }
+
+            # Include full field schemas only in 'full' detail mode
+            if detail_level == "full":
+                entry["fields"] = _process_service_fields(
+                    service_def.get("fields", {}),
+                    service_trans.get("fields", {}),
+                )
 
             # Add target only if present
             target = service_def.get("target")
             if target is not None:
-                services[service_key]["target"] = target
+                entry["target"] = target
+
+            services[service_key] = entry
 
     # Sort domains alphabetically
     sorted_domains = sorted(domains_seen)
 
+    # Apply pagination to the collected services
+    all_keys = list(services.keys())
+    total_count = len(all_keys)
+    paginated_keys = all_keys[offset : offset + limit]
+    paginated_services = {k: services[k] for k in paginated_keys}
+
     return {
         "success": True,
         "domains": sorted_domains,
-        "services": services,
-        "total_count": len(services),
+        "services": paginated_services,
+        **build_pagination_metadata(
+            total_count, offset, limit, len(paginated_services)
+        ),
+        "detail_level": detail_level,
         "filters_applied": {
             "domain": domain_filter,
             "query": query_filter,
