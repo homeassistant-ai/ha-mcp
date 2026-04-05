@@ -340,9 +340,6 @@ def ha_container_with_fresh_config():
         except Exception as e:
             logger.warning(f"⚠️ Could not inspect container: {e}")
 
-        logger.info("⏳ Waiting 5 seconds for Home Assistant to initialize...")
-        time.sleep(5)
-
         # Wait for API to be ready
         import requests
 
@@ -373,12 +370,35 @@ def ha_container_with_fresh_config():
                 "The container may have failed to start. Check Docker logs for details."
             )
 
-        # Additional stabilization period to allow components to fully load
-        logger.info(
-            "⏳ Waiting additional 10 seconds for Home Assistant components to stabilize..."
-        )
-        time.sleep(10)
-        logger.info("✅ Home Assistant should now be fully stabilized")
+        # Poll until HA components are fully loaded (HA typically loads 80+;
+        # 50 is enough to start testing)
+        logger.info("⏳ Waiting for Home Assistant components to stabilize...")
+        last_count = 0
+        for stabilize_attempt in range(20):
+            try:
+                config_resp = requests.get(
+                    f"{base_url}/api/config", timeout=2, headers=headers
+                )
+                if config_resp.status_code == 200:
+                    component_count = len(
+                        config_resp.json().get("components", [])
+                    )
+                    if component_count >= 50:
+                        logger.info(
+                            f"✅ Home Assistant stabilized with {component_count} components "
+                            f"after {stabilize_attempt + 1}s"
+                        )
+                        break
+                    if component_count != last_count:
+                        logger.info(
+                            f"⏳ {component_count} components loaded, waiting for more..."
+                        )
+                        last_count = component_count
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(1)
+        else:
+            logger.warning("⚠️ Component stabilization timed out, proceeding anyway")
 
         # Store connection info for other fixtures
         container_info = {
