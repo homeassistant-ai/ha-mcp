@@ -74,6 +74,7 @@ options:
       enabled: true
       ha_get_entity: "enabled-unpinned"
       ha_get_entity_exposure: "enabled-unpinned"
+      ha_remove_entity: "enabled-unpinned"
       ha_set_entity: "enabled-unpinned"
     files:
       enabled: true
@@ -223,6 +224,7 @@ schema:
       enabled: bool?
       ha_get_entity: "list(enabled-unpinned|enabled-pinned|disabled)?"
       ha_get_entity_exposure: "list(enabled-unpinned|enabled-pinned|disabled)?"
+      ha_remove_entity: "list(enabled-unpinned|enabled-pinned|disabled)?"
       ha_set_entity: "list(enabled-unpinned|enabled-pinned|disabled)?"
     files:
       enabled: bool?
