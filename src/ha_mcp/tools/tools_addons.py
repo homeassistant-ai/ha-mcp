@@ -175,7 +175,7 @@ async def list_addons(
                         "memory_usage": s.get("memory_usage"),
                         "memory_limit": s.get("memory_limit"),
                     }
-            except (ToolError, Exception) as exc:
+            except Exception as exc:
                 logger.warning("Failed to fetch stats for addon %s: %s", slug, exc)
             return slug, None
 
