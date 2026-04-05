@@ -218,11 +218,14 @@ def _group_tools(tools: list[dict]) -> dict[str, list[dict]]:
     return dict(sorted(groups.items()))
 
 
+_TOOL_STATES = "enabled-unpinned|enabled-pinned|disabled"
+
+
 def _default_state(tool: dict) -> str:
-    """Return the default state for a tool: unpinned, pinned, or disabled."""
+    """Return the default state for a tool."""
     if tool["name"] in DEFAULT_PINNED:
-        return "pinned"
-    return "unpinned"
+        return "enabled-pinned"
+    return "enabled-unpinned"
 
 
 def _tool_hint(tool: dict) -> str:
@@ -266,7 +269,7 @@ def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
         for tool in group_tools:
             state = _default_state(tool)
             opt_lines.append(f"      {tool['name']}: \"{state}\"")
-            sch_lines.append(f"      {tool['name']}: \"list(unpinned|pinned|disabled)?\"")
+            sch_lines.append(f"      {tool['name']}: \"list({_TOOL_STATES})?\"")
 
     opt_lines.append(CONFIG_TOOLS_END)
     sch_lines.append(SCHEMA_TOOLS_END)

@@ -144,7 +144,7 @@ def main() -> int:
                             continue
                         if not group_enabled or state == "disabled":
                             disabled_tools.append(tool_name)
-                        elif state == "pinned":
+                        elif state == "enabled-pinned":
                             pinned_tools.append(tool_name)
 
             # If YAML config editing is disabled, ensure ha_config_set_yaml is in the list

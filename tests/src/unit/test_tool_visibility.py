@@ -250,24 +250,24 @@ class TestStartPyConfigParsing:
                     continue
                 if not group_enabled or state == "disabled":
                     disabled.append(tool_name)
-                elif state == "pinned":
+                elif state == "enabled-pinned":
                     pinned.append(tool_name)
         return disabled, pinned
 
     def test_individual_disabled(self):
-        config = {"hacs": {"enabled": True, "ha_hacs_info": "unpinned", "ha_hacs_download": "disabled"}}
+        config = {"hacs": {"enabled": True, "ha_hacs_info": "enabled-unpinned", "ha_hacs_download": "disabled"}}
         disabled, _pinned = self._parse_tools(config)
         assert "ha_hacs_download" in disabled
         assert "ha_hacs_info" not in disabled
 
     def test_group_disabled_overrides_all(self):
-        config = {"system": {"enabled": False, "ha_restart": "unpinned", "ha_config_set_yaml": "pinned"}}
+        config = {"system": {"enabled": False, "ha_restart": "enabled-unpinned", "ha_config_set_yaml": "enabled-pinned"}}
         disabled, _pinned = self._parse_tools(config)
         assert "ha_restart" in disabled
         assert "ha_config_set_yaml" in disabled
 
     def test_pinned_state(self):
-        config = {"search": {"enabled": True, "ha_search_entities": "pinned", "ha_deep_search": "unpinned"}}
+        config = {"search": {"enabled": True, "ha_search_entities": "enabled-pinned", "ha_deep_search": "enabled-unpinned"}}
         _disabled, pinned = self._parse_tools(config)
         assert "ha_search_entities" in pinned
         assert "ha_deep_search" not in pinned
