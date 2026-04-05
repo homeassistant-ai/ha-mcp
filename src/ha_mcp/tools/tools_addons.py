@@ -171,14 +171,24 @@ async def list_addons(
             "repository": addon.get("repository"),
         }
 
-        # Include stats if requested
-        if include_stats:
-            addon_info["stats"] = {
-                "cpu_percent": addon.get("cpu_percent"),
-                "memory_percent": addon.get("memory_percent"),
-                "memory_usage": addon.get("memory_usage"),
-                "memory_limit": addon.get("memory_limit"),
-            }
+        # Include stats if requested (requires a separate API call per addon)
+        if include_stats and addon.get("state") == "started":
+            slug = addon.get("slug")
+            stats_response = await _supervisor_api_call(
+                client, f"/addons/{slug}/stats"
+            )
+            if stats_response.get("success"):
+                stats = stats_response["result"]
+                addon_info["stats"] = {
+                    "cpu_percent": stats.get("cpu_percent"),
+                    "memory_percent": stats.get("memory_percent"),
+                    "memory_usage": stats.get("memory_usage"),
+                    "memory_limit": stats.get("memory_limit"),
+                }
+            else:
+                addon_info["stats"] = None
+        elif include_stats:
+            addon_info["stats"] = None
 
         formatted_addons.append(addon_info)
 
