@@ -394,9 +394,8 @@ def ha_container_with_fresh_config():
                             f"⏳ {component_count} components loaded, waiting for more..."
                         )
                         last_count = component_count
-            except requests.exceptions.RequestException as exc:
-                # Ignore transient request errors during stabilization, but log for debugging.
-                logger.debug("Transient error while polling HA config during stabilization: %s", exc)
+            except Exception as exc:
+                logger.debug(f"Stabilization check failed: {exc}")
             time.sleep(1)
         else:
             logger.warning("⚠️ Component stabilization timed out, proceeding anyway")
@@ -445,7 +444,7 @@ async def ha_client(
     await client.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
