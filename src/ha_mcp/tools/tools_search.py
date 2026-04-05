@@ -17,6 +17,7 @@ from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import (
     add_timezone_metadata,
+    build_pagination_metadata,
     coerce_bool_param,
     coerce_int_param,
     parse_string_list_param,
@@ -28,16 +29,16 @@ logger = logging.getLogger(__name__)
 def _build_pagination_metadata(
     total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Build standardized pagination metadata for search responses."""
-    has_more = (offset + len(results)) < total_matches
-    return {
-        "total_matches": total_matches,
-        "offset": offset,
-        "limit": limit,
-        "count": len(results),
-        "has_more": has_more,
-        "next_offset": offset + limit if has_more else None,
-    }
+    """Build standardized pagination metadata for search responses.
+
+    Thin wrapper around the shared ``build_pagination_metadata`` helper that
+    keeps the existing call-site signature (accepts a *results* list and uses
+    ``total_matches`` as the key name expected by search tools).
+    """
+    meta = build_pagination_metadata(total_matches, offset, limit, len(results))
+    # Search tools use "total_matches" instead of "total_count"
+    meta["total_matches"] = meta.pop("total_count")
+    return meta
 
 
 async def _exact_match_search(
@@ -144,8 +145,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Search Entities"
-        }
+            "title": "Search Entities",
+        },
     )
     @log_tool_usage
     async def ha_search_entities(
@@ -498,8 +499,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get System Overview"
-        }
+            "title": "Get System Overview",
+        },
     )
     @log_tool_usage
     async def ha_get_overview(
@@ -721,8 +722,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Deep Search"
-        }
+            "title": "Deep Search",
+        },
     )
     @log_tool_usage
     async def ha_deep_search(
@@ -829,8 +830,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Entity State"
-        }
+            "title": "Get Entity State",
+        },
     )
     @log_tool_usage
     async def ha_get_state(entity_id: str) -> dict[str, Any]:
@@ -856,8 +857,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Multiple Entity States"
-        }
+            "title": "Get Multiple Entity States",
+        },
     )
     @log_tool_usage
     async def ha_get_states(

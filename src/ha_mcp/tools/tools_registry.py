@@ -24,7 +24,12 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
 )
-from .util_helpers import coerce_bool_param, parse_string_list_param
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_bool_param,
+    coerce_int_param,
+    parse_string_list_param,
+)
 
 # Known voice assistant identifiers
 KNOWN_ASSISTANTS = ["conversation", "cloud.alexa", "cloud.google_assistant"]
@@ -341,7 +346,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"device_id": device_id},
             )
 
-    @mcp.tool(tags={"Device Registry"}, annotations={"destructiveHint": True, "title": "Rename Entity"})
+    @mcp.tool(
+        tags={"Device Registry"},
+        annotations={"destructiveHint": True, "title": "Rename Entity"},
+    )
     @log_tool_usage
     async def ha_rename_entity(
         entity_id: Annotated[
@@ -504,7 +512,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 results["device_rename"] = {
                     "skipped": True,
                     "reason": reason,
-                    **({"warning": "Registry query failed; retry may succeed"} if registry_lookup_failed else {}),
+                    **(
+                        {"warning": "Registry query failed; retry may succeed"}
+                        if registry_lookup_failed
+                        else {}
+                    ),
                 }
 
             # Build success response
@@ -568,8 +580,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)"
-        }
+            "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
+        },
     )
     @log_tool_usage
     async def ha_get_device(
@@ -608,42 +620,59 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=50,
+                description="Max devices to return per page in list mode (default: 50)",
+            ),
+        ] = 50,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of devices to skip for pagination (default: 0)",
+            ),
+        ] = 0,
+        detail_level: Annotated[
+            str | None,
+            Field(
+                default="summary",
+                description=(
+                    "'summary': name, manufacturer, model, area (default for list mode). "
+                    "'full': include entities and all integration details. "
+                    "Single device lookups always return full detail."
+                ),
+            ),
+        ] = "summary",
     ) -> dict[str, Any]:
-        """
-        Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.
+        """Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 
-        Without device_id/entity_id: Lists all devices with optional filters.
-        With device_id or entity_id: Returns detailed info for that specific device.
+        Without device_id/entity_id: Lists devices with optional filters and pagination.
+        With device_id or entity_id: Returns full detail for that specific device.
 
-        **List all devices:**
-        - All devices: ha_get_device()
+        **List devices (paginated):**
+        - First page: ha_get_device()
+        - Next page: ha_get_device(offset=50)
         - By area: ha_get_device(area_id="living_room")
-        - By manufacturer: ha_get_device(manufacturer="Philips")
         - By integration: ha_get_device(integration="zigbee2mqtt")
-        - Combined filters: ha_get_device(integration="zha", area_id="kitchen")
+        - Full details in list: ha_get_device(detail_level="full", limit=10)
 
-        **Single device lookup:**
+        **Single device lookup (always full detail):**
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
-        **Zigbee device support:**
-        - Use integration="zha" or integration="zigbee2mqtt" to list Zigbee devices
-        - Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices
-        - ZHA triggers: Use `ieee_address` for zha_event triggers
-        - Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)
-
-        **Z-Wave JS device support:**
-        - Use integration="zwave_js" to list Z-Wave devices
-        - Returns node_id extracted from device identifiers
-        - Single device lookup includes node_status (security class, routing, Z-Wave+ version)
-
-        **Returns (list mode):**
-        - List of devices with device_id, name, manufacturer, model, area_id
-
-        **Returns (single device):**
-        - Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities
+        **Zigbee:** integration="zha" or "zigbee2mqtt". Returns ieee_address, radio metrics.
+        **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
         """
         try:
+            limit_int = (
+                coerce_int_param(limit, "limit", default=50, min_value=1, max_value=200)
+                or 50
+            )
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+            effective_detail = detail_level or "summary"
+
             # Get device registry
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
             list_result = await client.send_websocket_message(list_message)
@@ -836,7 +865,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "lqi": zha_dev.get("lqi"),
                                     "rssi": zha_dev.get("rssi"),
                                 }
-                    except (HomeAssistantConnectionError, HomeAssistantAPIError, TimeoutError, OSError) as e:
+                    except (
+                        HomeAssistantConnectionError,
+                        HomeAssistantAPIError,
+                        TimeoutError,
+                        OSError,
+                    ) as e:
                         logger.warning(
                             "Could not fetch ZHA radio metrics for device %s: %s",
                             device_info.get("device_id"),
@@ -844,9 +878,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
 
                 # Enrich Z-Wave JS devices with node status
-                if device_info.get("integration_type") == "zwave_js" and device_info.get(
-                    "node_id"
-                ):
+                if device_info.get(
+                    "integration_type"
+                ) == "zwave_js" and device_info.get("node_id"):
                     try:
                         zwave_result = await client.send_websocket_message(
                             {"type": "zwave_js/node_status", "device_id": device_id}
@@ -868,7 +902,12 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "is_controller_node"
                                 ),
                             }
-                    except (HomeAssistantConnectionError, HomeAssistantAPIError, TimeoutError, OSError) as e:
+                    except (
+                        HomeAssistantConnectionError,
+                        HomeAssistantAPIError,
+                        TimeoutError,
+                        OSError,
+                    ) as e:
                         logger.warning(
                             "Could not fetch Z-Wave node status for device %s: %s",
                             device_info.get("device_id"),
@@ -911,21 +950,31 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if integration_lower in named_types:
                         if device_info["integration_type"] != integration_lower:
                             continue
-                    elif (
-                        integration_lower
-                        not in device_info.get("integration_sources", [])
+                    elif integration_lower not in device_info.get(
+                        "integration_sources", []
                     ):
                         continue
 
-                device_info["entities"] = device_to_entities.get(device.get("id"), [])
+                # In summary mode, omit entity lists to reduce response size
+                if effective_detail == "full":
+                    device_info["entities"] = device_to_entities.get(
+                        device.get("id"), []
+                    )
                 matched_devices.append(device_info)
+
+            # Apply pagination
+            total_matched = len(matched_devices)
+            paginated_devices = matched_devices[offset_int : offset_int + limit_int]
 
             # Build result
             result: dict[str, Any] = {
                 "success": True,
-                "count": len(matched_devices),
+                **build_pagination_metadata(
+                    total_matched, offset_int, limit_int, len(paginated_devices)
+                ),
                 "total_devices": len(all_devices),
-                "devices": matched_devices,
+                "devices": paginated_devices,
+                "detail_level": effective_detail,
             }
 
             # Add filter info
@@ -982,10 +1031,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Device Registry"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Update Device"
-        }
+        annotations={"destructiveHint": True, "title": "Update Device"},
     )
     @log_tool_usage
     async def ha_update_device(
@@ -1072,8 +1118,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "title": "Remove Device"
-        }
+            "title": "Remove Device",
+        },
     )
     @log_tool_usage
     async def ha_remove_device(
