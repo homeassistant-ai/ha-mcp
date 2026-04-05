@@ -22,8 +22,8 @@ options:
   enable_skills: true
   enable_skills_as_tools: true
   enable_tool_search: false
-  enable_yaml_config_editing: false
   tool_search_max_results: 5
+  enable_yaml_config_editing: false
   # --- GENERATED TOOL CONFIG START (do not edit) ---
   tools:
     add-ons:
@@ -171,8 +171,8 @@ schema:
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
-  enable_yaml_config_editing: bool?
   tool_search_max_results: int?
+  enable_yaml_config_editing: bool?
   # --- GENERATED TOOL SCHEMA START (do not edit) ---
   tools:
     add-ons:
