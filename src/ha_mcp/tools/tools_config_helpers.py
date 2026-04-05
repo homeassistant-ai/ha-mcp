@@ -16,6 +16,7 @@ from pydantic import Field
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
     parse_string_list_param,
     wait_for_entity_registered,
@@ -405,6 +406,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        category: Annotated[
+            str | None,
+            Field(
+                description="Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.",
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -632,6 +640,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if result.get("success"):
                     helper_data = result.get("result", {})
                     entity_id = helper_data.get("entity_id")
+                    # Some helper types don't return entity_id — derive from result id
+                    if not entity_id and helper_data.get("id"):
+                        entity_id = f"{helper_type}.{helper_data['id']}"
 
                     # Wait for entity to be properly registered before proceeding
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
@@ -660,6 +671,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if update_result.get("success"):
                             helper_data["area_id"] = area_id
                             helper_data["labels"] = labels
+                        else:
+                            error_detail = update_result.get("error", {})
+                            error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
+                            helper_data["warning"] = (
+                                f"Helper created but entity registry update failed: {error_msg}"
+                            )
+
+                    # Apply category via shared helper (consistent with automations/scripts)
+                    if category and entity_id:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", helper_data, "helper"
+                        )
 
                     return {
                         "success": True,
@@ -890,7 +913,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             registry_update["area_id"] = area_id
                         if labels:
                             registry_update["labels"] = labels
-                        await client.send_websocket_message(registry_update)
+                        reg_result = await client.send_websocket_message(registry_update)
+                        if not reg_result.get("success"):
+                            error_detail = reg_result.get("error", {})
+                            error_msg = error_detail.get("message", "Unknown error") if isinstance(error_detail, dict) else str(error_detail)
+                            logger.warning(f"Entity registry update failed for {entity_id}: {error_msg}")
+                            updated_data["warning"] = (
+                                f"Config updated but entity registry update failed: {error_msg}"
+                            )
+
+                    # Apply category via shared helper
+                    if category:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", updated_data, "helper"
+                        )
 
                 else:
                     # Standard helpers: entity registry update only
@@ -918,6 +954,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f"Failed to update helper: {result.get('error', 'Unknown error')}",
                             context={"helper_type": helper_type, "entity_id": entity_id},
                         ))
+
+                    # Apply category via shared helper
+                    if category:
+                        await apply_entity_category(
+                            client, entity_id, category, "helpers", updated_data, "helper"
+                        )
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)
