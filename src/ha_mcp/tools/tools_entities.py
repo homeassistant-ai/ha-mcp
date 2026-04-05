@@ -941,3 +941,69 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "entity_id": entity_id if isinstance(entity_id, str) else entity_ids
                 },
             )
+
+    @mcp.tool(
+        tags={"Entity Registry"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "title": "Remove Entity",
+        },
+    )
+    @log_tool_usage
+    async def ha_remove_entity(
+        entity_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Entity ID to remove from the entity registry "
+                    "(e.g., 'sensor.old_temperature'). "
+                    "This permanently removes the entity registration."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Remove an entity from the Home Assistant entity registry.
+
+        Permanently removes the entity registration from Home Assistant.
+        The entity will no longer appear in the UI or be available to automations.
+
+        Use this to clean up orphaned or unwanted entity registrations.
+
+        RELATED TOOLS:
+        - ha_search_entities: Find entities to verify the entity_id before removing
+        - ha_get_entity: Check entity details before removal
+        """
+        try:
+            result = await client.send_websocket_message(
+                {"type": "config/entity_registry/remove", "entity_id": entity_id}
+            )
+
+            if not result.get("success"):
+                error_msg = str(result.get("error", "Unknown error"))
+                if "not found" in error_msg.lower():
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Entity '{entity_id}' not found in registry",
+                            context={"entity_id": entity_id},
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to remove entity '{entity_id}': {error_msg}",
+                        context={"entity_id": entity_id},
+                    )
+                )
+
+            return {"success": True, "entity_id": entity_id}
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error removing entity: {e}")
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
+            )
