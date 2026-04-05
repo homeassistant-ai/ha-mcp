@@ -79,8 +79,11 @@ class TestToolDocsSync:
         """Tool count in About section must match the actual tool registry."""
         tools = json.loads((REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(encoding="utf-8"))
         docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text(encoding="utf-8")
-        expected = f"provides {len(tools)}+ tools"
-        assert expected in docs, (
-            "About section tool count is stale. "
-            "Run 'python scripts/extract_tools.py' to regenerate."
-        )
+        for expected in [
+            f"provides {len(tools)}+ tools",
+            f"catalog (~{len(tools)} tools",
+        ]:
+            assert expected in docs, (
+                f"Tool count {expected!r} is stale in DOCS.md. "
+                "Run 'python scripts/extract_tools.py' to regenerate."
+            )
