@@ -146,7 +146,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
 | **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
-| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_info`, `ha_hacs_list_installed`, `ha_hacs_repository_info`, `ha_hacs_search` |
+| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema`, `ha_set_config_entry_helper` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs`, `ha_get_statistics` |
 | **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
