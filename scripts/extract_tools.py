@@ -164,7 +164,7 @@ def generate_docs_section(tools: list[dict]) -> str:
 
 def update_docs(tools: list[dict]) -> str:
     """Replace the auto-generated section in DOCS.md between sync markers."""
-    docs = DOCS_PATH.read_text(encoding="utf-8")
+    docs = DOCS_PATH.read_text()
     if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
         print(
             f"ERROR: {DOCS_PATH} is missing sync markers.\n"
