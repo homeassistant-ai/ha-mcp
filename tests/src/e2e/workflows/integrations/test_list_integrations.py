@@ -28,10 +28,10 @@ class TestListIntegrations:
 
     async def test_list_all_integrations(self, mcp_client):
         """
-        Test: List all integrations without filters
+        Test: List all integrations without filters (paginated).
 
-        This test validates that we can retrieve all configured integrations
-        from Home Assistant.
+        This test validates that we can retrieve integrations
+        from Home Assistant with pagination metadata.
         """
         logger.info("Testing ha_get_integration without filters...")
 
@@ -39,24 +39,29 @@ class TestListIntegrations:
 
         data = assert_mcp_success(result, "list all integrations")
 
-        # Verify response structure
-        assert "total" in data, "Response should include total count"
+        # Verify response structure with pagination
+        assert "total_count" in data, "Response should include total_count"
         assert "entries" in data, "Response should include entries list"
         assert "state_summary" in data, "Response should include state summary"
         assert "query" in data, "Response should include query field"
+        assert "has_more" in data, "Response should include has_more"
+        assert "offset" in data, "Response should include offset"
+        assert "limit" in data, "Response should include limit"
+        assert "count" in data, "Response should include count"
 
-        total = data["total"]
+        total_count = data["total_count"]
         entries = data["entries"]
+        count = data["count"]
         state_summary = data["state_summary"]
 
-        logger.info(f"Found {total} integrations")
+        logger.info(f"Found {total_count} integrations, {count} in page")
         logger.info(f"State summary: {state_summary}")
 
         # In a fresh test environment, there should be at least some integrations
-        # (default_config, etc.)
-        assert total >= 0, "Total should be non-negative"
+        assert total_count >= 0, "Total should be non-negative"
         assert isinstance(entries, list), "Entries should be a list"
-        assert len(entries) == total, "Entry count should match total"
+        assert count == len(entries), f"Count mismatch: {count} vs {len(entries)}"
+        assert count <= 50, f"Default page should have at most 50, got {count}"
 
         # Verify entry structure (if we have entries)
         if entries:
@@ -75,12 +80,14 @@ class TestListIntegrations:
             for field in expected_fields:
                 assert field in entry, f"Entry should have '{field}' field"
 
-            logger.info(f"Sample entry: domain={entry['domain']}, state={entry['state']}")
+            logger.info(
+                f"Sample entry: domain={entry['domain']}, state={entry['state']}"
+            )
 
-        # Verify state_summary matches entries
+        # Verify state_summary covers all entries (not just paginated page)
         total_from_summary = sum(state_summary.values())
-        assert total_from_summary == total, (
-            f"State summary total ({total_from_summary}) should match total ({total})"
+        assert total_from_summary == total_count, (
+            f"State summary total ({total_from_summary}) should match total_count ({total_count})"
         )
 
         # Verify no query was applied
@@ -101,7 +108,7 @@ class TestListIntegrations:
         all_result = await mcp_client.call_tool("ha_get_integration", {})
         all_data = assert_mcp_success(all_result, "get all integrations")
 
-        if all_data["total"] == 0:
+        if all_data["total_count"] == 0:
             pytest.skip("No integrations available to test query search")
 
         # Find a domain that has entries
@@ -114,12 +121,14 @@ class TestListIntegrations:
             "ha_get_integration", {"query": test_domain}
         )
 
-        search_data = assert_mcp_success(search_result, f"search by query {test_domain}")
+        search_data = assert_mcp_success(
+            search_result, f"search by query {test_domain}"
+        )
 
         # Fuzzy search should find at least the matching domain(s)
-        assert search_data["total"] > 0, (
+        assert search_data["total_count"] > 0, (
             f"Expected at least 1 entry for query {test_domain}, "
-            f"got {search_data['total']}"
+            f"got {search_data['total_count']}"
         )
 
         # Verify all entries match the query (domain or title contains search term)
@@ -134,7 +143,7 @@ class TestListIntegrations:
         # Verify query was recorded
         assert search_data["query"] == test_domain
 
-        logger.info(f"Query search test passed: {search_data['total']} entries")
+        logger.info(f"Query search test passed: {search_data['total_count']} entries")
 
     async def test_search_by_nonexistent_query(self, mcp_client):
         """
@@ -151,12 +160,45 @@ class TestListIntegrations:
         data = assert_mcp_success(result, "search by nonexistent query")
 
         # Should succeed but with empty results
-        assert data["total"] == 0, "Should have 0 results for nonexistent query"
+        assert data["total_count"] == 0, "Should have 0 results for nonexistent query"
         assert len(data["entries"]) == 0, "Entries should be empty"
         assert data["query"] == "nonexistent_integration_xyz_12345"
 
         logger.info("Nonexistent query search test passed")
 
+    async def test_pagination_limit_and_offset(self, mcp_client):
+        """Test that limit/offset pagination works for integration listing."""
+        logger.info("Testing integration pagination...")
+
+        # Get first page with small limit
+        page1_result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {"limit": 2, "offset": 0},
+        )
+        page1 = assert_mcp_success(page1_result, "page 1")
+
+        if page1["total_count"] < 3:
+            pytest.skip("Not enough integrations to test pagination")
+
+        assert page1["count"] == 2
+        assert page1["offset"] == 0
+        assert page1["has_more"] is True
+        assert page1["next_offset"] == 2
+
+        # Get second page
+        page2_result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {"limit": 2, "offset": 2},
+        )
+        page2 = assert_mcp_success(page2_result, "page 2")
+        assert page2["offset"] == 2
+
+        # Pages should not overlap
+        ids1 = {e["entry_id"] for e in page1["entries"]}
+        ids2 = {e["entry_id"] for e in page2["entries"]}
+        assert ids1.isdisjoint(ids2), "Pages should not overlap"
+
+        logger.info("Integration pagination test passed")
 
     async def test_integration_states(self, mcp_client):
         """
@@ -181,7 +223,9 @@ class TestListIntegrations:
         # Check for any problematic states
         for state in PROBLEM_STATES:
             if state in state_summary and state_summary[state] > 0:
-                logger.warning(f"Found {state_summary[state]} integrations in {state} state")
+                logger.warning(
+                    f"Found {state_summary[state]} integrations in {state} state"
+                )
 
         logger.info("State information test passed")
 
@@ -196,7 +240,7 @@ class TestListIntegrations:
         result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(result, "get integrations for detail check")
 
-        if data["total"] == 0:
+        if data["total_count"] == 0:
             pytest.skip("No integrations available to check details")
 
         # Check each entry has required fields with valid types
@@ -229,11 +273,11 @@ class TestListIntegrations:
             )
 
             # disabled_by can be None or string
-            assert entry["disabled_by"] is None or isinstance(entry["disabled_by"], str), (
-                "disabled_by should be None or string"
-            )
+            assert entry["disabled_by"] is None or isinstance(
+                entry["disabled_by"], str
+            ), "disabled_by should be None or string"
 
-        logger.info(f"All {data['total']} entries have valid structure")
+        logger.info(f"All {data['total_count']} entries have valid structure")
 
 
 @pytest.mark.integrations
@@ -253,7 +297,7 @@ class TestIntegrationFiltering:
         all_result = await mcp_client.call_tool("ha_get_integration", {})
         all_data = assert_mcp_success(all_result, "get all integrations")
 
-        if all_data["total"] == 0:
+        if all_data["total_count"] == 0:
             pytest.skip("No integrations available to test domain filter")
 
         # Pick a domain that exists
@@ -264,7 +308,7 @@ class TestIntegrationFiltering:
         )
         data = assert_mcp_success(result, f"filter by domain {test_domain}")
 
-        assert data["total"] > 0, f"Expected entries for domain {test_domain}"
+        assert data["total_count"] > 0, f"Expected entries for domain {test_domain}"
         assert data.get("domain_filter") == test_domain
 
         # All entries should be the filtered domain
@@ -277,7 +321,9 @@ class TestIntegrationFiltering:
         for entry in data["entries"]:
             assert "options" in entry, "Domain filter should include options"
 
-        logger.info(f"Domain filter test passed: {data['total']} {test_domain} entries")
+        logger.info(
+            f"Domain filter test passed: {data['total_count']} {test_domain} entries"
+        )
 
     async def test_filter_by_nonexistent_domain(self, mcp_client):
         """
@@ -288,7 +334,7 @@ class TestIntegrationFiltering:
         )
         data = assert_mcp_success(result, "filter by nonexistent domain")
 
-        assert data["total"] == 0, "Should have 0 results for nonexistent domain"
+        assert data["total_count"] == 0, "Should have 0 results for nonexistent domain"
         assert len(data["entries"]) == 0
 
     async def test_include_options_flag(self, mcp_client):
@@ -302,14 +348,16 @@ class TestIntegrationFiltering:
         )
         data = assert_mcp_success(result, "list with include_options")
 
-        if data["total"] == 0:
+        if data["total_count"] == 0:
             pytest.skip("No integrations available")
 
         # All entries should have options field
         for entry in data["entries"]:
             assert "options" in entry, "include_options should add options field"
 
-        logger.info(f"include_options test passed: {data['total']} entries with options")
+        logger.info(
+            f"include_options test passed: {data['total_count']} entries with options"
+        )
 
     async def test_specific_entry_includes_options(self, mcp_client):
         """
@@ -326,9 +374,7 @@ class TestIntegrationFiltering:
         )
         list_data = assert_mcp_success(list_result, "list with options")
 
-        target_entry = next(
-            (e for e in list_data["entries"] if e.get("options")), None
-        )
+        target_entry = next((e for e in list_data["entries"] if e.get("options")), None)
         if not target_entry:
             pytest.skip("No integrations with non-empty options found")
 
@@ -372,4 +418,6 @@ async def test_integration_discovery(mcp_client):
 
     assert "entries" in data, "Response should contain entries"
 
-    logger.info(f"Integration discovery test passed: found {data['total']} integrations")
+    logger.info(
+        f"Integration discovery test passed: found {data['total_count']} integrations"
+    )
