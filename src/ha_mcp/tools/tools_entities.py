@@ -946,7 +946,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         tags={"Entity Registry"},
         annotations={
             "destructiveHint": True,
-            "idempotentHint": False,
+            "idempotentHint": True,
             "title": "Remove Entity",
         },
     )
