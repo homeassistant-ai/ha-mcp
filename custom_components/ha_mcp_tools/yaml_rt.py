@@ -56,18 +56,27 @@ def _represent_tagged_scalar(dumper, data: _TaggedScalar):
     return dumper.represent_scalar(data.tag, data.value)
 
 
-def make_yaml() -> YAML:
-    """Return a round-trip YAML instance with HA tag support.
+def _register_ha_tags() -> None:
+    """Register HA tag constructors/representers on the shared class registries.
 
-    Note: ``add_constructor`` / ``add_representer`` mutate the shared class
-    registries, not per-instance state.  Re-registering is idempotent (dict
-    overwrite) and harmless, but callers should not assume instance isolation.
+    ``add_constructor`` / ``add_representer`` mutate class-level registries
+    shared by all ``YAML(typ="rt")`` instances.  We call this once at import
+    time; ``make_yaml()`` then only creates a fresh (thread-safe) instance.
     """
+    # Use a temporary instance to access the Constructor/Representer classes
+    _tmp = YAML(typ="rt")
+    for tag in _HA_TAGS:
+        _tmp.Constructor.add_constructor(tag, _make_tag_constructor(tag))
+    _tmp.Representer.add_representer(_TaggedScalar, _represent_tagged_scalar)
+
+
+_register_ha_tags()
+
+
+def make_yaml() -> YAML:
+    """Return a fresh round-trip YAML instance with HA tag support."""
     ry = YAML(typ="rt")
     ry.preserve_quotes = True
-    for tag in _HA_TAGS:
-        ry.Constructor.add_constructor(tag, _make_tag_constructor(tag))
-    ry.Representer.add_representer(_TaggedScalar, _represent_tagged_scalar)
     return ry
 
 
