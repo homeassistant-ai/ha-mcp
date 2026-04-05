@@ -998,6 +998,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ErrorCode.ENTITY_NOT_FOUND,
                             f"Entity '{entity_id}' not found in registry",
                             context={"entity_id": entity_id},
+                            suggestions=[
+                                "Use ha_search_entities() to find valid entity IDs",
+                                "The entity may have already been removed",
+                            ],
                         )
                     )
                 raise_tool_error(
@@ -1005,6 +1009,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ErrorCode.SERVICE_CALL_FAILED,
                         f"Failed to remove entity '{entity_id}': {error_msg}",
                         context={"entity_id": entity_id},
+                        suggestions=[
+                            "Check HA logs for details on why the removal was rejected",
+                        ],
                     )
                 )
 
@@ -1013,7 +1020,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error removing entity: {e}")
+            logger.error(f"Error removing entity '{entity_id}': {e}")
             exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
