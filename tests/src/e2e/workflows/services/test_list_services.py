@@ -97,8 +97,8 @@ class TestServiceDiscovery:
         if "light.turn_on" in services:
             turn_on = services["light.turn_on"]
             assert "name" in turn_on, "Service should have name"
-            # Default is summary mode — fields are omitted
-            assert "fields" not in turn_on, "Summary mode should omit fields"
+            # Domain filter auto-enables full detail — fields should be present
+            assert "fields" in turn_on, "Domain filter should auto-enable full detail"
 
         logger.info("Domain filter test passed")
 
@@ -336,17 +336,18 @@ class TestServiceDiscovery:
         logger.info("Detail level full test passed")
 
     async def test_detail_level_summary_omits_fields(self, mcp_client):
-        """Test that detail_level='summary' (default) omits field schemas."""
-        logger.info("Testing: detail_level=summary")
+        """Test that default summary mode (no filters) omits field schemas."""
+        logger.info("Testing: detail_level=summary (no filters)")
 
+        # No domain/query filter — stays in summary mode
         result = await mcp_client.call_tool(
             "ha_list_services",
-            {"domain": "light", "detail_level": "summary"},
+            {"limit": 10},
         )
         data = assert_mcp_success(result, "summary detail")
 
         services = data.get("services", {})
-        assert len(services) > 0, "Should return light services"
+        assert len(services) > 0, "Should return services"
 
         # Summary mode should omit fields
         for key, svc in services.items():

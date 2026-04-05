@@ -670,7 +670,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 limit, "limit", default=50, min_value=1, max_value=200
             )
             offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
-            effective_detail = detail_level
+            effective_detail = (
+                "full" if (integration or area_id or manufacturer) else detail_level
+            )
 
             # Get device registry
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}

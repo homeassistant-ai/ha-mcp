@@ -105,7 +105,7 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 query_filter=query,
                 limit=limit_int,
                 offset=offset_int,
-                detail_level=detail_level or "summary",
+                detail_level="full" if (domain or query) else detail_level,
             )
 
             return result
