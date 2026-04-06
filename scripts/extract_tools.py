@@ -307,7 +307,7 @@ def generate_addon_config_tools(tools: list[dict]) -> tuple[str, str]:
     return "\n".join(opt_lines), "\n".join(sch_lines)
 
 
-def generate_addon_translations(tools: list[dict]) -> str:  # noqa: ARG001
+def generate_addon_translations(tools: list[dict]) -> str:
     """Generate the translations/en.yaml for the addon.
 
     Only top-level config keys get translations (Supervisor doesn't
