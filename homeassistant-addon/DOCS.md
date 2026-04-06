@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 93+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 91+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -212,7 +212,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~93 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~91 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -310,7 +310,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 93+ MCP tools for controlling Home Assistant:
+The add-on provides 91+ MCP tools for controlling Home Assistant:
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
@@ -376,10 +376,8 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 ### HACS
 - `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
 - `ha_hacs_download` — Download and install a HACS repository.
-- `ha_hacs_info` — Get HACS status, version, and enabled categories.
-- `ha_hacs_list_installed` — List installed HACS repositories with focused, small response.
 - `ha_hacs_repository_info` — Get detailed repository information including README and documentation.
-- `ha_hacs_search` — Search HACS store for repositories by keyword with pagination.
+- `ha_hacs_search` — Search HACS store for repositories, or list installed repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
