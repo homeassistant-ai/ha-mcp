@@ -1,5 +1,19 @@
 """Home Assistant MCP Server."""
 
+import sys
+
+if sys.version_info < (3, 13):  # noqa: UP036 — uvx can bypass requires-python and run on 3.12
+    print(
+        f"ERROR: ha-mcp requires Python 3.13+, but you are running Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}.\n"
+        "If using uvx, add '--python 3.13' to your config args:\n"
+        '  "args": ["--python", "3.13", "ha-mcp@latest"]\n'
+        "Or install Python 3.13: brew install python@3.13 (macOS) / "
+        "sudo apt install python3.13 (Linux)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 import truststore
 
 truststore.inject_into_ssl()
