@@ -24,9 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
 TOOLS_JSON_PATH = REPO_ROOT / "site" / "src" / "data" / "tools.json"
 README_PATH = REPO_ROOT / "README.md"
+DOCS_PATH = REPO_ROOT / "homeassistant-addon" / "DOCS.md"
+
 
 README_START_MARKER = "<!-- TOOLS_TABLE_START -->"
 README_END_MARKER = "<!-- TOOLS_TABLE_END -->"
+DOCS_START_MARKER = "<!-- ADDON_TOOLS_START -->"
+DOCS_END_MARKER = "<!-- ADDON_TOOLS_END -->"
 
 TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
 
@@ -132,6 +136,54 @@ def extract_tools() -> list[dict]:
     return tools
 
 
+def generate_docs_section(tools: list[dict]) -> str:
+    """Generate the Available Tools section for homeassistant-addon/DOCS.md."""
+    categories: dict[str, list[dict]] = {}
+    for tool in tools:
+        cat = tool["tags"][0] if tool["tags"] else "Other"
+        categories.setdefault(cat, []).append(tool)
+
+    lines = [
+        DOCS_START_MARKER,
+        "",
+        f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
+        "",
+    ]
+    for cat in sorted(categories):
+        lines.append(f"### {cat}")
+        for tool in sorted(categories[cat], key=lambda t: t["name"]):
+            desc = tool["description"].split("\n")[0].strip() if tool["description"] else ""
+            entry = f"- `{tool['name']}`"
+            if desc:
+                entry += f" — {desc}"
+            lines.append(entry)
+        lines.append("")
+    lines.append(DOCS_END_MARKER)
+    return "\n".join(lines)
+
+
+def update_docs(tools: list[dict]) -> str:
+    """Replace the auto-generated section in DOCS.md between sync markers."""
+    docs = DOCS_PATH.read_text(encoding="utf-8")
+    if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
+        print(
+            f"ERROR: {DOCS_PATH} is missing sync markers.\n"
+            f"  Add {DOCS_START_MARKER!r} and {DOCS_END_MARKER!r} to the file first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    new_section = generate_docs_section(tools)
+    pattern = re.compile(
+        rf"{re.escape(DOCS_START_MARKER)}.*?{re.escape(DOCS_END_MARKER)}",
+        re.DOTALL,
+    )
+    updated = pattern.sub(new_section, docs)
+    updated = re.sub(r"\bprovides \d+\+ tools\b", f"provides {len(tools)}+ tools", updated)
+    updated = re.sub(r"\bcatalog \(~\d+ tools\b", f"catalog (~{len(tools)} tools", updated)
+    assert DOCS_START_MARKER in updated and DOCS_END_MARKER in updated
+    return updated
+
+
 def generate_tools_json(tools: list[dict]) -> str:
     return json.dumps(tools, indent=2, ensure_ascii=False) + "\n"
 
@@ -202,6 +254,10 @@ def check_sync(tools: list[dict]) -> bool:
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
 
+    if DOCS_PATH.exists() and DOCS_PATH.read_text(encoding="utf-8") != update_docs(tools):
+        print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
+        in_sync = False
+
     return in_sync
 
 
@@ -227,6 +283,9 @@ def main() -> None:
 
         README_PATH.write_text(update_readme(tools))
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
+
+        DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
+        print(f"Updated {DOCS_PATH.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":
