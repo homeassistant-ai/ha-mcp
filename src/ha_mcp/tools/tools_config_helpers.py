@@ -1009,26 +1009,55 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     else:
                         # Standard input helpers: use {type}/update API
                         # to persist config changes (not just entity registry).
+                        # HA's update schemas require all vol.Required fields
+                        # even for partial updates, so fetch current config
+                        # and backfill any fields the caller didn't provide.
+                        list_result = await client.send_websocket_message(
+                            {"type": f"{helper_type}/list"}
+                        )
+                        current_config: dict[str, Any] = {}
+                        if list_result.get("success"):
+                            items = list_result.get("result", [])
+                            current_config = next(
+                                (
+                                    item
+                                    for item in items
+                                    if isinstance(item, dict)
+                                    and item.get("id") == unique_id
+                                ),
+                                {},
+                            )
+
                         update_msg = {
                             "type": f"{helper_type}/update",
                             f"{helper_type}_id": unique_id,
+                            "name": name
+                            if name is not None
+                            else current_config.get("name"),
                         }
-                        if name is not None:
-                            update_msg["name"] = name
                         if icon is not None:
                             update_msg["icon"] = icon
 
                         if helper_type == "input_select":
-                            if options is not None:
-                                update_msg["options"] = options
+                            update_msg["options"] = (
+                                options
+                                if options is not None
+                                else current_config.get("options", [])
+                            )
                             if initial is not None:
                                 update_msg["initial"] = initial
 
                         elif helper_type == "input_number":
-                            if min_value is not None:
-                                update_msg["min"] = min_value
-                            if max_value is not None:
-                                update_msg["max"] = max_value
+                            update_msg["min"] = (
+                                min_value
+                                if min_value is not None
+                                else current_config.get("min", 0)
+                            )
+                            update_msg["max"] = (
+                                max_value
+                                if max_value is not None
+                                else current_config.get("max", 100)
+                            )
                             if step is not None:
                                 update_msg["step"] = step
                             if unit_of_measurement is not None:
