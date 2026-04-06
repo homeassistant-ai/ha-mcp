@@ -579,7 +579,7 @@
           "default": false
         },
         "force_reload": {
-          "type": "Annotated[bool, Field(description='Force reload from storage (bypass cache)')]",
+          "type": "Annotated[bool, Field(description='Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results).')]",
           "default": false
         },
         "entity_id": {
@@ -595,7 +595,7 @@
           "default": null
         },
         "include_config": {
-          "type": "Annotated[bool, Field(description='In search mode: include full card configuration in results (increases output size). Ignored outside search mode.')]",
+          "type": "Annotated[bool, Field(description=\"In search mode: include each matched card's own configuration object in results (increases output size). Does not affect whether the full dashboard config is returned — search mode always returns matches only, not the full dashboard. Ignored outside search mode.\")]",
           "default": false
         }
       }
