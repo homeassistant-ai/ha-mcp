@@ -68,11 +68,20 @@ class TestToolDocsSync:
         )
         assert section is not None, "Sync markers not found in DOCS.md"
 
-        section_tools = set(re.findall(r"`(ha_[a-z0-9_]+)`", section.group(0)))
+        # Pattern targets "- `ha_xxx`" at line start (re.MULTILINE).
+        # Assumes tool entries are never indented; update regex if format changes.
+        section_tools = set(re.findall(r"^- `(ha_[a-z0-9_]+)`", section.group(0), re.MULTILINE))
         missing = real_names - section_tools
         assert not missing, (
             f"Tools missing from DOCS.md auto-generated section ({len(missing)}): "
             + ", ".join(sorted(missing))
+            + "\nRun 'python scripts/extract_tools.py' to regenerate."
+        )
+
+        extra = section_tools - real_names
+        assert not extra, (
+            f"Ghost tools found in DOCS.md auto-generated section ({len(extra)}): "
+            + ", ".join(sorted(extra))
             + "\nRun 'python scripts/extract_tools.py' to regenerate."
         )
     def test_about_section_tool_count_synced(self) -> None:
