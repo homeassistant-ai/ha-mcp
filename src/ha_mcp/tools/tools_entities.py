@@ -275,7 +275,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 raise_tool_error(create_error_response(
                     ErrorCode.ENTITY_NOT_FOUND,
                     f"Entity '{entity_id}' not found in registry after applying exposure changes",
-                    context={"entity_id": entity_id},
+                    context={"entity_id": entity_id, "exposure_succeeded": exposure_result},
                     suggestions=[
                         "Verify the entity_id exists using ha_search_entities()",
                         "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
