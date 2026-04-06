@@ -409,6 +409,8 @@ class TestHelperWaitParameter:
                     "platform": "input_boolean",
                 },
             },
+            # input_boolean/list → current config for backfill
+            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
             # input_boolean/update
             {"success": True, "result": {"id": "abc123"}},
         ]
@@ -440,6 +442,8 @@ class TestHelperWaitParameter:
                     "platform": "input_boolean",
                 },
             },
+            # input_boolean/list → current config for backfill
+            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
             # input_boolean/update
             {"success": True, "result": {"id": "abc123"}},
         ]

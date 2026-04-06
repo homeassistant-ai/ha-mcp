@@ -1015,17 +1015,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         list_result = await client.send_websocket_message(
                             {"type": f"{helper_type}/list"}
                         )
-                        current_config: dict[str, Any] = {}
+                        existing = dict[str, Any]()
                         if list_result.get("success"):
                             items = list_result.get("result", [])
-                            current_config = next(
+                            existing = next(
                                 (
                                     item
                                     for item in items
                                     if isinstance(item, dict)
                                     and item.get("id") == unique_id
                                 ),
-                                {},
+                                existing,
                             )
 
                         update_msg = {
@@ -1033,7 +1033,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f"{helper_type}_id": unique_id,
                             "name": name
                             if name is not None
-                            else current_config.get("name"),
+                            else existing.get("name"),
                         }
                         if icon is not None:
                             update_msg["icon"] = icon
@@ -1042,7 +1042,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_msg["options"] = (
                                 options
                                 if options is not None
-                                else current_config.get("options", [])
+                                else existing.get("options", [])
                             )
                             if initial is not None:
                                 update_msg["initial"] = initial
@@ -1051,12 +1051,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_msg["min"] = (
                                 min_value
                                 if min_value is not None
-                                else current_config.get("min", 0)
+                                else existing.get("min", 0)
                             )
                             update_msg["max"] = (
                                 max_value
                                 if max_value is not None
-                                else current_config.get("max", 100)
+                                else existing.get("max", 100)
                             )
                             if step is not None:
                                 update_msg["step"] = step
