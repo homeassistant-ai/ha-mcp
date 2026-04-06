@@ -177,9 +177,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 token += "=" * padding
 
             decoded = urlsafe_b64decode(token.encode()).decode()
-            payload: dict[str, Any] = json.loads(decoded)
+            payload = json.loads(decoded)
 
-            if not payload.get("ha_token"):
+            if not isinstance(payload, dict) or not payload.get("ha_token"):
                 return None
             return payload
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
