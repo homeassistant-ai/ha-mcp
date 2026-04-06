@@ -567,7 +567,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards or get config for a specific one.\n\nWithout url_path (or with list_only=True): Lists all storage-mode dashboards\nwith metadata including url_path, title, icon, admin requirements.\n\nWith url_path: Returns the full Lovelace dashboard configuration\nincluding all views and cards.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
+    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists all storage-mode dashboards with metadata (url_path, title, icon).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria.\n  Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).\n  Multiple criteria are AND-ed. Always fetches fresh config (force=True).\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: url_path provided (no search params)\n  Returns the full Lovelace dashboard configuration including all views and cards.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n- Find cards by entity: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.living_room\")\n- Find by wildcard: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find by type: ha_config_get_dashboard(url_path=\"my-dash\", card_type=\"tile\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"jq_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -580,6 +580,22 @@
         },
         "force_reload": {
           "type": "Annotated[bool, Field(description='Force reload from storage (bypass cache)')]",
+          "default": false
+        },
+        "entity_id": {
+          "type": "Annotated[str | None, Field(description=\"Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. Matches cards with this entity in 'entity' or 'entities' field, view-level badges, and header cards. When provided, activates search mode (returns matches, not full config).\")]",
+          "default": null
+        },
+        "card_type": {
+          "type": "Annotated[str | None, Field(description=\"Find cards by type, e.g. 'tile', 'button', 'heading'. When provided, activates search mode.\")]",
+          "default": null
+        },
+        "heading": {
+          "type": "Annotated[str | None, Field(description='Find cards by heading/title text (case-insensitive partial match). When provided, activates search mode.')]",
+          "default": null
+        },
+        "include_config": {
+          "type": "Annotated[bool, Field(description='In search mode: include full card configuration in results (increases output size). Ignored outside search mode.')]",
           "default": false
         }
       }
@@ -617,7 +633,7 @@
   {
     "name": "ha_config_set_dashboard",
     "title": "Create or Update Dashboard",
-    "description": "Create or update a Home Assistant dashboard.\n\nCreates a new dashboard or updates an existing one with the provided configuration.\nSupports two modes: full config replacement OR Python transformation.\n\nUse 'default' or 'lovelace' to target the built-in default dashboard.\nNew dashboards require a hyphenated url_path (e.g., 'my-dashboard').\n\nWHEN TO USE WHICH MODE:\n- python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.\n- config: New dashboards only, or full restructure. Replaces everything.\n\nIMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls\nmust use fresh config_hash from ha_dashboard_find_card() or ha_config_get_dashboard()\nto get updated structure. Chain multiple ops in ONE expression when possible.\n\nTIP: Use ha_dashboard_find_card() to get the path for any card.\n\nPYTHON TRANSFORM EXAMPLES (RECOMMENDED):\n- Update card icon: 'config[\"views\"][0][\"cards\"][0][\"icon\"] = \"mdi:thermometer\"'\n- Add card: 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'\n- Delete card: 'del config[\"views\"][0][\"cards\"][2]'\n- Pattern-based update: 'for card in config[\"views\"][0][\"cards\"]: if \"light\" in card.get(\"entity\", \"\"): card[\"icon\"] = \"mdi:lightbulb\"'\n- Multi-operation: 'config[\"views\"][0][\"cards\"][0][\"icon\"] = \"mdi:a\"; config[\"views\"][0][\"cards\"][1][\"icon\"] = \"mdi:b\"'\n\nMODERN DASHBOARD BEST PRACTICES (2024+):\n- Use \"sections\" view type (default) with grid-based layouts\n- Use \"tile\" cards as primary card type (replaces legacy entity/light/climate cards)\n- Use \"grid\" cards for multi-column layouts within sections\n- Create multiple views with navigation paths (avoid single-view endless scrolling)\n- Use \"area\" cards with navigation for hierarchical organization\n\nDISCOVERING ENTITY IDs FOR DASHBOARDS:\nDo NOT guess entity IDs - use these tools to find exact entity IDs:\n1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area\n2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities\n3. ha_deep_search(query) - Comprehensive search across entities, areas, automations\n\nIf unsure about entity IDs, ALWAYS use one of these tools first.\n\nDASHBOARD DOCUMENTATION (via MCP skills):\n- skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide\n- skill://home-assistant-best-practices/references/dashboard-cards.md — card types list\n- ha_get_skill_home_assistant_best_practices — guidance on card types and configuration\n\nEXAMPLES:\n\nCreate empty dashboard:\nha_config_set_dashboard(\n    url_path=\"mobile-dashboard\",\n    title=\"Mobile View\",\n    icon=\"mdi:cellphone\"\n)\n\nCreate dashboard with modern sections view:\nha_config_set_dashboard(\n    url_path=\"home-dashboard\",\n    title=\"Home Overview\",\n    config={\n        \"views\": [{\n            \"title\": \"Home\",\n            \"type\": \"sections\",\n            \"sections\": [{\n                \"title\": \"Climate\",\n                \"cards\": [{\n                    \"type\": \"tile\",\n                    \"entity\": \"climate.living_room\",\n                    \"features\": [{\"type\": \"target-temperature\"}]\n                }]\n            }]\n        }]\n    }\n)\n\nCreate strategy-based dashboard (auto-generated):\nha_config_set_dashboard(\n    url_path=\"my-home\",\n    title=\"My Home\",\n    config={\n        \"strategy\": {\n            \"type\": \"home\",\n            \"favorite_entities\": [\"light.bedroom\"]\n        }\n    }\n)\n\nNote: Strategy dashboards cannot be converted to custom dashboards via this tool.\nUse the \"Take Control\" feature in the Home Assistant interface to convert them.\n\nUpdate existing dashboard config:\nha_config_set_dashboard(\n    url_path=\"existing-dashboard\",\n    config={\n        \"views\": [{\n            \"title\": \"Updated View\",\n            \"type\": \"sections\",\n            \"sections\": [{\n                \"cards\": [{\"type\": \"markdown\", \"content\": \"Updated!\"}]\n            }]\n        }]\n    }\n)\n\nNote: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar\nare also updated if explicitly provided alongside (or instead of) a config change.",
+    "description": "Create or update a Home Assistant dashboard.\n\nCreates a new dashboard or updates an existing one with the provided configuration.\nSupports two modes: full config replacement OR Python transformation.\n\nUse 'default' or 'lovelace' to target the built-in default dashboard.\nNew dashboards require a hyphenated url_path (e.g., 'my-dashboard').\n\nWHEN TO USE WHICH MODE:\n- python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.\n- config: New dashboards only, or full restructure. Replaces everything.\n\nIMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls\nmust use fresh config_hash from ha_config_get_dashboard()\nto get updated structure. Chain multiple ops in ONE expression when possible.\n\nTIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.\n\nPYTHON TRANSFORM EXAMPLES (RECOMMENDED):\n- Update card icon: 'config[\"views\"][0][\"cards\"][0][\"icon\"] = \"mdi:thermometer\"'\n- Add card: 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'\n- Delete card: 'del config[\"views\"][0][\"cards\"][2]'\n- Pattern-based update: 'for card in config[\"views\"][0][\"cards\"]: if \"light\" in card.get(\"entity\", \"\"): card[\"icon\"] = \"mdi:lightbulb\"'\n- Multi-operation: 'config[\"views\"][0][\"cards\"][0][\"icon\"] = \"mdi:a\"; config[\"views\"][0][\"cards\"][1][\"icon\"] = \"mdi:b\"'\n\nMODERN DASHBOARD BEST PRACTICES (2024+):\n- Use \"sections\" view type (default) with grid-based layouts\n- Use \"tile\" cards as primary card type (replaces legacy entity/light/climate cards)\n- Use \"grid\" cards for multi-column layouts within sections\n- Create multiple views with navigation paths (avoid single-view endless scrolling)\n- Use \"area\" cards with navigation for hierarchical organization\n\nDISCOVERING ENTITY IDs FOR DASHBOARDS:\nDo NOT guess entity IDs - use these tools to find exact entity IDs:\n1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area\n2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities\n3. ha_deep_search(query) - Comprehensive search across entities, areas, automations\n\nIf unsure about entity IDs, ALWAYS use one of these tools first.\n\nDASHBOARD DOCUMENTATION (via MCP skills):\n- skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide\n- skill://home-assistant-best-practices/references/dashboard-cards.md — card types list\n- ha_get_skill_home_assistant_best_practices — guidance on card types and configuration\n\nEXAMPLES:\n\nCreate empty dashboard:\nha_config_set_dashboard(\n    url_path=\"mobile-dashboard\",\n    title=\"Mobile View\",\n    icon=\"mdi:cellphone\"\n)\n\nCreate dashboard with modern sections view:\nha_config_set_dashboard(\n    url_path=\"home-dashboard\",\n    title=\"Home Overview\",\n    config={\n        \"views\": [{\n            \"title\": \"Home\",\n            \"type\": \"sections\",\n            \"sections\": [{\n                \"title\": \"Climate\",\n                \"cards\": [{\n                    \"type\": \"tile\",\n                    \"entity\": \"climate.living_room\",\n                    \"features\": [{\"type\": \"target-temperature\"}]\n                }]\n            }]\n        }]\n    }\n)\n\nCreate strategy-based dashboard (auto-generated):\nha_config_set_dashboard(\n    url_path=\"my-home\",\n    title=\"My Home\",\n    config={\n        \"strategy\": {\n            \"type\": \"home\",\n            \"favorite_entities\": [\"light.bedroom\"]\n        }\n    }\n)\n\nNote: Strategy dashboards cannot be converted to custom dashboards via this tool.\nUse the \"Take Control\" feature in the Home Assistant interface to convert them.\n\nUpdate existing dashboard config:\nha_config_set_dashboard(\n    url_path=\"existing-dashboard\",\n    config={\n        \"views\": [{\n            \"title\": \"Updated View\",\n            \"type\": \"sections\",\n            \"sections\": [{\n                \"cards\": [{\"type\": \"markdown\", \"content\": \"Updated!\"}]\n            }]\n        }]\n    }\n)\n\nNote: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar\nare also updated if explicitly provided alongside (or instead of) a config change.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -695,43 +711,6 @@
       "Dashboards"
     ],
     "source_file": "tools_resources.py"
-  },
-  {
-    "name": "ha_dashboard_find_card",
-    "title": "Find Dashboard Card",
-    "description": "Find cards, badges, and header cards in a dashboard by entity_id, type, or heading text.\n\nReturns card/badge/header locations (view_index, section_index, card_index/badge_index)\nand path for use with ha_config_set_dashboard(python_transform=...).\n\nAlso searches view-level badges (views[n].badges) and sections-view header cards\n(views[n].header.card). Badges are the chip row at the top of a view, and header\ncards are Markdown cards in the view header — both reference entities and are\noften missed during entity rename operations.\n\nUse this tool BEFORE targeted updates to find exact card positions without\nmanually parsing the full dashboard config.\n\nSEARCH CRITERIA (at least one required):\n- entity_id: Match cards and badges containing this entity (supports wildcards with *)\n- card_type: Match cards of this type (e.g., 'tile', 'button', 'heading')\n- heading: Match cards with this text in heading/title (partial, case-insensitive)\n\nMultiple criteria are AND-ed together.\n\nEXAMPLES:\n\nFind all tile cards:\nha_dashboard_find_card(url_path=\"my-dashboard\", card_type=\"tile\")\n\nFind cards for a specific entity:\nha_dashboard_find_card(url_path=\"my-dashboard\", entity_id=\"light.living_room\")\n\nFind all temperature sensors (wildcard):\nha_dashboard_find_card(url_path=\"my-dashboard\", entity_id=\"sensor.temperature_*\")\n\nFind the \"Climate\" section heading:\nha_dashboard_find_card(url_path=\"my-dashboard\", heading=\"Climate\", card_type=\"heading\")\n\nWORKFLOW EXAMPLE:\n1. find = ha_dashboard_find_card(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. # Use jq_path and config_hash from result to update:\n3. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"jq_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )",
-    "inputSchema": {
-      "properties": {
-        "url_path": {
-          "type": "Annotated[str | None, Field(description=\"Dashboard URL path, e.g. 'lovelace-home'. Omit for default.\")]",
-          "default": null
-        },
-        "entity_id": {
-          "type": "Annotated[str | None, Field(description=\"Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. Matches cards with this entity in 'entity' or 'entities' field.\")]",
-          "default": null
-        },
-        "card_type": {
-          "type": "Annotated[str | None, Field(description=\"Find cards by type, e.g. 'tile', 'button', 'heading'.\")]",
-          "default": null
-        },
-        "heading": {
-          "type": "Annotated[str | None, Field(description=\"Find cards by heading/title text (case-insensitive partial match). Useful for finding section headings (type: 'heading').\")]",
-          "default": null
-        },
-        "include_config": {
-          "type": "Annotated[bool, Field(description='Include full card configuration in results (increases output size).')]",
-          "default": false
-        }
-      }
-    },
-    "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [
-      "Dashboards"
-    ],
-    "source_file": "tools_config_dashboards.py"
   },
   {
     "name": "ha_get_device",
