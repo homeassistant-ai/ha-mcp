@@ -171,6 +171,46 @@ const withBase = (path: string) => {
         </div>
       </section>
 
+      <!-- Troubleshooting -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">?</span>
+          <h2 class="text-xl font-semibold text-white">Troubleshooting: Can't Connect to Local HA?</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">If the demo server works but your local Home Assistant doesn't, check the following:</p>
+
+          <div class="space-y-4">
+            <div>
+              <p class="text-white font-medium mb-2">1. macOS Local Network Privacy (Sequoia 15+)</p>
+              <p class="text-slate-300 mb-2">macOS may silently block Claude Desktop subprocesses from accessing local network IPs (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>). Check <strong>System Settings &rarr; Privacy &amp; Security &rarr; Local Network</strong> for Claude Desktop.</p>
+              <p class="text-slate-400 mb-2">Workaround &mdash; SSH tunnel to localhost:</p>
+              <pre class="code-block"><code>ssh -N -L 8123:localhost:8123 user@your-ha-server-ip</code></pre>
+              <p class="text-slate-400 text-sm mt-2">Then set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> to <code class="bg-slate-800 px-1 rounded">http://localhost:8123</code>.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">2. Firewall software</p>
+              <p class="text-slate-300">Little Snitch, Lulu, or similar tools may block <code class="bg-slate-800 px-1 rounded">python</code>/<code class="bg-slate-800 px-1 rounded">node</code> connections from Claude Desktop. Add firewall rules to allow them. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/780" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#780</a>.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">3. http:// vs https://</p>
+              <p class="text-slate-300">HA in container mode (Docker, K3s) uses HTTP by default. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you configured SSL/TLS or a reverse proxy.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">4. Python 3.13 required</p>
+              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs.</p>
+              <pre class="code-block"><code>brew install python@3.13
+uvx --refresh ha-mcp@latest</code></pre>
+            </div>
+          </div>
+
+          <p class="text-slate-400 text-sm mt-4">See the <a href={withBase('/faq#macos-connection')} class="text-blue-400 hover:underline">FAQ</a> for full details.</p>
+        </div>
+      </section>
+
       <!-- Step 7 -->
       <section class="guide-step">
         <div class="step-header">

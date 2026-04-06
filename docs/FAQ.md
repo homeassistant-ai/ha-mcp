@@ -82,6 +82,51 @@ To disable it:
 
 See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
 
+### macOS: "All connection attempts failed" to local Home Assistant
+
+If ha-mcp connects to the demo server but fails to reach your local Home Assistant (`192.168.x.x`, `10.x.x.x`, etc.) on macOS, the most common causes are:
+
+**1. macOS Local Network Privacy (Sequoia 15+)**
+
+macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns `uvx` as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.
+
+- Check **System Settings → Privacy & Security → Local Network** for Claude Desktop
+- If Claude Desktop is not listed, try restarting it to trigger the permission prompt
+
+**Workaround — SSH tunnel to localhost:**
+
+Since macOS does not restrict connections to `localhost`, an SSH port forward bypasses the restriction:
+
+```bash
+ssh -N -L 8123:localhost:8123 user@your-ha-server-ip
+```
+
+Then set `HOMEASSISTANT_URL` to `http://localhost:8123` in your config.
+
+**2. Firewall software (Little Snitch, Lulu, etc.)**
+
+Third-party firewalls may block `python` or `node` processes spawned by Claude Desktop from making network connections. Check your firewall rules and allow connections for these processes. See [#780](https://github.com/homeassistant-ai/ha-mcp/issues/780) for an example resolution.
+
+**3. http:// vs https://**
+
+Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using `https://` causes a TLS handshake error. Use `http://` unless you have explicitly configured SSL/TLS or a reverse proxy.
+
+**4. Python version too old**
+
+ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
+
+```bash
+brew install python@3.13
+```
+
+Then force a refresh:
+
+```bash
+uvx --refresh ha-mcp@latest --version
+```
+
+See [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630), [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867), [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) for related reports.
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.

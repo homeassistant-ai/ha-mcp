@@ -126,6 +126,26 @@ We'd love to hear how you're using ha-mcp!
 - **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Share your automations, ask questions
 - **[GitHub Issues](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs or request features
 
+## Troubleshooting
+
+### Can't connect to local Home Assistant?
+
+If the demo server works but your local HA (`192.168.x.x`) doesn't:
+
+1. **macOS Local Network Privacy (Sequoia 15+)** — macOS may silently block Claude Desktop subprocesses from accessing local network IPs. Check **System Settings → Privacy & Security → Local Network**. As a workaround, use an SSH tunnel:
+   ```bash
+   ssh -N -L 8123:localhost:8123 user@your-ha-server-ip
+   ```
+   Then set `HOMEASSISTANT_URL` to `http://localhost:8123`.
+
+2. **Firewall software** — Little Snitch, Lulu, or similar tools may block `python`/`node` connections from Claude Desktop. Add firewall rules to allow them.
+
+3. **http:// vs https://** — HA in container mode (Docker, K3s) uses HTTP by default. Use `http://` unless you configured SSL/TLS.
+
+4. **Python 3.13 required** — ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.13` then `uvx --refresh ha-mcp@latest`.
+
+See the [FAQ](FAQ.md#macos-all-connection-attempts-failed-to-local-home-assistant) for full details.
+
 ---
 
 Having issues? See the **[FAQ & Troubleshooting Guide](FAQ.md)**.

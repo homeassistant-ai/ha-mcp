@@ -7,6 +7,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 import functools
 import json
 import logging
+import sys
 import time
 from typing import Any, Literal, NoReturn, overload
 
@@ -226,6 +227,24 @@ def exception_to_structured_error(
             details=error_msg,
             context=context,
         )
+
+    # Append macOS-specific hints for connection failures
+    if (
+        sys.platform == "darwin"
+        and isinstance(error, HomeAssistantConnectionError)
+        and "timeout" not in error_str
+        and "error" in error_response
+        and isinstance(error_response["error"], dict)
+    ):
+        macos_hints = [
+            "macOS may block local network access for Claude Desktop subprocesses "
+            "(System Settings > Privacy & Security > Local Network)",
+            "Try an SSH tunnel: ssh -N -L 8123:localhost:8123 user@ha-server, "
+            "then use http://localhost:8123",
+            "Ensure you are using http:// (not https://) unless SSL/TLS is configured",
+        ]
+        existing = error_response["error"].get("suggestions", [])
+        error_response["error"]["suggestions"] = existing + macos_hints
 
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
         error_response["error"]["suggestions"] = suggestions
