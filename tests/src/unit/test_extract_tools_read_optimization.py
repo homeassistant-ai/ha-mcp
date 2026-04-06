@@ -17,13 +17,20 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import extract_tools  # noqa: E402
 
+# Static dummy tools list — avoids expensive AST parsing in every test.
+# The dict structure satisfies both update_readme() and update_docs():
+#   - tags[0]  → category heading
+#   - name     → tool entry line
+#   - description → first-line description in DOCS section
+_DUMMY_TOOLS = [{"name": "ha_test_tool", "tags": ["Test"], "description": "Test description"}]
+
 
 class TestUpdateReadmeContentParam:
     """update_readme(tools, content=...) avoids redundant disk reads."""
 
     def test_readme_file_not_read_when_content_provided(self):
         """Optimisation: README_PATH.read_text must not be called when content= given."""
-        tools = extract_tools.extract_tools()
+        tools = _DUMMY_TOOLS
         readme = extract_tools.README_PATH.read_text(encoding="utf-8")
 
         mock_path = MagicMock(spec=Path)
@@ -37,7 +44,7 @@ class TestUpdateReadmeContentParam:
 
     def test_readme_content_param_produces_same_result_as_file_read(self):
         """Correctness: result via content= matches result via internal file read."""
-        tools = extract_tools.extract_tools()
+        tools = _DUMMY_TOOLS
         readme = extract_tools.README_PATH.read_text(encoding="utf-8")
 
         result_via_param = extract_tools.update_readme(tools, content=readme)
@@ -53,10 +60,9 @@ class TestUpdateDocsContentParam:
         """Optimisation: DOCS_PATH.read_text must not be called when content= given."""
         if not extract_tools.DOCS_PATH.exists():
             import pytest
-
             pytest.skip("DOCS_PATH not found — skipping")
 
-        tools = extract_tools.extract_tools()
+        tools = _DUMMY_TOOLS
         docs = extract_tools.DOCS_PATH.read_text(encoding="utf-8")
 
         mock_path = MagicMock(spec=Path)
@@ -72,10 +78,9 @@ class TestUpdateDocsContentParam:
         """Correctness: result via content= matches result via internal file read."""
         if not extract_tools.DOCS_PATH.exists():
             import pytest
-
             pytest.skip("DOCS_PATH not found — skipping")
 
-        tools = extract_tools.extract_tools()
+        tools = _DUMMY_TOOLS
         docs = extract_tools.DOCS_PATH.read_text(encoding="utf-8")
 
         result_via_param = extract_tools.update_docs(tools, content=docs)
