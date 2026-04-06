@@ -147,8 +147,41 @@ class TestHacsSearchInstalled:
 
         # No filter should be applied
         assert data["category_filter"] is None, "No category filter should be applied"
+        assert data["installed_only"] is True, "Response should indicate installed_only=True"
 
         logger.info("List all installed test passed")
+
+    async def test_search_installed_with_query(self, mcp_client):
+        """
+        Test: Search installed repositories with a keyword query.
+
+        Exercises the code path where installed_only=True AND query is non-empty,
+        ensuring only installed repos are returned even when scoring by relevance.
+        """
+        logger.info("Testing ha_hacs_search with installed_only=True and query...")
+
+        data = await safe_hacs_call(
+            mcp_client,
+            "ha_hacs_search",
+            {"query": "hacs", "installed_only": True},
+        )
+
+        if not data.get("success"):
+            unavailable, reason = is_hacs_unavailable(data)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            pytest.fail(f"HACS search installed with query failed: {data.get('error')}")
+
+        assert data["installed_only"] is True
+        # All returned results must be installed
+        for repo in data["results"]:
+            assert repo.get("installed") is True, (
+                f"Repo {repo.get('name')} should be installed"
+            )
+
+        logger.info(
+            f"Search installed with query: {data['total_matches']} matches"
+        )
 
     async def test_list_by_category(self, mcp_client):
         """

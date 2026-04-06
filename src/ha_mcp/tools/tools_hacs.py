@@ -33,38 +33,54 @@ CATEGORY_DISPLAY = {v: k for k, v in CATEGORY_MAP.items()}
 CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
 
 
-async def _is_hacs_available() -> bool:
-    """Return True if HACS is installed and responding via WebSocket.
-
-    Raises if the WebSocket connection fails — callers handle API errors via
-    their own exception_to_structured_error blocks.
-    """
-    from ..client.websocket_client import get_websocket_client
-
-    ws_client = await get_websocket_client()
-    response = await ws_client.send_command("hacs/info")
-    return bool(response.get("success"))
-
-
 async def _assert_hacs_available() -> None:
-    """Raise ToolError if HACS is not available.
+    """Raise ToolError if HACS is not installed or not responding.
+
+    Distinguishes "unknown command" (HACS not installed) from other failures
+    (HACS installed but broken) so the error message is accurate.
 
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified
     correctly rather than masked as COMPONENT_NOT_INSTALLED.
     """
-    if not await _is_hacs_available():
+    from ..client.websocket_client import get_websocket_client
+
+    ws_client = await get_websocket_client()
+    response = await ws_client.send_command("hacs/info")
+    if response.get("success"):
+        return
+
+    error = response.get("error", {})
+    error_code = error.get("code") if isinstance(error, dict) else None
+    error_message = (
+        error.get("message", "") if isinstance(error, dict) else str(error)
+    )
+
+    # "unknown_command" means HACS is not installed at all
+    if error_code == "unknown_command" or "unknown command" in error_message.lower():
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                "HACS is not installed or not loaded.",
+                "HACS is not installed.",
                 suggestions=[
                     "Install HACS from https://hacs.xyz/",
                     "Restart Home Assistant after HACS installation",
-                    "Check Home Assistant logs for HACS errors",
                 ],
             )
         )
+
+    # HACS is installed but not responding correctly
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            f"HACS is installed but not responding: {error_message or 'unknown error'}",
+            suggestions=[
+                "Restart Home Assistant",
+                "Check Home Assistant logs for HACS errors",
+                "Verify HACS is up to date",
+            ],
+        )
+    )
 
 
 def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -135,9 +151,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             # Coerce parameters
-            installed_only_bool = (
-                coerce_bool_param(installed_only, "installed_only", default=False)
-                or False
+            installed_only_bool = coerce_bool_param(
+                installed_only, "installed_only", default=False
             )
             max_results_int = coerce_int_param(
                 max_results,
@@ -337,18 +352,16 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             actual_id = str(repo.get("id"))
                             break
                     else:
-                        return await add_timezone_metadata(
-                            client,
-                            {
-                                "success": False,
-                                "error": f"Repository '{repository_id}' not found in HACS",
-                                "error_code": "REPOSITORY_NOT_FOUND",
-                                "suggestions": [
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.RESOURCE_NOT_FOUND,
+                                f"Repository '{repository_id}' not found in HACS",
+                                suggestions=[
                                     "Use ha_hacs_search() to find the repository",
                                     "Check the repository name is correct (case-insensitive)",
                                     "The repository may need to be added to HACS first",
                                 ],
-                            },
+                            )
                         )
 
             # Get repository info via WebSocket using numeric ID
@@ -463,17 +476,15 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Validate repository format
             if "/" not in repository:
-                return await add_timezone_metadata(
-                    client,
-                    {
-                        "success": False,
-                        "error": "Invalid repository format. Must be 'owner/repo'",
-                        "error_code": "INVALID_REPOSITORY_FORMAT",
-                        "suggestions": [
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Invalid repository format. Must be 'owner/repo'",
+                        suggestions=[
                             "Use format: 'owner/repo' (e.g., 'hacs/integration')",
                             "Check the repository exists on GitHub",
                         ],
-                    },
+                    )
                 )
 
             # Add repository via WebSocket
@@ -605,18 +616,16 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             repo_name = repo.get("name") or repository_id
                             break
                     else:
-                        return await add_timezone_metadata(
-                            client,
-                            {
-                                "success": False,
-                                "error": f"Repository '{repository_id}' not found in HACS",
-                                "error_code": "REPOSITORY_NOT_FOUND",
-                                "suggestions": [
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.RESOURCE_NOT_FOUND,
+                                f"Repository '{repository_id}' not found in HACS",
+                                suggestions=[
                                     "Use ha_hacs_add_repository() to add the repository first",
                                     "Use ha_hacs_search() to find available repositories",
                                     "Check the repository name is correct (case-insensitive)",
                                 ],
-                            },
+                            )
                         )
 
             # Build download command parameters
