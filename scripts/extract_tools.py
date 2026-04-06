@@ -178,8 +178,8 @@ def update_docs(tools: list[dict]) -> str:
         re.DOTALL,
     )
     updated = pattern.sub(new_section, docs)
-    updated = re.sub(r"provides \d+\+ tools", f"provides {len(tools)}+ tools", updated)
-    updated = re.sub(r"catalog \(~\d+ tools", f"catalog (~{len(tools)} tools", updated)
+    updated = re.sub(r"\bprovides \d+\+ tools\b", f"provides {len(tools)}+ tools", updated)
+    updated = re.sub(r"\bcatalog \(~\d+ tools\b", f"catalog (~{len(tools)} tools", updated)
     assert DOCS_START_MARKER in updated and DOCS_END_MARKER in updated
     return updated
 
