@@ -10,7 +10,6 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools.helpers import exception_to_structured_error
 
-
 MACOS_HINT_FRAGMENT = "Local Network"
 
 
