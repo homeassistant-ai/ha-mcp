@@ -187,8 +187,11 @@ class TestTier3ParallelFetch:
             )
 
         # With 2s budget and 1.5s per fetch (parallel batches of 10),
-        # first batch takes ~1.5s, second batch would exceed budget
+        # batch 1 (t=0→1.5s) completes under budget, batch 2 (t=1.5→3.0s)
+        # may start but batch 3 is skipped. Expect 10-20 fetched.
         assert call_count < 30, (
             f"Should stop before fetching all 30, but fetched {call_count}"
         )
-        assert call_count > 0, "Should fetch at least one batch"
+        assert call_count >= 10, (
+            f"Should complete at least one full batch of 10, but only fetched {call_count}"
+        )
