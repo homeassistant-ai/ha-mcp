@@ -24,7 +24,9 @@ from .best_practice_checker import (
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
+    fetch_entity_category,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -205,12 +207,33 @@ def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
 
+    async def _resolve_automation_entity_id(identifier: str) -> str | None:
+        """Resolve an automation identifier to its entity_id.
+
+        If identifier is already an entity_id (starts with "automation."),
+        returns it directly. Otherwise, searches states to find the entity
+        whose unique_id matches the identifier.
+        """
+        if identifier.startswith("automation."):
+            return identifier
+        try:
+            states = await client.get_states()
+            for state in states:
+                if (
+                    state.get("entity_id", "").startswith("automation.")
+                    and state.get("attributes", {}).get("id") == identifier
+                ):
+                    return str(state["entity_id"])
+        except Exception as e:
+            logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
+        return None
+
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "tags": ["automation"],
-            "title": "Get Automation Config",
+            "title": "Get Automation Config"
         }
     )
     @log_tool_usage
@@ -231,12 +254,20 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
 
-        For comprehensive automation documentation, use: ha_get_domain_docs("automation")
+        For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             config_result = await client.get_automation_config(identifier)
             # Normalize config for round-trip compatibility (GET → SET)
             normalized_config = _normalize_config_for_roundtrip(config_result)
+
+            # Resolve entity_id and fetch category from entity registry
+            entity_id = await _resolve_automation_entity_id(identifier)
+            if entity_id:
+                cat_id = await fetch_entity_category(client, entity_id, "automation")
+                if cat_id:
+                    normalized_config["category"] = cat_id
+
             return {
                 "success": True,
                 "action": "get",
@@ -270,15 +301,15 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Check Home Assistant connection",
-                    "Use ha_get_domain_docs('automation') for configuration help",
+                    "Use ha_get_skill_home_assistant_best_practices for help",
                 ],
             )
 
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "destructiveHint": True,
-            "tags": ["automation"],
-            "title": "Create or Update Automation",
+            "title": "Create or Update Automation"
         }
     )
     @log_tool_usage
@@ -293,6 +324,13 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             str | None,
             Field(
                 description="Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.",
+                default=None,
+            ),
+        ] = None,
+        category: Annotated[
+            str | None,
+            Field(
+                description="Category ID to assign to this automation. Use ha_config_get_category(scope='automation') to list available categories, or ha_config_set_category() to create one.",
                 default=None,
             ),
         ] = None,
@@ -327,6 +365,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
 
         OPTIONAL CONFIG FIELDS (Regular Automations):
         - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
+        - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
         - condition: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
         - max: Maximum concurrent executions (for queued/parallel modes)
@@ -413,7 +452,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
         For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: ha_get_domain_docs("automation")
+        - Use: ha_get_skill_home_assistant_best_practices
         - Or visit: https://www.home-assistant.io/docs/automation/
 
         TROUBLESHOOTING:
@@ -443,6 +482,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ))
 
             config_dict = cast(dict[str, Any], parsed_config)
+
+            # Extract category before sending to HA REST API (which rejects unknown keys).
+            # Parameter takes precedence over config dict value.
+            config_category = config_dict.pop("category", None)
+            effective_category = category if category is not None else config_category
 
             # Normalize field names (triggers -> trigger, actions -> action, etc.)
             config_dict = _normalize_automation_config(config_dict)
@@ -499,6 +543,9 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Wait for automation to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = result.get("entity_id")
+            # On updates, entity_id may not be in the result — derive from identifier
+            if not entity_id and identifier and identifier.startswith("automation."):
+                entity_id = identifier
             if wait_bool and entity_id:
                 try:
                     registered = await wait_for_entity_registered(client, entity_id)
@@ -506,6 +553,12 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                         result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
                 except Exception as e:
                     result["warning"] = f"Automation created but verification failed: {e}"
+
+            # Apply category to entity registry if provided
+            if effective_category and entity_id:
+                await apply_entity_category(
+                    client, entity_id, effective_category, "automation", result, "automation"
+                )
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
@@ -524,7 +577,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search_entities(domain_filter='automation') to find automations",
-                "Use ha_get_domain_docs('automation') for comprehensive configuration help",
+                "Use ha_get_skill_home_assistant_best_practices for help",
             ]
             if bp_warnings:
                 suggestions.append(
@@ -538,11 +591,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             )
 
     @mcp.tool(
+        tags={"Automations"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "tags": ["automation"],
-            "title": "Remove Automation",
+            "title": "Remove Automation"
         }
     )
     @log_tool_usage
@@ -572,20 +625,11 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             # Resolve entity_id for wait verification (identifier may be a unique_id)
-            entity_id_for_wait: str | None = None
-            if identifier.startswith("automation."):
-                entity_id_for_wait = identifier
-            else:
-                # Try to find entity_id by matching unique_id in automation states
-                try:
-                    states = await client.get_states()
-                    for state in states:
-                        eid = state.get("entity_id", "")
-                        if eid.startswith("automation.") and state.get("attributes", {}).get("id") == identifier:
-                            entity_id_for_wait = eid
-                            break
-                except Exception as e:
-                    logger.warning(f"Could not resolve unique_id '{identifier}' to entity_id: {e} — wait verification will be skipped")
+            entity_id_for_wait = await _resolve_automation_entity_id(identifier)
+            if not entity_id_for_wait:
+                logger.warning(
+                    f"Could not resolve unique_id '{identifier}' to entity_id — wait verification will be skipped"
+                )
 
             result = await client.delete_automation_config(identifier)
 

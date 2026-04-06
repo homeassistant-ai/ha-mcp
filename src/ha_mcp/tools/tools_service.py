@@ -5,10 +5,11 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import httpx
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import (
@@ -21,31 +22,60 @@ logger = logging.getLogger(__name__)
 
 # Services that produce observable state changes on entities
 _STATE_CHANGING_SERVICES = {
-    "turn_on", "turn_off", "toggle", "open", "close", "lock", "unlock",
-    "set_temperature", "set_hvac_mode", "set_fan_mode", "set_speed",
-    "select_option", "set_value", "set_datetime", "set_cover_position",
-    "set_position", "play_media", "media_play", "media_pause", "media_stop",
+    "turn_on",
+    "turn_off",
+    "toggle",
+    "open",
+    "close",
+    "lock",
+    "unlock",
+    "set_temperature",
+    "set_hvac_mode",
+    "set_fan_mode",
+    "set_speed",
+    "select_option",
+    "set_value",
+    "set_datetime",
+    "set_cover_position",
+    "set_position",
+    "play_media",
+    "media_play",
+    "media_pause",
+    "media_stop",
 }
 
 # Domains where service calls don't produce entity state changes
 _NON_STATE_CHANGING_DOMAINS = {
-    "automation", "script", "homeassistant", "notify", "tts",
-    "persistent_notification", "logbook", "system_log",
+    "automation",
+    "script",
+    "homeassistant",
+    "notify",
+    "tts",
+    "persistent_notification",
+    "logbook",
+    "system_log",
 }
 
 # Mapping from service name to the expected resulting state
 _SERVICE_TO_STATE: dict[str, str] = {
-    "turn_on": "on", "turn_off": "off",
-    "open": "open", "close": "closed",
-    "lock": "locked", "unlock": "unlocked",
+    "turn_on": "on",
+    "turn_off": "off",
+    "open": "open",
+    "close": "closed",
+    "lock": "locked",
+    "unlock": "unlocked",
 }
 
 
-def _build_service_suggestions(domain: str, service: str, entity_id: str | None) -> list[str]:
+def _build_service_suggestions(
+    domain: str, service: str, entity_id: str | None
+) -> list[str]:
     """Build common error suggestions for service call failures."""
     return [
-        f"Verify {entity_id} exists using ha_get_state()" if entity_id else "Specify an entity_id for targeted service calls",
-        f"Check available services for {domain} domain using ha_get_domain_docs()",
+        f"Verify {entity_id} exists using ha_get_state()"
+        if entity_id
+        else "Specify an entity_id for targeted service calls",
+        f"Check available services for {domain} domain using ha_get_skill_home_assistant_best_practices",
         "Use ha_search_entities() to find correct entity IDs",
     ]
 
@@ -56,7 +86,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     if not device_tools:
         raise ValueError("device_tools is required for service tools registration")
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Call Service"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
     @log_tool_usage
     async def ha_call_service(
         domain: str,
@@ -98,7 +128,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           Only applies to state-changing services on a single entity. Set to False for
           fire-and-forget calls, bulk operations, or services without observable state changes.
 
-        **For detailed service documentation and parameters, use ha_get_domain_docs(domain).**
+        **For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**
 
         Common patterns: Use ha_get_state() to check current values before making changes.
         Use ha_search_entities() to find correct entity IDs.
@@ -108,11 +138,13 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 parsed_data = parse_json_param(data, "data")
             except ValueError as e:
-                raise_tool_error(create_validation_error(
-                    f"Invalid data parameter: {e}",
-                    parameter="data",
-                    invalid_json=True,
-                ))
+                raise_tool_error(
+                    create_validation_error(
+                        f"Invalid data parameter: {e}",
+                        parameter="data",
+                        invalid_json=True,
+                    )
+                )
 
             # Ensure service_data is a dict
             service_data: dict[str, Any] = {}
@@ -120,17 +152,22 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if isinstance(parsed_data, dict):
                     service_data = parsed_data
                 else:
-                    raise_tool_error(create_validation_error(
-                        "Data parameter must be a JSON object",
-                        parameter="data",
-                        details=f"Received type: {type(parsed_data).__name__}",
-                    ))
+                    raise_tool_error(
+                        create_validation_error(
+                            "Data parameter must be a JSON object",
+                            parameter="data",
+                            details=f"Received type: {type(parsed_data).__name__}",
+                        )
+                    )
 
             if entity_id:
                 service_data["entity_id"] = entity_id
 
             # Coerce return_response boolean parameter
-            return_response_bool = coerce_bool_param(return_response, "return_response", default=False) or False
+            return_response_bool = (
+                coerce_bool_param(return_response, "return_response", default=False)
+                or False
+            )
             wait_bool = coerce_bool_param(wait, "wait", default=True)
 
             # Determine if we should wait for state change:
@@ -150,9 +187,13 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     state_data = await client.get_entity_state(entity_id)
                     initial_state = state_data.get("state") if state_data else None
                 except Exception as e:
-                    logger.debug(f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded")
+                    logger.debug(
+                        f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
+                    )
 
-            result = await client.call_service(domain, service, service_data, return_response=return_response_bool)
+            result = await client.call_service(
+                domain, service, service_data, return_response=return_response_bool
+            )
 
             response: dict[str, Any] = {
                 "success": True,
@@ -173,15 +214,22 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 try:
                     expected = _SERVICE_TO_STATE.get(service)
                     new_state = await wait_for_state_change(
-                        client, entity_id, expected_state=expected,
-                        initial_state=initial_state, timeout=10.0,
+                        client,
+                        entity_id,
+                        expected_state=expected,
+                        initial_state=initial_state,
+                        timeout=10.0,
                     )
                     if new_state:
                         response["verified_state"] = new_state.get("state")
                     else:
-                        response["warning"] = "Service executed but state change could not be verified within timeout."
+                        response["warning"] = (
+                            "Service executed but state change could not be verified within timeout."
+                        )
                 except Exception as e:
-                    response["warning"] = f"Service executed but state verification failed: {e}"
+                    response["warning"] = (
+                        f"Service executed but state verification failed: {e}"
+                    )
 
             return response
         except HomeAssistantConnectionError as error:
@@ -226,10 +274,12 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Use structured error response
             suggestions = _build_service_suggestions(domain, service, entity_id)
             if entity_id:
-                suggestions.extend([
-                    f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
-                    f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                ])
+                suggestions.extend(
+                    [
+                        f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
+                        f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
+                    ]
+                )
             exception_to_structured_error(
                 error,
                 context={
@@ -240,18 +290,66 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=suggestions,
             )
 
-    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     @log_tool_usage
     async def ha_get_operation_status(
-        operation_id: str, timeout_seconds: int = 10
+        operation_id: Annotated[
+            str | list[str],
+            Field(
+                description=(
+                    "Single operation ID or list of operation IDs to check. "
+                    "Use a single string for one operation, or a list for bulk status checks."
+                ),
+            ),
+        ],
+        timeout_seconds: int = 10,
     ) -> dict[str, Any]:
-        """Check status of device operation with real-time WebSocket verification."""
-        result = await device_tools.get_device_operation_status(
-            operation_id=operation_id, timeout_seconds=timeout_seconds
-        )
-        return cast(dict[str, Any], result)
+        """
+        Check status of one or more device operations with real-time WebSocket verification.
 
-    @mcp.tool(annotations={"destructiveHint": True, "title": "Bulk Control"})
+        Pass a single operation_id string to check one operation, or a list of IDs
+        to check multiple operations at once (bulk status).
+
+        The timeout_seconds parameter applies to single-operation checks only.
+        Bulk checks poll each operation individually with a short internal timeout.
+
+        Use this to track operations initiated by ha_bulk_control or ha_call_service.
+        For current entity states, use ha_get_state instead.
+        """
+        try:
+            # Handle JSON string coercion (MCP clients may send '["op1","op2"]')
+            resolved_id: str | list[str] = operation_id
+            if isinstance(operation_id, str):
+                try:
+                    parsed = parse_json_param(operation_id, "operation_id")
+                    if isinstance(parsed, list):
+                        resolved_id = [str(item) for item in parsed]
+                except ValueError:
+                    pass  # Plain string — treat as single operation ID
+
+            if isinstance(resolved_id, list):
+                result = await device_tools.get_bulk_operation_status(
+                    operation_ids=resolved_id
+                )
+                return cast(dict[str, Any], result)
+            result = await device_tools.get_device_operation_status(
+                operation_id=resolved_id, timeout_seconds=timeout_seconds
+            )
+            return cast(dict[str, Any], result)
+        except ToolError:
+            raise
+        except Exception as e:
+            op_context: dict[str, Any] = {"operation_id": operation_id}
+            exception_to_structured_error(
+                e,
+                context=op_context,
+                suggestions=[
+                    "Verify the operation ID(s) are valid",
+                    "Use ha_get_state() to check current entity states instead",
+                ],
+            )
+
+    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
     @log_tool_usage
     async def ha_bulk_control(
         operations: str | list[dict[str, Any]], parallel: bool | str = True
@@ -265,57 +363,26 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
-            raise_tool_error(create_validation_error(
-                f"Invalid operations parameter: {e}",
-                parameter="operations",
-                invalid_json=True,
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid operations parameter: {e}",
+                    parameter="operations",
+                    invalid_json=True,
+                )
+            )
 
         # Ensure operations is a list of dicts
         if parsed_operations is None or not isinstance(parsed_operations, list):
-            raise_tool_error(create_validation_error(
-                "Operations parameter must be a list",
-                parameter="operations",
-                details=f"Received type: {type(parsed_operations).__name__}",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    "Operations parameter must be a list",
+                    parameter="operations",
+                    details=f"Received type: {type(parsed_operations).__name__}",
+                )
+            )
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
         result = await device_tools.bulk_device_control(
             operations=operations_list, parallel=parallel_bool
-        )
-        return cast(dict[str, Any], result)
-
-    @mcp.tool(annotations={"readOnlyHint": True, "title": "Get Bulk Operation Status"})
-    @log_tool_usage
-    async def ha_get_bulk_status(operation_ids: list[str]) -> dict[str, Any]:
-        """
-        Check status of multiple device control operations.
-
-        Use this tool to check the status of operations initiated by ha_bulk_control
-        or control_device_smart. Each of these tools returns unique operation_ids
-        that can be tracked here.
-
-        **IMPORTANT:** This tool is for tracking async device operations, NOT for
-        checking current entity states. To get current states of entities, use
-        ha_get_state instead.
-
-        **Args:**
-            operation_ids: List of operation IDs returned by ha_bulk_control or
-                          control_device_smart (e.g., ["op_1234", "op_5678"])
-
-        **Returns:**
-            Status summary with completion/pending/failed counts and detailed
-            results for each operation.
-
-        **Example:**
-            # After calling control_device_smart
-            result = control_device_smart("light.kitchen", "on")
-            op_id = result["operation_id"]  # e.g., "op_1234"
-
-            # Check operation status
-            status = ha_get_bulk_status([op_id])
-        """
-        result = await device_tools.get_bulk_operation_status(
-            operation_ids=operation_ids
         )
         return cast(dict[str, Any], result)

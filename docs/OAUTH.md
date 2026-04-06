@@ -1,10 +1,39 @@
 # OAuth Authentication for ha-mcp (Beta)
 
-> **Status:** Beta - OAuth provides an alternative to the private URL method. It's fully functional but still being refined.
+> **Status:** Beta — OAuth provides an alternative to the private URL method. Fully functional but still being refined.
 
-> **Breaking change:** `HOMEASSISTANT_URL` is now a required environment variable in OAuth mode. The consent form no longer accepts a Home Assistant URL for security reasons.
+OAuth authentication lets multiple users authenticate with their own Home Assistant Long-Lived Access Token via a consent form.
 
-OAuth authentication allows multiple users to authenticate with their own Home Assistant Long-Lived Access Token via a consent form.
+## Migrating from v6.x
+
+v7.0.0 removed the Home Assistant URL field from the OAuth consent form. You must now set `HOMEASSISTANT_URL` as a server-side environment variable.
+
+**Why:** The consent form had two security vulnerabilities:
+- **SSRF** ([GHSA-fmfg-9g7c-3vq7](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-fmfg-9g7c-3vq7)): The URL field let an attacker submit arbitrary URLs to probe internal networks through the ha-mcp server.
+- **XSS** ([GHSA-pf93-j98v-25pv](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-pf93-j98v-25pv)): Unescaped HTML in the consent form allowed cross-site scripting.
+
+Removing the URL field and sanitizing form output eliminates both attack surfaces.
+
+**What to do:** Add `HOMEASSISTANT_URL` to your server environment before starting ha-mcp:
+
+**Docker:**
+```bash
+docker run -d -p 8086:8086 \
+  -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+  -e MCP_BASE_URL=https://your-mcp-server.example.com \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
+```
+
+**uvx:**
+```bash
+HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+MCP_BASE_URL=https://your-mcp-server.example.com \
+uvx --from=ha-mcp@latest ha-mcp-oauth
+```
+
+The consent form now accepts only the Long-Lived Access Token. Everything else stays the same.
+
+---
 
 ## When to Use OAuth
 

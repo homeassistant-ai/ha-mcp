@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: should_run
     if: needs.should_run.outputs.should_run == 'true'
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -253,7 +253,7 @@ jobs:
             Base your evaluation ONLY on the issue text provided below.
 
             **Project**: Home Assistant MCP Server (ha-mcp)
-            - MCP server with 95+ tools for AI assistants to control Home Assistant
+            - MCP server with 92+ tools for AI assistants to control Home Assistant
             - Supports: Claude Desktop, Claude Code, Cursor, Gemini CLI, Continue, etc.
             - Installation: uvx, pip, docker, Home Assistant add-on
             - Users can run \`ha_report_issue\` tool to auto-collect diagnostic info
@@ -332,7 +332,7 @@ jobs:
           settings: |
             {
               "model": {
-                "maxSessionTurns": 50
+                "maxSessionTurns": 20
               },
               "tools": {
                 "core": [
@@ -359,7 +359,7 @@ jobs:
 
             **Project Context:**
             - ha-mcp is an MCP (Model Context Protocol) server that connects AI assistants to Home Assistant
-            - It provides 95+ tools for controlling smart home devices, automations, and scenes
+            - It provides 92+ tools for controlling smart home devices, automations, and scenes
             - Installation methods: uvx, pip, Docker, or Home Assistant add-on
             - Codebase structure: src/ha_mcp/ (tools, client, server code)
             - Common issues: connection timeouts, authentication errors, tool failures
@@ -417,6 +417,7 @@ jobs:
             - `google_web_search <query>` - Search web for error messages or external docs
 
             **Critical Rules:**
+            - **TIME BUDGET**: You have ~8 minutes. Limit yourself to ~10 tool calls total. If you can't find something after 2 searches, move on. Focus on the single most likely root cause.
             - **YOU ARE READ-ONLY**: You cannot modify files, create PRs, or make code changes
             - If you identify a fix, provide it as a diff in the Technical Analysis section
             - ONLY reference file paths you actually found with `grep` or `find`

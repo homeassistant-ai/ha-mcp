@@ -4,6 +4,7 @@ Smart search tools for Home Assistant MCP server.
 
 import asyncio
 import logging
+import random
 import time
 from typing import Any
 
@@ -23,8 +24,42 @@ BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
 # Time budgets for fallback individual fetching (in seconds)
-AUTOMATION_CONFIG_TIME_BUDGET = 15.0  # Max time for fetching automation configs individually
+AUTOMATION_CONFIG_TIME_BUDGET = (
+    15.0  # Max time for fetching automation configs individually
+)
 SCRIPT_CONFIG_TIME_BUDGET = 10.0  # Max time for fetching script configs individually
+
+
+def _simplify_states_summary(
+    states_summary: dict[str, int],
+    detail_level: str,
+    max_states: int | None = None,
+) -> dict[str, int]:
+    """Keep only the most common states, aggregate the rest into _other.
+
+    Args:
+        states_summary: Original {state: count} mapping.
+        detail_level: "minimal", "standard", or "full".
+        max_states: Override cap (None = 5 for minimal, 10 for standard).
+
+    Returns:
+        Capped states_summary with ``_other`` count when truncated.
+    """
+    if detail_level == "full":
+        return states_summary
+
+    if max_states is None:
+        max_states = 5 if detail_level == "minimal" else 10
+
+    if len(states_summary) <= max_states:
+        return states_summary
+
+    sorted_states = sorted(states_summary.items(), key=lambda x: x[1], reverse=True)
+    top = dict(sorted_states[:max_states])
+    other_count = sum(count for _, count in sorted_states[max_states:])
+    if other_count > 0:
+        top["_other"] = other_count
+    return top
 
 
 class SmartSearchTools:
@@ -130,7 +165,9 @@ class SmartSearchTools:
             }
 
             if not matches or (matches and matches[0]["score"] < 80):
-                response["suggestions"] = self.fuzzy_searcher.get_smart_suggestions(entities, query)
+                response["suggestions"] = self.fuzzy_searcher.get_smart_suggestions(
+                    entities, query
+                )
 
             return response
 
@@ -143,7 +180,11 @@ class SmartSearchTools:
                     "Verify entity exists with get_all_states",
                     "Try simpler search terms",
                 ],
-                context={"query": query, "matches": [], "error_source": "smart_entity_search"},
+                context={
+                    "query": query,
+                    "matches": [],
+                    "error_source": "smart_entity_search",
+                },
             )
 
     async def get_entities_by_area(
@@ -347,18 +388,26 @@ class SmartSearchTools:
         max_entities_per_domain: int | None = None,
         include_state: bool | None = None,
         include_entity_id: bool | None = None,
+        domains_filter: list[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """
         Get AI-friendly system overview with intelligent categorization.
 
         Args:
             detail_level: Level of detail to return:
-                - "minimal": 10 random entities per domain (friendly_name only)
-                - "standard": ALL entities per domain (friendly_name only) [DEFAULT]
-                - "full": ALL entities with full details (entity_id, friendly_name, state)
-            max_entities_per_domain: Override max entities per domain (None = all)
+                - "minimal": 10 entities/domain sample, top-5 states (friendly_name only)
+                - "standard": ALL entities, top-10 states (friendly_name only)
+                - "full": ALL entities with entity_id + friendly_name + state + full states
+            max_entities_per_domain: Override default entity cap (0 = no limit)
             include_state: Override whether to include state field
             include_entity_id: Override whether to include entity_id field
+            domains_filter: Only include these domains (None = all)
+            limit: Max total entities to include across all domains.
+                Defaults to None (no limit) for minimal, 200 for standard/full.
+                Domain counts and states_summary are always complete regardless.
+            offset: Number of entities to skip for pagination (default: 0)
 
         Returns:
             System overview optimized for AI understanding at requested detail level
@@ -387,9 +436,20 @@ class SmartSearchTools:
                 return_exceptions=True,
             )
 
-            # Process results, handling any exceptions gracefully
-            entities = results[0] if not isinstance(results[0], Exception) else []
-            services = results[1] if not isinstance(results[1], Exception) else []
+            # Entities are mandatory — surface connection/auth errors immediately.
+            # Services failure is logged at warning (affects total count and service catalog).
+            # Registry failures are logged at debug (area enrichment only).
+            if isinstance(results[0], Exception):
+                raise results[0]
+
+            entities = results[0]
+            partial_warnings: list[str] = []
+            if isinstance(results[1], Exception):
+                logger.warning(f"Could not fetch services: {results[1]}")
+                partial_warnings.append(f"Services unavailable: {results[1]}")
+                services = []
+            else:
+                services = results[1]
 
             # Handle area registry result
             area_registry: list[dict[str, Any]] = []
@@ -429,8 +489,12 @@ class SmartSearchTools:
                     entity_area_map[entity_id] = area_id
 
             # Determine defaults based on detail_level
+            # max_entities_per_domain=0 means "uncap everything" (entities + states)
+            uncap_all = max_entities_per_domain == 0
             if max_entities_per_domain is None:
-                max_entities_per_domain = 10 if detail_level == "minimal" else None
+                if detail_level == "minimal":
+                    max_entities_per_domain = 10
+                # standard and full: no default cap (None = all entities)
             if include_state is None:
                 include_state = detail_level == "full"
             if include_entity_id is None:
@@ -447,6 +511,14 @@ class SmartSearchTools:
                         "domains": {},
                     }
 
+            # Normalize domains filter
+            domains_filter_set: set[str] | None = None
+            if domains_filter:
+                domains_filter_set = {d.strip().lower() for d in domains_filter}
+
+            # Count all domains before filtering (for system_summary)
+            all_domains = {e["entity_id"].split(".")[0] for e in entities}
+
             # Analyze entities by domain
             domain_stats: dict[str, dict[str, Any]] = {}
             device_types: dict[str, int] = {}
@@ -454,6 +526,11 @@ class SmartSearchTools:
             for entity in entities:
                 entity_id = entity["entity_id"]
                 domain = entity_id.split(".")[0]
+
+                # Skip domains not in the filter
+                if domains_filter_set and domain not in domains_filter_set:
+                    continue
+
                 attributes = entity.get("attributes", {})
                 state = entity.get("state", "unknown")
 
@@ -537,8 +614,6 @@ class SmartSearchTools:
             }
 
             # Prepare domain stats with entity filtering and truncation info
-            import random
-
             formatted_domain_stats = {}
             for domain, stats in sorted_domains:
                 all_entities = stats["all_entities"]
@@ -563,24 +638,117 @@ class SmartSearchTools:
 
                 formatted_domain_stats[domain] = {
                     "count": stats["count"],
-                    "states_summary": stats["states_summary"],
+                    "states_summary": _simplify_states_summary(
+                        stats["states_summary"],
+                        "full" if uncap_all else detail_level,
+                    ),
                     "entities": selected_entities,
                     "truncated": truncated,
                 }
 
-            # Build base response
-            base_response = {
+            # Apply global entity pagination (limit/offset across all domains)
+            # Default limit: None for minimal (already capped per-domain), 200 for standard/full
+            effective_limit = limit
+            if effective_limit is None and detail_level != "minimal":
+                effective_limit = 200
+
+            pagination_metadata: dict[str, Any] | None = None
+            if effective_limit is not None:
+                total_entity_count = sum(
+                    len(ds["entities"]) for ds in formatted_domain_stats.values()
+                )
+
+                if offset == 0:
+                    # Page 1: fair distribution — give each domain a minimum
+                    # allocation so the LLM sees entities from every domain,
+                    # then distribute the remaining budget proportionally.
+                    min_per_domain = 3
+                    num_domains = len(formatted_domain_stats)
+                    reserved = min(min_per_domain * num_domains, effective_limit)
+                    remaining_budget = effective_limit - reserved
+
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
+                        # Base allocation: min_per_domain or all if domain is smaller
+                        base = min(min_per_domain, domain_len)
+                        # Proportional share of remaining budget
+                        if total_entity_count > 0 and remaining_budget > 0:
+                            extra = int(
+                                remaining_budget * domain_len / total_entity_count
+                            )
+                        else:
+                            extra = 0
+                        take = min(base + extra, domain_len)
+                        if take < domain_len:
+                            domain_data["entities"] = domain_entities[:take]
+                            domain_data["truncated"] = True
+                        entities_included += len(domain_data["entities"])
+                else:
+                    # Pages 2+: sequential skip/take across domains
+                    entities_skipped = 0
+                    entities_included = 0
+                    for domain_data in formatted_domain_stats.values():
+                        domain_entities = domain_data["entities"]
+                        domain_len = len(domain_entities)
+
+                        skip_from_domain = max(
+                            0, min(domain_len, offset - entities_skipped)
+                        )
+                        budget_left = effective_limit - entities_included
+                        take_from_domain = max(
+                            0, min(domain_len - skip_from_domain, budget_left)
+                        )
+
+                        if skip_from_domain > 0 or take_from_domain < domain_len:
+                            domain_data["entities"] = domain_entities[
+                                skip_from_domain : skip_from_domain + take_from_domain
+                            ]
+                            if take_from_domain < domain_len:
+                                domain_data["truncated"] = True
+
+                        entities_skipped += skip_from_domain
+                        entities_included += take_from_domain
+
+                has_more = (offset + entities_included) < total_entity_count
+                pagination_metadata = {
+                    "total_entity_results": total_entity_count,
+                    "offset": offset,
+                    "limit": effective_limit,
+                    "entities_returned": entities_included,
+                    "has_more": has_more,
+                    "next_offset": offset + effective_limit if has_more else None,
+                }
+
+            # Build base response — totals always reflect full system
+            system_summary: dict[str, Any] = {
+                "total_entities": len(entities),
+                "total_domains": len(all_domains),
+                "total_services": total_services,
+                "total_areas": len(area_registry),
+            }
+            if domains_filter_set:
+                system_summary["filtered_domains"] = sorted(domains_filter_set)
+
+            base_response: dict[str, Any] = {
                 "success": True,
-                "system_summary": {
-                    "total_entities": len(entities),
-                    "total_domains": len(domain_stats),
-                    "total_services": total_services,
-                    "total_areas": len(area_registry),
-                },
+                "system_summary": system_summary,
                 "domain_stats": formatted_domain_stats,
-                "area_analysis": area_stats,  # Now included in all detail levels
+                "area_analysis": (
+                    {area: {"count": info["count"]} for area, info in area_stats.items()}
+                    if detail_level == "minimal"
+                    else area_stats
+                ),
                 "ai_insights": ai_insights,
             }
+
+            if pagination_metadata:
+                base_response["pagination"] = pagination_metadata
+
+            if partial_warnings:
+                base_response["partial"] = True
+                base_response["warnings"] = partial_warnings
 
             # Add level-specific fields
             if detail_level == "full":
@@ -599,7 +767,11 @@ class SmartSearchTools:
                     "Verify API token permissions",
                     "Try test_connection first",
                 ],
-                context={"total_entities": 0, "entity_summary": {}, "controllable_devices": {}},
+                context={
+                    "total_entities": 0,
+                    "entity_summary": {},
+                    "controllable_devices": {},
+                },
             )
 
     async def deep_search(
@@ -610,20 +782,22 @@ class SmartSearchTools:
         offset: int = 0,
         include_config: bool = False,
         concurrency_limit: int = DEFAULT_CONCURRENCY_LIMIT,
+        exact_match: bool = True,
     ) -> dict[str, Any]:
         """
-        Deep search across automation, script, and helper definitions.
+        Deep search across automation, script, helper, and dashboard definitions.
 
         Searches not just entity names but also within configuration definitions
         including triggers, actions, sequences, and other config fields.
 
         Args:
-            query: Search query (can be partial, with typos)
+            query: Search query (can be partial, with typos when exact_match=False)
             search_types: Types to search (default: ["automation", "script", "helper"])
             limit: Maximum total results to return (default: 5)
             offset: Number of results to skip for pagination (default: 0)
             include_config: Include full config in results (default: False)
             concurrency_limit: Max concurrent API calls for config fetching
+            exact_match: Use exact substring matching (default: True). Set False for fuzzy.
 
         Returns:
             Dictionary with search results grouped by type
@@ -636,6 +810,7 @@ class SmartSearchTools:
                 "automations": [],
                 "scripts": [],
                 "helpers": [],
+                "dashboards": [],
             }
 
             query_lower = query.lower().strip()
@@ -724,7 +899,9 @@ class SmartSearchTools:
                                         all_automation_configs[uid] = item
                                 bulk_fetched = True
                         except Exception as e:
-                            logger.debug(f"Automation WebSocket bulk fetch ({ws_type}) failed: {e}")
+                            logger.debug(
+                                f"Automation WebSocket bulk fetch ({ws_type}) failed: {e}"
+                            )
 
                 # Attempt C: Individual REST calls with time budget (LAST RESORT)
                 # Prioritize name-matched automations so we at least get their configs
@@ -740,7 +917,10 @@ class SmartSearchTools:
                         _name_score,
                         unique_id,
                     ) in sorted_by_score:
-                        if time.perf_counter() - budget_start > AUTOMATION_CONFIG_TIME_BUDGET:
+                        if (
+                            time.perf_counter() - budget_start
+                            > AUTOMATION_CONFIG_TIME_BUDGET
+                        ):
                             break
                         if not unique_id or unique_id in all_automation_configs:
                             continue
@@ -753,7 +933,9 @@ class SmartSearchTools:
                             )
                             all_automation_configs[unique_id] = config
                         except Exception as e:
-                            logger.debug(f"Automation individual config fetch ({unique_id}) failed: {e}")
+                            logger.debug(
+                                f"Automation individual config fetch ({unique_id}) failed: {e}"
+                            )
 
                 # Phase 3: Score with whatever configs we have
                 for entity_id, friendly_name, name_score, unique_id in name_scored:
@@ -761,20 +943,27 @@ class SmartSearchTools:
                         all_automation_configs.get(unique_id, {}) if unique_id else {}
                     )
                     config_match_score = (
-                        self._search_in_dict(config, query_lower) if config else 0
+                        self._search_in_dict(config, query_lower, exact_match)
+                        if config
+                        else 0
                     )
-                    total_score = max(name_score, config_match_score)
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
 
-                    if total_score >= self.settings.fuzzy_threshold:
+                    if total_score >= threshold:
                         results["automations"].append(
                             {
                                 "entity_id": entity_id,
                                 "friendly_name": friendly_name,
                                 "score": total_score,
-                                "match_in_name": name_score
-                                >= self.settings.fuzzy_threshold,
-                                "match_in_config": config_match_score
-                                >= self.settings.fuzzy_threshold,
+                                "match_in_name": match_in_name,
+                                "match_in_config": config_match_score >= threshold,
                                 "config": config if config else None,
                             }
                         )
@@ -847,7 +1036,9 @@ class SmartSearchTools:
                                         all_script_configs[sid] = item
                                 script_bulk_fetched = True
                         except Exception as e:
-                            logger.debug(f"Script WebSocket bulk fetch ({ws_type}) failed: {e}")
+                            logger.debug(
+                                f"Script WebSocket bulk fetch ({ws_type}) failed: {e}"
+                            )
 
                 # Attempt C: Individual fetch with budget
                 if not script_bulk_fetched:
@@ -861,7 +1052,10 @@ class SmartSearchTools:
                         script_id,
                         _name_score,
                     ) in sorted_scripts:
-                        if time.perf_counter() - budget_start > SCRIPT_CONFIG_TIME_BUDGET:
+                        if (
+                            time.perf_counter() - budget_start
+                            > SCRIPT_CONFIG_TIME_BUDGET
+                        ):
                             break
                         if script_id in all_script_configs:
                             continue
@@ -874,7 +1068,9 @@ class SmartSearchTools:
                                 "config", {}
                             )
                         except Exception as e:
-                            logger.debug(f"Script individual config fetch ({script_id}) failed: {e}")
+                            logger.debug(
+                                f"Script individual config fetch ({script_id}) failed: {e}"
+                            )
 
                 # Phase 3: Score scripts
                 for (
@@ -885,23 +1081,28 @@ class SmartSearchTools:
                 ) in script_name_scored:
                     script_config = all_script_configs.get(script_id, {})
                     config_match_score = (
-                        self._search_in_dict(script_config, query_lower)
+                        self._search_in_dict(script_config, query_lower, exact_match)
                         if script_config
                         else 0
                     )
-                    total_score = max(name_score, config_match_score)
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
 
-                    if total_score >= self.settings.fuzzy_threshold:
+                    if total_score >= threshold:
                         results["scripts"].append(
                             {
                                 "entity_id": entity_id,
                                 "script_id": script_id,
                                 "friendly_name": friendly_name,
                                 "score": total_score,
-                                "match_in_name": name_score
-                                >= self.settings.fuzzy_threshold,
-                                "match_in_config": config_match_score
-                                >= self.settings.fuzzy_threshold,
+                                "match_in_name": match_in_name,
+                                "match_in_config": config_match_score >= threshold,
                                 "config": script_config if script_config else None,
                             }
                         )
@@ -944,22 +1145,29 @@ class SmartSearchTools:
                                     )
                                 )
                                 config_match_score = self._search_in_dict(
-                                    helper, query_lower
+                                    helper, query_lower, exact_match
+                                )
+                                total_score, threshold, match_in_name = (
+                                    self._score_deep_match(
+                                        entity_id,
+                                        name,
+                                        name_match_score,
+                                        config_match_score,
+                                        query_lower,
+                                        exact_match,
+                                    )
                                 )
 
-                                total_score = max(name_match_score, config_match_score)
-
-                                if total_score >= self.settings.fuzzy_threshold:
+                                if total_score >= threshold:
                                     helper_results.append(
                                         {
                                             "entity_id": entity_id,
                                             "helper_type": helper_type,
                                             "name": name,
                                             "score": total_score,
-                                            "match_in_name": name_match_score
-                                            >= self.settings.fuzzy_threshold,
+                                            "match_in_name": match_in_name,
                                             "match_in_config": config_match_score
-                                            >= self.settings.fuzzy_threshold,
+                                            >= threshold,
                                             "config": helper,
                                         }
                                     )
@@ -982,6 +1190,98 @@ class SmartSearchTools:
                     elif isinstance(result, Exception):
                         logger.debug(f"Helper list fetch failed: {result}")
 
+            # ================================================================
+            # DASHBOARD SEARCH
+            # Fetches all storage-mode dashboards and the default dashboard,
+            # then searches their configs (cards, badges, views) for the query.
+            # ================================================================
+            if "dashboard" in search_types:
+                try:
+                    # List all storage-mode dashboards
+                    dash_list_resp = await self.client.send_websocket_message(
+                        {"type": "lovelace/dashboards/list"}
+                    )
+                    dashboard_entries: list[dict[str, Any]] = []
+                    if isinstance(dash_list_resp, dict) and dash_list_resp.get(
+                        "success"
+                    ):
+                        dashboard_entries = dash_list_resp.get("result", [])
+
+                    # Build list of dashboards to search (include default)
+                    dashboards_to_search: list[tuple[str, str]] = [
+                        ("default", "Default Dashboard")
+                    ]
+                    for dash in dashboard_entries:
+                        url_path = dash.get("url_path", "")
+                        title = dash.get("title", url_path)
+                        if url_path:
+                            dashboards_to_search.append((url_path, title))
+
+                    async def search_dashboard(
+                        url_path: str, title: str
+                    ) -> list[dict[str, Any]]:
+                        """Search a single dashboard's config for the query."""
+                        async with semaphore:
+                            try:
+                                get_data: dict[str, Any] = {"type": "lovelace/config"}
+                                if url_path != "default":
+                                    get_data["url_path"] = url_path
+                                resp = await asyncio.wait_for(
+                                    self.client.send_websocket_message(get_data),
+                                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                                )
+                                config = (
+                                    resp.get("result", resp)
+                                    if isinstance(resp, dict)
+                                    else resp
+                                )
+                                if not isinstance(config, dict):
+                                    return []
+
+                                # Search the entire dashboard config
+                                config_score = self._search_in_dict(
+                                    config, query_lower, exact_match
+                                )
+                                threshold = (
+                                    100
+                                    if exact_match
+                                    else self.settings.fuzzy_threshold
+                                )
+                                if config_score >= threshold:
+                                    return [
+                                        {
+                                            "dashboard_url": url_path,
+                                            "dashboard_title": title,
+                                            "score": config_score,
+                                            "match_in_config": True,
+                                            "config": config,
+                                        }
+                                    ]
+                                return []
+                            except Exception as e:
+                                logger.debug(
+                                    f"Dashboard search failed ({url_path}): {e}"
+                                )
+                                return []
+
+                    # Search all dashboards in parallel
+                    dash_results = await asyncio.gather(
+                        *[
+                            search_dashboard(url_path, title)
+                            for url_path, title in dashboards_to_search
+                        ],
+                        return_exceptions=True,
+                    )
+                    for dash_result in dash_results:
+                        if isinstance(dash_result, list):
+                            results["dashboards"].extend(dash_result)
+                        elif isinstance(dash_result, Exception):
+                            logger.debug(f"Dashboard search failed: {dash_result}")
+
+                except Exception as e:
+                    logger.error(f"Dashboard search error: {e}")
+                    raise
+
             # Merge all results with their category, sort by score, and paginate
             tagged_results: list[tuple[str, dict[str, Any]]] = []
             for category, items in results.items():
@@ -990,13 +1290,14 @@ class SmartSearchTools:
             tagged_results.sort(key=lambda x: x[1]["score"], reverse=True)
 
             total_before_pagination = len(tagged_results)
-            paginated = tagged_results[offset:offset + limit]
+            paginated = tagged_results[offset : offset + limit]
 
             # Re-group paginated results by category
             final_results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
                 "helpers": [],
+                "dashboards": [],
             }
             for category, item in paginated:
                 if not include_config:
@@ -1005,7 +1306,7 @@ class SmartSearchTools:
 
             has_more = (offset + len(paginated)) < total_before_pagination
 
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "query": query,
                 "total_matches": total_before_pagination,
@@ -1020,6 +1321,12 @@ class SmartSearchTools:
                 "search_types": search_types,
             }
 
+            # Only include dashboards key when dashboard search was requested
+            if "dashboard" in search_types:
+                response["dashboards"] = final_results["dashboards"]
+
+            return response
+
         except Exception as e:
             logger.error(f"Error in deep_search: {e}")
             exception_to_structured_error(
@@ -1029,44 +1336,92 @@ class SmartSearchTools:
                     "Verify automation/script/helper entities exist",
                     "Try simpler search terms",
                 ],
-                context={"query": query, "automations": [], "scripts": [], "helpers": []},
+                context={
+                    "query": query,
+                    "automations": [],
+                    "scripts": [],
+                    "helpers": [],
+                },
             )
 
+    def _score_deep_match(
+        self,
+        entity_id: str,
+        friendly_name: str,
+        fuzzy_name_score: int,
+        config_match_score: int,
+        query_lower: str,
+        exact_match: bool,
+    ) -> tuple[int, int, bool]:
+        """Compute total score, threshold, and match_in_name for a deep search result.
+
+        Returns (total_score, threshold, match_in_name).
+        """
+        if exact_match:
+            name_exact = (
+                100
+                if query_lower in entity_id.lower()
+                or query_lower in friendly_name.lower()
+                else 0
+            )
+            total_score = max(name_exact, config_match_score)
+            return total_score, 100, name_exact >= 100
+        else:
+            total_score = max(fuzzy_name_score, config_match_score)
+            threshold = self.settings.fuzzy_threshold
+            return total_score, threshold, fuzzy_name_score >= threshold
+
     def _search_in_dict(
-        self, data: dict[str, Any] | list[Any] | Any, query: str
+        self,
+        data: dict[str, Any] | list[Any] | Any,
+        query: str,
+        exact_match: bool = False,
     ) -> int:
         """
         Recursively search for query string in nested dictionary/list structures.
 
-        Returns a fuzzy match score based on how well the query matches values in the data.
+        When exact_match is True, uses substring matching (returns 100 if found, 0 if not).
+        When exact_match is False, uses fuzzy matching with partial ratio scoring.
         """
         max_score = 0
 
         if isinstance(data, dict):
             for key, value in data.items():
-                # Score the key itself
-                key_score = calculate_partial_ratio(query, str(key).lower())
-                max_score = max(max_score, key_score)
+                if exact_match:
+                    if query in str(key).lower():
+                        return 100
+                else:
+                    key_score = calculate_partial_ratio(query, str(key).lower())
+                    max_score = max(max_score, key_score)
 
-                # Recursively score the value
-                value_score = self._search_in_dict(value, query)
+                value_score = self._search_in_dict(value, query, exact_match)
                 max_score = max(max_score, value_score)
+                if exact_match and max_score >= 100:
+                    return 100
 
         elif isinstance(data, list):
             for item in data:
-                item_score = self._search_in_dict(item, query)
+                item_score = self._search_in_dict(item, query, exact_match)
                 max_score = max(max_score, item_score)
+                if exact_match and max_score >= 100:
+                    return 100
 
         elif isinstance(data, str):
-            # Direct fuzzy match on string values
-            max_score = max(max_score, calculate_partial_ratio(query, data.lower()))
+            if exact_match:
+                if query in data.lower():
+                    return 100
+            else:
+                max_score = max(max_score, calculate_partial_ratio(query, data.lower()))
 
         elif data is not None:
-            # Convert to string and match
-            max_score = max(
-                max_score,
-                calculate_partial_ratio(query, str(data).lower()),
-            )
+            if exact_match:
+                if query in str(data).lower():
+                    return 100
+            else:
+                max_score = max(
+                    max_score,
+                    calculate_partial_ratio(query, str(data).lower()),
+                )
 
         return max_score
 

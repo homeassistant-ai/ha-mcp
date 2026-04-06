@@ -327,6 +327,27 @@ mcp = _DeferredMCP()
 _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+class StatelessSessionLogFilter(logging.Filter):
+    """Downgrade 'Terminating session: None' to DEBUG to reduce user confusion.
+
+    In stateless HTTP mode every request creates and tears down a temporary
+    session, producing an INFO log that looks alarming but is routine.
+    This filter lowers the level to DEBUG so the message only appears with
+    verbose logging enabled.
+
+    # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "mcp.server.streamable_http"
+            and "Terminating session: None" in record.getMessage()
+        ):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
     """Configure root logger with consistent timestamp format."""
     logging.basicConfig(
@@ -334,6 +355,9 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         datefmt=_LOG_DATE_FORMAT,
         force=force,
+    )
+    logging.getLogger("mcp.server.streamable_http").addFilter(
+        StatelessSessionLogFilter()
     )
 
 
@@ -594,18 +618,36 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         return
     _registered_landing_paths.add(path)
 
-    # Safe because the MCP streamable-http transport claims only POST and DELETE.
-    # FastMCP registers custom routes at lowest precedence (after the MCP route),
-    # so GET requests fall through here without intercepting MCP traffic.
+    _landing_message = (
+        "HA-MCP server is up and running!\n"
+        "\n"
+        "To connect, paste the full URL (including the /private_... key) into the\n"
+        "connector or MCP settings of your AI/LLM client. No username or password required.\n"
+        "Setup instructions: https://homeassistant-ai.github.io/ha-mcp/\n"
+        "\n"
+        "--- Cloudflare Users ---\n"
+        "\n"
+        'If your LLM cannot connect, Cloudflare\'s "Block AI training bots"\n'
+        "setting is the most common cause. To disable it:\n"
+        "\n"
+        "1. Log in to Cloudflare (https://dash.cloudflare.com)\n"
+        "2. In the left sidebar, click Domains, then click Overview\n"
+        "3. Click on the domain you use for connecting to Home Assistant\n"
+        '4. On the right side, find "Control AI Crawlers"\n'
+        '5. Under "Block AI training bots", open the dropdown\n'
+        '6. Select "do not block (allow crawlers)"\n'
+        "\n"
+        "Screenshot of the setting:\n"
+        "https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg\n"
+    )
+
+    # Safe because FastMCP registers the MCP route with methods=["POST", "DELETE"]
+    # in stateless mode, so Starlette rejects GET requests before the MCP handler runs.
+    # Custom routes are registered at lowest precedence (after the MCP route).
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
         return PlainTextResponse(
-            "HA-MCP server is up and running. To connect, please follow the "
-            "setup instructions (https://homeassistant-ai.github.io/ha-mcp/), "
-            "and paste the URL for this page into your LLM. If using Cloudflare "
-            "and you're unable to connect via your LLM, make sure the "
-            '"Block AI training bots" setting is set to '
-            '"do not block (allow crawlers)".',
+            _landing_message,
             status_code=405,
             # DELETE is included per the MCP Streamable HTTP spec (used for
             # session termination), even though this deployment uses stateless mode.

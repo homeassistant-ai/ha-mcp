@@ -319,6 +319,11 @@ class TestSystemTools:
         assert isinstance(data["notification_count"], int)
         logger.info(f"Notification count: {data['notification_count']}")
 
+        # Verify repair_count is present
+        assert "repair_count" in data, "Missing 'repair_count' field"
+        assert isinstance(data["repair_count"], int)
+        logger.info(f"Repair count: {data['repair_count']}")
+
         logger.info("Get system overview test completed successfully")
 
     @pytest.mark.asyncio
@@ -371,6 +376,171 @@ class TestSystemTools:
                 logger.info(f"  {component}: {status}")
 
         logger.info("Get system health test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_repairs(self, mcp_client):
+        """
+        Test: Get system health with repairs included.
+
+        Verifies that the include="repairs" parameter adds repair data
+        to the system health response.
+        """
+        logger.info("Testing get system health with repairs include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = data.get("error", "")
+            if "not available" in str(error_msg).lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with repairs failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "repairs" in data, "Missing 'repairs' field when include='repairs'"
+
+        repairs = data["repairs"]
+        assert "issues" in repairs, "Repairs should contain 'issues' list"
+        assert "count" in repairs, "Repairs should contain 'count'"
+        assert isinstance(repairs["issues"], list), "Repairs issues should be a list"
+
+        logger.info(f"System health with repairs: {repairs['count']} repair issues found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_default_no_extras(self, mcp_client):
+        """
+        Test: Default system health (no include) should NOT contain repairs/zha_network.
+        """
+        logger.info("Testing default system health has no extras...")
+
+        result = await mcp_client.call_tool("ha_get_system_health", {})
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            pytest.skip("system_health not available in test environment")
+
+        assert "repairs" not in data, "Default health should not include repairs"
+        assert "zha_network" not in data, "Default health should not include zha_network"
+
+        logger.info("Default system health correctly excludes extras")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_zha_network(self, mcp_client):
+        """
+        Test: Get system health with ZHA network data.
+
+        ZHA may or may not be installed — verify response structure
+        regardless (error isolation means it should still succeed).
+        system_health may raise ToolError in CI (no system_health component).
+        """
+        logger.info("Testing get system health with zha_network include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "zha_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with ZHA failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "zha_network" in data, "Missing 'zha_network' when include='zha_network'"
+
+        zha = data["zha_network"]
+        assert "devices" in zha, "ZHA network should contain 'devices' list"
+        assert "count" in zha, "ZHA network should contain 'count'"
+        assert isinstance(zha["devices"], list), "ZHA devices should be a list"
+
+        logger.info(f"System health with ZHA: {zha['count']} devices found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_combined_include(self, mcp_client):
+        """
+        Test: Get system health with comma-separated include parameter.
+        """
+        logger.info("Testing system health with combined include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs,zha_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with combined include failed: {error_msg}")
+
+        assert "repairs" in data, "Combined include should have repairs"
+        assert "zha_network" in data, "Combined include should have zha_network"
+
+        logger.info("Combined include correctly returns both sections")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_zwave_network(self, mcp_client):
+        """
+        Test: Get system health with Z-Wave JS network data.
+
+        Z-Wave JS may or may not be installed — verify response structure
+        regardless (error isolation means it should still succeed).
+        system_health may raise ToolError in CI (no system_health component).
+        """
+        logger.info("Testing get system health with zwave_network include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "zwave_network"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with zwave_network failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "zwave_network" in data, "Missing 'zwave_network' when include='zwave_network'"
+
+        zwave = data["zwave_network"]
+        assert "controller" in zwave, "Z-Wave network should contain 'controller'"
+        assert "nodes" in zwave, "Z-Wave network should contain 'nodes' list"
+        assert "count" in zwave, "Z-Wave network should contain 'count'"
+        assert isinstance(zwave["nodes"], list), "Z-Wave nodes should be a list"
+
+        logger.info(f"System health with Z-Wave: {zwave['count']} nodes found")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_unknown_include_warns(self, mcp_client):
+        """
+        Test: Unknown include values produce a warning in the response.
+        """
+        logger.info("Testing system health with unknown include value...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "repairs,bogus_section"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with unknown include failed: {error_msg}")
+
+        assert "warning" in data, "Unknown include value should produce a warning"
+        assert "bogus_section" in data["warning"], "Warning should mention the unknown section"
+
+        logger.info(f"Unknown include warning: {data['warning']}")
 
 
 @pytest.mark.system

@@ -15,7 +15,7 @@ except importlib.metadata.PackageNotFoundError:
     _PACKAGE_VERSION = "unknown"
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 project_root = Path(__file__).parent.parent.parent
@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     # Home Assistant connection
     # In OAuth mode, these are optional and provided per-request
     homeassistant_url: str = Field(default=OAUTH_MODE_URL, alias="HOMEASSISTANT_URL")
-    homeassistant_token: str = Field(default=OAUTH_MODE_TOKEN, alias="HOMEASSISTANT_TOKEN")
+    homeassistant_token: str = Field(
+        default=OAUTH_MODE_TOKEN, alias="HOMEASSISTANT_TOKEN"
+    )
 
     # Server configuration
     timeout: int = Field(30, alias="HA_TIMEOUT")
@@ -70,7 +72,9 @@ class Settings(BaseSettings):
 
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
-    mcp_server_version: str = Field(default=_PACKAGE_VERSION, alias="MCP_SERVER_VERSION")
+    mcp_server_version: str = Field(
+        default=_PACKAGE_VERSION, alias="MCP_SERVER_VERSION"
+    )
 
     # Environment configuration
     environment: str = Field("development", alias="ENVIRONMENT")
@@ -80,19 +84,45 @@ class Settings(BaseSettings):
     # Examples: "tools_config_automations,tools_config_scripts,tools_traces"
     enabled_tool_modules: str = Field("all", alias="ENABLED_TOOL_MODULES")
 
-    # Dashboard partial update tools (jq_transform, find_card)
+    # Dashboard partial update tools (python_transform, find_card)
     # These are token-efficient alternatives to full config replacement.
     # Disable when using clients with programmatic tool use (future).
-    enable_dashboard_partial_tools: bool = Field(True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS")
+    enable_dashboard_partial_tools: bool = Field(
+        True, alias="ENABLE_DASHBOARD_PARTIAL_TOOLS"
+    )
 
     # Skills configuration
     # Serve bundled HA best-practice skills as MCP resources (skill:// URIs).
     # Resources are not auto-injected — clients must explicitly request them.
     enable_skills: bool = Field(True, alias="ENABLE_SKILLS")
 
-    # Expose skills as tools (list_resources/read_resource) for clients
-    # that don't support MCP resources natively.
-    enable_skills_as_tools: bool = Field(False, alias="ENABLE_SKILLS_AS_TOOLS")
+    # Expose skills and doc resources as tools (list_resources/read_resource)
+    # for clients that don't support MCP resources natively.
+    # Defaults to True so all clients can access documentation and skills.
+    # Resource-capable clients can set to False to reduce tool count.
+    enable_skills_as_tools: bool = Field(True, alias="ENABLE_SKILLS_AS_TOOLS")
+
+    # Tool search transform — replaces the full tool catalog with a unified
+    # BM25 search tool and categorized call proxies (read/write/delete).
+    # Dramatically reduces idle context token usage for LLMs.
+    enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
+
+    # Managed YAML config editing — allows ha_config_set_yaml to add,
+    # replace, or remove top-level keys in configuration.yaml and package
+    # files. Disabled by default; only for YAML-only features with no UI/API path.
+    enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
+
+    @model_validator(mode="after")
+    def _skills_dependency(self) -> "Settings":
+        """Auto-enable skills (resources) when skills-as-tools is on.
+
+        skills_as_tools wraps ResourcesAsTools which requires skills to be
+        registered as MCP resources first. Without this, enabling
+        skills_as_tools alone would produce empty list_resources results.
+        """
+        if self.enable_skills_as_tools and not self.enable_skills:
+            self.enable_skills = True
+        return self
 
     @property
     def env_file_name(self) -> str:

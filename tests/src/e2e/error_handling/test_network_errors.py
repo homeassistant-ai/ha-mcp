@@ -368,8 +368,8 @@ class TestErrorHandling:
                 if operation_ids:
                     status_result = await self._safe_tool_call(
                         mcp_client,
-                        "ha_get_bulk_status",
-                        {"operation_ids": operation_ids},
+                        "ha_get_operation_status",
+                        {"operation_id": operation_ids},
                     )
 
                     status_data = parse_mcp_result(status_result)
@@ -465,9 +465,7 @@ class TestErrorHandling:
         invalid_type_result = await self._safe_tool_call(
             mcp_client,
             "ha_config_set_helper",
-            {
-                "helper_type": "nonexistent_type",
-                "name": "Test Invalid Type"},
+            {"helper_type": "nonexistent_type", "name": "Test Invalid Type"},
         )
 
         invalid_type_data = parse_mcp_result(invalid_type_result)
@@ -491,7 +489,8 @@ class TestErrorHandling:
                 "min_value": 100.0,
                 "max_value": 50.0,  # max_value < min_value - should fail validation
                 "step": 1.0,
-                "mode": "slider"},
+                "mode": "slider",
+            },
         )
 
         invalid_range_data = parse_mcp_result(invalid_range_result)
@@ -510,7 +509,8 @@ class TestErrorHandling:
             {
                 "helper_type": "input_select",
                 "name": "Test Empty Options",
-                "options": []},
+                "options": [],
+            },
         )
 
         empty_options_data = parse_mcp_result(empty_options_result)
@@ -530,7 +530,8 @@ class TestErrorHandling:
                 "helper_type": "input_datetime",
                 "name": "Test No Date Time",
                 "has_date": False,
-                "has_time": False},
+                "has_time": False,
+            },
         )
 
         no_date_time_data = parse_mcp_result(no_date_time_result)
@@ -661,9 +662,7 @@ class TestErrorHandling:
                 result = await _safe_tool_call_standalone(
                     mcp_client,
                     "ha_config_set_helper",
-                    {
-                        "helper_type": helper_type,
-                        "name": helper_name},
+                    {"helper_type": helper_type, "name": helper_name},
                 )
                 data = parse_mcp_result(result)
                 if data.get("success"):

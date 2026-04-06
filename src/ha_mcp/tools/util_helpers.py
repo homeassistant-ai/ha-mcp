@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, overload
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -55,18 +55,37 @@ def coerce_bool_param(
             return True
         if value in ("false", "0", "no", "off"):
             return False
-        raise ValueError(
-            f"{param_name} must be a boolean value, got '{value}'"
-        )
+        raise ValueError(f"{param_name} must be a boolean value, got '{value}'")
 
-    raise ValueError(
-        f"{param_name} must be bool or string, got {type(value).__name__}"
-    )
+    raise ValueError(f"{param_name} must be bool or string, got {type(value).__name__}")
+
+
+@overload
+def coerce_int_param(
+    value: int | str | None,
+    param_name: str = ...,
+    *,
+    default: int,
+    min_value: int | None = ...,
+    max_value: int | None = ...,
+) -> int: ...
+
+
+@overload
+def coerce_int_param(
+    value: int | str | None,
+    param_name: str = ...,
+    *,
+    default: None = ...,
+    min_value: int | None = ...,
+    max_value: int | None = ...,
+) -> int | None: ...
 
 
 def coerce_int_param(
     value: int | str | None,
     param_name: str = "parameter",
+    *,
     default: int | None = None,
     min_value: int | None = None,
     max_value: int | None = None,
@@ -111,9 +130,10 @@ def coerce_int_param(
             f"{param_name} must be int or string, got {type(value).__name__}"
         )
 
-    # Apply constraints
+    # Apply constraints — raise for below-minimum (indicates caller bug),
+    # clamp for above-maximum (soft cap for oversized requests)
     if min_value is not None and result < min_value:
-        result = min_value
+        raise ValueError(f"{param_name} must be at least {min_value}, got {result}")
     if max_value is not None and result > max_value:
         result = max_value
 
@@ -159,9 +179,19 @@ def parse_json_param(
 
 
 def parse_string_list_param(
-    param: str | list[str] | None, param_name: str = "parameter"
+    param: str | list[str] | None,
+    param_name: str = "parameter",
+    allow_csv: bool = False,
 ) -> list[str] | None:
-    """Parse JSON string array or return existing list of strings."""
+    """Parse JSON string array or return existing list of strings.
+
+    Args:
+        param: Value to parse.
+        param_name: Name for error messages.
+        allow_csv: When True, plain strings are split on commas
+            (e.g. ``"light,sensor"`` → ``["light", "sensor"]``).
+            When False (default), non-JSON strings raise ValueError.
+    """
     if param is None:
         return None
 
@@ -171,6 +201,21 @@ def parse_string_list_param(
         raise ValueError(f"{param_name} must be a list of strings")
 
     if isinstance(param, str):
+        # Try JSON array first
+        if param.strip().startswith("["):
+            try:
+                parsed = json.loads(param)
+                if not isinstance(parsed, list):
+                    raise ValueError(f"{param_name} must be a JSON array")
+                if not all(isinstance(item, str) for item in parsed):
+                    raise ValueError(f"{param_name} must be a JSON array of strings")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+        # Comma-separated fallback (opt-in)
+        if allow_csv:
+            return [item.strip() for item in param.split(",") if item.strip()]
+        # Original behavior: attempt JSON parse (will fail for plain strings)
         try:
             parsed = json.loads(param)
             if not isinstance(parsed, list):
@@ -182,6 +227,41 @@ def parse_string_list_param(
             raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
     raise ValueError(f"{param_name} must be string, list, or None")
+
+
+def build_pagination_metadata(
+    total_count: int, offset: int, limit: int, count: int
+) -> dict[str, Any]:
+    """Build standardized pagination metadata for paginated responses.
+
+    Args:
+        total_count: Total number of items matching filters (before pagination).
+        offset: Current pagination offset.
+        limit: Maximum items per page (must be positive).
+        count: Number of items in this page.
+    """
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    has_more = (offset + count) < total_count
+    return {
+        "total_count": total_count,
+        "offset": offset,
+        "limit": limit,
+        "count": count,
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+    }
+
+
+def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract service_response from HA call_service result.
+
+    HA's call_service with return_response wraps results in
+    {"changed_states": [...], "service_response": {...}}.
+    Returns service_response if present and is a dict, otherwise the original result.
+    """
+    sr = result.get("service_response")
+    return sr if isinstance(sr, dict) else result
 
 
 async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
@@ -235,7 +315,9 @@ async def wait_for_entity_registered(
         try:
             state = await client.get_entity_state(entity_id)
             if state:
-                logger.debug(f"Entity {entity_id} registered after {time.monotonic() - start:.1f}s")
+                logger.debug(
+                    f"Entity {entity_id} registered after {time.monotonic() - start:.1f}s"
+                )
                 return True
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
@@ -245,8 +327,6 @@ async def wait_for_entity_registered(
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id}: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Unexpected error polling {entity_id}: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} not registered within {timeout}s")
     return False
@@ -277,18 +357,20 @@ async def wait_for_entity_removed(
         try:
             state = await client.get_entity_state(entity_id)
             if not state:
-                logger.debug(f"Entity {entity_id} removed after {time.monotonic() - start:.1f}s")
+                logger.debug(
+                    f"Entity {entity_id} removed after {time.monotonic() - start:.1f}s"
+                )
                 return True
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                logger.debug(f"Entity {entity_id} removed (404) after {time.monotonic() - start:.1f}s")
+                logger.debug(
+                    f"Entity {entity_id} removed (404) after {time.monotonic() - start:.1f}s"
+                )
                 return True
             logger.warning(f"Unexpected API error polling {entity_id} removal: {e}")
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id} removal: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Unexpected error polling {entity_id} removal: {e}")
         await asyncio.sleep(poll_interval)
     logger.warning(f"Entity {entity_id} still exists after {timeout}s")
     return False
@@ -327,12 +409,14 @@ async def wait_for_state_change(
             if isinstance(raw_initial, dict):
                 initial_state = raw_initial.get("state")
         except HomeAssistantAPIError:
-            logger.debug(f"Could not fetch initial state for {entity_id} — will detect any change")
+            logger.debug(
+                f"Could not fetch initial state for {entity_id} — will detect any change"
+            )
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-            logger.warning(f"Connection/auth error fetching initial state for {entity_id}: {e}")
+            logger.warning(
+                f"Connection/auth error fetching initial state for {entity_id}: {e}"
+            )
             raise
-        except Exception as e:
-            logger.debug(f"Error fetching initial state for {entity_id}: {e}")
 
     start = time.monotonic()
     while time.monotonic() - start < timeout:
@@ -347,23 +431,102 @@ async def wait_for_state_change(
                         f"after {time.monotonic() - start:.1f}s"
                     )
                     return state_data
-                if expected_state is None and initial_state is not None and current != initial_state:
+                if (
+                    expected_state is None
+                    and initial_state is not None
+                    and current != initial_state
+                ):
                     logger.debug(
                         f"Entity {entity_id} changed from '{initial_state}' to '{current}' "
                         f"after {time.monotonic() - start:.1f}s"
                     )
                     return state_data
                 # If initial state fetch failed, use first successful poll as baseline
-                if expected_state is None and initial_state is None and current is not None:
+                if (
+                    expected_state is None
+                    and initial_state is None
+                    and current is not None
+                ):
                     initial_state = current
         except HomeAssistantAPIError as e:
             logger.debug(f"API error polling {entity_id} state: {e}")
         except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
             logger.warning(f"Connection/auth error polling {entity_id} state: {e}")
             raise
-        except Exception as e:
-            logger.debug(f"Error polling {entity_id} state: {e}")
         await asyncio.sleep(poll_interval)
 
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
     return None
+
+
+async def fetch_entity_category(client: Any, entity_id: str, scope: str) -> str | None:
+    """Fetch a category ID for an entity from the entity registry.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity to look up (e.g., 'automation.morning_routine')
+        scope: Category scope (e.g., 'automation', 'script', 'helpers')
+
+    Returns:
+        Category ID string if set, None otherwise
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+        if result.get("success"):
+            categories = result.get("result", {}).get("categories", {})
+            cat_id = categories.get(scope)
+            return str(cat_id) if cat_id is not None else None
+    except Exception as e:
+        logger.warning(f"Failed to fetch category for {entity_id}: {e}")
+    return None
+
+
+async def apply_entity_category(
+    client: Any,
+    entity_id: str,
+    category: str,
+    scope: str,
+    result_dict: dict[str, Any],
+    entity_type: str = "entity",
+) -> None:
+    """Apply a category to an entity via the entity registry.
+
+    Updates result_dict in-place with 'category' on success or
+    'category_warning' on failure.
+
+    Args:
+        client: HomeAssistantClient instance
+        entity_id: Entity to update
+        category: Category ID to assign
+        scope: Category scope (e.g., 'automation', 'script')
+        result_dict: Tool result dict to update with category status
+        entity_type: Human-readable type for warning messages
+    """
+    try:
+        ws_result = await client.send_websocket_message(
+            {
+                "type": "config/entity_registry/update",
+                "entity_id": entity_id,
+                "categories": {scope: category},
+            }
+        )
+        if ws_result.get("success"):
+            result_dict["category"] = category
+        else:
+            error_detail = ws_result.get("error", {})
+            error_msg = (
+                error_detail.get("message", "Unknown error")
+                if isinstance(error_detail, dict)
+                else str(error_detail)
+            )
+            logger.warning(f"Failed to set category for {entity_id}: {error_msg}")
+            result_dict["category_warning"] = (
+                f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to set category for {entity_id}: {e}")
+        result_dict["category_warning"] = (
+            f"{entity_type.capitalize()} saved but failed to set category: {e}"
+        )

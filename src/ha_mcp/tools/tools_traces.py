@@ -5,6 +5,7 @@ This module provides tools for retrieving execution traces from Home Assistant
 to help debug automation and script issues.
 """
 
+import json
 import logging
 from typing import Annotated, Any
 
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant trace debugging tools."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["trace"], "title": "Get Automation Traces"})
+    @mcp.tool(tags={"History & Statistics"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Automation Traces"})
     @log_tool_usage
     async def ha_get_automation_traces(
         automation_id: Annotated[
@@ -51,6 +52,31 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 le=50,
             ),
         ] = 10,
+        deduplicate: Annotated[
+            bool,
+            Field(
+                description="Deduplicate variables across action steps (default: True). Set to False to include full variables at every step.",
+                default=True,
+            ),
+        ] = True,
+        detailed: Annotated[
+            bool,
+            Field(
+                description="Include extra diagnostic data: logbook entries and context metadata (default: False). Use when standard trace lacks detail for debugging.",
+                default=False,
+            ),
+        ] = False,
+        sections: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Comma-separated list of trace sections to return. "
+                    "Valid values: trigger, conditions, actions, config, error, logbook, context. "
+                    "Omit to return all sections. Example: 'actions' or 'trigger,conditions'."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Retrieve execution traces for automations and scripts to debug issues.
@@ -72,6 +98,17 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
            Returns full execution details including trigger info, condition results,
            action trace with timing, and context variables.
+
+        3. Get detailed trace with logbook (provide run_id and detailed=True):
+           ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", detailed=True)
+           Returns the formatted trace plus logbook entries and context metadata.
+           Useful when the standard trace summary doesn't reveal enough for debugging.
+           Note: script-style action paths (sequence/, numeric) are always matched
+           regardless of this flag.
+
+        4. Get full variables without deduplication (provide run_id and deduplicate=False):
+           ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", deduplicate=False)
+           Returns the formatted trace with full variables at every action step.
 
         DEBUGGING EXAMPLES:
 
@@ -152,7 +189,11 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ))
 
                     trace_data = result.get("result", {})
-                    return _format_detailed_trace(automation_id, run_id, trace_data)
+                    return _format_detailed_trace(
+                        automation_id, run_id, trace_data,
+                        deduplicate=deduplicate, detailed=detailed,
+                        sections=sections,
+                    )
                 else:
                     # List recent traces
                     result = await ws_client.send_command(
@@ -412,9 +453,12 @@ def _format_trace_list(
 
 
 def _format_detailed_trace(
-    automation_id: str, run_id: str, trace: dict[str, Any]
+    automation_id: str, run_id: str, trace: dict[str, Any],
+    *, deduplicate: bool = True, detailed: bool = False,
+    sections: str | None = None,
 ) -> dict[str, Any]:
     """Format detailed trace for AI consumption."""
+    domain = "automation" if automation_id.startswith("automation.") else "script"
     result: dict[str, Any] = {
         "success": True,
         "automation_id": automation_id,
@@ -445,7 +489,11 @@ def _format_detailed_trace(
                 triggers.append(step_info)
             elif path == "condition" or path.startswith("condition/"):
                 conditions.append(step_info)
-            elif path == "action" or path.startswith("action/"):
+            elif (
+                path == "action" or path.startswith("action/")
+                or path.startswith("sequence/")
+                or (domain == "script" and (path.split("/")[0].isdigit()))
+            ):
                 actions.append(step_info)
 
     # Sort by timestamp (if available) or path to maintain execution order
@@ -494,9 +542,15 @@ def _format_detailed_trace(
             condition_results.append(cond_result)
         result["condition_results"] = condition_results
 
-    # Extract action trace
+    # Extract action trace with optional variable deduplication.
+    # Home Assistant includes the full variable context at every trace step,
+    # but variables rarely change between steps. For complex automations with
+    # hundreds of steps (e.g., blueprint choose actions), this can produce
+    # 100KB+ of duplicated data. When deduplicate=True (default), we only
+    # include variables at steps where they actually changed.
     if actions:
         action_results = []
+        last_vars_fingerprint: str | None = None
         for action in actions:
             action_info: dict[str, Any] = {
                 "path": action.get("path"),
@@ -515,14 +569,24 @@ def _format_detailed_trace(
             if "error" in action:
                 action_info["error"] = action["error"]
 
-            # Extract variables if they contain useful debugging info
+            # Extract variables, optionally deduplicating across steps.
             # Check both 'variables' and 'changed_variables'
             variables = action.get("variables") or action.get("changed_variables", {})
             if variables and "trigger" not in variables:  # Skip trigger vars (already shown)
-                # Only include non-empty variable sets
                 useful_vars = {k: v for k, v in variables.items() if v is not None}
                 if useful_vars:
-                    action_info["variables"] = useful_vars
+                    if deduplicate:
+                        # Compare with previous step using JSON fingerprint
+                        try:
+                            fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
+                        except (TypeError, ValueError):
+                            fingerprint = str(useful_vars)
+
+                        if fingerprint != last_vars_fingerprint:
+                            action_info["variables"] = useful_vars
+                            last_vars_fingerprint = fingerprint
+                    else:
+                        action_info["variables"] = useful_vars
 
             # Add child execution info (for nested scripts/automations)
             if "child_id" in action:
@@ -548,5 +612,31 @@ def _format_detailed_trace(
     # Add script execution info if present
     if trace.get("script_execution"):
         result["script_execution"] = trace["script_execution"]
+
+    # In detailed mode, include logbook entries and context metadata
+    # that are essential for debugging but omitted by default to save context.
+    if detailed:
+        if "logbook_entries" in trace:
+            result["logbook_entries"] = trace["logbook_entries"]
+        if trace.get("context"):
+            result["context"] = trace["context"]
+
+    # Filter to requested sections if specified.
+    # Maps user-facing section names to result dict keys.
+    if sections:
+        section_key_map = {
+            "trigger": "trigger",
+            "conditions": "condition_results",
+            "actions": "action_trace",
+            "config": "config_summary",
+            "error": "error",
+            "logbook": "logbook_entries",
+            "context": "context",
+        }
+        requested = {s.strip().lower() for s in sections.split(",")}
+        keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
+        # Always keep metadata keys
+        keep_keys |= {"success", "automation_id", "run_id", "timestamp", "state", "script_execution"}
+        result = {k: v for k, v in result.items() if k in keep_keys}
 
     return result

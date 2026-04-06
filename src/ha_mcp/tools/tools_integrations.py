@@ -13,7 +13,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import coerce_bool_param
+from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,14 @@ logger = logging.getLogger(__name__)
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
 
-    @mcp.tool(annotations={"idempotentHint": True, "readOnlyHint": True, "tags": ["integration"], "title": "Get Integration"})
+    @mcp.tool(
+        tags={"Integrations"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Integration",
+        },
+    )
     @log_tool_usage
     async def ha_get_integration(
         entry_id: Annotated[
@@ -35,7 +42,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         query: Annotated[
             str | None,
             Field(
-                description="When listing, fuzzy search by domain or title.",
+                description="When listing, search by domain or title. "
+                "Uses exact substring matching by default; set exact_match=False for fuzzy.",
                 default=None,
             ),
         ] = None,
@@ -65,39 +73,61 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=False,
             ),
         ] = False,
+        exact_match: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "Use exact substring matching for query filter (default: True). "
+                    "Set to False for fuzzy matching when the query may contain typos."
+                ),
+                default=True,
+            ),
+        ] = True,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=50,
+                description="Max entries to return per page in list mode (default: 50)",
+            ),
+        ] = 50,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of entries to skip for pagination (default: 0)",
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
-        """
-        Get integration (config entry) information - list all or get a specific one.
+        """Get integration (config entry) information with pagination.
 
         Without an entry_id: Lists all configured integrations with optional filters.
         With an entry_id: Returns detailed information including full options/configuration.
 
-        Use this to audit existing configurations (e.g. template sensor Jinja code).
-        When creating new functionality, prefer UI-based helpers over templates when possible.
-
         EXAMPLES:
         - List all integrations: ha_get_integration()
-        - Search integrations: ha_get_integration(query="zigbee")
+        - Paginate: ha_get_integration(offset=50)
+        - Search: ha_get_integration(query="zigbee")
         - Get specific entry: ha_get_integration(entry_id="abc123")
         - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
-        - List template entries with definitions: ha_get_integration(domain="template")
-        - List all with options: ha_get_integration(include_options=True)
+        - List template entries: ha_get_integration(domain="template")
 
-        STATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
+        STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
-
-        RETURNS (when listing):
-        - entries: List of integrations with domain, title, state, capabilities
-        - state_summary: Count of entries in each state
-        - When domain filter or include_options is set, each entry includes the 'options' object
-
-        RETURNS (when getting specific entry):
-        - entry: Full config entry details including options/configuration
-        - options_schema: Options flow schema when include_schema=True and supports_options=true
         """
         try:
-            include_opts = coerce_bool_param(include_options, "include_options", default=False)
-            include_schema_bool = coerce_bool_param(include_schema, "include_schema", default=False)
+            include_opts = coerce_bool_param(
+                include_options, "include_options", default=False
+            )
+            include_schema_bool = coerce_bool_param(
+                include_schema, "include_schema", default=False
+            )
+            exact_match_bool = coerce_bool_param(
+                exact_match, "exact_match", default=True
+            )
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
+            )
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
             # Auto-enable options when domain filter is set
             if domain is not None:
                 include_opts = True
@@ -106,7 +136,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if entry_id is not None:
                 try:
                     result = await client.get_config_entry(entry_id)
-                    resp: dict[str, Any] = {"success": True, "entry_id": entry_id, "entry": result}
+                    resp: dict[str, Any] = {
+                        "success": True,
+                        "entry_id": entry_id,
+                        "entry": result,
+                    }
 
                     # Optionally fetch options flow schema (logically read-only: start+abort)
                     if include_schema_bool and result.get("supports_options"):
@@ -128,13 +162,17 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "menu_options": flow_result.get("menu_options", []),
                                 }
                         except Exception as schema_err:
-                            logger.debug(f"Failed to fetch options schema for {entry_id}: {schema_err}")
+                            logger.debug(
+                                f"Failed to fetch options schema for {entry_id}: {schema_err}"
+                            )
                         finally:
                             if flow_id:
                                 try:
                                     await client.abort_options_flow(flow_id)
                                 except Exception as abort_err:
-                                    logger.debug(f"Failed to abort options flow {flow_id}: {abort_err}")
+                                    logger.debug(
+                                        f"Failed to abort options flow {flow_id}: {abort_err}"
+                                    )
 
                     return resp
                 except ToolError:
@@ -142,35 +180,39 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 except Exception as e:
                     error_msg = str(e)
                     if "404" in error_msg or "not found" in error_msg.lower():
-                        raise_tool_error(create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Config entry not found: {entry_id}",
-                            context={"entry_id": entry_id},
-                            suggestions=[
-                                "Use ha_get_integration() without entry_id to see all config entries",
-                            ],
-                        ))
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.RESOURCE_NOT_FOUND,
+                                f"Config entry not found: {entry_id}",
+                                context={"entry_id": entry_id},
+                                suggestions=[
+                                    "Use ha_get_integration() without entry_id to see all config entries",
+                                ],
+                            )
+                        )
                     raise
 
             # List mode - get all config entries
             # Use REST API endpoint for config entries
-            response = await client._request(
-                "GET", "/config/config_entries/entry"
-            )
+            response = await client._request("GET", "/config/config_entries/entry")
 
             if not isinstance(response, list):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Unexpected response format from Home Assistant",
-                    context={"response_type": type(response).__name__},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Unexpected response format from Home Assistant",
+                        context={"response_type": type(response).__name__},
+                    )
+                )
 
             entries = response
 
             # Apply domain filter before formatting
             if domain:
                 domain_lower = domain.strip().lower()
-                entries = [e for e in entries if e.get("domain", "").lower() == domain_lower]
+                entries = [
+                    e for e in entries if e.get("domain", "").lower() == domain_lower
+                ]
 
             # Format entries for response
             formatted_entries = []
@@ -202,24 +244,22 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 formatted_entries.append(formatted_entry)
 
-            # Apply fuzzy search filter if query provided
+            # Apply search filter if query provided
             if query and query.strip():
-                from ..utils.fuzzy_search import calculate_ratio
-
-                # Perform fuzzy search with both exact and fuzzy matching
                 matches = []
                 query_lower = query.strip().lower()
 
                 for entry in formatted_entries:
-                    domain_lower = entry['domain'].lower()
-                    title_lower = entry['title'].lower()
+                    domain_lower = (entry.get("domain") or "").lower()
+                    title_lower = (entry.get("title") or "").lower()
 
                     # Check for exact substring matches first (highest priority)
                     if query_lower in domain_lower or query_lower in title_lower:
-                        # Exact substring match gets score of 100
                         matches.append((100, entry))
-                    else:
-                        # Try fuzzy matching on domain and title separately
+                    elif not exact_match_bool:
+                        # Fuzzy matching only when exact_match is disabled
+                        from ..utils.fuzzy_search import calculate_ratio
+
                         domain_score = calculate_ratio(query_lower, domain_lower)
                         title_score = calculate_ratio(query_lower, title_lower)
                         best_score = max(domain_score, title_score)
@@ -231,16 +271,22 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 matches.sort(key=lambda x: x[0], reverse=True)
                 formatted_entries = [match[1] for match in matches]
 
-            # Group by state for summary
+            # Group by state for summary (computed before pagination for full picture)
             state_summary: dict[str, int] = {}
             for entry in formatted_entries:
                 state = entry.get("state", "unknown")
                 state_summary[state] = state_summary.get(state, 0) + 1
 
+            # Apply pagination
+            total_entries = len(formatted_entries)
+            paginated_entries = formatted_entries[offset_int : offset_int + limit_int]
+
             result_data: dict[str, Any] = {
                 "success": True,
-                "total": len(formatted_entries),
-                "entries": formatted_entries,
+                **build_pagination_metadata(
+                    total_entries, offset_int, limit_int, len(paginated_entries)
+                ),
+                "entries": paginated_entries,
                 "state_summary": state_summary,
                 "query": query if query else None,
             }
@@ -262,11 +308,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
     @mcp.tool(
-        annotations={
-            "destructiveHint": True,
-            "tags": ["integration"],
-            "title": "Set Integration Enabled",
-        }
+        tags={"Integrations"},
+        annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
     )
     @log_tool_usage
     async def ha_set_integration_enabled(
@@ -294,11 +337,13 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 error_msg = result.get("error", {})
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
-                    context={"entry_id": entry_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
+                        context={"entry_id": entry_id},
+                    )
+                )
 
             # Get updated entry info
             require_restart = result.get("result", {}).get("require_restart", False)
@@ -306,7 +351,11 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if require_restart:
                 note = "Home Assistant restart required for changes to take effect."
             else:
-                note = "Integration has been loaded." if enabled_bool else "Integration has been unloaded."
+                note = (
+                    "Integration has been loaded."
+                    if enabled_bool
+                    else "Integration has been unloaded."
+                )
 
             return {
                 "success": True,
@@ -323,11 +372,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
     @mcp.tool(
-        annotations={
-            "destructiveHint": True,
-            "tags": ["integration"],
-            "title": "Delete Config Entry",
-        }
+        tags={"Integrations"},
+        annotations={"destructiveHint": True, "title": "Delete Config Entry"},
     )
     @log_tool_usage
     async def ha_delete_config_entry(
@@ -344,14 +390,16 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
 
             if not confirm_bool:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Deletion not confirmed. Set confirm=True to proceed.",
-                    context={
-                        "entry_id": entry_id,
-                        "warning": "This will permanently delete the config entry. This cannot be undone.",
-                    },
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Deletion not confirmed. Set confirm=True to proceed.",
+                        context={
+                            "entry_id": entry_id,
+                            "warning": "This will permanently delete the config entry. This cannot be undone.",
+                        },
+                    )
+                )
 
             result = await client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)

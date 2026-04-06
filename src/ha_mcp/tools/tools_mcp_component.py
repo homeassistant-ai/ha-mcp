@@ -5,7 +5,7 @@ This module provides the ha_install_mcp_tools tool which installs the
 ha_mcp_tools custom component via HACS. This enables additional services
 that are not available through standard Home Assistant APIs.
 
-Feature Flag: Set HAMCP_ENABLE_MCP_TOOLS_INSTALLER=true to enable this tool.
+Feature Flag: Set HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true to enable this tool.
 """
 
 import logging
@@ -32,8 +32,7 @@ def is_custom_component_integration_enabled() -> bool:
 
 
 # Constants for ha_mcp_tools custom component
-# TODO: Switch to "homeassistant-ai/ha-mcp" after hacs.json is on default branch
-MCP_TOOLS_REPO = "julienld/ha-mcp-test-custom-component"
+MCP_TOOLS_REPO = "homeassistant-ai/ha-mcp"
 MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 
 
@@ -55,10 +54,10 @@ def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     from .tools_hacs import CATEGORY_MAP, _assert_hacs_available
 
     @mcp.tool(
+        tags={"Utilities"},
         annotations={
             "destructiveHint": True,
-            "tags": ["mcp", "management", "installation"],
-            "title": "Install MCP Tools Component",
+            "title": "Install MCP Tools Component"
         }
     )
     @log_tool_usage

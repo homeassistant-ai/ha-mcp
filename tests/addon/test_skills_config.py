@@ -13,12 +13,17 @@ class TestSkillsConfig:
         settings = Settings()  # type: ignore[call-arg]
         assert settings.enable_skills is True
 
-    def test_enable_skills_as_tools_default_false(self):
-        """Check that enable_skills_as_tools defaults to False."""
+    def test_enable_skills_as_tools_default_true(self):
+        """Check that enable_skills_as_tools defaults to True.
+
+        This is intentional: skills-as-tools replaces several removed
+        documentation tools, so it must be on by default to preserve
+        documentation access for all clients.
+        """
         from ha_mcp.config import Settings
 
         settings = Settings()  # type: ignore[call-arg]
-        assert settings.enable_skills_as_tools is False
+        assert settings.enable_skills_as_tools is True
 
     def test_enable_skills_alias(self):
         """Check that ENABLE_SKILLS environment variable alias is set."""

@@ -425,15 +425,17 @@ class TestHaConfigDeleteDashboardResource:
         assert result["resource_id"] == "abc123"
 
     @pytest.mark.asyncio
-    async def test_delete_not_found_returns_error(self, delete_tool, mock_client):
-        """Test that deleting non-existent resource returns RESOURCE_NOT_FOUND."""
+    async def test_delete_not_found_raises_tool_error(self, delete_tool, mock_client):
+        """Test that deleting non-existent resource raises ToolError with RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.return_value = {
             "success": False,
             "error": {"message": "Resource not found"},
         }
 
-        result = await delete_tool(resource_id="nonexistent")
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(resource_id="nonexistent")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
 

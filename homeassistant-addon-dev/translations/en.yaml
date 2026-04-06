@@ -18,3 +18,20 @@ configuration:
     description: >-
       Expose skills via list_resources/read_resource tools for MCP clients
       that don't support resources natively. Adds 3 extra tools.
+  enable_tool_search:
+    name: Enable tool search
+    description: >-
+      Replace the full tool catalog with search-based discovery. Reduces
+      idle context from ~46K to ~5K tokens. Use this if using an LLM without
+      deferred tools or with smaller context windows. Tools are found via
+      ha_search_tools and executed via categorized proxies (read/write/delete).
+      Requires restart to take effect.
+  enable_yaml_config_editing:
+    name: Enable YAML config editing
+    description: >-
+      Allow AI assistants to add, replace, or remove top-level keys in
+      configuration.yaml and packages/*.yaml. Only whitelisted keys are
+      allowed (e.g., template, sensor, command_line, mqtt). Core keys
+      like homeassistant, http, and recorder are blocked. A backup is
+      created before every edit. Use for YAML-only features that have no
+      UI or API alternative. Requires restart to take effect.

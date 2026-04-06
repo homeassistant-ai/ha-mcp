@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
 
 const base = import.meta.env.BASE_URL;
 
@@ -10,23 +11,7 @@ const withBase = (path: string) => {
 ---
 
 <Layout title="macOS Setup Guide - Home Assistant MCP">
-  <!-- Navigation Bar -->
-  <nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
-    <div class="container mx-auto px-4 max-w-4xl">
-      <div class="flex items-center justify-between h-14">
-        <a href={withBase('/')} class="flex items-center gap-2">
-          <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
-          <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
-          <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
-        </a>
-        <div class="flex items-center gap-6">
-          <a href={withBase('/')} class="text-sm text-slate-300 hover:text-white transition-colors">Home</a>
-          <a href={withBase('/setup')} class="text-sm text-slate-300 hover:text-white transition-colors">Setup</a>
-          <a href={withBase('/faq')} class="text-sm text-slate-300 hover:text-white transition-colors">FAQ</a>
-        </div>
-      </div>
-    </div>
-  </nav>
+  <Nav active="setup" />
 
   <div class="container mx-auto px-4 py-8 max-w-3xl">
     <!-- Header -->

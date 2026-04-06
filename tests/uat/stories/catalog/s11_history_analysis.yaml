@@ -39,7 +39,7 @@ verify:
 expected:
   tools_should_use:
     - ha_get_history
-    - ha_get_logbook
+    - ha_get_logs
   description: >
     Agent should call ha_get_history with the entity_id and a time range,
     then analyze the state changes. Should also check the logbook for

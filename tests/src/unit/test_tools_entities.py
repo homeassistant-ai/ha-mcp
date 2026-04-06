@@ -593,26 +593,30 @@ class TestHaSetEntityCombined:
         assert "exposure_succeeded" in result
 
     @pytest.mark.asyncio
-    async def test_enabled_invalid_value_returns_error(self, mock_mcp, mock_client):
-        """Invalid value for enabled should return a validation error."""
+    async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
+        """Invalid value for enabled should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", enabled="maybe")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.test", enabled="maybe")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         error = result.get("error", {})
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
         assert "enabled" in error_msg.lower() or "boolean" in error_msg.lower()
 
     @pytest.mark.asyncio
-    async def test_hidden_invalid_value_returns_error(self, mock_mcp, mock_client):
-        """Invalid value for hidden should return a validation error."""
+    async def test_hidden_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
+        """Invalid value for hidden should raise ToolError."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(entity_id="light.test", hidden="maybe")
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="light.test", hidden="maybe")
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         error = result.get("error", {})
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
@@ -1087,3 +1091,234 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
+
+
+class TestHaSetEntityRegistryDisableGuardrail:
+    """Test that registry-disable (enabled=False) is blocked for automations and scripts."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_entity_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_set_entity function."""
+        register_entity_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_set_entity"]
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on automation entity should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.test", enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        # Ensure no WebSocket call was made
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_script_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on script entity should raise ToolError."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="script.my_script", enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "script" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_string_false_blocked(self, set_entity_tool, mock_client):
+        """enabled='false' (string) on automation entity should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.morning", enabled="false")
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_string_capital_false_blocked(self, set_entity_tool, mock_client):
+        """enabled='False' (capital F, common from Python agents) should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="automation.evening", enabled="False")
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disable_automation_single_element_list_blocked(self, set_entity_tool, mock_client):
+        """enabled=False on single-element list ['automation.test'] should also be blocked."""
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id=["automation.test"], enabled=False)
+
+        error_text = str(exc_info.value)
+        assert "automation" in error_text.lower()
+        assert "turn_off" in error_text
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enable_automation_allowed(self, set_entity_tool, mock_client):
+        """enabled=True on automation entity should be allowed (re-enabling is fine)."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_entry": {
+                        "entity_id": "automation.test",
+                        "name": None,
+                        "original_name": "Test",
+                        "icon": None,
+                        "area_id": None,
+                        "disabled_by": None,
+                        "hidden_by": None,
+                        "aliases": [],
+                        "labels": [],
+                    }
+                },
+            }
+        )
+
+        result = await set_entity_tool(entity_id="automation.test", enabled=True)
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_disable_other_domain_allowed(self, set_entity_tool, mock_client):
+        """enabled=False on non-automation/script entities should still work."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_entry": {
+                        "entity_id": "sensor.temperature",
+                        "name": None,
+                        "original_name": "Temperature",
+                        "icon": None,
+                        "area_id": None,
+                        "disabled_by": "user",
+                        "hidden_by": None,
+                        "aliases": [],
+                        "labels": [],
+                    }
+                },
+            }
+        )
+
+        result = await set_entity_tool(entity_id="sensor.temperature", enabled=False)
+        assert result["success"] is True
+
+
+class TestHaRemoveEntity:
+    """Test ha_remove_entity tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def remove_entity_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_remove_entity function."""
+        register_entity_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_remove_entity"]
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_success(self, remove_entity_tool, mock_client):
+        """Successfully removing an entity should return success with entity_id."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": None}
+        )
+        entity_id = "input_boolean.test_entity"
+
+        result = await remove_entity_tool(entity_id=entity_id)
+
+        assert result["success"] is True
+        assert result["entity_id"] == entity_id
+
+        # Verify correct WebSocket message type and payload
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "config/entity_registry/remove"
+        assert call_args["entity_id"] == entity_id
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_not_found(self, remove_entity_tool, mock_client):
+        """Removing a non-existent entity should raise ToolError containing 'not found'.
+
+        Note: send_websocket_message returns errors as plain strings, never as dicts.
+        Detection: "not found" in error_msg.lower() -- NOT error.get("code").
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Entity not found",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.definitely_not_real_12345")
+
+        error_msg = str(exc_info.value).lower()
+        assert "not found" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
+        """WebSocket connection failure should raise ToolError."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=Exception("conn failed")
+        )
+
+        with pytest.raises(ToolError):
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_general_failure(self, remove_entity_tool, mock_client):
+        """Generic failures should raise ToolError with SERVICE_CALL_FAILED message."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "Permission denied"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+        error_msg = str(exc_info.value).lower()
+        assert "permission denied" in error_msg

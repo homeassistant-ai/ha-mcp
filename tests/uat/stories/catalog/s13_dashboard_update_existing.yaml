@@ -1,0 +1,21 @@
+id: s13
+title: "Comprehensive dashboard operations"
+category: dashboard
+weight: 5
+prompt: >
+  I have a dashboard at URL path "living-room-test". Please:
+  1. Read the current dashboard config and tell me what cards are on it
+  2. Look up what card types are available and find the documentation for
+     the "history-graph" card type
+  3. Search the dashboard for any card that references light.bed_light
+  4. Add a history-graph card for light.bed_light and a Markdown card with
+     the title "Dashboard Updated" to the existing dashboard without
+     removing any existing cards
+  Show me what you found and the final updated config.
+expected:
+  tools_should_use:
+    - ha_config_get_dashboard
+    - ha_get_skill_home_assistant_best_practices
+    - read_resource
+    - ha_dashboard_find_card
+    - ha_config_set_dashboard
