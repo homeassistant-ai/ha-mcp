@@ -58,7 +58,7 @@ if (-not (Test-Path $ConfigDir)) {
 # The MCP server config
 $HaMcpConfig = @{
     command = "uvx"
-    args = @("--python", "3.13", "ha-mcp@latest")
+    args = @("--python", "3.13", "--refresh", "ha-mcp@latest")
     env = @{
         HOMEASSISTANT_URL = $DemoUrl
         HOMEASSISTANT_TOKEN = $DemoToken

@@ -73,7 +73,7 @@ mkdir -p "$CONFIG_DIR"
 # The MCP server config to add (using full path for Claude Desktop compatibility)
 HA_MCP_CONFIG='{
   "command": "'"$UVX_PATH"'",
-  "args": ["--python", "3.13", "ha-mcp@latest"],
+  "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"],
   "env": {
     "HOMEASSISTANT_URL": "'"$DEMO_URL"'",
     "HOMEASSISTANT_TOKEN": "'"$DEMO_TOKEN"'"
