@@ -33,6 +33,20 @@ def mock_client():
                     },
                 }
 
+            if msg_type.endswith("/list"):
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "id": unique_id,
+                            "name": "Existing Helper",
+                            "options": ["old_a", "old_b"],
+                            "min": 0,
+                            "max": 100,
+                        }
+                    ],
+                }
+
             if msg_type.endswith("/update"):
                 return {
                     "success": True,
