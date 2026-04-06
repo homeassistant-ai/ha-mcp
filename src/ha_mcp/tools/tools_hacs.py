@@ -130,6 +130,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """Search HACS store for repositories, or list installed repositories.
 
         **Search mode** (default): Searches by keyword across name, description, and authors.
+        **Browse mode** (no query, `installed_only=False`): Returns all HACS store repos
+        sorted alphabetically, paginated by `max_results` and `offset`.
         **Installed mode** (`installed_only=True`): Lists installed repos (no query needed).
 
         **DASHBOARD TIP:** Use `installed_only=True, category="lovelace"` to discover
