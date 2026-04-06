@@ -415,7 +415,7 @@ Balance improvement against regression risk. Consider:
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
-| `sync-tool-docs.yml` | Push to master (src/ha_mcp/tools/) | Regenerate `tools.json`, README, DOCS.md |
+| `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
 
 ## Development Commands
 
