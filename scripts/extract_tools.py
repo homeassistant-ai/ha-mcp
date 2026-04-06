@@ -179,9 +179,16 @@ def generate_docs_section(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def update_docs(tools: list[dict]) -> str:
-    """Replace the auto-generated section in DOCS.md between sync markers."""
-    docs = DOCS_PATH.read_text(encoding="utf-8")
+def update_docs(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the auto-generated section in DOCS.md between sync markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading DOCS_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads DOCS_PATH internally.
+    """
+    docs = content if content is not None else DOCS_PATH.read_text(encoding="utf-8")
     if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
         print(
             f"ERROR: {DOCS_PATH} is missing sync markers.\n"
@@ -227,8 +234,16 @@ def generate_readme_table(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def update_readme(tools: list[dict]) -> str:
-    readme = README_PATH.read_text()
+def update_readme(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the tool table in README.md between markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading README_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads README_PATH internally.
+    """
+    readme = content if content is not None else README_PATH.read_text(encoding="utf-8")
     table = generate_readme_table(tools)
     count = len(tools)
 
@@ -429,13 +444,16 @@ def check_sync(tools: list[dict]) -> bool:
         print("MISSING: site/src/data/tools.json", file=sys.stderr)
         in_sync = False
 
-    if README_PATH.read_text() != update_readme(tools):
+    readme_content = README_PATH.read_text(encoding="utf-8")
+    if readme_content != update_readme(tools, content=readme_content):
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
 
-    if DOCS_PATH.exists() and DOCS_PATH.read_text(encoding="utf-8") != update_docs(tools):
-        print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
-        in_sync = False
+    if DOCS_PATH.exists():
+        docs_content = DOCS_PATH.read_text(encoding="utf-8")
+        if docs_content != update_docs(tools, content=docs_content):
+            print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
+            in_sync = False
 
     return in_sync
 
@@ -460,7 +478,7 @@ def main() -> None:
         TOOLS_JSON_PATH.write_text(generate_tools_json(tools))
         print(f"Wrote {TOOLS_JSON_PATH.relative_to(REPO_ROOT)}")
 
-        README_PATH.write_text(update_readme(tools))
+        README_PATH.write_text(update_readme(tools), encoding="utf-8")
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
 
         DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
