@@ -247,7 +247,10 @@ def exception_to_structured_error(
         error_response["error"]["suggestions"] = existing + macos_hints
 
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
-        error_response["error"]["suggestions"] = suggestions
+        existing = error_response["error"].get("suggestions", [])
+        combined = existing + suggestions
+        # Remove duplicates while preserving order
+        error_response["error"]["suggestions"] = list(dict.fromkeys(combined))
 
     if raise_error:
         raise_tool_error(error_response)

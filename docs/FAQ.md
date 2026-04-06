@@ -122,7 +122,7 @@ brew install python@3.13
 Then force a refresh:
 
 ```bash
-uvx --refresh ha-mcp@latest --version
+uvx --refresh ha-mcp@latest
 ```
 
 See [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630), [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867), [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) for related reports.
