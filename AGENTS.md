@@ -415,6 +415,7 @@ Balance improvement against regression risk. Consider:
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
+| `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
 
 ## Development Commands
 
@@ -438,7 +439,10 @@ an isolated Docker HA instance — Docker daemon must be running.
 
 ```bash
 # Run FULL E2E suite (required before claiming all tests pass)
-cd tests && uv run pytest src/e2e/ -v --tb=short
+# -n2 is optimal locally (each worker spins up its own HA container;
+# more workers add memory pressure without proportional speedup).
+# CI uses -n3 tuned for 2-vCPU GitHub runners with 15GB RAM.
+cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short
 
 # Run specific file (partial coverage only — never substitute for full suite)
 cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
@@ -536,7 +540,7 @@ def register_<domain>_tools(mcp, client, **kwargs):
 
 ### Tool Tags
 
-Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table and `site/src/data/tools.json`. Regenerate after changes: `python scripts/extract_tools.py`
+Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table, `site/src/data/tools.json`, and `homeassistant-addon/DOCS.md`. These are auto-regenerated on merge by `sync-tool-docs.yml` — no manual regeneration needed. For local testing: `python scripts/extract_tools.py`
 
 ### Safety Annotations
 | Annotation | Default | Use For |

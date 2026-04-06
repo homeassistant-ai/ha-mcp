@@ -87,30 +87,26 @@ async def test_logbook_limit_capped_at_maximum(mcp_client):
     data = get_logbook_data(raw_data)
 
     # Verify limit is capped at 500
-    assert data["limit"] == 500, (
-        f"Limit should be capped at 500, got {data['limit']}"
-    )
+    assert data["limit"] == 500, f"Limit should be capped at 500, got {data['limit']}"
 
     logger.info(f"Limit correctly capped at {data['limit']}")
 
 
 @pytest.mark.asyncio
 async def test_logbook_minimum_limit(mcp_client):
-    """Test that logbook limit has a minimum of 1."""
+    """Test that logbook limit of 0 is rejected (must be at least 1)."""
     logger.info("Testing logbook minimum limit")
 
-    result = await mcp_client.call_tool(
+    data = await safe_call_tool(
+        mcp_client,
         "ha_get_logs",
-        {"hours_back": 1, "limit": 0},  # Request zero
+        {"hours_back": 1, "limit": 0},
     )
 
-    raw_data = assert_mcp_success(result, "Logbook with zero limit")
-    data = get_logbook_data(raw_data)
+    # limit=0 should be rejected by coerce_int_param (min_value=1)
+    assert not data.get("success"), "limit=0 should be rejected"
 
-    # Verify limit is at least 1
-    assert data["limit"] >= 1, f"Limit should be at least 1, got {data['limit']}"
-
-    logger.info(f"Minimum limit enforced: {data['limit']}")
+    logger.info("Zero limit correctly rejected")
 
 
 @pytest.mark.asyncio
@@ -164,22 +160,19 @@ async def test_logbook_pagination_with_offset(mcp_client):
 
 @pytest.mark.asyncio
 async def test_logbook_negative_offset(mcp_client):
-    """Test that negative offset is clamped to 0."""
+    """Test that negative offset is rejected."""
     logger.info("Testing logbook with negative offset")
 
-    # Use safe_call_tool — offset clamping is applied before the HA API call,
-    # so the clamped value appears in both success and error responses
-    raw_data = await safe_call_tool(
+    data = await safe_call_tool(
         mcp_client,
         "ha_get_logs",
         {"hours_back": 1, "limit": 10, "offset": -5},
     )
-    data = get_logbook_data(raw_data)
 
-    # Verify offset is clamped to 0 (present in both success and error context)
-    assert data["offset"] == 0, f"Negative offset should be clamped to 0, got {data['offset']}"
+    # Negative offset should be rejected by coerce_int_param (min_value=0)
+    assert not data.get("success"), "Negative offset should be rejected"
 
-    logger.info("Negative offset correctly clamped to 0")
+    logger.info("Negative offset correctly rejected")
 
 
 @pytest.mark.asyncio
@@ -211,9 +204,7 @@ async def test_logbook_has_more_indicator(mcp_client):
         )
         logger.info(f"Pagination hint: {data['pagination_hint']}")
 
-    logger.info(
-        f"has_more={has_more} (total={total}, limit=2, offset=0)"
-    )
+    logger.info(f"has_more={has_more} (total={total}, limit=2, offset=0)")
 
 
 @pytest.mark.asyncio
@@ -388,7 +379,9 @@ async def test_logs_error_log_source(mcp_client):
     assert "returned_lines" in data, "Response should contain returned_lines"
     assert data["limit"] == 20, f"Limit should be 20, got {data['limit']}"
 
-    logger.info(f"Retrieved {data['returned_lines']} of {data['total_lines']} log lines")
+    logger.info(
+        f"Retrieved {data['returned_lines']} of {data['total_lines']} log lines"
+    )
 
 
 @pytest.mark.asyncio
@@ -416,7 +409,10 @@ async def test_logs_invalid_level(mcp_client):
             {"source": "system", "level": "INVALID"},
         )
 
-    assert "invalid" in str(exc_info.value).lower() or "level" in str(exc_info.value).lower()
+    assert (
+        "invalid" in str(exc_info.value).lower()
+        or "level" in str(exc_info.value).lower()
+    )
     logger.info("Invalid level correctly raises ToolError")
 
 

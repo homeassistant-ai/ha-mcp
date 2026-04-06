@@ -17,6 +17,7 @@ from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from .helpers import exception_to_structured_error, log_tool_usage
 from .util_helpers import (
     add_timezone_metadata,
+    build_pagination_metadata,
     coerce_bool_param,
     coerce_int_param,
     parse_string_list_param,
@@ -28,15 +29,22 @@ logger = logging.getLogger(__name__)
 def _build_pagination_metadata(
     total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Build standardized pagination metadata for search responses."""
-    has_more = (offset + len(results)) < total_matches
+    """Build standardized pagination metadata for search responses.
+
+    Thin wrapper around the shared ``build_pagination_metadata`` helper that
+    keeps the existing call-site signature (accepts a *results* list and uses
+    ``total_matches`` as the key name expected by search tools).
+    """
+    meta = build_pagination_metadata(total_matches, offset, limit, len(results))
+    # Search tools use "total_matches" instead of "total_count" —
+    # construct explicitly to avoid fragile dependency on shared helper's key names
     return {
-        "total_matches": total_matches,
-        "offset": offset,
-        "limit": limit,
-        "count": len(results),
-        "has_more": has_more,
-        "next_offset": offset + limit if has_more else None,
+        "total_matches": meta["total_count"],
+        "offset": meta["offset"],
+        "limit": meta["limit"],
+        "count": meta["count"],
+        "has_more": meta["has_more"],
+        "next_offset": meta["next_offset"],
     }
 
 

@@ -87,6 +87,7 @@ jobs:
         echo "🚀 Running full E2E test suite with 3 workers..."
         uv run pytest tests/src/e2e/ \
           -n3 \
+          --dist loadscope \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"

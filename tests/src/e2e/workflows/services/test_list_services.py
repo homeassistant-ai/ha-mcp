@@ -23,12 +23,11 @@ class TestServiceDiscovery:
 
     async def test_list_all_services(self, mcp_client):
         """
-        Test: List all available services without filters
+        Test: List all available services without filters (paginated, summary mode).
 
-        Validates that the tool returns a comprehensive list of services
-        from various domains.
+        Validates default pagination (limit=50) and summary mode behavior.
         """
-        logger.info("Testing: List all services")
+        logger.info("Testing: List all services (default pagination)")
 
         result = await mcp_client.call_tool("ha_list_services", {})
         data = assert_mcp_success(result, "list all services")
@@ -38,17 +37,27 @@ class TestServiceDiscovery:
         assert len(domains) > 0, "Should return at least one domain"
         logger.info(f"Found {len(domains)} domains")
 
-        # Should have services
+        # Should have pagination metadata
         total_count = data.get("total_count", 0)
         assert total_count > 0, "Should return at least one service"
-        logger.info(f"Found {total_count} total services")
+        assert "has_more" in data, "Should include has_more pagination field"
+        assert "count" in data, "Should include count pagination field"
+        assert "offset" in data, "Should include offset pagination field"
+        assert "limit" in data, "Should include limit pagination field"
 
-        # Common domains should be present
-        common_domains = ["homeassistant", "light", "switch", "automation"]
-        for domain in common_domains:
-            if domain in domains:
-                logger.info(f"Found common domain: {domain}")
+        # Default limit is 50, so count should be <= 50
+        count = data.get("count", 0)
+        assert count <= 50, f"Default page should have at most 50 services, got {count}"
 
+        # Default detail_level is summary — services should not have fields
+        services = data.get("services", {})
+        if services:
+            first_service = next(iter(services.values()))
+            assert "name" in first_service, "Summary should include name"
+            assert "description" in first_service, "Summary should include description"
+            assert "fields" not in first_service, "Summary mode should omit fields"
+
+        logger.info(f"Found {total_count} total, {count} in page")
         logger.info("All services list test passed")
 
     async def test_filter_by_domain(self, mcp_client):
@@ -88,8 +97,8 @@ class TestServiceDiscovery:
         if "light.turn_on" in services:
             turn_on = services["light.turn_on"]
             assert "name" in turn_on, "Service should have name"
-            assert "fields" in turn_on, "Service should have fields"
-            logger.info(f"light.turn_on fields: {list(turn_on.get('fields', {}).keys())}")
+            # Default is summary mode — fields are omitted even with domain filter
+            assert "fields" not in turn_on, "Summary mode should omit fields"
 
         logger.info("Domain filter test passed")
 
@@ -116,10 +125,7 @@ class TestServiceDiscovery:
         logger.info(f"Found {total_count} services matching 'turn'")
 
         # Check that results contain 'turn' in service names
-        turn_services = [
-            key for key in services.keys()
-            if "turn" in key.lower()
-        ]
+        turn_services = [key for key in services.keys() if "turn" in key.lower()]
         logger.info(f"Services with 'turn' in name: {turn_services[:10]}")
 
         logger.info("Query filter test passed")
@@ -143,7 +149,9 @@ class TestServiceDiscovery:
         filters_applied = data.get("filters_applied", {})
 
         # Verify filters were applied
-        assert filters_applied.get("domain") == "light", "Domain filter should be applied"
+        assert filters_applied.get("domain") == "light", (
+            "Domain filter should be applied"
+        )
         assert filters_applied.get("query") == "on", "Query filter should be applied"
 
         # All services should be from light domain
@@ -157,19 +165,19 @@ class TestServiceDiscovery:
 
     async def test_service_field_details(self, mcp_client):
         """
-        Test: Service field details are properly returned
+        Test: Service field details are properly returned in full detail mode.
 
-        Validates that service field definitions include proper
+        Validates that detail_level='full' includes field definitions with
         type information, descriptions, and requirements.
         """
-        logger.info("Testing: Service field details")
+        logger.info("Testing: Service field details (full mode)")
 
-        # Get light services (well-known, have fields)
+        # Get light services with full detail
         result = await mcp_client.call_tool(
             "ha_list_services",
-            {"domain": "light"},
+            {"domain": "light", "detail_level": "full"},
         )
-        data = assert_mcp_success(result, "get light services")
+        data = assert_mcp_success(result, "get light services (full)")
 
         services = data.get("services", {})
 
@@ -178,17 +186,13 @@ class TestServiceDiscovery:
             turn_on = services["light.turn_on"]
             fields = turn_on.get("fields", {})
 
+            assert len(fields) > 0, "Full mode should include fields"
             logger.info(f"light.turn_on has {len(fields)} fields")
 
             # Check field structure
             for field_name, field_def in fields.items():
                 assert "name" in field_def, f"Field {field_name} should have name"
                 assert "type" in field_def, f"Field {field_name} should have type"
-                # required may be present
-                logger.debug(
-                    f"  Field: {field_name} ({field_def.get('type')}) "
-                    f"required={field_def.get('required', False)}"
-                )
 
             # Common light.turn_on fields to check
             expected_fields = ["brightness", "brightness_pct", "color_temp_kelvin"]
@@ -278,6 +282,81 @@ class TestServiceDiscovery:
 
         logger.info("homeassistant domain test passed")
 
+    async def test_pagination_limit_and_offset(self, mcp_client):
+        """Test that limit and offset correctly paginate service results."""
+        logger.info("Testing: Pagination with limit and offset")
+
+        # Get first page with small limit
+        page1 = await mcp_client.call_tool(
+            "ha_list_services",
+            {"limit": 5, "offset": 0},
+        )
+        data1 = assert_mcp_success(page1, "page 1")
+
+        assert data1["count"] == 5, f"Should return 5 services, got {data1['count']}"
+        assert data1["offset"] == 0
+        assert data1["limit"] == 5
+        assert data1["has_more"] is True, "Should have more pages"
+        assert data1["next_offset"] == 5
+
+        # Get second page
+        page2 = await mcp_client.call_tool(
+            "ha_list_services",
+            {"limit": 5, "offset": 5},
+        )
+        data2 = assert_mcp_success(page2, "page 2")
+
+        assert data2["count"] == 5
+        assert data2["offset"] == 5
+
+        # Pages should not overlap
+        keys1 = set(data1["services"].keys())
+        keys2 = set(data2["services"].keys())
+        assert keys1.isdisjoint(keys2), "Pages should not overlap"
+
+        logger.info("Pagination limit/offset test passed")
+
+    async def test_detail_level_full_includes_fields(self, mcp_client):
+        """Test that detail_level='full' includes field schemas."""
+        logger.info("Testing: detail_level=full")
+
+        result = await mcp_client.call_tool(
+            "ha_list_services",
+            {"domain": "light", "detail_level": "full"},
+        )
+        data = assert_mcp_success(result, "full detail")
+
+        services = data.get("services", {})
+        assert len(services) > 0, "Should return light services"
+
+        # Full mode should include fields
+        for key, svc in services.items():
+            assert "fields" in svc, f"{key} should have fields in full mode"
+
+        logger.info("Detail level full test passed")
+
+    async def test_detail_level_summary_omits_fields(self, mcp_client):
+        """Test that default summary mode (no filters) omits field schemas."""
+        logger.info("Testing: detail_level=summary (no filters)")
+
+        # No domain/query filter — stays in summary mode
+        result = await mcp_client.call_tool(
+            "ha_list_services",
+            {"limit": 10},
+        )
+        data = assert_mcp_success(result, "summary detail")
+
+        services = data.get("services", {})
+        assert len(services) > 0, "Should return services"
+
+        # Summary mode should omit fields
+        for key, svc in services.items():
+            assert "fields" not in svc, f"{key} should not have fields in summary mode"
+            assert "name" in svc, f"{key} should have name"
+            assert "description" in svc, f"{key} should have description"
+
+        logger.info("Detail level summary test passed")
+
 
 @pytest.mark.services
 async def test_service_discovery_integration(mcp_client):
@@ -291,10 +370,10 @@ async def test_service_discovery_integration(mcp_client):
     """
     logger.info("Testing: Service discovery integration workflow")
 
-    # Step 1: Discover light services
+    # Step 1: Discover light services (use full detail to see fields)
     services_result = await mcp_client.call_tool(
         "ha_list_services",
-        {"domain": "light"},
+        {"domain": "light", "detail_level": "full"},
     )
     services_data = assert_mcp_success(services_result, "discover light services")
 

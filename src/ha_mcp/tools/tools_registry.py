@@ -7,7 +7,7 @@ Important: Device renaming does NOT cascade to entities - they are independent r
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -19,7 +19,11 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
 )
-from .util_helpers import parse_string_list_param
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_int_param,
+    parse_string_list_param,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,42 +173,58 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=50,
+                description="Max devices to return per page in list mode (default: 50)",
+            ),
+        ] = 50,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of devices to skip for pagination (default: 0)",
+            ),
+        ] = 0,
+        detail_level: Annotated[
+            Literal["summary", "full"],
+            Field(
+                default="summary",
+                description=(
+                    "'summary': basic device info and protocol identifiers (default for list mode). "
+                    "'full': include entities and all integration details. "
+                    "Single device lookups always return full detail."
+                ),
+            ),
+        ] = "summary",
     ) -> dict[str, Any]:
-        """
-        Get device information, including Zigbee (ZHA/Z2M) and Z-Wave JS devices with protocol-specific details.
+        """Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 
-        Without device_id/entity_id: Lists all devices with optional filters.
-        With device_id or entity_id: Returns detailed info for that specific device.
+        Without device_id/entity_id: Lists devices with optional filters and pagination.
+        With device_id or entity_id: Returns full detail for that specific device.
 
-        **List all devices:**
-        - All devices: ha_get_device()
+        **List devices (paginated):**
+        - First page: ha_get_device()
+        - Next page: ha_get_device(offset=50)
         - By area: ha_get_device(area_id="living_room")
-        - By manufacturer: ha_get_device(manufacturer="Philips")
         - By integration: ha_get_device(integration="zigbee2mqtt")
-        - Combined filters: ha_get_device(integration="zha", area_id="kitchen")
+        - Full details in list: ha_get_device(detail_level="full", limit=10)
 
-        **Single device lookup:**
+        **Single device lookup (always full detail):**
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
-        **Zigbee device support:**
-        - Use integration="zha" or integration="zigbee2mqtt" to list Zigbee devices
-        - Returns ieee_address, integration_type, and radio metrics (LQI/RSSI) for ZHA devices
-        - ZHA triggers: Use `ieee_address` for zha_event triggers
-        - Z2M triggers: Use `friendly_name` for MQTT topics (zigbee2mqtt/{friendly_name}/action)
-
-        **Z-Wave JS device support:**
-        - Use integration="zwave_js" to list Z-Wave devices
-        - Returns node_id extracted from device identifiers
-        - Single device lookup includes node_status (security class, routing, Z-Wave+ version)
-
-        **Returns (list mode):**
-        - List of devices with device_id, name, manufacturer, model, area_id
-
-        **Returns (single device):**
-        - Full device details including integration_type, ieee_address/node_id, radio_metrics/node_status, entities
+        **Zigbee:** integration="zha" or "zigbee2mqtt". Returns ieee_address, radio metrics.
+        **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
         """
         try:
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
+            )
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            effective_detail = detail_level
+
             # Get device registry
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
             list_result = await client.send_websocket_message(list_message)
@@ -226,7 +246,9 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_result.get("result", []) if entity_result.get("success") else []
             )
 
-            # Build entity -> device_id map
+            # Build entity -> device_id map (always needed for entity_id param lookup)
+            # Build device -> entities map only when needed (single device lookup or full detail)
+            need_entity_details = device_id or entity_id or effective_detail == "full"
             entity_to_device: dict[str, str] = {}
             device_to_entities: dict[str, list[dict[str, Any]]] = {}
             for e in all_entities:
@@ -234,15 +256,16 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 did = e.get("device_id")
                 if eid and did:
                     entity_to_device[eid] = did
-                    if did not in device_to_entities:
-                        device_to_entities[did] = []
-                    device_to_entities[did].append(
-                        {
-                            "entity_id": eid,
-                            "name": e.get("name") or e.get("original_name"),
-                            "platform": e.get("platform"),
-                        }
-                    )
+                    if need_entity_details:
+                        if did not in device_to_entities:
+                            device_to_entities[did] = []
+                        device_to_entities[did].append(
+                            {
+                                "entity_id": eid,
+                                "name": e.get("name") or e.get("original_name"),
+                                "platform": e.get("platform"),
+                            }
+                        )
 
             # If entity_id provided, find the device_id
             if entity_id and not device_id:
@@ -487,15 +510,26 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ):
                         continue
 
-                device_info["entities"] = device_to_entities.get(device.get("id"), [])
+                # In summary mode, omit entity lists to reduce response size
+                if effective_detail == "full":
+                    device_info["entities"] = device_to_entities.get(
+                        device.get("id"), []
+                    )
                 matched_devices.append(device_info)
+
+            # Apply pagination
+            total_matched = len(matched_devices)
+            paginated_devices = matched_devices[offset_int : offset_int + limit_int]
 
             # Build result
             result: dict[str, Any] = {
                 "success": True,
-                "count": len(matched_devices),
+                **build_pagination_metadata(
+                    total_matched, offset_int, limit_int, len(paginated_devices)
+                ),
                 "total_devices": len(all_devices),
-                "devices": matched_devices,
+                "devices": paginated_devices,
+                "detail_level": effective_detail,
             }
 
             # Add filter info

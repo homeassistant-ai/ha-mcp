@@ -326,21 +326,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         else str(error)
                     )
                     failed = dict.fromkeys(assistants, should_expose)
-                    response: dict[str, Any] = {
-                        "success": False,
-                        "error": {
-                            "code": ErrorCode.SERVICE_CALL_FAILED.value,
-                            "message": f"Exposure failed: {error_msg}",
-                            "suggestion": "Check Home Assistant connection and entity availability",
-                        },
+                    context: dict[str, Any] = {
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
                     }
                     if has_registry_updates:
-                        response["partial"] = True
-                        response["entity_entry"] = _format_entity_entry(entity_entry)
-                    return response
+                        context["partial"] = True
+                        context["entity_entry"] = _format_entity_entry(entity_entry)
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Exposure failed: {error_msg}",
+                        context=context,
+                        suggestions=["Check Home Assistant connection and entity availability"],
+                    ))
 
                 # Track successful exposures
                 for a in assistants:
@@ -358,21 +357,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if get_result.get("success"):
                 entity_entry = get_result.get("result", {})
             else:
-                # Return plain dict so caller can inspect exposure_succeeded
-                return {
-                    "success": False,
-                    "error": {
-                        "code": ErrorCode.ENTITY_NOT_FOUND.value,
-                        "message": f"Entity '{entity_id}' not found in registry after applying exposure changes",
-                        "suggestion": "Use ha_search_entities() to verify the entity exists",
-                    },
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                    context={"entity_id": entity_id, "exposure_succeeded": exposure_result},
+                    suggestions=[
                         "Verify the entity_id exists using ha_search_entities()",
                         "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
                     ],
-                    "exposure_succeeded": exposure_result,
-                }
+                ))
 
         response_data: dict[str, Any] = {
             "success": True,
@@ -965,15 +958,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    return {
-                        "success": False,
-                        "entity_id": eid,
-                        "error": error_msg,
-                    }
+                    raise ValueError(error_msg)
 
                 entry = result.get("result", {})
                 return {
-                    "success": True,
                     "entity_id": entry.get("entity_id"),
                     "name": entry.get("name"),
                     "original_name": entry.get("original_name"),
@@ -995,21 +983,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not is_bulk:
                 eid = entity_ids[0]
                 logger.info(f"Getting entity registry entry for {eid}")
-                result = await _fetch_entity(eid)
-
-                if result.get("success"):
-                    return {
-                        "success": True,
-                        "entity_id": eid,
-                        "entity_entry": {
-                            k: v for k, v in result.items() if k not in ("success",)
-                        },
-                    }
-                else:
+                try:
+                    result = await _fetch_entity(eid)
+                except ValueError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Entity not found: {result.get('error', 'Unknown error')}",
+                            f"Entity not found: {e}",
                             context={"entity_id": eid},
                             suggestions=[
                                 "Use ha_search_entities() to find valid entity IDs",
@@ -1017,6 +997,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ],
                         )
                     )
+                return {
+                    "success": True,
+                    "entity_id": eid,
+                    "entity_entry": result,
+                }
 
             # Bulk case - fetch all entities
             logger.info(
@@ -1038,18 +1023,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "error": str(fetch_result),
                         }
                     )
-                    continue
-                if fetch_result.get("success"):
-                    entity_entries.append(
-                        {k: v for k, v in fetch_result.items() if k not in ("success",)}
-                    )
                 else:
-                    errors.append(
-                        {
-                            "entity_id": eid,
-                            "error": fetch_result.get("error", "Unknown error"),
-                        }
-                    )
+                    entity_entries.append(fetch_result)
 
             response: dict[str, Any] = {
                 "success": True,
@@ -1074,4 +1049,93 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={
                     "entity_id": entity_id if isinstance(entity_id, str) else entity_ids
                 },
+            )
+
+    @mcp.tool(
+        tags={"Entity Registry"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Entity",
+        },
+    )
+    @log_tool_usage
+    async def ha_remove_entity(
+        entity_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Entity ID to remove from the entity registry "
+                    "(e.g., 'sensor.old_temperature'). "
+                    "This permanently removes the entity registration."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Remove an entity from the Home Assistant entity registry.
+
+        Permanently removes the entity registration from Home Assistant.
+        The entity will no longer appear in the UI or be available to automations.
+
+        WARNING: This permanently removes the entity registration.
+        - Use only for orphaned or stale entity entries
+        - If the underlying device or integration is still active, the entity
+          may be re-added automatically on the next HA restart or reload
+        - This action cannot be undone without restoring from backup
+
+        EXAMPLES:
+        - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
+        - Remove stale helper entry: ha_remove_entity("input_boolean.deleted_helper")
+
+        NOTE: For most use cases, consider disabling instead:
+        ha_set_entity(entity_id="sensor.old", enabled=False)
+
+        RELATED TOOLS:
+        - ha_search_entities: Find entities to verify the entity_id before removing
+        - ha_get_entity: Check entity details before removal
+        """
+        try:
+            result = await client.send_websocket_message(
+                {"type": "config/entity_registry/remove", "entity_id": entity_id}
+            )
+
+            if not result.get("success"):
+                error = result.get("error", {})
+                error_msg = (
+                    error.get("message", str(error))
+                    if isinstance(error, dict)
+                    else str(error)
+                )
+                if "not found" in error_msg.lower():
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Entity '{entity_id}' not found in registry",
+                            context={"entity_id": entity_id},
+                            suggestions=[
+                                "Use ha_search_entities() to find valid entity IDs",
+                                "The entity may have already been removed",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to remove entity '{entity_id}': {error_msg}",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Check HA logs for details on why the removal was rejected",
+                        ],
+                    )
+                )
+
+            return {"success": True, "entity_id": entity_id}
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error removing entity '{entity_id}': {e}")
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
             )
