@@ -24,7 +24,7 @@ class TestUpdateReadmeContentParam:
     def test_readme_file_not_read_when_content_provided(self):
         """Optimisation: README_PATH.read_text must not be called when content= given."""
         tools = extract_tools.extract_tools()
-        readme = extract_tools.README_PATH.read_text()
+        readme = extract_tools.README_PATH.read_text(encoding="utf-8")
 
         mock_path = MagicMock(spec=Path)
         mock_path.read_text.return_value = "should not be used"
@@ -38,7 +38,7 @@ class TestUpdateReadmeContentParam:
     def test_readme_content_param_produces_same_result_as_file_read(self):
         """Correctness: result via content= matches result via internal file read."""
         tools = extract_tools.extract_tools()
-        readme = extract_tools.README_PATH.read_text()
+        readme = extract_tools.README_PATH.read_text(encoding="utf-8")
 
         result_via_param = extract_tools.update_readme(tools, content=readme)
         result_via_file = extract_tools.update_readme(tools)

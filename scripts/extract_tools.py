@@ -226,7 +226,7 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
             Pass this when the caller has already read the file (e.g. check_sync)
             to avoid a redundant read. When None, reads README_PATH internally.
     """
-    readme = content if content is not None else README_PATH.read_text()
+    readme = content if content is not None else README_PATH.read_text(encoding="utf-8")
     table = generate_readme_table(tools)
     count = len(tools)
 
@@ -265,7 +265,7 @@ def check_sync(tools: list[dict]) -> bool:
         print("MISSING: site/src/data/tools.json", file=sys.stderr)
         in_sync = False
 
-    readme_content = README_PATH.read_text()  # encoding: system default, matches update_readme's internal read
+    readme_content = README_PATH.read_text(encoding="utf-8")
     if readme_content != update_readme(tools, content=readme_content):
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
@@ -299,7 +299,7 @@ def main() -> None:
         TOOLS_JSON_PATH.write_text(generate_tools_json(tools))
         print(f"Wrote {TOOLS_JSON_PATH.relative_to(REPO_ROOT)}")
 
-        README_PATH.write_text(update_readme(tools))
+        README_PATH.write_text(update_readme(tools), encoding="utf-8")
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
 
         DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
