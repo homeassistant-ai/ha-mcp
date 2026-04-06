@@ -570,10 +570,10 @@ class TestHaSetEntityCombined:
         assert result["exposure_failed"] == {"cloud.alexa": False}
 
     @pytest.mark.asyncio
-    async def test_expose_only_entity_not_found_returns_error(
+    async def test_expose_only_entity_not_found_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If only expose_to is set and entity fetch fails, return error."""
+        """If only expose_to is set and entity fetch fails, raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose call succeeds
@@ -583,14 +583,15 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.nonexistent",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.nonexistent",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert "not found" in result["error"]["message"]
-        assert "exposure_succeeded" in result
 
     @pytest.mark.asyncio
     async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):

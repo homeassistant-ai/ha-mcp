@@ -272,21 +272,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if get_result.get("success"):
                 entity_entry = get_result.get("result", {})
             else:
-                # Return plain dict so caller can inspect exposure_succeeded
-                return {
-                    "success": False,
-                    "error": {
-                        "code": ErrorCode.ENTITY_NOT_FOUND.value,
-                        "message": f"Entity '{entity_id}' not found in registry after applying exposure changes",
-                        "suggestion": "Use ha_search_entities() to verify the entity exists",
-                    },
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                    context={"entity_id": entity_id},
+                    suggestions=[
                         "Verify the entity_id exists using ha_search_entities()",
                         "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
                     ],
-                    "exposure_succeeded": exposure_result,
-                }
+                ))
 
         response_data: dict[str, Any] = {
             "success": True,
@@ -831,15 +825,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    return {
-                        "success": False,
-                        "entity_id": eid,
-                        "error": error_msg,
-                    }
+                    raise ValueError(error_msg)
 
                 entry = result.get("result", {})
                 return {
-                    "success": True,
                     "entity_id": entry.get("entity_id"),
                     "name": entry.get("name"),
                     "original_name": entry.get("original_name"),
@@ -861,21 +850,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not is_bulk:
                 eid = entity_ids[0]
                 logger.info(f"Getting entity registry entry for {eid}")
-                result = await _fetch_entity(eid)
-
-                if result.get("success"):
-                    return {
-                        "success": True,
-                        "entity_id": eid,
-                        "entity_entry": {
-                            k: v for k, v in result.items() if k not in ("success",)
-                        },
-                    }
-                else:
+                try:
+                    result = await _fetch_entity(eid)
+                except ValueError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Entity not found: {result.get('error', 'Unknown error')}",
+                            f"Entity not found: {e}",
                             context={"entity_id": eid},
                             suggestions=[
                                 "Use ha_search_entities() to find valid entity IDs",
@@ -883,6 +864,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ],
                         )
                     )
+                return {
+                    "success": True,
+                    "entity_id": eid,
+                    "entity_entry": result,
+                }
 
             # Bulk case - fetch all entities
             logger.info(
@@ -904,18 +890,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "error": str(fetch_result),
                         }
                     )
-                    continue
-                if fetch_result.get("success"):
-                    entity_entries.append(
-                        {k: v for k, v in fetch_result.items() if k not in ("success",)}
-                    )
                 else:
-                    errors.append(
-                        {
-                            "entity_id": eid,
-                            "error": fetch_result.get("error", "Unknown error"),
-                        }
-                    )
+                    entity_entries.append(fetch_result)
 
             response: dict[str, Any] = {
                 "success": True,
