@@ -240,21 +240,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         else str(error)
                     )
                     failed = dict.fromkeys(assistants, should_expose)
-                    response: dict[str, Any] = {
-                        "success": False,
-                        "error": {
-                            "code": ErrorCode.SERVICE_CALL_FAILED.value,
-                            "message": f"Exposure failed: {error_msg}",
-                            "suggestion": "Check Home Assistant connection and entity availability",
-                        },
+                    context: dict[str, Any] = {
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
                     }
                     if has_registry_updates:
-                        response["partial"] = True
-                        response["entity_entry"] = _format_entity_entry(entity_entry)
-                    return response
+                        context["partial"] = True
+                        context["entity_entry"] = _format_entity_entry(entity_entry)
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Exposure failed: {error_msg}",
+                        context=context,
+                        suggestions=["Check Home Assistant connection and entity availability"],
+                    ))
 
                 # Track successful exposures
                 for a in assistants:

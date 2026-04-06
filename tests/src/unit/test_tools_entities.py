@@ -474,10 +474,10 @@ class TestHaSetEntityCombined:
         assert "No updates specified" in error_msg
 
     @pytest.mark.asyncio
-    async def test_expose_failure_after_registry_success_returns_partial(
+    async def test_expose_failure_after_registry_success_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If registry update succeeds but expose fails, return partial success info."""
+        """If registry update succeeds but expose fails, raise ToolError with partial context."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 # Registry update succeeds
@@ -507,26 +507,27 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            name="Updated",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                name="Updated",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result.get("partial") is True
         assert "entity_entry" in result
         assert result["entity_entry"]["name"] == "Updated"
-        # Should report which assistants succeeded and failed
         assert "exposure_succeeded" in result
         assert "exposure_failed" in result
         assert result["exposure_failed"] == {"conversation": True}
 
     @pytest.mark.asyncio
-    async def test_expose_only_failure_returns_error_without_partial(
+    async def test_expose_only_failure_raises_tool_error_without_partial(
         self, mock_mcp, mock_client
     ):
-        """If only expose_to is set and it fails, return error without partial flag."""
+        """If only expose_to is set and it fails, raise ToolError without partial flag."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": False,
@@ -536,21 +537,23 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert "partial" not in result
         assert result["exposure_succeeded"] == {}
         assert result["exposure_failed"] == {"conversation": True}
 
     @pytest.mark.asyncio
-    async def test_expose_mixed_partial_failure_reports_succeeded(
+    async def test_expose_mixed_partial_failure_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If first exposure group succeeds but second fails, report which succeeded."""
+        """If first exposure group succeeds but second fails, raise ToolError with context."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose_true succeeds
@@ -560,11 +563,13 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True, "cloud.alexa": False},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                expose_to={"conversation": True, "cloud.alexa": False},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["exposure_succeeded"] == {"conversation": True}
         assert result["exposure_failed"] == {"cloud.alexa": False}
@@ -592,6 +597,7 @@ class TestHaSetEntityCombined:
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert "not found" in result["error"]["message"]
+        assert result["exposure_succeeded"] == {"conversation": True}
 
     @pytest.mark.asyncio
     async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
