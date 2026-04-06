@@ -4,7 +4,6 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -433,7 +432,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     for match in matches:
                         del match["card_config"]
 
-                config_hash = _compute_config_hash(config)
+                config_hash: str | None = _compute_config_hash(config)
 
                 return {
                     "success": True,
