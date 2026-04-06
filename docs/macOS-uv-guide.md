@@ -144,7 +144,7 @@ If the demo server works but your local HA (`192.168.x.x`) doesn't:
 
 4. **Python 3.13 required** — ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.13` then `uvx --refresh ha-mcp@latest`.
 
-See the [FAQ](FAQ.md#macos-all-connection-attempts-failed-to-local-home-assistant) for full details.
+See the [FAQ](FAQ.md) for full details.
 
 ---
 

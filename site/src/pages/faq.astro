@@ -142,7 +142,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
 
         <div class="faq-item" id="macos-connection">
           <h3 class="text-lg font-medium text-white mb-2">macOS: "All connection attempts failed" to local Home Assistant</h3>
-          <p class="text-slate-300 mb-4">If ha-mcp connects to the demo server but fails to reach your local Home Assistant (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>, etc.) on macOS, check the following:</p>
+          <p class="text-slate-300 mb-4">If ha-mcp connects to the demo server but fails to reach your local Home Assistant (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>, etc.) on macOS, check the following. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/867" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#867</a> (Local Network Privacy), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/630" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#630</a> (env vars), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/773" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#773</a> (Python version) for related reports.</p>
 
           <h4 class="font-medium text-white mt-4 mb-2">1. macOS Local Network Privacy (Sequoia 15+)</h4>
           <p class="text-slate-300 mb-3">macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns <code class="bg-slate-800 px-1 rounded">uvx</code> as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.</p>
@@ -166,7 +166,6 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
           <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
           <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
-          <p class="text-slate-400 text-sm mt-3">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/630" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#630</a>, <a href="https://github.com/homeassistant-ai/ha-mcp/issues/867" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#867</a>, <a href="https://github.com/homeassistant-ai/ha-mcp/issues/773" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#773</a> for related reports.</p>
         </div>
 
         <div class="faq-item" id="ssl-certificates">

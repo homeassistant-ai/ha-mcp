@@ -84,7 +84,7 @@ See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more detai
 
 ### macOS: "All connection attempts failed" to local Home Assistant
 
-If ha-mcp connects to the demo server but fails to reach your local Home Assistant (`192.168.x.x`, `10.x.x.x`, etc.) on macOS, the most common causes are:
+If ha-mcp connects to the demo server but fails to reach your local Home Assistant (`192.168.x.x`, `10.x.x.x`, etc.) on macOS, the most common causes are listed below. See [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867) (Local Network Privacy), [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630) (env vars not reaching ha-mcp), and [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) (Python version/read-only filesystem) for related reports.
 
 **1. macOS Local Network Privacy (Sequoia 15+)**
 
@@ -124,8 +124,6 @@ Then force a refresh:
 ```bash
 uvx --refresh ha-mcp@latest
 ```
-
-See [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630), [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867), [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) for related reports.
 
 ### SSL certificate errors (self-signed certificates)
 
