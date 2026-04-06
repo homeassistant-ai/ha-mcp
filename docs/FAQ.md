@@ -125,6 +125,12 @@ Then force a refresh:
 uvx --refresh ha-mcp@latest
 ```
 
+If `uvx` still uses the old Python after installing 3.13, explicitly pin it by adding `--python 3.13` to your config args:
+
+```json
+"args": ["--python", "3.13", "ha-mcp@latest"]
+```
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.

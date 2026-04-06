@@ -166,6 +166,8 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
           <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
           <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.13, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.13</code> to your config args:</p>
+          <pre class="code-block mt-2"><code>"args": ["--python", "3.13", "ha-mcp@latest"]</code></pre>
         </div>
 
         <div class="faq-item" id="ssl-certificates">

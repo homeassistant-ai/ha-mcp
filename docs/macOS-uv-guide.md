@@ -142,7 +142,7 @@ If the demo server works but your local HA (`192.168.x.x`) doesn't:
 
 3. **http:// vs https://** — HA in container mode (Docker, K3s) uses HTTP by default. Use `http://` unless you configured SSL/TLS.
 
-4. **Python 3.13 required** — ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.13` then `uvx --refresh ha-mcp@latest`.
+4. **Python 3.13 required** — ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.13` then `uvx --refresh ha-mcp@latest`. If uvx still picks the old Python, add `"--python", "3.13"` to your config args.
 
 See the [FAQ](FAQ.md) for full details.
 
