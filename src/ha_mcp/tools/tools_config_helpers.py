@@ -1015,17 +1015,36 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         list_result = await client.send_websocket_message(
                             {"type": f"{helper_type}/list"}
                         )
-                        existing = dict[str, Any]()
-                        if list_result.get("success"):
-                            items = list_result.get("result", [])
-                            existing = next(
-                                (
-                                    item
-                                    for item in items
-                                    if isinstance(item, dict)
-                                    and item.get("id") == unique_id
-                                ),
-                                existing,
+                        if not list_result.get("success"):
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.SERVICE_CALL_FAILED,
+                                    f"Failed to fetch {helper_type} config list: {list_result.get('error', 'Unknown')}",
+                                    context={
+                                        "helper_type": helper_type,
+                                        "entity_id": entity_id,
+                                    },
+                                )
+                            )
+                        existing = next(
+                            (
+                                item
+                                for item in list_result.get("result", [])
+                                if isinstance(item, dict)
+                                and item.get("id") == unique_id
+                            ),
+                            None,
+                        )
+                        if not existing:
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.CONFIG_NOT_FOUND,
+                                    f"{helper_type} config not found for id: {unique_id}",
+                                    context={
+                                        "helper_type": helper_type,
+                                        "entity_id": entity_id,
+                                    },
+                                )
                             )
 
                         update_msg = {
