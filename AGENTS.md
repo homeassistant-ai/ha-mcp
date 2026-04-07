@@ -523,7 +523,8 @@ src/ha_mcp/
 - `list` — collections (`ha_list_areas`)
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
-- `delete` — remove (`ha_config_delete_automation`)
+- `delete` — remove config entries (`ha_config_delete_automation`, `ha_delete_file`)
+- `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
 - `call` — execute (`ha_call_service`)
 
 ### Tool Structure
@@ -537,13 +538,12 @@ def register_<domain>_tools(mcp, client, **kwargs):
         """<Action verb> <what this tool does -- one sentence>.
 
         <Optional: second sentence for key behavioral distinction or modes>
-
-        # Add only when genuinely needed:
+        """
+        # Add to the docstring above only when genuinely needed:
         # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # NOTE: non-obvious gotcha or destructive side-effect
+        # NOTE / WARNING: non-obvious gotcha or destructive side-effect
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
-        """
 ```
 
 ### Tool Docstrings
@@ -551,7 +551,7 @@ def register_<domain>_tools(mcp, client, **kwargs):
 The single-line template is the default -- extend it only where it genuinely helps.
 
 **Required for every tool:**
-- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Execute`, `Call`)
+- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`)
 - One sentence describing what the tool does (not how)
 
 **Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
