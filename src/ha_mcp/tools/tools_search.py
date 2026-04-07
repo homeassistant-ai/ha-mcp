@@ -14,7 +14,7 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
@@ -841,89 +841,69 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         },
     )
     @log_tool_usage
-    async def ha_get_state(entity_id: str) -> dict[str, Any]:
-        """Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.)."""
-        try:
-            result = await client.get_entity_state(entity_id)
-            return await add_timezone_metadata(client, result)
-        except ToolError:
-            raise
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={"entity_id": entity_id},
-                suggestions=[
-                    f"Verify entity '{entity_id}' exists in Home Assistant",
-                    "Check Home Assistant connection",
-                    "Use ha_search_entities() to find correct entity IDs",
-                ],
-            )
-
-    @mcp.tool(
-        tags={"Search & Discovery"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Multiple Entity States",
-        },
-    )
-    @log_tool_usage
-    async def ha_get_states(
-        entity_ids: Annotated[
-            list[str],
+    async def ha_get_state(
+        entity_id: Annotated[
+            str | list[str],
             Field(
-                description="List of entity IDs to retrieve states for (e.g., ['light.kitchen', 'sensor.temperature'])"
+                description="Entity ID or list of entity IDs to retrieve state for "
+                "(e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])"
             ),
         ],
     ) -> dict[str, Any]:
-        """Get state information for multiple Home Assistant entities in a single call.
+        """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
-        Efficiently retrieves states for multiple entities using parallel requests
-        instead of calling ha_get_state repeatedly. Maximum 100 entities per call.
-        Duplicate entity IDs are automatically deduplicated.
+        SINGLE ENTITY:
+        Pass a string entity_id. Returns the entity's full state and attributes.
 
+        MULTIPLE ENTITIES:
+        Pass a list of entity IDs (max 100). Efficiently retrieves states using
+        parallel requests. Duplicates are automatically deduplicated.
         Returns success=True if at least one entity state was retrieved.
         Check 'error_count' for any failed lookups in partial-success scenarios.
 
-        WHEN TO USE:
-        - Checking states of multiple entities at once (e.g., verifying automation results)
-        - Comparing states across related entities
-        - Any scenario requiring 2+ entity state lookups
-
         EXAMPLES:
-        - ha_get_states(["light.kitchen", "light.living_room", "sensor.temperature"])
-        - ha_get_states(["automation.morning_routine", "binary_sensor.motion"])
-
-        NOTE: For a single entity, use ha_get_state() instead.
+        - Single: ha_get_state("light.kitchen")
+        - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
         """
+        # Single entity path
+        if isinstance(entity_id, str):
+            try:
+                result = await client.get_entity_state(entity_id)
+                return await add_timezone_metadata(client, result)
+            except ToolError:
+                raise
+            except Exception as e:
+                exception_to_structured_error(
+                    e,
+                    context={"entity_id": entity_id},
+                    suggestions=[
+                        f"Verify entity '{entity_id}' exists in Home Assistant",
+                        "Check Home Assistant connection",
+                        "Use ha_search_entities() to find correct entity IDs",
+                    ],
+                )
+
+        # Multiple entities path
+        entity_ids: list[str] = entity_id
         MAX_ENTITIES = 100
 
         if not isinstance(entity_ids, list) or not entity_ids:
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    "entity_ids must be a non-empty list of entity ID strings",
-                    parameter="entity_ids",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                "entity_id must be a non-empty string or list of entity ID strings",
+                parameter="entity_id",
+            ))
 
         if not all(isinstance(eid, str) for eid in entity_ids):
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    "All entity_ids values must be strings",
-                    parameter="entity_ids",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                "All entity_id values must be strings",
+                parameter="entity_id",
+            ))
 
         if len(entity_ids) > MAX_ENTITIES:
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
-                    parameter="entity_ids",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
+                parameter="entity_id",
+            ))
 
         # Deduplicate while preserving order
         unique_ids = list(dict.fromkeys(entity_ids))
@@ -934,16 +914,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
 
-            async def _fetch_state(entity_id: str) -> dict[str, Any]:
+            async def _fetch_state(eid: str) -> dict[str, Any]:
                 try:
-                    state = await client.get_entity_state(entity_id)
-                    return {"success": True, "entity_id": entity_id, "state": state}
+                    state = await client.get_entity_state(eid)
+                    return {"success": True, "entity_id": eid, "state": state}
                 except Exception as e:
-                    logger.warning(f"Failed to fetch state for '{entity_id}': {e}")
+                    logger.warning(f"Failed to fetch state for '{eid}': {e}")
                     # ast-grep-ignore — batch item failure, aggregated via asyncio.gather
                     return exception_to_structured_error(
                         e,
-                        context={"entity_id": entity_id},
+                        context={"entity_id": eid},
                         raise_error=False,
                     )
 

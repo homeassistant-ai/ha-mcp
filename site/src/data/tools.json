@@ -808,51 +808,9 @@
     "source_file": "tools_registry.py"
   },
   {
-    "name": "ha_rename_entity",
-    "title": "Rename Entity",
-    "description": "Rename a Home Assistant entity by changing its entity_id, optionally renaming its device too.\n\nChanges the entity_id (e.g., light.old_name -> light.new_name).\nThe domain must remain the same - you cannot change a light to a switch.\n\nDEVICE RENAME:\nProvide new_device_name to also rename the device associated with this entity.\nThe device is looked up automatically from the entity registry.\n\nVOICE ASSISTANT EXPOSURE:\nBy default, this function preserves voice assistant exposure settings\n(Alexa, Google Assistant, Assist) when renaming. The exposure settings\nare stored separately from the entity registry and must be migrated\nmanually. Set preserve_voice_exposure=False to skip this migration.\n\nIMPORTANT LIMITATIONS:\n- References in automations/scripts/dashboards are NOT automatically updated\n- Entity history is preserved (HA 2022.4+)\n- Some entities cannot be renamed:\n  - Entities without unique IDs\n  - Entities disabled by integration\n\nEXAMPLES:\n- Rename light: ha_rename_entity(\"light.bedroom_1\", \"light.master_bedroom\")\n- Rename with friendly name: ha_rename_entity(\"sensor.temp\", \"sensor.living_room_temp\", name=\"Living Room Temperature\")\n- Rename entity and device: ha_rename_entity(\"light.bedroom_1\", \"light.master_bedroom\", new_device_name=\"Master Bedroom Lamp\")\n- Rename without exposure migration: ha_rename_entity(\"light.old\", \"light.new\", preserve_voice_exposure=False)\n\nNOTE: Device and entity renaming are independent in HA. Renaming a device does\nNOT rename its entities. See ha_update_device() for device-only renaming.",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "Annotated[str, Field(description=\"Current entity ID to rename (e.g., 'light.old_name')\")]"
-        },
-        "new_entity_id": {
-          "type": "Annotated[str, Field(description=\"New entity ID (e.g., 'light.new_name'). Domain must match the original.\")]"
-        },
-        "name": {
-          "type": "Annotated[str | None, Field(description='Optional: New friendly name for the entity', default=None)]",
-          "default": null
-        },
-        "icon": {
-          "type": "Annotated[str | None, Field(description=\"Optional: New icon (e.g., 'mdi:lightbulb')\", default=None)]",
-          "default": null
-        },
-        "new_device_name": {
-          "type": "Annotated[str | None, Field(description='Optional: New display name for the associated device. If provided, both entity and device are renamed in one operation.', default=None)]",
-          "default": null
-        },
-        "preserve_voice_exposure": {
-          "type": "Annotated[bool | str | None, Field(description='Migrate voice assistant exposure settings to the new entity_id. Defaults to True. Set to False to skip exposure migration.', default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "entity_id",
-        "new_entity_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Device Registry"
-    ],
-    "source_file": "tools_registry.py"
-  },
-  {
     "name": "ha_update_device",
     "title": "Update Device",
-    "description": "Update device properties such as name, area, disabled state, or labels.\n\nIMPORTANT: Renaming a device does NOT rename its entities!\nDevice and entity names are independent. To rename entities, use ha_rename_entity().\n\nCommon workflow for full rename:\n1. ha_update_device(device_id=\"abc\", name=\"Living Room Sensor\")  # Rename device\n2. ha_rename_entity(entity_id=\"sensor.old\", new_entity_id=\"sensor.living_room\")  # Rename entities separately\n\nPARAMETERS:\n- name: Sets the user-defined display name (name_by_user)\n- area_id: Assigns device to an area/room. Use '' to remove from area.\n- disabled_by: Set to 'user' to disable, or empty to enable\n- labels: List of labels (replaces existing labels)\n\nEXAMPLES:\n- Rename device: ha_update_device(\"abc123\", name=\"Living Room Hub\")\n- Move to area: ha_update_device(\"abc123\", area_id=\"living_room\")\n- Disable device: ha_update_device(\"abc123\", disabled_by=\"user\")\n- Enable device: ha_update_device(\"abc123\", disabled_by=\"\")\n- Add labels: ha_update_device(\"abc123\", labels=[\"important\", \"sensor\"])",
+    "description": "Update device properties such as name, area, disabled state, or labels.\n\nIMPORTANT: Renaming a device does NOT rename its entities!\nDevice and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).\n\nCommon workflow for full rename:\n1. ha_update_device(device_id=\"abc\", name=\"Living Room Sensor\")  # Rename device\n2. ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.living_room\")  # Rename entities separately\n\nPARAMETERS:\n- name: Sets the user-defined display name (name_by_user)\n- area_id: Assigns device to an area/room. Use '' to remove from area.\n- disabled_by: Set to 'user' to disable, or empty to enable\n- labels: List of labels (replaces existing labels)\n\nEXAMPLES:\n- Rename device: ha_update_device(\"abc123\", name=\"Living Room Hub\")\n- Move to area: ha_update_device(\"abc123\", area_id=\"living_room\")\n- Disable device: ha_update_device(\"abc123\", disabled_by=\"user\")\n- Enable device: ha_update_device(\"abc123\", disabled_by=\"\")\n- Add labels: ha_update_device(\"abc123\", labels=[\"important\", \"sensor\"])",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -961,7 +919,7 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, enabled/disabled state, visibility, aliases, labels, and voice\nassistant exposure in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels and expose_to parameters are supported.\nOther parameters (area_id, name, icon, enabled, hidden, aliases) require single entity.\n\nLABEL OPERATIONS:\n- label_operation=\"set\" (default): Replace all labels with the provided list. Use [] to clear.\n- label_operation=\"add\": Add labels to existing ones without removing any.\n- label_operation=\"remove\": Remove specified labels from the entity.\n\nUse ha_search_entities() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\nSingle entity:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Rename: ha_set_entity(\"sensor.temp\", name=\"Living Room Temperature\")\n- Set labels: ha_set_entity(\"light.lamp\", labels=[\"outdoor\", \"smart\"])\n- Add labels: ha_set_entity(\"light.lamp\", labels=[\"new_label\"], label_operation=\"add\")\n- Remove labels: ha_set_entity(\"light.lamp\", labels=[\"old_label\"], label_operation=\"remove\")\n- Clear labels: ha_set_entity(\"light.lamp\", labels=[])\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nBulk operations:\n- Set labels on multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"outdoor\"])\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose multiple to Alexa: ha_set_entity([\"light.a\", \"light.b\"], expose_to={\"cloud.alexa\": True})\n\nNOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.\n\nENABLED/DISABLED WARNING:\nSetting enabled=False performs a **registry-level disable** — the entity is completely\nremoved from the Home Assistant state machine and hidden from the UI. It will NOT appear\nin state queries, dashboards, or automations until re-enabled AND the integration is\nreloaded. This is NOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. Use these instead:\n- ha_call_service(\"automation\", \"turn_off\", entity_id=\"automation.xxx\")\n- ha_call_service(\"script\", \"turn_off\", entity_id=\"script.xxx\")",
+    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, enabled/disabled state, visibility, aliases, labels, voice\nassistant exposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, icon, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.\n\nLABEL OPERATIONS:\n- label_operation=\"set\" (default): Replace all labels with the provided list. Use [] to clear.\n- label_operation=\"add\": Add labels to existing ones without removing any.\n- label_operation=\"remove\": Remove specified labels from the entity.\n\nENTITY ID RENAME:\nUse new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).\nDomain must match. Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nUse new_device_name to rename the associated device. Can be combined with\nnew_entity_id to rename both in one call. The device is looked up automatically.\n\nUse ha_search_entities() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\nSingle entity:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Rename display name: ha_set_entity(\"sensor.temp\", name=\"Living Room Temperature\")\n- Rename entity_id: ha_set_entity(\"light.old_name\", new_entity_id=\"light.new_name\")\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Rename entity_id with friendly name: ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.new\", name=\"New Name\")\n- Set labels: ha_set_entity(\"light.lamp\", labels=[\"outdoor\", \"smart\"])\n- Add labels: ha_set_entity(\"light.lamp\", labels=[\"new_label\"], label_operation=\"add\")\n- Remove labels: ha_set_entity(\"light.lamp\", labels=[\"old_label\"], label_operation=\"remove\")\n- Clear labels: ha_set_entity(\"light.lamp\", labels=[])\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nBulk operations:\n- Set labels on multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"outdoor\"])\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose multiple to Alexa: ha_set_entity([\"light.a\", \"light.b\"], expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nSetting enabled=False performs a **registry-level disable** — the entity is completely\nremoved from the Home Assistant state machine and hidden from the UI. It will NOT appear\nin state queries, dashboards, or automations until re-enabled AND the integration is\nreloaded. This is NOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. Use these instead:\n- ha_call_service(\"automation\", \"turn_off\", entity_id=\"automation.xxx\")\n- ha_call_service(\"script\", \"turn_off\", entity_id=\"script.xxx\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1005,6 +963,14 @@
         },
         "expose_to": {
           "type": "Annotated[str | dict[str, bool] | None, Field(description='Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Valid assistants: \\'conversation\\' (Assist), \\'cloud.alexa\\', \\'cloud.google_assistant\\'. Example: {\"conversation\": true, \"cloud.alexa\": false}. Supports bulk operations.', default=None)]",
+          "default": null
+        },
+        "new_entity_id": {
+          "type": "Annotated[str | None, Field(description=\"New entity ID to rename to (e.g., 'light.new_name'). Domain must match the original. Single entity only.\", default=None)]",
+          "default": null
+        },
+        "new_device_name": {
+          "type": "Annotated[str | None, Field(description='New display name for the associated device. If provided, both entity and device are updated in one operation. Single entity only.', default=None)]",
           "default": null
         }
       },
@@ -2236,38 +2202,15 @@
   {
     "name": "ha_get_state",
     "title": "Get Entity State",
-    "description": "Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.).",
+    "description": "Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).\n\nSINGLE ENTITY:\nPass a string entity_id. Returns the entity's full state and attributes.\n\nMULTIPLE ENTITIES:\nPass a list of entity IDs (max 100). Efficiently retrieves states using\nparallel requests. Duplicates are automatically deduplicated.\nReturns success=True if at least one entity state was retrieved.\nCheck 'error_count' for any failed lookups in partial-success scenarios.\n\nEXAMPLES:\n- Single: ha_get_state(\"light.kitchen\")\n- Multiple: ha_get_state([\"light.kitchen\", \"light.living_room\", \"sensor.temperature\"])",
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "str"
+          "type": "Annotated[str | list[str], Field(description=\"Entity ID or list of entity IDs to retrieve state for (e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])\")]"
         }
       },
       "required": [
         "entity_id"
-      ]
-    },
-    "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [
-      "Search & Discovery"
-    ],
-    "source_file": "tools_search.py"
-  },
-  {
-    "name": "ha_get_states",
-    "title": "Get Multiple Entity States",
-    "description": "Get state information for multiple Home Assistant entities in a single call.\n\nEfficiently retrieves states for multiple entities using parallel requests\ninstead of calling ha_get_state repeatedly. Maximum 100 entities per call.\nDuplicate entity IDs are automatically deduplicated.\n\nReturns success=True if at least one entity state was retrieved.\nCheck 'error_count' for any failed lookups in partial-success scenarios.\n\nWHEN TO USE:\n- Checking states of multiple entities at once (e.g., verifying automation results)\n- Comparing states across related entities\n- Any scenario requiring 2+ entity state lookups\n\nEXAMPLES:\n- ha_get_states([\"light.kitchen\", \"light.living_room\", \"sensor.temperature\"])\n- ha_get_states([\"automation.morning_routine\", \"binary_sensor.motion\"])\n\nNOTE: For a single entity, use ha_get_state() instead.",
-    "inputSchema": {
-      "properties": {
-        "entity_ids": {
-          "type": "Annotated[list[str], Field(description=\"List of entity IDs to retrieve states for (e.g., ['light.kitchen', 'sensor.temperature'])\")]"
-        }
-      },
-      "required": [
-        "entity_ids"
       ]
     },
     "annotations": {
@@ -2650,44 +2593,6 @@
     "source_file": "tools_system.py"
   },
   {
-    "name": "ha_add_todo_item",
-    "title": "Add Todo Item",
-    "description": "Add an item to a Home Assistant todo list.\n\nCreates a new item in the specified todo list with optional description and due date.\n\nPARAMETERS:\n- entity_id: The todo list to add to (e.g., 'todo.shopping_list')\n- summary: The item text (required)\n- description: Optional detailed description\n- due_date: Optional due date (YYYY-MM-DD format)\n- due_datetime: Optional due datetime (ISO format, overrides due_date if both provided)\n\nEXAMPLES:\n- Add simple item: ha_add_todo_item(\"todo.shopping_list\", \"Buy milk\")\n- Add with description: ha_add_todo_item(\"todo.shopping_list\", \"Buy milk\", description=\"2% organic\")\n- Add with due date: ha_add_todo_item(\"todo.tasks\", \"Pay bills\", due_date=\"2024-12-31\")\n\nUSE CASES:\n- \"Add milk to my shopping list\"\n- \"Add 'call mom' to my todo list\"\n- \"Remind me to pay rent by the 1st\"\n\nNOTE: Not all todo integrations support all features (description, due dates).\nThe Shopping List integration only supports summary.",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "Annotated[str, Field(description=\"Todo list entity ID (e.g., 'todo.shopping_list')\")]"
-        },
-        "summary": {
-          "type": "Annotated[str, Field(description=\"Item text/name to add (e.g., 'Buy milk')\")]"
-        },
-        "description": {
-          "type": "Annotated[str | None, Field(description='Optional detailed description for the item', default=None)]",
-          "default": null
-        },
-        "due_date": {
-          "type": "Annotated[str | None, Field(description=\"Optional due date in YYYY-MM-DD format (e.g., '2024-12-25')\", default=None)]",
-          "default": null
-        },
-        "due_datetime": {
-          "type": "Annotated[str | None, Field(description=\"Optional due datetime in ISO format (e.g., '2024-12-25T14:00:00')\", default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "entity_id",
-        "summary"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Todo Lists"
-    ],
-    "source_file": "tools_todo.py"
-  },
-  {
     "name": "ha_get_todo",
     "title": "Get Todo",
     "description": "Get todo lists or items - list all todo lists or get items from a specific list.\n\nWithout an entity_id: Lists all todo list entities in Home Assistant.\nWith an entity_id: Gets items from that specific todo list, optionally filtered by status.\n\n**LISTING TODO LISTS (entity_id omitted):**\nReturns all entities in the 'todo' domain, including shopping lists\nand any other todo-type integrations.\n\nEach todo list includes:\n- entity_id: The unique identifier (e.g., 'todo.shopping_list')\n- friendly_name: Human-readable name\n- state: Number of incomplete items or current status\n\n**GETTING TODO ITEMS (entity_id provided):**\nRetrieves items from the specified todo list.\n\nStatus filter values:\n- needs_action: Items that still need to be done\n- completed: Items that have been marked as done\n- None (default): Returns all items regardless of status\n\nItem properties:\n- uid: Unique identifier for the item\n- summary: The item text/description\n- status: Current status (needs_action or completed)\n- description: Optional detailed description\n- due: Optional due date (if supported)\n\nEXAMPLES:\n- List all todo lists: ha_get_todo()\n- Get all items: ha_get_todo(\"todo.shopping_list\")\n- Get incomplete items: ha_get_todo(\"todo.shopping_list\", status=\"needs_action\")\n- Get completed items: ha_get_todo(\"todo.shopping_list\", status=\"completed\")\n\nUSE CASES:\n- \"What todo lists do I have?\"\n- \"Show me my shopping list\"\n- \"What's on my todo list?\"\n- \"Show completed items\"",
@@ -2715,7 +2620,7 @@
   {
     "name": "ha_remove_todo_item",
     "title": "Remove Todo Item",
-    "description": "Remove an item from a Home Assistant todo list.\n\nPermanently deletes an item from the specified todo list.\n\nIDENTIFYING ITEMS:\n- Use the item's UID (from ha_get_todo)\n- Or use the exact item summary/name text\n\nEXAMPLES:\n- Remove by name: ha_remove_todo_item(\"todo.shopping_list\", \"Buy milk\")\n- Remove by UID: ha_remove_todo_item(\"todo.shopping_list\", \"abc123-uid\")\n\nUSE CASES:\n- \"Remove milk from my shopping list\"\n- \"Delete the eggs item\"\n- \"Clear 'call mom' from my todo\"\n\nWARNING: This permanently removes the item. To mark as completed instead,\nuse ha_update_todo_item() with status=\"completed\".",
+    "description": "Remove an item from a Home Assistant todo list.\n\nPermanently deletes an item from the specified todo list.\n\nIDENTIFYING ITEMS:\n- Use the item's UID (from ha_get_todo)\n- Or use the exact item summary/name text\n\nEXAMPLES:\n- Remove by name: ha_remove_todo_item(\"todo.shopping_list\", \"Buy milk\")\n- Remove by UID: ha_remove_todo_item(\"todo.shopping_list\", \"abc123-uid\")\n\nUSE CASES:\n- \"Remove milk from my shopping list\"\n- \"Delete the eggs item\"\n- \"Clear 'call mom' from my todo\"\n\nWARNING: This permanently removes the item. To mark as completed instead,\nuse ha_set_todo_item() with status=\"completed\".",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -2740,41 +2645,45 @@
     "source_file": "tools_todo.py"
   },
   {
-    "name": "ha_update_todo_item",
-    "title": "Update Todo Item",
-    "description": "Update or complete a todo item in Home Assistant.\n\nModifies an existing item in the specified todo list. Can be used to:\n- Mark items as completed or incomplete\n- Rename items\n- Update descriptions and due dates\n\nIDENTIFYING ITEMS:\n- Use the item's UID (from ha_get_todo)\n- Or use the exact item summary/name text\n\nSTATUS VALUES:\n- completed: Mark the item as done\n- needs_action: Mark the item as not done (reopen)\n\nEXAMPLES:\n- Complete item: ha_update_todo_item(\"todo.shopping_list\", \"Buy milk\", status=\"completed\")\n- Rename item: ha_update_todo_item(\"todo.tasks\", \"Old task\", rename=\"New task name\")\n- Update due date: ha_update_todo_item(\"todo.tasks\", \"Pay bills\", due_date=\"2024-12-31\")\n- Reopen item: ha_update_todo_item(\"todo.tasks\", \"Task to redo\", status=\"needs_action\")\n\nUSE CASES:\n- \"Mark milk as bought\"\n- \"Complete the eggs on my shopping list\"\n- \"Change the due date for my task\"\n- \"Rename 'call mom' to 'video call with mom'\"\n\nNOTE: At least one update field (rename, status, description, due_date, due_datetime) must be provided.",
+    "name": "ha_set_todo_item",
+    "title": "Set Todo Item",
+    "description": "Create or update a todo item in Home Assistant.\n\nWITHOUT item parameter (create mode):\nCreates a new item. summary is required.\n\nWITH item parameter (update mode):\nUpdates an existing item identified by UID or exact name.\nAt least one update field (rename, status, description, due_date, due_datetime) is required.\n\nEXAMPLES:\n- Add item: ha_set_todo_item(\"todo.shopping_list\", summary=\"Buy milk\")\n- Add with description: ha_set_todo_item(\"todo.shopping_list\", summary=\"Buy milk\", description=\"2% organic\")\n- Add with due date: ha_set_todo_item(\"todo.tasks\", summary=\"Pay bills\", due_date=\"2024-12-31\")\n- Complete item: ha_set_todo_item(\"todo.shopping_list\", item=\"Buy milk\", status=\"completed\")\n- Rename item: ha_set_todo_item(\"todo.tasks\", item=\"Old task\", rename=\"New task name\")\n- Update due date: ha_set_todo_item(\"todo.tasks\", item=\"Pay bills\", due_date=\"2024-12-31\")\n- Reopen item: ha_set_todo_item(\"todo.tasks\", item=\"Task to redo\", status=\"needs_action\")\n\nNOTE: Not all todo integrations support all features (description, due dates).\nThe Shopping List integration only supports summary.",
     "inputSchema": {
       "properties": {
         "entity_id": {
           "type": "Annotated[str, Field(description=\"Todo list entity ID (e.g., 'todo.shopping_list')\")]"
         },
-        "item": {
-          "type": "Annotated[str, Field(description='Item to update - can be the item UID or the exact item summary/name')]"
+        "summary": {
+          "type": "Annotated[str | None, Field(description=\"Item text/name. Required when creating a new item. Ignored in update mode — use 'rename' to change the item name.\", default=None)]",
+          "default": null
         },
-        "rename": {
-          "type": "Annotated[str | None, Field(description='New name/summary for the item', default=None)]",
+        "item": {
+          "type": "Annotated[str | None, Field(description='Existing item to update - can be the item UID or the exact item summary/name. When provided, operates in update mode. When omitted, creates a new item.', default=None)]",
           "default": null
         },
         "status": {
-          "type": "Annotated[Literal['needs_action', 'completed'] | None, Field(description=\"New status: 'completed' to mark done, 'needs_action' to mark incomplete\", default=None)]",
+          "type": "Annotated[Literal['needs_action', 'completed'] | None, Field(description=\"Item status: 'completed' to mark done, 'needs_action' to mark incomplete. Only used in update mode.\", default=None)]",
           "default": null
         },
         "description": {
-          "type": "Annotated[str | None, Field(description='New description for the item', default=None)]",
+          "type": "Annotated[str | None, Field(description='Detailed description for the item', default=None)]",
           "default": null
         },
         "due_date": {
-          "type": "Annotated[str | None, Field(description='New due date in YYYY-MM-DD format', default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Due date in YYYY-MM-DD format (e.g., '2024-12-25')\", default=None)]",
           "default": null
         },
         "due_datetime": {
-          "type": "Annotated[str | None, Field(description='New due datetime in ISO format', default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Due datetime in ISO format (e.g., '2024-12-25T14:00:00'). Overrides due_date if both provided.\", default=None)]",
+          "default": null
+        },
+        "rename": {
+          "type": "Annotated[str | None, Field(description='New name/summary for an existing item. Only used in update mode.', default=None)]",
           "default": null
         }
       },
       "required": [
-        "entity_id",
-        "item"
+        "entity_id"
       ]
     },
     "annotations": {
