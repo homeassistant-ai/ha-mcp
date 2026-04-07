@@ -62,7 +62,12 @@ class TestRenameConsolidationEdgeCases:
             f"Simple rename should not have 'results' key: {rename_data.keys()}"
         )
 
-        logger.info("Verified simple response format (no 'results' key)")
+        # Rename should include a warning about updating references
+        assert "warning" in rename_data, (
+            f"Rename should include a warning about updating references: {rename_data.keys()}"
+        )
+
+        logger.info("Verified simple response format (no 'results' key, has warning)")
 
         # Cleanup
         await safe_call_tool(
