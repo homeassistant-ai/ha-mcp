@@ -30,15 +30,14 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(TESTS_DIR))
 
 from fastmcp import Client  # noqa: E402
-from test_constants import TEST_TOKEN  # noqa: E402
+from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 
 from ha_mcp.client import HomeAssistantClient  # noqa: E402
 from ha_mcp.server import HomeAssistantSmartMCPServer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.4.1"
+HA_IMAGE = HA_TEST_IMAGE
 
 CATALOG_DIR = Path(__file__).parent / "catalog"
 

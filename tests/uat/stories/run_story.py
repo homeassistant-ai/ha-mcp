@@ -90,14 +90,13 @@ def _start_container(*, keep_alive: bool = False) -> dict:
     import tempfile
 
     import requests
-    from test_constants import TEST_TOKEN
+    from test_constants import HA_TEST_IMAGE, TEST_TOKEN
     from testcontainers.core.container import DockerContainer
 
     if keep_alive:
         os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
-    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.4.1"
+    HA_IMAGE = HA_TEST_IMAGE
 
     # Copy initial_test_state
     config_dir = Path(tempfile.mkdtemp(prefix="ha_story_"))
