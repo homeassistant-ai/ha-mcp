@@ -39,7 +39,7 @@ sys.path.insert(0, str(TESTS_DIR))
 from test_constants import TEST_TOKEN  # noqa: E402
 
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.4.1"
 
 DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"

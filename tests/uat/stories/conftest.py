@@ -38,7 +38,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer  # noqa: E402
 logger = logging.getLogger(__name__)
 
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.4.1"
 
 CATALOG_DIR = Path(__file__).parent / "catalog"
 

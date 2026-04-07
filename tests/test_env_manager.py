@@ -103,7 +103,7 @@ class HomeAssistantTestEnvironment:
 
         # Create container with port configuration
         # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-        HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+        HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.4.1"
         container = DockerContainer(HA_IMAGE)
 
         # Check for custom port via environment variable
