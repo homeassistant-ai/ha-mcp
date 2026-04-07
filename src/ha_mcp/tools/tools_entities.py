@@ -237,16 +237,25 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if isinstance(error, dict)
                     else str(error)
                 )
+                suggestions = [
+                    "Verify the entity_id exists using ha_search_entities()",
+                ]
+                if new_entity_id is not None:
+                    suggestions.extend([
+                        "Check that the new entity_id doesn't already exist",
+                        "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
+                    ])
+                else:
+                    suggestions.extend([
+                        "Check that area_id exists if specified",
+                        "Some entities may not support all update options",
+                    ])
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
                         f"Failed to update entity: {error_msg}",
                         context={"entity_id": entity_id},
-                        suggestions=[
-                            "Verify the entity_id exists using ha_search_entities()",
-                            "Check that area_id exists if specified",
-                            "Some entities may not support all update options",
-                        ],
+                        suggestions=suggestions,
                     )
                 )
 
@@ -375,9 +384,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "message": f"Entity updated: {', '.join(updates_made)}",
         }
 
-        # Include old_entity_id when a rename was performed
+        # Include old_entity_id and rename warning when a rename was performed
         if new_entity_id is not None:
             response_data["old_entity_id"] = original_entity_id
+            response_data["warning"] = (
+                "Remember to update any automations, scripts, or dashboards "
+                "that reference the old entity_id"
+            )
 
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
@@ -533,7 +546,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         ENTITY ID RENAME:
         Use new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).
-        Domain must match. HA Core preserves voice exposure settings automatically.
+        Domain must match. Voice exposure settings are preserved automatically.
+
+        WARNING: Renaming an entity_id does NOT update references in automations,
+        scripts, templates, or dashboards. All consumers of the old entity_id must
+        be updated manually — HA does not propagate the rename automatically.
+
+        Rename limitations:
+        - Entity history is preserved (HA 2022.4+)
+        - Entities without unique IDs cannot be renamed
+        - Entities disabled by their integration cannot be renamed
 
         DEVICE RENAME:
         Use new_device_name to rename the associated device. Can be combined with
