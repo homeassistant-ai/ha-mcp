@@ -523,7 +523,7 @@ src/ha_mcp/
 - `list` — collections (`ha_list_areas`)
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
-- `delete` — remove config entries (`ha_config_delete_automation`, `ha_delete_file`)
+- `delete` — remove dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
 - `call` — execute (`ha_call_service`)
 
