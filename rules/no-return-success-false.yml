@@ -1,0 +1,25 @@
+id: no-return-success-false
+language: python
+rule:
+  kind: dictionary
+  has:
+    all:
+      - kind: pair
+      - has:
+          kind: "false"
+          stopBy: end
+      - has:
+          kind: string_content
+          regex: ^success$
+          stopBy: end
+  inside:
+    kind: return_statement
+    stopBy: end
+files:
+  - "src/ha_mcp/tools/**"
+message: |
+  Do not return hand-built `{"success": False, ...}` dicts from tool functions.
+  Returning an error dict does not set `isError=true` on the MCP response (per MCP spec).
+  Use `raise_tool_error(create_error_response(...))` instead.
+  Exception: batch item failures appended to a results list (use `.append()` instead of `return`).
+severity: error

@@ -421,38 +421,40 @@ class DeviceControlTools:
             }
 
         elif operation.status.value == "failed":
-            return {
-                "operation_id": operation_id,
-                "status": "failed",
-                "success": False,
-                "entity_id": operation.entity_id,
-                "action": operation.action,
-                "error": operation.error_message,
-                "duration_ms": operation.duration_ms,
-                "suggestions": [
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                operation.error_message or "Device operation failed",
+                context={
+                    "operation_id": operation_id,
+                    "entity_id": operation.entity_id,
+                    "action": operation.action,
+                    "duration_ms": operation.duration_ms,
+                },
+                suggestions=[
                     "Check if device is available and responding",
                     "Verify device supports the requested action",
                     "Check Home Assistant logs for error details",
                     "Try a simpler action like toggle",
                 ],
-            }
+            ))
 
         elif operation.status.value == "timeout":
-            return {
-                "operation_id": operation_id,
-                "status": "timeout",
-                "success": False,
-                "entity_id": operation.entity_id,
-                "action": operation.action,
-                "error": f"Operation timed out after {operation.timeout_ms}ms",
-                "elapsed_ms": operation.elapsed_ms,
-                "suggestions": [
+            raise_tool_error(create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                f"Operation timed out after {operation.timeout_ms}ms",
+                context={
+                    "operation_id": operation_id,
+                    "entity_id": operation.entity_id,
+                    "action": operation.action,
+                    "elapsed_ms": operation.elapsed_ms,
+                },
+                suggestions=[
                     "Device may be slow to respond or offline",
                     "Check device connectivity",
                     "Try increasing timeout for slow devices",
                     "Verify device is powered on",
                 ],
-            }
+            ))
 
         else:  # pending
             return {
