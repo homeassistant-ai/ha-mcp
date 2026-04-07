@@ -330,8 +330,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           Multiple criteria are AND-ed. Always fetches fresh config (force=True).
           Strategy dashboards are not searchable (no explicit cards).
 
-        MODE 3 — Get: url_path provided (no search params)
-          Returns the full Lovelace dashboard configuration including all views and cards.
+        MODE 3 — Get: Triggered if not in list or search mode.
+          Returns the full Lovelace dashboard config, defaulting to the
+          main dashboard if url_path is omitted.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
@@ -513,26 +514,38 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error getting dashboard: {e}")
             if search_mode:
+                logger.error(
+                    f"Error finding card in dashboard: url_path={url_path}, "
+                    f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
+                    f"error={e}",
+                    exc_info=True,
+                )
                 suggestions = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
                 ]
+                context: dict[str, Any] = {
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "entity_id": entity_id,
+                    "card_type": card_type,
+                    "heading": heading,
+                }
             else:
+                logger.error(f"Error getting dashboard: {e}", exc_info=True)
                 suggestions = [
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Check if you have permission to access this dashboard",
                     "Use url_path='default' for default dashboard",
                 ]
+                context = {
+                    "action": "get" if not list_only else "list",
+                    "url_path": url_path,
+                }
             exception_to_structured_error(
                 e,
-                context={
-                    "action": "find_card"
-                    if search_mode
-                    else ("get" if not list_only else "list"),
-                    "url_path": url_path,
-                },
+                context=context,
                 suggestions=suggestions,
             )
 
