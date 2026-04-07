@@ -18,21 +18,10 @@ async def test_simple_connection(mcp_client):
     logger.info("☀️ Testing basic MCP connection with sun.sun entity")
 
     # Test a simple tool that doesn't use WebSocket - just get state.
-    # Try sun.sun first (default_config), fall back to zone.home (always exists).
-    from ..utilities.assertions import safe_call_tool
-
-    result_data = await safe_call_tool(
-        mcp_client, "ha_get_state", {"entity_id": "sun.sun"}
+    # sun.sun is part of default_config and guaranteed by conftest entity wait.
+    result = await mcp_client.call_tool(
+        "ha_get_state", {"entity_id": "sun.sun"}
     )
-    if result_data.get("success"):
-        result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": "sun.sun"}
-        )
-    else:
-        logger.info("sun.sun not available, falling back to zone.home")
-        result = await mcp_client.call_tool(
-            "ha_get_state", {"entity_id": "zone.home"}
-        )
 
     # Parse and verify the result using standard assertion utility
     data = assert_mcp_success(result, "Get state request")

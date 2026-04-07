@@ -45,7 +45,7 @@ from .utilities.assertions import parse_mcp_result
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import TEST_TOKEN
+from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
@@ -262,8 +262,6 @@ def ha_container_with_fresh_config():
     )
 
     # Create testcontainer with port configuration
-    from test_constants import HA_TEST_IMAGE
-
     container = DockerContainer(HA_TEST_IMAGE)
 
     # Check for custom port via environment variable
@@ -434,14 +432,15 @@ def ha_container_with_fresh_config():
                             f"waiting for more..."
                         )
                         last_entity_count = entity_count
-            except requests.exceptions.RequestException:
-                pass
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                logger.debug(f"Entity registration check failed: {exc}")
             time.sleep(1)
         else:
-            logger.warning(
-                f"⚠️ Entity registration timed out after "
-                f"{ENTITY_STABILIZATION_TIMEOUT}s with only "
-                f"{last_entity_count} entities — some tests may fail"
+            pytest.fail(
+                f"Entity registration timed out after "
+                f"{ENTITY_STABILIZATION_TIMEOUT}s. "
+                f"Only {last_entity_count} entities registered "
+                f"(minimum: {MIN_ENTITIES}). Check Docker logs."
             )
 
         # Store connection info for other fixtures
