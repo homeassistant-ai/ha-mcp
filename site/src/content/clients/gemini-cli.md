@@ -1,7 +1,7 @@
 ---
 name: Gemini CLI
 company: Google
-logo: /logos/google.svg
+logo: /logos/gemini.svg
 transports: ['stdio', 'sse', 'streamable-http']
 configFormat: cli
 configLocation: ~/.gemini/settings.json
