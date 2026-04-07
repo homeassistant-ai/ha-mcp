@@ -48,18 +48,10 @@ REFRESH_TOKEN_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
 
 class HomeAssistantCredentials:
-    """Stores Home Assistant credentials for a client."""
+    """Temporary HA credentials held between consent form and token exchange."""
 
     def __init__(self, ha_token: str):
         self.ha_token = ha_token
-        self.validated_at = time.time()
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for storage."""
-        return {
-            "ha_token": self.ha_token,
-            "validated_at": self.validated_at,
-        }
 
 
 class HomeAssistantOAuthProvider(OAuthProvider):

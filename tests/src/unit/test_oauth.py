@@ -24,18 +24,6 @@ class TestHomeAssistantCredentials:
         )
 
         assert creds.ha_token == "test_token_123"
-        assert creds.validated_at > 0
-
-    def test_credentials_to_dict(self):
-        """Test converting credentials to dictionary."""
-        creds = HomeAssistantCredentials(
-            ha_token="token",
-        )
-
-        result = creds.to_dict()
-
-        assert result["ha_token"] == "token"
-        assert "validated_at" in result
 
 
 class TestConsentForm:
