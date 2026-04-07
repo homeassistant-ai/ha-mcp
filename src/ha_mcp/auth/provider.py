@@ -211,11 +211,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                     return None
                 return payload
 
-            # Unsigned payload (backwards compat with tokens issued before
-            # v7.x / April 2026, before HMAC signing was added)
-            if outer.get("ha_token"):
-                logger.debug("Accepted unsigned token (pre-signing backwards compat)")
-                return outer
+            # Reject unsigned tokens — HMAC secret is regenerated on restart,
+            # so no legitimate unsigned tokens can exist on a running server.
             return None
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")
