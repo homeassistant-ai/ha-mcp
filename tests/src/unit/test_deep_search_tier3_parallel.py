@@ -1,9 +1,9 @@
-"""Unit tests for parallel Tier 3 config fetching in deep_search.
+"""Unit tests for parallel Attempt C config fetching in deep_search.
 
-Validates that when bulk config fetches fail (Tier 1 & 2), Tier 3 fetches
-configs in parallel batches without name-score prioritization. This ensures
-entities referenced only inside automation conditions/actions (not in the
-automation name) are still found. Regression test for #879.
+Validates that when bulk config fetches fail (Attempts A & B), Attempt C
+fetches configs in parallel batches without name-score prioritization. This
+ensures entities referenced only inside automation/script conditions/actions
+(not in the name) are still found. Regression test for #879.
 """
 
 import asyncio
@@ -44,8 +44,8 @@ def _make_automation_entities(count: int) -> list[dict]:
     ]
 
 
-class TestTier3ParallelFetch:
-    """Test that Tier 3 fetches configs in parallel without name-score prioritization."""
+class TestAttemptCParallelFetch:
+    """Test that Attempt C fetches configs in parallel without name-score prioritization."""
 
     @pytest.fixture
     def mock_client(self):
@@ -63,7 +63,7 @@ class TestTier3ParallelFetch:
         return _make_tools(mock_client)
 
     @pytest.mark.asyncio
-    async def test_tier3_fetches_all_configs_not_just_name_matches(
+    async def test_attempt_c_fetches_all_configs_not_just_name_matches(
         self, mock_client, smart_tools
     ):
         """Configs for ALL automations should be fetched, not just name-matched ones.
@@ -155,8 +155,8 @@ class TestTier3ParallelFetch:
         )
 
     @pytest.mark.asyncio
-    async def test_tier3_respects_time_budget(self, mock_client, smart_tools):
-        """Tier 3 should stop fetching when time budget is exhausted."""
+    async def test_attempt_c_respects_time_budget(self, mock_client, smart_tools):
+        """Attempt C should stop fetching when time budget is exhausted."""
         automations = _make_automation_entities(30)
         mock_client.get_states = AsyncMock(return_value=automations)
 
@@ -165,11 +165,10 @@ class TestTier3ParallelFetch:
         async def _slow_fetch(method: str, url: str) -> dict:
             nonlocal call_count
             uid = url.split("/")[-1]
-            # First call triggers bulk fetch failure
             if url.rstrip("/") == "/config/automation/config":
                 raise Exception("Bulk unavailable")
             call_count += 1
-            await asyncio.sleep(1.5)  # Simulate slow fetches
+            await asyncio.sleep(0.01)  # Minimal sleep to yield control
             return {"id": uid, "action": []}
 
         mock_client._request = AsyncMock(side_effect=_slow_fetch)
@@ -177,21 +176,96 @@ class TestTier3ParallelFetch:
             side_effect=Exception("WebSocket unavailable")
         )
 
+        # Budget of 0.005s: batch 1 starts at t=0 (passes check), but by the
+        # time it completes (~0.01s), the budget is exceeded so batch 2 is skipped.
         with patch(
-            "ha_mcp.tools.smart_search.AUTOMATION_CONFIG_TIME_BUDGET", 2.0
+            "ha_mcp.tools.smart_search.AUTOMATION_CONFIG_TIME_BUDGET", 0.005
         ):
-            result = await smart_tools.deep_search(
+            await smart_tools.deep_search(
                 query="test",
                 search_types=["automation"],
                 limit=10,
             )
 
-        # With 2s budget and 1.5s per fetch (parallel batches of 10),
-        # batch 1 (t=0→1.5s) completes under budget, batch 2 (t=1.5→3.0s)
-        # may start but batch 3 is skipped. Expect 10-20 fetched.
-        assert call_count < 30, (
-            f"Should stop before fetching all 30, but fetched {call_count}"
+        # Batch 1 (10 items) completes because the budget check happens before
+        # launching each batch. Batch 2 at ~0.01s exceeds the 0.005s budget.
+        assert call_count == 10, (
+            f"Expected exactly one batch of 10, but fetched {call_count}"
         )
-        assert call_count >= 10, (
-            f"Should complete at least one full batch of 10, but only fetched {call_count}"
+
+
+class TestAttemptCScriptParallelFetch:
+    """Test that Attempt C works for scripts (structurally different from automations)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @pytest.mark.asyncio
+    async def test_script_attempt_c_fetches_configs(self, mock_client, smart_tools):
+        """Script Attempt C should fetch configs and find matches inside them.
+
+        Scripts use a different tuple format (entity_id, friendly_name, script_id,
+        name_score) and client.get_script_config() instead of client._request().
+        """
+        scripts = [
+            {
+                "entity_id": "script.morning_coffee",
+                "state": "off",
+                "attributes": {"friendly_name": "Morning Coffee"},
+            },
+            {
+                "entity_id": "script.night_lockup",
+                "state": "off",
+                "attributes": {"friendly_name": "Night Lockup"},
+            },
+        ]
+        all_entities = scripts + [
+            _make_entity("lock.front_door", "Front Door Lock"),
+        ]
+        mock_client.get_states = AsyncMock(return_value=all_entities)
+
+        fetched_sids = []
+
+        async def _script_config(sid: str) -> dict:
+            fetched_sids.append(sid)
+            if sid == "night_lockup":
+                return {
+                    "config": {
+                        "sequence": [
+                            {
+                                "service": "lock.lock",
+                                "target": {"entity_id": "lock.front_door"},
+                            }
+                        ]
+                    }
+                }
+            return {"config": {"sequence": [{"service": "switch.turn_on"}]}}
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_config)
+
+        result = await smart_tools.deep_search(
+            query="front_door",
+            search_types=["script"],
+            limit=10,
+        )
+
+        # Both script configs should have been fetched
+        assert len(fetched_sids) == 2, f"Expected 2 script fetches, got {fetched_sids}"
+
+        # Night Lockup references front_door in its sequence
+        script_results = result.get("scripts", [])
+        matched_ids = [r["entity_id"] for r in script_results]
+        assert "script.night_lockup" in matched_ids, (
+            f"Should find script referencing front_door. Got: {matched_ids}"
         )

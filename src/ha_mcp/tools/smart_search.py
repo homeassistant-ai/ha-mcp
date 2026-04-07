@@ -27,15 +27,19 @@ INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 # Time budgets for fallback individual fetching (in seconds).
 # Configurable via env vars for instances with many automations/scripts.
 def _env_float(key: str, default: float) -> float:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
     try:
-        return float(os.environ.get(key, default))
+        return float(raw)
     except (ValueError, TypeError):
+        logger.warning(f"Invalid value for {key}={raw!r}, using default {default}")
         return default
 
 AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
 SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
 
-# Batch size for parallel individual config fetches (Tier 3 fallback)
+# Batch size for parallel individual config fetches (Attempt C fallback)
 INDIVIDUAL_FETCH_BATCH_SIZE = 10
 
 
@@ -913,7 +917,7 @@ class SmartSearchTools:
                             )
 
                 # Attempt C: Parallel individual REST calls with time budget (LAST RESORT)
-                # Fetch ALL configs in parallel batches — don't prioritize by name score.
+                # Fetch configs in parallel batches (subject to time budget) — don't prioritize by name score.
                 # Name score is only used for result ranking, not fetch order, because
                 # deep_search's purpose is to find matches INSIDE configs (conditions/actions),
                 # not just by name. Prioritizing by name would skip the configs most likely
@@ -927,6 +931,7 @@ class SmartSearchTools:
                     ]
                     total_to_fetch = len(uids_to_fetch)
                     fetched_count = 0
+                    failed_count = 0
 
                     async def _fetch_automation_config(uid: str) -> tuple[str, dict[str, Any] | None]:
                         try:
@@ -948,23 +953,24 @@ class SmartSearchTools:
                             time.perf_counter() - budget_start
                             > AUTOMATION_CONFIG_TIME_BUDGET
                         ):
-                            skipped = total_to_fetch - fetched_count
+                            skipped = total_to_fetch - fetched_count - failed_count
                             logger.warning(
                                 f"Automation config fetch budget exhausted "
                                 f"({AUTOMATION_CONFIG_TIME_BUDGET}s). "
-                                f"Fetched {fetched_count}/{total_to_fetch}, "
-                                f"skipped {skipped} automations."
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), skipped {skipped} automations."
                             )
                             break
                         batch = uids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
                         batch_results = await asyncio.gather(
                             *[_fetch_automation_config(uid) for uid in batch],
-                            return_exceptions=True,
                         )
-                        for br in batch_results:
-                            if isinstance(br, tuple) and br[1] is not None:
-                                all_automation_configs[br[0]] = br[1]
+                        for uid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_automation_configs[uid_result] = config_result
                                 fetched_count += 1
+                            else:
+                                failed_count += 1
 
                 # Phase 3: Score with whatever configs we have
                 for entity_id, friendly_name, name_score, unique_id in name_scored:
@@ -1079,6 +1085,7 @@ class SmartSearchTools:
                     ]
                     total_to_fetch = len(sids_to_fetch)
                     fetched_count = 0
+                    failed_count = 0
 
                     async def _fetch_script_config(sid: str) -> tuple[str, dict[str, Any] | None]:
                         try:
@@ -1098,23 +1105,24 @@ class SmartSearchTools:
                             time.perf_counter() - budget_start
                             > SCRIPT_CONFIG_TIME_BUDGET
                         ):
-                            skipped = total_to_fetch - fetched_count
+                            skipped = total_to_fetch - fetched_count - failed_count
                             logger.warning(
                                 f"Script config fetch budget exhausted "
                                 f"({SCRIPT_CONFIG_TIME_BUDGET}s). "
-                                f"Fetched {fetched_count}/{total_to_fetch}, "
-                                f"skipped {skipped} scripts."
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), skipped {skipped} scripts."
                             )
                             break
                         batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
                         batch_results = await asyncio.gather(
                             *[_fetch_script_config(sid) for sid in batch],
-                            return_exceptions=True,
                         )
-                        for br in batch_results:
-                            if isinstance(br, tuple) and br[1] is not None:
-                                all_script_configs[br[0]] = br[1]
+                        for sid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_script_configs[sid_result] = config_result
                                 fetched_count += 1
+                            else:
+                                failed_count += 1
 
                 # Phase 3: Score scripts
                 for (
