@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register entity registry and device registry management tools."""
+    """Register device registry management tools."""
 
     async def _update_device_internal(
         device_id: str,

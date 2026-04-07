@@ -1,8 +1,10 @@
-"""Unit tests for ha_get_state bulk state retrieval tool."""
+"""Unit tests for ha_get_state single and bulk state retrieval tool."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_search import register_search_tools
 
@@ -125,33 +127,35 @@ class TestHaGetStates:
 
     @pytest.mark.asyncio
     async def test_empty_list_rejected(self, mock_client, get_states_tool):
-        """Empty entity_ids list returns structured validation error."""
-        result = await get_states_tool(entity_id=[])
+        """Empty entity_ids list raises ToolError with validation error."""
+        with pytest.raises(ToolError) as exc_info:
+            await get_states_tool(entity_id=[])
 
-        data = result["data"]
+        data = json.loads(str(exc_info.value))
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_FAILED"
-        assert data["parameter"] == "entity_id"
         mock_client.get_entity_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_string_ids_rejected(self, mock_client, get_states_tool):
-        """Non-string values in entity_ids returns structured validation error."""
-        result = await get_states_tool(entity_id=["light.ok", 123])
+        """Non-string values in entity_ids raises ToolError with validation error."""
+        with pytest.raises(ToolError) as exc_info:
+            await get_states_tool(entity_id=["light.ok", 123])
 
-        data = result["data"]
+        data = json.loads(str(exc_info.value))
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_FAILED"
         mock_client.get_entity_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_exceeds_max_entities_rejected(self, mock_client, get_states_tool):
-        """More than 100 entity IDs returns structured validation error."""
+        """More than 100 entity IDs raises ToolError with validation error."""
         ids = [f"sensor.test_{i}" for i in range(101)]
 
-        result = await get_states_tool(entity_id=ids)
+        with pytest.raises(ToolError) as exc_info:
+            await get_states_tool(entity_id=ids)
 
-        data = result["data"]
+        data = json.loads(str(exc_info.value))
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_FAILED"
         assert "101" in data["error"]["message"]
@@ -201,3 +205,67 @@ class TestHaGetStates:
         assert data["success"] is False
         error = data["errors"][0]["error"]
         assert error["code"] == "CONNECTION_FAILED"
+
+
+class TestHaGetStateSingleEntity:
+    """Test ha_get_state single-entity path (isinstance(entity_id, str))."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def get_state_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_single_entity_returns_state(self, mock_client, get_state_tool):
+        """Single string entity_id returns state with timezone metadata."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+
+        result = await get_state_tool(entity_id="light.kitchen")
+
+        assert result["data"]["entity_id"] == "light.kitchen"
+        assert result["data"]["state"] == "on"
+        mock_client.get_entity_state.assert_called_once_with("light.kitchen")
+
+    @pytest.mark.asyncio
+    async def test_single_entity_not_found_raises_tool_error(self, mock_client, get_state_tool):
+        """Single entity that doesn't exist raises ToolError."""
+        mock_client.get_entity_state = AsyncMock(
+            side_effect=Exception("404 Not Found")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await get_state_tool(entity_id="sensor.nonexistent")
+
+        error = json.loads(str(exc_info.value))
+        assert error["success"] is False

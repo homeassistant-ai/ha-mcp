@@ -14,7 +14,7 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
-from .helpers import exception_to_structured_error, log_tool_usage
+from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
@@ -888,31 +888,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         MAX_ENTITIES = 100
 
         if not isinstance(entity_ids, list) or not entity_ids:
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    "entity_id must be a non-empty string or list of entity ID strings",
-                    parameter="entity_id",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                "entity_id must be a non-empty string or list of entity ID strings",
+                parameter="entity_id",
+            ))
 
         if not all(isinstance(eid, str) for eid in entity_ids):
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    "All entity_id values must be strings",
-                    parameter="entity_id",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                "All entity_id values must be strings",
+                parameter="entity_id",
+            ))
 
         if len(entity_ids) > MAX_ENTITIES:
-            return await add_timezone_metadata(
-                client,
-                create_validation_error(
-                    f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
-                    parameter="entity_id",
-                ),
-            )
+            raise_tool_error(create_validation_error(
+                f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
+                parameter="entity_id",
+            ))
 
         # Deduplicate while preserving order
         unique_ids = list(dict.fromkeys(entity_ids))

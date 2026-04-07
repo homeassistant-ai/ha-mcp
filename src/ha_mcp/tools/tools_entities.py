@@ -266,6 +266,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id = new_entity_id
 
         # Handle new_device_name — rename the associated device
+        # Normalize empty string to None (no-op, don't clear device name)
+        if new_device_name is not None and not new_device_name.strip():
+            new_device_name = None
         device_rename_result: dict[str, Any] | None = None
         if new_device_name is not None:
             # If no registry update was sent, fetch entity_entry to get device_id
@@ -277,8 +280,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 get_result = await client.send_websocket_message(device_lookup_msg)
                 if get_result.get("success"):
                     entity_entry = get_result.get("result", {})
+                else:
+                    logger.warning(f"Entity registry lookup failed for {entity_id}: {get_result.get('error')}")
+                    device_rename_result = {
+                        "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
+                    }
 
-            device_id = entity_entry.get("device_id")
+            device_id = entity_entry.get("device_id") if not device_rename_result else None
             if not device_id:
                 device_rename_result = {
                     "warning": "Entity has no associated device — device rename skipped",
@@ -536,7 +544,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         assistant exposure, and entity_id rename in a single call.
 
         BULK OPERATIONS:
-        When entity_id is a list, only labels and expose_to parameters are supported.
+        When entity_id is a list, only labels, expose_to, and categories parameters are supported.
         Other parameters (area_id, name, icon, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
 
         LABEL OPERATIONS:
@@ -570,6 +578,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Rename display name: ha_set_entity("sensor.temp", name="Living Room Temperature")
         - Rename entity_id: ha_set_entity("light.old_name", new_entity_id="light.new_name")
         - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
+        - Rename entity_id with friendly name: ha_set_entity("sensor.old", new_entity_id="sensor.new", name="New Name")
         - Set labels: ha_set_entity("light.lamp", labels=["outdoor", "smart"])
         - Add labels: ha_set_entity("light.lamp", labels=["new_label"], label_operation="add")
         - Remove labels: ha_set_entity("light.lamp", labels=["old_label"], label_operation="remove")

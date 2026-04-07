@@ -205,7 +205,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description="Item text/name. Required when creating a new item. "
-                "Not required when updating an existing item.",
+                "Ignored in update mode — use 'rename' to change the item name.",
                 default=None,
             ),
         ] = None,
@@ -292,6 +292,18 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Route: create mode (no item) vs update mode (item provided)
         if item is None:
             # --- Create mode ---
+            if rename is not None or status is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "rename and status are only valid when updating an existing item (provide 'item' parameter)",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "To create a new item, provide only 'summary' (and optionally 'due_date', 'description')",
+                            "To update an existing item, include the 'item' parameter with the item name",
+                        ],
+                    )
+                )
             if not summary:
                 raise_tool_error(
                     create_error_response(
