@@ -7,13 +7,18 @@ via the Home Assistant entity registry API.
 
 import asyncio
 import logging
+import re
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
 
@@ -68,6 +73,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         parsed_labels: list[str] | None,
         label_operation: str,
         parsed_expose_to: dict[str, bool] | None,
+        new_entity_id: str | None = None,
+        new_device_name: str | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Returns the response dict."""
         # For add/remove operations, we need to fetch current labels first
@@ -117,10 +124,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 enabled_bool = coerce_bool_param(enabled, "enabled")
             except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                    )
+                )
             message["disabled_by"] = None if enabled_bool else "user"
             updates_made.append("enabled" if enabled_bool else "disabled")
 
@@ -128,10 +137,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 hidden_bool = coerce_bool_param(hidden, "hidden")
             except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                    )
+                )
             message["hidden_by"] = "user" if hidden_bool else None
             updates_made.append("hidden" if hidden_bool else "visible")
 
@@ -154,8 +165,43 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     f"labels removed: {parsed_labels} -> {final_labels}"
                 )
 
+        if new_entity_id is not None:
+            entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
+            if not re.match(entity_pattern, new_entity_id):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid new_entity_id format: {new_entity_id}",
+                        suggestions=[
+                            "Use format: domain.object_id (lowercase letters, numbers, underscores only)"
+                        ],
+                        context={"new_entity_id": new_entity_id},
+                    )
+                )
+            current_domain = entity_id.split(".")[0]
+            new_domain = new_entity_id.split(".")[0]
+            if current_domain != new_domain:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
+                        suggestions=[
+                            f"New entity_id must start with '{current_domain}.'"
+                        ],
+                        context={
+                            "entity_id": entity_id,
+                            "new_entity_id": new_entity_id,
+                        },
+                    )
+                )
+            message["new_entity_id"] = new_entity_id
+            updates_made.append(f"entity_id -> {new_entity_id}")
+
         if parsed_expose_to is not None:
             updates_made.append(f"expose_to={parsed_expose_to}")
+
+        if new_device_name is not None:
+            updates_made.append(f"device_name -> {new_device_name}")
 
         if not updates_made:
             raise_tool_error(
@@ -163,10 +209,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "No updates specified",
                     suggestions=[
-                        "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, categories, labels, or expose_to"
+                        "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, categories, labels, expose_to, new_entity_id, or new_device_name"
                     ],
                 )
             )
+
+        # Save original entity_id before potential rename
+        original_entity_id = entity_id
 
         # Send entity registry update (covers all fields except expose_to)
         has_registry_updates = len(message) > 2  # more than just type + entity_id
@@ -188,20 +237,74 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if isinstance(error, dict)
                     else str(error)
                 )
+                suggestions = [
+                    "Verify the entity_id exists using ha_search_entities()",
+                ]
+                if new_entity_id is not None:
+                    suggestions.extend([
+                        "Check that the new entity_id doesn't already exist",
+                        "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
+                    ])
+                else:
+                    suggestions.extend([
+                        "Check that area_id exists if specified",
+                        "Some entities may not support all update options",
+                    ])
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
                         f"Failed to update entity: {error_msg}",
                         context={"entity_id": entity_id},
-                        suggestions=[
-                            "Verify the entity_id exists using ha_search_entities()",
-                            "Check that area_id exists if specified",
-                            "Some entities may not support all update options",
-                        ],
+                        suggestions=suggestions,
                     )
                 )
 
             entity_entry = result.get("result", {}).get("entity_entry", {})
+
+            # If entity was renamed, update entity_id for subsequent operations
+            if new_entity_id:
+                entity_id = new_entity_id
+
+        # Handle new_device_name — rename the associated device
+        # Normalize empty string to None (no-op, don't clear device name)
+        if new_device_name is not None and not new_device_name.strip():
+            new_device_name = None
+        device_rename_result: dict[str, Any] | None = None
+        if new_device_name is not None:
+            # If no registry update was sent, fetch entity_entry to get device_id
+            if not entity_entry:
+                device_lookup_msg: dict[str, Any] = {
+                    "type": "config/entity_registry/get",
+                    "entity_id": entity_id,
+                }
+                get_result = await client.send_websocket_message(device_lookup_msg)
+                if get_result.get("success"):
+                    entity_entry = get_result.get("result", {})
+                else:
+                    logger.warning(f"Entity registry lookup failed for {entity_id}: {get_result.get('error')}")
+                    device_rename_result = {
+                        "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
+                    }
+
+            device_id = entity_entry.get("device_id") if not device_rename_result else None
+            if not device_id:
+                device_rename_result = {
+                    "warning": "Entity has no associated device — device rename skipped",
+                }
+            else:
+                device_msg: dict[str, Any] = {
+                    "type": "config/device_registry/update",
+                    "device_id": device_id,
+                    "name_by_user": new_device_name if new_device_name else None,
+                }
+                device_result = await client.send_websocket_message(device_msg)
+                if device_result.get("success"):
+                    device_rename_result = {"success": True, "device_id": device_id}
+                else:
+                    device_rename_result = {
+                        "warning": f"Entity updated but device rename failed: {device_result.get('error', 'Unknown error')}",
+                        "device_id": device_id,
+                    }
 
         # Handle expose_to via separate WebSocket API
         exposure_result: dict[str, bool] | None = None
@@ -240,21 +343,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         else str(error)
                     )
                     failed = dict.fromkeys(assistants, should_expose)
-                    response: dict[str, Any] = {
-                        "success": False,
-                        "error": {
-                            "code": ErrorCode.SERVICE_CALL_FAILED.value,
-                            "message": f"Exposure failed: {error_msg}",
-                            "suggestion": "Check Home Assistant connection and entity availability",
-                        },
+                    context: dict[str, Any] = {
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
                     }
                     if has_registry_updates:
-                        response["partial"] = True
-                        response["entity_entry"] = _format_entity_entry(entity_entry)
-                    return response
+                        context["partial"] = True
+                        context["entity_entry"] = _format_entity_entry(entity_entry)
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Exposure failed: {error_msg}",
+                        context=context,
+                        suggestions=["Check Home Assistant connection and entity availability"],
+                    ))
 
                 # Track successful exposures
                 for a in assistants:
@@ -272,21 +374,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if get_result.get("success"):
                 entity_entry = get_result.get("result", {})
             else:
-                # Return plain dict so caller can inspect exposure_succeeded
-                return {
-                    "success": False,
-                    "error": {
-                        "code": ErrorCode.ENTITY_NOT_FOUND.value,
-                        "message": f"Entity '{entity_id}' not found in registry after applying exposure changes",
-                        "suggestion": "Use ha_search_entities() to verify the entity exists",
-                    },
-                    "entity_id": entity_id,
-                    "suggestions": [
+                raise_tool_error(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                    context={"entity_id": entity_id, "exposure_succeeded": exposure_result},
+                    suggestions=[
                         "Verify the entity_id exists using ha_search_entities()",
                         "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
                     ],
-                    "exposure_succeeded": exposure_result,
-                }
+                ))
 
         response_data: dict[str, Any] = {
             "success": True,
@@ -296,8 +392,25 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "message": f"Entity updated: {', '.join(updates_made)}",
         }
 
+        # Include old_entity_id and rename warning when a rename was performed
+        if new_entity_id is not None:
+            response_data["old_entity_id"] = original_entity_id
+            response_data["warning"] = (
+                "Remember to update any automations, scripts, or dashboards "
+                "that reference the old entity_id"
+            )
+
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
+
+        if device_rename_result is not None:
+            response_data["device_rename"] = device_rename_result
+            # Only mark partial when device rename was attempted and failed
+            # (not when entity simply has no device)
+            if "warning" in device_rename_result and device_rename_result.get(
+                "device_id"
+            ):
+                response_data["partial"] = True
 
         return response_data
 
@@ -306,8 +419,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "title": "Set Entity"
-        }
+            "title": "Set Entity",
+        },
     )
     @log_tool_usage
     async def ha_set_entity(
@@ -403,21 +516,58 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        new_entity_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "New entity ID to rename to (e.g., 'light.new_name'). "
+                    "Domain must match the original. Single entity only."
+                ),
+                default=None,
+            ),
+        ] = None,
+        new_device_name: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "New display name for the associated device. "
+                    "If provided, both entity and device are updated in one operation. Single entity only."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Update entity properties in the entity registry.
 
         Allows modifying entity metadata such as area assignment, display name,
-        icon, enabled/disabled state, visibility, aliases, labels, and voice
-        assistant exposure in a single call.
+        icon, enabled/disabled state, visibility, aliases, labels, voice
+        assistant exposure, and entity_id rename in a single call.
 
         BULK OPERATIONS:
-        When entity_id is a list, only labels and expose_to parameters are supported.
-        Other parameters (area_id, name, icon, enabled, hidden, aliases) require single entity.
+        When entity_id is a list, only labels, expose_to, and categories parameters are supported.
+        Other parameters (area_id, name, icon, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
 
         LABEL OPERATIONS:
         - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
         - label_operation="add": Add labels to existing ones without removing any.
         - label_operation="remove": Remove specified labels from the entity.
+
+        ENTITY ID RENAME:
+        Use new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).
+        Domain must match. Voice exposure settings are preserved automatically.
+
+        WARNING: Renaming an entity_id does NOT update references in automations,
+        scripts, templates, or dashboards. All consumers of the old entity_id must
+        be updated manually — HA does not propagate the rename automatically.
+
+        Rename limitations:
+        - Entity history is preserved (HA 2022.4+)
+        - Entities without unique IDs cannot be renamed
+        - Entities disabled by their integration cannot be renamed
+
+        DEVICE RENAME:
+        Use new_device_name to rename the associated device. Can be combined with
+        new_entity_id to rename both in one call. The device is looked up automatically.
 
         Use ha_search_entities() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
@@ -425,7 +575,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         EXAMPLES:
         Single entity:
         - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
-        - Rename: ha_set_entity("sensor.temp", name="Living Room Temperature")
+        - Rename display name: ha_set_entity("sensor.temp", name="Living Room Temperature")
+        - Rename entity_id: ha_set_entity("light.old_name", new_entity_id="light.new_name")
+        - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
+        - Rename entity_id with friendly name: ha_set_entity("sensor.old", new_entity_id="sensor.new", name="New Name")
         - Set labels: ha_set_entity("light.lamp", labels=["outdoor", "smart"])
         - Add labels: ha_set_entity("light.lamp", labels=["new_label"], label_operation="add")
         - Remove labels: ha_set_entity("light.lamp", labels=["old_label"], label_operation="remove")
@@ -436,8 +589,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Set labels on multiple: ha_set_entity(["light.a", "light.b"], labels=["outdoor"])
         - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
         - Expose multiple to Alexa: ha_set_entity(["light.a", "light.b"], expose_to={"cloud.alexa": True})
-
-        NOTE: To rename an entity_id (e.g., sensor.old -> sensor.new), use ha_rename_entity() instead.
 
         ENABLED/DISABLED WARNING:
         Setting enabled=False performs a **registry-level disable** — the entity is completely
@@ -490,6 +641,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "enabled": enabled,
                 "hidden": hidden,
                 "aliases": aliases,
+                "new_entity_id": new_entity_id,
+                "new_device_name": new_device_name,
             }
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
@@ -524,25 +677,28 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 if _enabled_check is False:
                     blocked = [
-                        eid for eid in entity_ids
+                        eid
+                        for eid in entity_ids
                         if eid.split(".")[0] in ("automation", "script")
                     ]
                     if blocked:
                         _domain = blocked[0].split(".")[0]
                         _service_hint = f"{_domain}.turn_off"
-                        raise_tool_error(create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
-                            f"This removes the entity from the state machine and hides it from the UI "
-                            f"until it is re-enabled AND the {_domain}s are reloaded. "
-                            f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
-                            f"to disable it without removing it.",
-                            suggestions=[
-                                f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
-                                f"Use {_domain}.turn_on to re-enable it later",
-                                "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
-                            ],
-                        ))
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
+                                f"This removes the entity from the state machine and hides it from the UI "
+                                f"until it is re-enabled AND the {_domain}s are reloaded. "
+                                f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
+                                f"to disable it without removing it.",
+                                suggestions=[
+                                    f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
+                                    f"Use {_domain}.turn_on to re-enable it later",
+                                    "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
+                                ],
+                            )
+                        )
 
             # Parse list parameters if provided as strings
             parsed_aliases = None
@@ -661,6 +817,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parsed_labels,
                     label_operation,
                     parsed_expose_to,
+                    new_entity_id=new_entity_id,
+                    new_device_name=new_device_name,
                 )
 
             # Bulk case - process each entity
@@ -740,8 +898,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "readOnlyHint": True,
             "idempotentHint": True,
-            "title": "Get Entity"
-        }
+            "title": "Get Entity",
+        },
     )
     @log_tool_usage
     async def ha_get_entity(
@@ -831,15 +989,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    return {
-                        "success": False,
-                        "entity_id": eid,
-                        "error": error_msg,
-                    }
+                    raise ValueError(error_msg)
 
                 entry = result.get("result", {})
                 return {
-                    "success": True,
                     "entity_id": entry.get("entity_id"),
                     "name": entry.get("name"),
                     "original_name": entry.get("original_name"),
@@ -861,21 +1014,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not is_bulk:
                 eid = entity_ids[0]
                 logger.info(f"Getting entity registry entry for {eid}")
-                result = await _fetch_entity(eid)
-
-                if result.get("success"):
-                    return {
-                        "success": True,
-                        "entity_id": eid,
-                        "entity_entry": {
-                            k: v for k, v in result.items() if k not in ("success",)
-                        },
-                    }
-                else:
+                try:
+                    result = await _fetch_entity(eid)
+                except ValueError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Entity not found: {result.get('error', 'Unknown error')}",
+                            f"Entity not found: {e}",
                             context={"entity_id": eid},
                             suggestions=[
                                 "Use ha_search_entities() to find valid entity IDs",
@@ -883,6 +1028,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ],
                         )
                     )
+                return {
+                    "success": True,
+                    "entity_id": eid,
+                    "entity_entry": result,
+                }
 
             # Bulk case - fetch all entities
             logger.info(
@@ -904,18 +1054,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "error": str(fetch_result),
                         }
                     )
-                    continue
-                if fetch_result.get("success"):
-                    entity_entries.append(
-                        {k: v for k, v in fetch_result.items() if k not in ("success",)}
-                    )
                 else:
-                    errors.append(
-                        {
-                            "entity_id": eid,
-                            "error": fetch_result.get("error", "Unknown error"),
-                        }
-                    )
+                    entity_entries.append(fetch_result)
 
             response: dict[str, Any] = {
                 "success": True,
