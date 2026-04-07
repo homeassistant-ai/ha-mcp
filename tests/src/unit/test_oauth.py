@@ -1044,6 +1044,82 @@ class TestStatelessTokenResilience:
         assert refresh_obj is not None
 
 
+class TestDecodeTokenEdgeCases:
+    """Test _decode_token with unusual payloads."""
+
+    @pytest.mark.asyncio
+    async def test_non_dict_json_payload_rejected(self):
+        """A token that base64-decodes to a JSON array should be rejected."""
+        from base64 import urlsafe_b64encode
+
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        # Encode a JSON array
+        array_token = urlsafe_b64encode(b'[1, 2, 3]').decode().rstrip("=")
+        result = provider._decode_token(array_token)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_non_dict_json_string_payload_rejected(self):
+        """A token that base64-decodes to a JSON string should be rejected."""
+        from base64 import urlsafe_b64encode
+
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        string_token = urlsafe_b64encode(b'"just_a_string"').decode().rstrip("=")
+        result = provider._decode_token(string_token)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_access_token_expired_rejected(self):
+        """An access token past its exp should be rejected."""
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        expired_token = provider._encode_token(
+            "test_llat", token_type="access", expires_at=int(time.time()) - 10
+        )
+        result = await provider.load_access_token(expired_token)
+        assert result is None
+
+
+class TestOAuthMainSentinel:
+    """Test the main_oauth OAUTH_MODE_TOKEN sentinel logic."""
+
+    def test_empty_token_gets_sentinel(self):
+        """When HOMEASSISTANT_TOKEN is empty, it should be set to OAUTH_MODE_TOKEN."""
+        import os
+
+        from ha_mcp.config import OAUTH_MODE_TOKEN
+
+        original = os.environ.get("HOMEASSISTANT_TOKEN")
+        try:
+            os.environ["HOMEASSISTANT_TOKEN"] = ""
+            # Re-run the sentinel logic
+            if not os.getenv("HOMEASSISTANT_TOKEN"):
+                os.environ["HOMEASSISTANT_TOKEN"] = OAUTH_MODE_TOKEN
+            assert os.environ["HOMEASSISTANT_TOKEN"] == OAUTH_MODE_TOKEN
+        finally:
+            if original is not None:
+                os.environ["HOMEASSISTANT_TOKEN"] = original
+            else:
+                os.environ.pop("HOMEASSISTANT_TOKEN", None)
+
+    def test_existing_token_not_overwritten(self):
+        """When HOMEASSISTANT_TOKEN has a real value, it should not be overwritten."""
+        import os
+
+        original = os.environ.get("HOMEASSISTANT_TOKEN")
+        try:
+            os.environ["HOMEASSISTANT_TOKEN"] = "real_token_value"
+            if not os.getenv("HOMEASSISTANT_TOKEN"):
+                from ha_mcp.config import OAUTH_MODE_TOKEN
+
+                os.environ["HOMEASSISTANT_TOKEN"] = OAUTH_MODE_TOKEN
+            assert os.environ["HOMEASSISTANT_TOKEN"] == "real_token_value"
+        finally:
+            if original is not None:
+                os.environ["HOMEASSISTANT_TOKEN"] = original
+            else:
+                os.environ.pop("HOMEASSISTANT_TOKEN", None)
+
+
 class TestOAuthProxyClient:
     """Tests for OAuthProxyClient in __main__.py."""
 

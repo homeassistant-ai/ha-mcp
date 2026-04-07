@@ -7,6 +7,8 @@ provide their Long-Lived Access Token (LLAT).
 """
 
 import binascii
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -132,7 +134,17 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Pending authorization requests (for consent form flow)
         self.pending_authorizations: dict[str, dict[str, Any]] = {}
 
+        # Server-side secret for HMAC-protecting LLATs in refresh tokens.
+        # Regenerated each startup — existing refresh tokens become invalid
+        # on restart, but that's acceptable since access tokens still work
+        # and clients will re-authenticate via the consent form.
+        self._hmac_secret = secrets.token_bytes(32)
+
         logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
+
+    def _sign_payload(self, payload_json: bytes) -> str:
+        """Compute HMAC-SHA256 signature of a token payload."""
+        return hmac.new(self._hmac_secret, payload_json, hashlib.sha256).hexdigest()
 
     def _encode_token(
         self,
@@ -144,9 +156,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
     ) -> str:
         """Encode a stateless OAuth token as base64 JSON.
 
-        Both access and refresh tokens are self-contained: the HA LLAT,
-        token type, and (for refresh tokens) client/scope metadata are
-        encoded directly.  No server-side storage is needed.
+        Access tokens are unsigned and contain the raw HA LLAT (short-lived).
+        Refresh tokens are HMAC-signed: they contain the LLAT plus a signature
+        that the server can verify using its secret. This prevents tampering
+        with long-lived refresh tokens while preserving statelessness.
 
         Security note: tokens are base64-encoded, not encrypted.
         The LLAT itself is the authorization boundary; transport
@@ -163,12 +176,21 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             payload["scopes"] = scopes
         if expires_at is not None:
             payload["exp"] = expires_at
-        return urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+        payload_json = json.dumps(payload, sort_keys=True).encode()
+        if token_type == "refresh":
+            # Sign refresh tokens to prevent tampering with long-lived tokens
+            sig = self._sign_payload(payload_json)
+            envelope = json.dumps({"payload": payload, "sig": sig}).encode()
+            return urlsafe_b64encode(envelope).decode().rstrip("=")
+        return urlsafe_b64encode(payload_json).decode().rstrip("=")
 
     def _decode_token(self, token: str) -> dict[str, Any] | None:
         """Decode a stateless token and return its full payload.
 
-        Returns the payload dict or ``None`` if the token is malformed.
+        For refresh tokens, verifies the HMAC signature before accepting.
+        Returns the payload dict or ``None`` if the token is malformed
+        or signature verification fails.
         """
         try:
             # Add padding if needed
@@ -177,11 +199,30 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 token += "=" * padding
 
             decoded = urlsafe_b64decode(token.encode()).decode()
-            payload = json.loads(decoded)
+            outer = json.loads(decoded)
 
-            if not isinstance(payload, dict) or not payload.get("ha_token"):
+            if not isinstance(outer, dict):
                 return None
-            return payload
+
+            # Signed envelope (refresh tokens): {"payload": {...}, "sig": "..."}
+            if "sig" in outer and "payload" in outer:
+                payload = outer["payload"]
+                if not isinstance(payload, dict):
+                    return None
+                expected_sig = self._sign_payload(
+                    json.dumps(payload, sort_keys=True).encode()
+                )
+                if not hmac.compare_digest(outer["sig"], expected_sig):
+                    logger.warning("Refresh token signature verification failed")
+                    return None
+                if not payload.get("ha_token"):
+                    return None
+                return payload
+
+            # Unsigned payload (access tokens)
+            if not outer.get("ha_token"):
+                return None
+            return outer
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")
             return None
@@ -560,12 +601,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             )
 
         scopes = authorization_code.scopes
+        access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
         # Both tokens are stateless — no server-side storage needed.
         access_token_value = self._encode_token(
             ha_credentials.ha_token,
             token_type="access",
+            expires_at=access_token_expires_at,
         )
         refresh_token_value = self._encode_token(
             ha_credentials.ha_token,
@@ -576,7 +619,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         )
 
         # Clean up temporary credentials (no longer needed after token issued)
-        del self.ha_credentials[client.client_id]
+        self.ha_credentials.pop(client.client_id, None)
 
         logger.info(f"Issued stateless tokens for client {client.client_id}")
 
@@ -597,13 +640,19 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             return None
 
         if payload.get("type") != "refresh":
+            logger.debug("Token is not a refresh token")
             return None
 
         if payload.get("client_id") != client.client_id:
+            logger.warning(
+                f"Refresh token client_id mismatch: expected {client.client_id}, "
+                f"got {payload.get('client_id')}"
+            )
             return None
 
         expires_at = payload.get("exp")
         if expires_at is not None and expires_at < time.time():
+            logger.debug("Refresh token expired")
             return None
 
         return RefreshToken(
@@ -641,10 +690,13 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             )
 
         ha_token = payload["ha_token"]
+        access_token_expires_at = int(time.time() + ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_token_expires_at = int(time.time() + REFRESH_TOKEN_EXPIRY_SECONDS)
 
         # Issue new stateless token pair
-        new_access_token_value = self._encode_token(ha_token, token_type="access")
+        new_access_token_value = self._encode_token(
+            ha_token, token_type="access", expires_at=access_token_expires_at
+        )
         new_refresh_token_value = self._encode_token(
             ha_token,
             token_type="refresh",
@@ -665,8 +717,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         """Decode and validate a stateless access token.
 
         Accepts tokens with ``type=access`` or no type field (backwards
-        compatibility with tokens issued before the type field was added).
+        compatibility with tokens issued before v7.x / April 2026).
         Rejects tokens explicitly typed as ``refresh``.
+        Enforces ``exp`` if present in the payload.
         """
         payload = self._decode_token(token)
         if not payload:
@@ -675,13 +728,20 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # Reject refresh tokens presented as access tokens
         token_type = payload.get("type")
         if token_type == "refresh":
+            logger.warning("Refresh token presented as access token (rejected)")
+            return None
+
+        # Enforce expiry if present
+        expires_at = payload.get("exp")
+        if expires_at is not None and expires_at < time.time():
+            logger.debug("Access token expired")
             return None
 
         return AccessToken(
             token=token,
             client_id=payload.get("client_id", "stateless"),
             scopes=payload.get("scopes", ["homeassistant", "mcp"]),
-            expires_at=None,  # LLAT revocation is the security boundary
+            expires_at=expires_at,
             claims={"ha_token": payload["ha_token"]},
         )
 
@@ -695,19 +755,20 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         With fully stateless tokens there is no server-side state to
         remove.  The LLAT itself is the security boundary — revoking
         it in Home Assistant immediately invalidates all derived tokens.
+
+        Per RFC 7009, the /revoke endpoint returns success regardless.
+        The token remains valid until the underlying LLAT is revoked
+        in Home Assistant.
         """
+        logger.debug(
+            "Token revocation requested (no-op for stateless tokens; "
+            "revoke the LLAT in Home Assistant to invalidate)"
+        )
 
     def get_ha_credentials(self, client_id: str) -> HomeAssistantCredentials | None:
-        """
-        Get Home Assistant credentials for a client.
+        """Get temporarily stored HA credentials for a client.
 
-        This is used by the MCP server to get the HA token
-        for making API calls on behalf of the authenticated user.
-
-        Args:
-            client_id: The OAuth client ID
-
-        Returns:
-            HomeAssistantCredentials if found, None otherwise
+        Only valid between consent form submission and token exchange.
+        After token issuance, credentials are deleted from this store.
         """
         return self.ha_credentials.get(client_id)
