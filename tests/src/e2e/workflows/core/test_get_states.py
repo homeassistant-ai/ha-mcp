@@ -1,5 +1,5 @@
 """
-E2E tests for ha_get_states tool - bulk entity state retrieval.
+E2E tests for ha_get_state tool - bulk entity state retrieval.
 
 Tests the bulk state retrieval functionality that fetches multiple entity
 states in a single call using parallel requests.
@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 @pytest.mark.core
 class TestGetStates:
-    """Test ha_get_states bulk entity state retrieval."""
+    """Test ha_get_state bulk entity state retrieval."""
 
     async def test_multiple_known_entities(self, mcp_client):
         """Retrieve states for multiple known entities; all succeed."""
-        logger.info("Testing ha_get_states with sun.sun + a sensor")
+        logger.info("Testing ha_get_state with sun.sun + a sensor")
 
         # Find a sensor entity to pair with sun.sun
         search_result = await mcp_client.call_tool(
@@ -43,8 +43,8 @@ class TestGetStates:
         logger.info(f"Testing with entities: {entity_ids}")
 
         result = await mcp_client.call_tool(
-            "ha_get_states",
-            {"entity_ids": entity_ids},
+            "ha_get_state",
+            {"entity_id": entity_ids},
         )
 
         data = assert_mcp_success(result, "Get multiple entity states")
@@ -74,11 +74,11 @@ class TestGetStates:
 
     async def test_partial_failure_with_nonexistent_entity(self, mcp_client):
         """Mix of real and nonexistent entities returns partial success."""
-        logger.info("Testing ha_get_states with partial failure")
+        logger.info("Testing ha_get_state with partial failure")
 
         result = await mcp_client.call_tool(
-            "ha_get_states",
-            {"entity_ids": ["sun.sun", "sensor.nonexistent_test_xyz_99999"]},
+            "ha_get_state",
+            {"entity_id": ["sun.sun", "sensor.nonexistent_test_xyz_99999"]},
         )
 
         data = assert_mcp_success(result, "Partial failure get_states")
@@ -99,12 +99,12 @@ class TestGetStates:
 
     async def test_all_nonexistent_entities(self, mcp_client):
         """All entities nonexistent returns success=False."""
-        logger.info("Testing ha_get_states with all nonexistent entities")
+        logger.info("Testing ha_get_state with all nonexistent entities")
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_get_states",
-            {"entity_ids": ["sensor.fake_aaa_111", "sensor.fake_bbb_222"]},
+            "ha_get_state",
+            {"entity_id": ["sensor.fake_aaa_111", "sensor.fake_bbb_222"]},
         )
 
         inner = result.get("data", result)
@@ -119,12 +119,12 @@ class TestGetStates:
 
     async def test_empty_entity_ids_rejected(self, mcp_client):
         """Empty entity_ids list returns validation error."""
-        logger.info("Testing ha_get_states with empty list")
+        logger.info("Testing ha_get_state with empty list")
 
         result = await safe_call_tool(
             mcp_client,
-            "ha_get_states",
-            {"entity_ids": []},
+            "ha_get_state",
+            {"entity_id": []},
         )
 
         inner = result.get("data", result)
@@ -138,33 +138,41 @@ class TestGetStates:
 
     async def test_response_states_keyed_by_entity_id(self, mcp_client):
         """Verify states dict is keyed by entity_id, not a list."""
-        logger.info("Testing ha_get_states response structure")
+        logger.info("Testing ha_get_state response structure")
 
         result = await mcp_client.call_tool(
-            "ha_get_states",
-            {"entity_ids": ["sun.sun"]},
+            "ha_get_state",
+            {"entity_id": ["sun.sun"]},
         )
 
         data = assert_mcp_success(result, "Single entity get_states")
 
         inner = data["data"]
-        assert isinstance(inner["states"], dict), f"states must be dict: {type(inner['states'])}"
-        assert "sun.sun" in inner["states"], f"Key should be entity_id: {inner['states']}"
+        assert isinstance(inner["states"], dict), (
+            f"states must be dict: {type(inner['states'])}"
+        )
+        assert "sun.sun" in inner["states"], (
+            f"Key should be entity_id: {inner['states']}"
+        )
 
         sun_data = inner["states"]["sun.sun"]
-        assert "entity_id" in sun_data, f"State data should contain entity_id: {sun_data}"
+        assert "entity_id" in sun_data, (
+            f"State data should contain entity_id: {sun_data}"
+        )
         assert "state" in sun_data, f"State data should contain state: {sun_data}"
-        assert "attributes" in sun_data, f"State data should contain attributes: {sun_data}"
+        assert "attributes" in sun_data, (
+            f"State data should contain attributes: {sun_data}"
+        )
 
         logger.info("Response structure is correct")
 
     async def test_duplicate_entity_ids_deduplicated(self, mcp_client):
         """Duplicate IDs are deduplicated; only one state returned per unique ID."""
-        logger.info("Testing ha_get_states deduplication")
+        logger.info("Testing ha_get_state deduplication")
 
         result = await mcp_client.call_tool(
-            "ha_get_states",
-            {"entity_ids": ["sun.sun", "sun.sun", "sun.sun"]},
+            "ha_get_state",
+            {"entity_id": ["sun.sun", "sun.sun", "sun.sun"]},
         )
 
         data = assert_mcp_success(result, "Deduplicated get_states")
