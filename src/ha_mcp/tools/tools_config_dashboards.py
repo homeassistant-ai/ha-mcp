@@ -330,7 +330,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           Multiple criteria are AND-ed. Always fetches fresh config (force=True).
           Strategy dashboards are not searchable (no explicit cards).
 
-        MODE 3 — Get: Triggered if not in list or search mode.
+        MODE 3 — Get: Active when list_only=False and no search parameters are provided.
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
 
