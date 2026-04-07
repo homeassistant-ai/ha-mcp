@@ -154,16 +154,19 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         scopes: list[str] | None = None,
         expires_at: int | None = None,
     ) -> str:
-        """Encode a stateless OAuth token as base64 JSON.
+        """Encode a stateless HMAC-signed OAuth token as base64 JSON.
 
-        Access tokens are unsigned and contain the raw HA LLAT (short-lived).
-        Refresh tokens are HMAC-signed: they contain the LLAT plus a signature
-        that the server can verify using its secret. This prevents tampering
-        with long-lived refresh tokens while preserving statelessness.
+        All tokens are HMAC-signed using a per-instance server secret.
+        This prevents forgery and tampering: an intercepted token cannot
+        be modified (e.g., changing exp, scopes, or client_id) without
+        invalidating the signature.
 
-        Security note: tokens are base64-encoded, not encrypted.
-        The LLAT itself is the authorization boundary; transport
-        security comes from HTTPS.
+        The token payload contains the HA LLAT, token type, issued-at
+        timestamp, and (for refresh tokens) client/scope metadata and
+        expiry.
+
+        Tokens are invalidated on server restart (new HMAC secret).
+        Clients re-authenticate via the consent form.
         """
         payload: dict[str, Any] = {
             "ha_token": ha_token,
@@ -178,12 +181,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             payload["exp"] = expires_at
 
         payload_json = json.dumps(payload, sort_keys=True).encode()
-        if token_type == "refresh":
-            # Sign refresh tokens to prevent tampering with long-lived tokens
-            sig = self._sign_payload(payload_json)
-            envelope = json.dumps({"payload": payload, "sig": sig}).encode()
-            return urlsafe_b64encode(envelope).decode().rstrip("=")
-        return urlsafe_b64encode(payload_json).decode().rstrip("=")
+        sig = self._sign_payload(payload_json)
+        envelope = json.dumps({"payload": payload, "sig": sig}).encode()
+        return urlsafe_b64encode(envelope).decode().rstrip("=")
 
     def _decode_token(self, token: str) -> dict[str, Any] | None:
         """Decode a stateless token and return its full payload.
@@ -204,7 +204,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             if not isinstance(outer, dict):
                 return None
 
-            # Signed envelope (refresh tokens): {"payload": {...}, "sig": "..."}
+            # Signed envelope: {"payload": {...}, "sig": "..."}
             if "sig" in outer and "payload" in outer:
                 payload = outer["payload"]
                 if not isinstance(payload, dict):
@@ -213,16 +213,18 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                     json.dumps(payload, sort_keys=True).encode()
                 )
                 if not hmac.compare_digest(outer["sig"], expected_sig):
-                    logger.warning("Refresh token signature verification failed")
+                    logger.warning("Token signature verification failed")
                     return None
                 if not payload.get("ha_token"):
                     return None
                 return payload
 
-            # Unsigned payload (access tokens)
-            if not outer.get("ha_token"):
-                return None
-            return outer
+            # Unsigned payload (backwards compat with tokens issued before
+            # v7.x / April 2026, before HMAC signing was added)
+            if outer.get("ha_token"):
+                logger.debug("Accepted unsigned token (pre-signing backwards compat)")
+                return outer
+            return None
         except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
             logger.debug(f"Failed to decode token: {e}")
             return None

@@ -803,8 +803,8 @@ class TestStatelessTokenResilience:
     """Tests for stateless token behaviour across provider restarts."""
 
     @pytest.mark.asyncio
-    async def test_tokens_survive_provider_restart(self):
-        """Stateless tokens remain valid across independent provider instances."""
+    async def test_tokens_invalidated_on_provider_restart(self):
+        """HMAC-signed tokens are rejected by a new provider instance (different secret)."""
         from mcp.server.auth.provider import AuthorizationCode
         from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
@@ -837,49 +837,41 @@ class TestStatelessTokenResilience:
             client_info, auth_code
         )
 
-        # Provider 2: fresh instance (simulates container restart)
+        # Tokens work on the same provider instance
+        access = await provider1.load_access_token(token_response.access_token)
+        assert access is not None
+
+        # Provider 2: fresh instance with different HMAC secret
         provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
 
-        # Access token still works on a fresh provider
-        access = await provider2.load_access_token(token_response.access_token)
-        assert access is not None
-        assert access.claims["ha_token"] == "persistent_ha_token"
+        # Tokens from provider1 are rejected (signature mismatch)
+        access2 = await provider2.load_access_token(token_response.access_token)
+        assert access2 is None, "Signed tokens should be rejected by a different provider instance"
 
-        # Refresh token also works — client re-registers via DCR
         client_info2 = OAuthClientInformationFull(
             client_id="persist-client",
             redirect_uris=["http://localhost/cb"],
             scope="homeassistant mcp",
         )
         await provider2.register_client(client_info2)
-
-        refresh_obj = await provider2.load_refresh_token(
-            client_info2, token_response.refresh_token
-        )
-        assert refresh_obj is not None
-
-        new_token = await provider2.exchange_refresh_token(
-            client_info2, refresh_obj, ["homeassistant"]
-        )
-        new_access = await provider2.load_access_token(new_token.access_token)
-        assert new_access is not None
-        assert new_access.claims["ha_token"] == "persistent_ha_token"
+        refresh2 = await provider2.load_refresh_token(client_info2, token_response.refresh_token)
+        assert refresh2 is None, "Signed refresh tokens should be rejected after restart"
 
     @pytest.mark.asyncio
-    async def test_chained_refresh_across_restart(self):
-        """Chained refresh tokens work across provider restarts."""
+    async def test_chained_refresh_same_instance(self):
+        """Chained refresh tokens work within the same provider instance."""
         from mcp.server.auth.provider import AuthorizationCode
         from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
 
-        provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_info = OAuthClientInformationFull(
             client_id="chain-client",
             redirect_uris=["http://localhost/cb"],
             scope="homeassistant",
         )
-        await provider1.register_client(client_info)
-        provider1.ha_credentials["chain-client"] = HomeAssistantCredentials(
+        await provider.register_client(client_info)
+        provider.ha_credentials["chain-client"] = HomeAssistantCredentials(
             ha_token="chain_ha_token",
         )
         auth_code = AuthorizationCode(
@@ -891,35 +883,27 @@ class TestStatelessTokenResilience:
             expires_at=time.time() + 300,
             code_challenge="test_challenge",
         )
-        provider1.auth_codes["chain-code"] = auth_code
-        token1 = await provider1.exchange_authorization_code(client_info, auth_code)
+        provider.auth_codes["chain-code"] = auth_code
+        token1 = await provider.exchange_authorization_code(client_info, auth_code)
 
-        # First refresh on provider1
-        refresh1_obj = await provider1.load_refresh_token(
+        # First refresh
+        refresh1_obj = await provider.load_refresh_token(
             client_info, token1.refresh_token
         )
-        token2 = await provider1.exchange_refresh_token(
+        assert refresh1_obj is not None
+        token2 = await provider.exchange_refresh_token(
             client_info, refresh1_obj, ["homeassistant"]
         )
 
-        # Restart — fresh provider, re-register client
-        provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
-        client_info2 = OAuthClientInformationFull(
-            client_id="chain-client",
-            redirect_uris=["http://localhost/cb"],
-            scope="homeassistant",
-        )
-        await provider2.register_client(client_info2)
-
-        # Second refresh across restart
-        refresh2_obj = await provider2.load_refresh_token(
-            client_info2, token2.refresh_token
+        # Second refresh (chained from the new refresh token)
+        refresh2_obj = await provider.load_refresh_token(
+            client_info, token2.refresh_token
         )
         assert refresh2_obj is not None
-        token3 = await provider2.exchange_refresh_token(
-            client_info2, refresh2_obj, ["homeassistant"]
+        token3 = await provider.exchange_refresh_token(
+            client_info, refresh2_obj, ["homeassistant"]
         )
-        access = await provider2.load_access_token(token3.access_token)
+        access = await provider.load_access_token(token3.access_token)
         assert access is not None
         assert access.claims["ha_token"] == "chain_ha_token"
 
