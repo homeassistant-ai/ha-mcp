@@ -35,18 +35,22 @@ configuration:
   enable_yaml_config_editing:
     name: Enable YAML config editing
     description: >-
-      Allow AI assistants to add, replace, or remove top-level keys in
-      configuration.yaml and packages/*.yaml. Only whitelisted keys are
-      allowed (e.g., template, sensor, command_line, mqtt). Core keys
-      like homeassistant, http, and recorder are blocked. A backup is
-      created before every edit. Use for YAML-only features that have no
-      UI or API alternative. Requires restart to take effect.
+      Controls the ha_config_set_yaml tool. When off (default), the tool
+      is disabled regardless of its setting in Advanced tool configuration.
+      When on, the tool is enabled and pinned. Allows AI assistants to add,
+      replace, or remove top-level keys in configuration.yaml and
+      packages/*.yaml. Only whitelisted keys allowed; core keys like
+      homeassistant, http, and recorder are blocked. A backup is created
+      before every edit. Requires restart.
   tools:
     name: Advanced tool configuration
     description: >-
-      Configure tool availability and pinning per tool. Each tool can be
-      enabled-unpinned, enabled-pinned (always visible in tool search),
-      or disabled. Some core tools (ha_search_entities, ha_get_overview,
-      ha_get_state, ha_report_issue) cannot be disabled. For full tool
-      descriptions visit https://homeassistant-ai.github.io/ha-mcp/tools
-      — Requires restart.
+      Per-tool and per-group control over tool availability. Each tool can
+      be enabled-unpinned, enabled-pinned (always visible in tool search),
+      or disabled. Setting a group's toggle to off disables all tools in
+      that group regardless of individual settings. Core tools
+      (ha_search_entities, ha_get_overview, ha_get_state, ha_report_issue)
+      cannot be disabled — the server silently re-enables them.
+      ha_config_set_yaml is controlled by the Enable YAML config editing
+      toggle above. Full tool details at
+      https://homeassistant-ai.github.io/ha-mcp/tools — Requires restart.
