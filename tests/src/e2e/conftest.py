@@ -366,7 +366,7 @@ def ha_container_with_fresh_config():
         # components; 50 is the minimum needed for tests (covers automation,
         # script, input_*, group, scene, and other commonly-tested domains).
         MIN_COMPONENTS = 50
-        STABILIZATION_TIMEOUT = 20
+        STABILIZATION_TIMEOUT = 30
 
         logger.info("⏳ Waiting for Home Assistant components to stabilize...")
         last_count = 0
@@ -402,6 +402,41 @@ def ha_container_with_fresh_config():
                 f"Home Assistant component stabilization timed out after {STABILIZATION_TIMEOUT}s. "
                 f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS}). "
                 f"Check Docker logs."
+            )
+
+        # Wait for key entities to actually register (components loaded ≠
+        # entities available). HA 2026.4+ can report 80+ components while
+        # individual integrations are still registering their entities and
+        # WebSocket handlers.
+        ENTITY_STABILIZATION_TIMEOUT = 15
+        REQUIRED_ENTITIES = ["sun.sun", "person.mcp"]
+        logger.info(
+            f"⏳ Waiting for key entities to register: {REQUIRED_ENTITIES}"
+        )
+        for entity_attempt in range(ENTITY_STABILIZATION_TIMEOUT):
+            try:
+                all_found = True
+                for entity_id in REQUIRED_ENTITIES:
+                    state_resp = requests.get(
+                        f"{base_url}/api/states/{entity_id}",
+                        timeout=2,
+                        headers=headers,
+                    )
+                    if state_resp.status_code != 200:
+                        all_found = False
+                        break
+                if all_found:
+                    logger.info(
+                        f"✅ Key entities registered after {entity_attempt + 1}s"
+                    )
+                    break
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(1)
+        else:
+            logger.warning(
+                f"⚠️ Key entity registration timed out after "
+                f"{ENTITY_STABILIZATION_TIMEOUT}s — some tests may fail"
             )
 
         # Store connection info for other fixtures
