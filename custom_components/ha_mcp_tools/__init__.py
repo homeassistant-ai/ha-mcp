@@ -40,6 +40,51 @@ from .yaml_rt import make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# HA-aware YAML loader/dumper
+#
+# Standard yaml.safe_load chokes on HA custom tags like !include and !secret.
+# These classes preserve them as opaque _HATag objects so that a load→edit→dump
+# cycle leaves all existing directives intact.
+# ---------------------------------------------------------------------------
+
+
+class _HATag:
+    """Opaque wrapper that round-trips HA custom YAML tags unchanged."""
+
+    __slots__ = ("tag", "value")
+
+    def __init__(self, tag: str, value: str) -> None:
+        self.tag = tag
+        self.value = value
+
+
+class _HALoader(yaml.SafeLoader):
+    """SafeLoader extended to tolerate HA custom tags (!include, !secret, …)."""
+
+
+def _ha_multi_constructor(
+    loader: yaml.Loader, tag_suffix: str, node: yaml.ScalarNode
+) -> _HATag:
+    return _HATag(tag_suffix, loader.construct_scalar(node))
+
+
+# "!" prefix catches all local tags while leaving tag:yaml.org,2002:* intact.
+_HALoader.add_multi_constructor("!", _ha_multi_constructor)
+
+
+class _HADumper(yaml.Dumper):
+    """Dumper that emits _HATag objects back as their original YAML tags."""
+
+
+def _ha_tag_representer(dumper: yaml.Dumper, data: _HATag) -> yaml.ScalarNode:
+    return dumper.represent_scalar(data.tag, data.value)
+
+
+_HADumper.add_representer(_HATag, _ha_tag_representer)
+
+
 # Service names
 SERVICE_LIST_FILES = "list_files"
 SERVICE_READ_FILE = "read_file"
@@ -791,9 +836,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except (OSError, ValueError) as err:
             return {"success": False, "error": f"Invalid path: {err}"}
 
-        # Validate the new content is parseable YAML
+        # Validate the new content is parseable YAML (tolerates !include / !secret)
         try:
-            yaml.safe_load(content)
+            yaml.load(content, Loader=_HALoader)  # noqa: S506
         except yaml.YAMLError as err:
             return {"success": False, "error": f"Invalid YAML content: {err}"}
 
