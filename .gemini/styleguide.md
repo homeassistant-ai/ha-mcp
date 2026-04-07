@@ -96,6 +96,22 @@ Flag HIGH severity if errors use plain exceptions or dict returns instead of str
 
 ## Code Conventions
 
+## MCP Tool Docstrings
+
+These rules apply to new or modified tool docstrings in the PR diff only -- not to pre-existing docstrings in unchanged files.
+
+**Flag MEDIUM severity when a new or modified tool docstring:**
+- Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Execute`, `Call`)
+- Is missing entirely or is still a placeholder
+- References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
+- Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
+- Is a workflow-entry tool but gives no hint about the next natural tool to call
+
+**Do NOT flag:**
+- Concise one-liners on straightforward tools (progressive disclosure: brief by default)
+- Missing examples on tools with obvious single-parameter calls
+- Multi-line docstrings that stay focused and on-topic
+
 1. **Tool descriptions**: Use action verbs, keep concise
 2. **Async/await**: Use consistently for I/O operations
 3. **Type hints**: Required for all function signatures
