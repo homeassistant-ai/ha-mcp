@@ -27,6 +27,7 @@ const withBase = (path: string) => {
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
+        <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
@@ -137,6 +138,36 @@ HOMEASSISTANT_URL=https://your-ha-instance.example.com \
 MCP_BASE_URL=https://your-mcp-server.example.com \
 uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">full migration guide</a> for details.</p>
+        </div>
+
+        <div class="faq-item" id="macos-connection">
+          <h3 class="text-lg font-medium text-white mb-2">macOS: "All connection attempts failed" to local Home Assistant</h3>
+          <p class="text-slate-300 mb-4">If ha-mcp connects to the demo server but fails to reach your local Home Assistant (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>, etc.) on macOS, check the following. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/867" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#867</a> (Local Network Privacy), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/630" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#630</a> (env vars), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/773" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#773</a> (Python version) for related reports.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">1. macOS Local Network Privacy (Sequoia 15+)</h4>
+          <p class="text-slate-300 mb-3">macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns <code class="bg-slate-800 px-1 rounded">uvx</code> as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.</p>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
+            <li>Check <strong>System Settings &rarr; Privacy &amp; Security &rarr; Local Network</strong> for Claude Desktop</li>
+            <li>If Claude Desktop is not listed, try restarting it to trigger the permission prompt</li>
+          </ul>
+          <p class="text-slate-400 mb-2">Workaround &mdash; SSH tunnel to localhost:</p>
+          <p class="text-slate-300 mb-3">macOS does not restrict connections to <code class="bg-slate-800 px-1 rounded">localhost</code>, so an SSH port forward bypasses the restriction:</p>
+          <pre class="code-block"><code>ssh -N -L 8123:localhost:8123 user@your-ha-server-ip</code></pre>
+          <p class="text-slate-400 text-sm mt-2 mb-4">Then set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> to <code class="bg-slate-800 px-1 rounded">http://localhost:8123</code> in your config.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">2. Firewall software (Little Snitch, Lulu, etc.)</h4>
+          <p class="text-slate-300 mb-3">Third-party firewalls may block <code class="bg-slate-800 px-1 rounded">python</code> or <code class="bg-slate-800 px-1 rounded">node</code> processes spawned by Claude Desktop. Check your firewall rules and allow connections for these processes. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/780" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#780</a> for an example resolution.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">3. http:// vs https://</h4>
+          <p class="text-slate-300 mb-3">Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using <code class="bg-slate-800 px-1 rounded">https://</code> causes a TLS handshake error. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you have explicitly configured SSL/TLS or a reverse proxy.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">4. Python version too old</h4>
+          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
+          <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
+          <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
+          <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.13, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.13</code> to your config args:</p>
+          <pre class="code-block mt-2"><code>"args": ["--python", "3.13", "ha-mcp@latest"]</code></pre>
         </div>
 
         <div class="faq-item" id="ssl-certificates">
