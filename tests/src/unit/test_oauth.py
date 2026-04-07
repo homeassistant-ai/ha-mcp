@@ -327,17 +327,16 @@ class TestHomeAssistantOAuthProvider:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_load_access_token_backwards_compat(self, provider):
-        """Test that tokens without a type field are accepted (backwards compat)."""
+    async def test_unsigned_token_rejected(self, provider):
+        """Unsigned tokens (no HMAC signature) must be rejected."""
         from base64 import urlsafe_b64encode
 
-        # Manually create a token without "type" field (old format)
-        payload = {"ha_token": "old_format_token", "iat": int(time.time())}
-        old_token = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        # Manually create an unsigned token (old format, no sig envelope)
+        payload = {"ha_token": "forged_token", "iat": int(time.time())}
+        unsigned_token = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
-        result = await provider.load_access_token(old_token)
-        assert result is not None
-        assert result.claims["ha_token"] == "old_format_token"
+        result = await provider.load_access_token(unsigned_token)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_load_invalid_access_token(self, provider):
