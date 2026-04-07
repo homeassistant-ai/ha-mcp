@@ -404,39 +404,44 @@ def ha_container_with_fresh_config():
                 f"Check Docker logs."
             )
 
-        # Wait for key entities to actually register (components loaded ≠
+        # Wait for entities to actually register (components loaded ≠
         # entities available). HA 2026.4+ can report 80+ components while
-        # individual integrations are still registering their entities and
-        # WebSocket handlers.
-        ENTITY_STABILIZATION_TIMEOUT = 15
-        REQUIRED_ENTITIES = ["sun.sun", "person.mcp"]
-        logger.info(
-            f"⏳ Waiting for key entities to register: {REQUIRED_ENTITIES}"
-        )
+        # individual integrations (demo, sun, helpers) are still registering
+        # their entities and WebSocket handlers. The demo integration alone
+        # creates 60+ entities (lights, sensors, switches, etc.).
+        MIN_ENTITIES = 50
+        ENTITY_STABILIZATION_TIMEOUT = 30
+        logger.info("⏳ Waiting for entities to register...")
+        last_entity_count = 0
         for entity_attempt in range(ENTITY_STABILIZATION_TIMEOUT):
             try:
-                all_found = True
-                for entity_id in REQUIRED_ENTITIES:
-                    state_resp = requests.get(
-                        f"{base_url}/api/states/{entity_id}",
-                        timeout=2,
-                        headers=headers,
-                    )
-                    if state_resp.status_code != 200:
-                        all_found = False
+                states_resp = requests.get(
+                    f"{base_url}/api/states",
+                    timeout=5,
+                    headers=headers,
+                )
+                if states_resp.status_code == 200:
+                    entity_count = len(states_resp.json())
+                    if entity_count >= MIN_ENTITIES:
+                        logger.info(
+                            f"✅ {entity_count} entities registered "
+                            f"after {entity_attempt + 1}s"
+                        )
                         break
-                if all_found:
-                    logger.info(
-                        f"✅ Key entities registered after {entity_attempt + 1}s"
-                    )
-                    break
+                    if entity_count != last_entity_count:
+                        logger.info(
+                            f"⏳ {entity_count} entities registered, "
+                            f"waiting for more..."
+                        )
+                        last_entity_count = entity_count
             except requests.exceptions.RequestException:
                 pass
             time.sleep(1)
         else:
             logger.warning(
-                f"⚠️ Key entity registration timed out after "
-                f"{ENTITY_STABILIZATION_TIMEOUT}s — some tests may fail"
+                f"⚠️ Entity registration timed out after "
+                f"{ENTITY_STABILIZATION_TIMEOUT}s with only "
+                f"{last_entity_count} entities — some tests may fail"
             )
 
         # Store connection info for other fixtures
