@@ -534,9 +534,9 @@ When a tool's functionality is fully covered by another tool, **remove** the red
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
-| Tools share all parameters, differ only in data source | `ha_get_logs` with `source=` (all sources use same params) | Consolidate via `source` param |
 | Tools share few parameters, have different schemas | `ha_get_history` vs `ha_get_statistics` (3 shared, 5 divergent params) | Keep separate |
 | Tools call different APIs with different semantics | `ha_call_service` vs intent handling | Keep separate |
+| Dispatcher with many conditional params | `ha_get_logs` (7 of 10 params are source-specific) | Tech debt — do not replicate |
 
 ### Breaking Changes Definition
 
