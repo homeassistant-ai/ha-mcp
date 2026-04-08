@@ -321,6 +321,30 @@ class HomeAssistantClient:
         else:
             return []
 
+    async def call_intent(
+        self, name: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """
+        Handle a Home Assistant intent via the REST API.
+
+        Calls POST /api/intent/handle. Requires ``intent:`` to be present in
+        configuration.yaml (built-in media intents like HassMediaSearch work
+        with the default ``conversation`` integration and do not need extra setup).
+
+        Args:
+            name: Intent name (e.g., 'HassMediaSearch', 'HassMediaPause')
+            data: Optional intent parameters (e.g., {'media_type': 'music', 'search_term': 'jazz'})
+
+        Returns:
+            Intent response dict containing 'response' (with 'speech' and 'response_type')
+            and 'conversation_id'.
+        """
+        logger.debug(f"Handling intent: {name}")
+        payload: dict[str, Any] = {"name": name}
+        if data:
+            payload["data"] = data
+        return await self._request("POST", "/intent/handle", json=payload)
+
     async def fire_event(
         self, event_type: str, data: dict[str, Any] | None = None
     ) -> dict[str, Any]:
