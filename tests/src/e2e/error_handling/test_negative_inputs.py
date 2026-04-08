@@ -47,27 +47,35 @@ logger = logging.getLogger(__name__)
             "light.xyz_nonexistent_e2e_abc_123",
             "valid format but entity does not exist in HA",
         ),
+        (
+            [],
+            "empty list — ToolError raised pre-flight, no network I/O",
+        ),
     ],
 )
-async def test_ha_get_state_invalid_entity_id_returns_error(
-    mcp_client, entity_id: str, description: str
+async def test_ha_get_state_invalid_input_returns_error(
+    mcp_client, entity_id: str | list, description: str
 ) -> None:
-    """ha_get_state with a bad entity_id must return success=False.
+    """ha_get_state with invalid input must return success=False.
 
-    Both cases reach the HA REST endpoint (GET /api/states/{entity_id}),
-    which returns HTTP 404. The MCP layer converts that to a ToolError,
-    and safe_call_tool() normalises it to a dict with success=False.
+    Failure paths differ by input type:
 
-    Evidence (all live-verified against HA 2026.4.1):
-    - GET /api/states/sensor.          → HTTP 404 "Entity not found."
-    - GET /api/states/light.xyz_...    → HTTP 404 "Entity not found."
-    Source trace (tools_search.py):
-      exception_to_structured_error(HomeAssistantAPIError(404))
-      → create_entity_not_found_error() → raise_tool_error() → ToolError
-      → safe_call_tool() → {"success": False, ...}
+    String inputs ("sensor.", "light.xyz_nonexistent_e2e_abc_123"):
+      Reach the HA REST endpoint (GET /api/states/{entity_id}) → HTTP 404 →
+      HomeAssistantAPIError(404) → exception_to_structured_error →
+      raise_tool_error() → ToolError → safe_call_tool() → success=False.
+      Evidence (live-verified against HA 2026.4.1):
+      - GET /api/states/sensor.       → HTTP 404 "Entity not found."
+      - GET /api/states/light.xyz_... → HTTP 404 "Entity not found."
+
+    Empty list []:
+      Pre-flight validation in the multi-entity path raises ToolError
+      before any network I/O (source: tools_search.py line 891):
+        if not isinstance(entity_ids, list) or not entity_ids:
+            raise_tool_error(create_validation_error(...))
     """
     logger.info(
-        "Testing ha_get_state bad entity_id: %s (%s)", entity_id, description
+        "Testing ha_get_state invalid input: %r (%s)", entity_id, description
     )
 
     result = await safe_call_tool(
@@ -84,32 +92,6 @@ async def test_ha_get_state_invalid_entity_id_returns_error(
     logger.info(
         "✅ ha_get_state(%r) correctly returned success=False", entity_id
     )
-
-
-@pytest.mark.error_handling
-@pytest.mark.asyncio
-async def test_ha_get_state_empty_list_returns_error(mcp_client) -> None:
-    """ha_get_state([]) must return success=False.
-
-    The multi-entity path in ha_get_state explicitly validates that the list
-    is non-empty and raises a ToolError before any network I/O.
-
-    Evidence:
-    - Source (tools_search.py line 891):
-        if not isinstance(entity_ids, list) or not entity_ids:
-            raise_tool_error(create_validation_error(...))
-    """
-    logger.info("Testing ha_get_state with empty list")
-
-    result = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": []})
-
-    assert result.get("success") is False, (
-        f"Expected success=False for entity_id=[], got: {result}"
-    )
-    assert "error" in result, (
-        f"Expected structured error dict for empty list, got: {result}"
-    )
-    logger.info("✅ ha_get_state([]) correctly returned success=False")
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +163,8 @@ async def test_ha_get_entity_empty_list_returns_empty_success(mcp_client) -> Non
                     "count": 0,
                     "message": "No entities requested",
                 }
+    - parse_mcp_result() does a plain json.loads() with no added fields,
+      so result == expected_result is a safe exact-equality check here.
     """
     logger.info(
         "Testing ha_get_entity([]) — expects success=True, count=0"
@@ -190,16 +174,14 @@ async def test_ha_get_entity_empty_list_returns_empty_success(mcp_client) -> Non
         mcp_client, "ha_get_entity", {"entity_id": []}
     )
 
-    assert result.get("success") is True, (
-        f"Expected success=True for ha_get_entity([]), got: {result}"
-    )
-    assert result.get("count") == 0, (
-        f"Expected count=0 for ha_get_entity([]), "
-        f"got count={result.get('count')}"
-    )
-    assert result.get("entity_entries") == [], (
-        f"Expected empty entity_entries list, "
-        f"got: {result.get('entity_entries')}"
+    expected_result = {
+        "success": True,
+        "entity_entries": [],
+        "count": 0,
+        "message": "No entities requested",
+    }
+    assert result == expected_result, (
+        f"Expected {expected_result} for ha_get_entity([]), got: {result}"
     )
     logger.info(
         "✅ ha_get_entity([]) → success=True, count=0  "
