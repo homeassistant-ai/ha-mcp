@@ -1389,7 +1389,7 @@ class TestWebSocketManagerPool:
         mock_client_a = MagicMock()
         mock_client_a.is_connected = True
         mock_client_a.connect = AsyncMock(return_value=True)
-        mock_client_a.disconnect = AsyncMock(side_effect=Exception("boom"))
+        mock_client_a.disconnect = AsyncMock(side_effect=OSError("boom"))
 
         mock_client_b = MagicMock()
         mock_client_b.is_connected = True
