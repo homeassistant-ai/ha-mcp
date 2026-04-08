@@ -124,8 +124,8 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         group support reload ('reload_available' with 'reload_service').
 
         Preserves YAML comments on sibling keys, file-level comments,
-        and Home Assistant tags (!include, !secret, etc.). action='replace'
-        substitutes the subtree as-is; comments from the old subtree
+        and Home Assistant tags (!include, !secret, etc.). The 'replace' action
+        substitutes the subtree as-is, so comments from the old subtree
         do not carry over.
         """
         try:
