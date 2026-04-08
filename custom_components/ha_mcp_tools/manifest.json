@@ -7,6 +7,6 @@
     "documentation": "https://github.com/homeassistant-ai/ha-mcp",
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/homeassistant-ai/ha-mcp/issues",
-    "requirements": ["ruamel.yaml>=0.18.0"],
+    "requirements": ["ruamel.yaml==0.18.10"],
     "version": "0.4.0"
 }

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError as RuamelYAMLError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -42,49 +44,28 @@ _LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# HA-aware YAML loader/dumper
+# Round-trip YAML engine
 #
-# Standard yaml.safe_load chokes on HA custom tags like !include and !secret.
-# These classes preserve them as opaque _HATag objects so that a load→edit→dump
-# cycle leaves all existing directives intact.
+# ruamel.yaml's round-trip mode (typ='rt') preserves comments, !include /
+# !secret tags, key ordering, and quote styles across load → edit → dump.
+# PyYAML strips all of these, making it unsafe for editing HA config files.
 # ---------------------------------------------------------------------------
 
-
-class _HATag:
-    """Opaque wrapper that round-trips HA custom YAML tags unchanged."""
-
-    __slots__ = ("tag", "value")
-
-    def __init__(self, tag: str, value: str) -> None:
-        self.tag = tag
-        self.value = value
+_ryaml = YAML()           # typ='rt' (round-trip) by default
+_ryaml.preserve_quotes = True
+_ryaml.width = 4096       # prevent unwanted line-wrapping
 
 
-class _HALoader(yaml.SafeLoader):
-    """SafeLoader extended to tolerate HA custom tags (!include, !secret, …)."""
+def _yaml_load(text: str):
+    """Load YAML text, preserving HA custom tags and comments."""
+    return _ryaml.load(text) or {}
 
 
-def _ha_multi_constructor(
-    loader: yaml.Loader, tag_suffix: str, node: yaml.ScalarNode
-) -> _HATag:
-    # add_multi_constructor strips the prefix ("!"), so tag_suffix is e.g. "include".
-    # Re-add "!" so represent_scalar emits the shorthand !include, not !<include>.
-    return _HATag("!" + tag_suffix, loader.construct_scalar(node))
-
-
-# "!" prefix catches all local tags while leaving tag:yaml.org,2002:* intact.
-_HALoader.add_multi_constructor("!", _ha_multi_constructor)
-
-
-class _HADumper(yaml.Dumper):
-    """Dumper that emits _HATag objects back as their original YAML tags."""
-
-
-def _ha_tag_representer(dumper: yaml.Dumper, data: _HATag) -> yaml.ScalarNode:
-    return dumper.represent_scalar(data.tag, data.value)
-
-
-_HADumper.add_representer(_HATag, _ha_tag_representer)
+def _yaml_dump(data) -> str:
+    """Dump data back to YAML, preserving comments and tags."""
+    stream = StringIO()
+    _ryaml.dump(data, stream)
+    return stream.getvalue()
 
 
 # Service names
@@ -628,8 +609,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if target_file.exists():
                 raw_content = await hass.async_add_executor_job(target_file.read_text)
                 try:
-                    data = ry.load(StringIO(raw_content)) or {}
-                except YAMLError as err:
+                    data = _yaml_load(raw_content)
+                except RuamelYAMLError as err:
                     return {
                         "success": False,
                         "error": f"Cannot parse existing file '{rel_path}': {err}",
@@ -696,19 +677,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     }
                 del data[yaml_path]
 
-            # Serialize back to YAML
-            try:
-                new_content = yaml_dumps(ry, data)
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Failed to serialize YAML: {err}",
-                }
+            # Serialize back to YAML (ruamel preserves comments, tags, ordering)
+            new_content = _yaml_dump(data)
 
             # Validate the result parses cleanly
             try:
-                ry.load(StringIO(new_content))
-            except YAMLError as err:
+                _ryaml.load(new_content)
+            except RuamelYAMLError as err:
                 return {
                     "success": False,
                     "error": f"Generated YAML failed validation: {err}",
@@ -840,8 +815,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Validate the new content is parseable YAML (tolerates !include / !secret)
         try:
-            yaml.load(content, Loader=_HALoader)  # noqa: S506
-        except yaml.YAMLError as err:
+            _ryaml.load(content)
+        except RuamelYAMLError as err:
             return {"success": False, "error": f"Invalid YAML content: {err}"}
 
         backup_path_str: str | None = None
