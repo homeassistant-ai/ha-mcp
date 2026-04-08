@@ -152,7 +152,18 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             # --- Intent routing ---
             if intent is not None:
-                parsed_intent_data = parse_json_param(data, "data") if data is not None else None
+                parsed_intent_data = None
+                if data is not None:
+                    try:
+                        parsed_intent_data = parse_json_param(data, "data")
+                    except ValueError as e:
+                        raise_tool_error(
+                            create_validation_error(
+                                f"Invalid data parameter for intent: {e}",
+                                parameter="data",
+                                invalid_json=True,
+                            )
+                        )
                 intent_data = parsed_intent_data if isinstance(parsed_intent_data, dict) else {}
                 result = await client.call_intent(intent, intent_data or None)
                 response_block = result.get("response", {})
@@ -170,8 +181,8 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if domain is None or service is None:
                 raise_tool_error(
                     create_validation_error(
-                        "domain and service are required when intent is not set",
-                        parameter="domain" if domain is None else "service",
+                        "Parameters 'domain' and 'service' are required when 'intent' is not provided.",
+                        context={"parameters": ["domain", "service"]},
                     )
                 )
             # Mypy narrowing: after raise_tool_error (NoReturn), domain and service are str
