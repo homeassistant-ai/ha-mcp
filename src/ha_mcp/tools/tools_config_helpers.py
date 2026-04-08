@@ -753,10 +753,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     else f"{helper_type}.{helper_id}"
                 )
 
-                # Person, zone, and tag store config in separate config stores
-                # (not just the entity registry). Route updates accordingly.
-                # Person and zone have entity registry entries with unique_id
-                # used as the config store identifier. Tags use their own tag
+                # Helper types that persist config in dedicated storage APIs
+                # (not just the entity registry). Each type uses its own
+                # {type}/update WebSocket command. Tags use their own
                 # registry and don't have entity registry entries.
                 config_store_types = {
                     "person",
@@ -1114,11 +1113,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                         elif helper_type == "counter":
                             if initial is not None:
-                                update_msg["initial"] = (
-                                    int(initial)
-                                    if isinstance(initial, str)
-                                    else initial
-                                )
+                                update_msg["initial"] = int(initial)
                             if min_value is not None:
                                 update_msg["minimum"] = int(min_value)
                             if max_value is not None:
@@ -1191,7 +1186,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
 
                 else:
-                    # Standard helpers: entity registry update only
+                    # Fallback for unknown/future helper types: entity registry update only
                     update_msg = {
                         "type": "config/entity_registry/update",
                         "entity_id": entity_id,
