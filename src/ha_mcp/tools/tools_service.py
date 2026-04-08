@@ -89,12 +89,13 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
     @log_tool_usage
     async def ha_call_service(
-        domain: str,
-        service: str,
+        domain: str | None = None,
+        service: str | None = None,
         entity_id: str | None = None,
         data: str | dict[str, Any] | None = None,
         return_response: bool | str = False,
         wait: bool | str = True,
+        intent: str | None = None,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services to control entities and trigger automations.
@@ -119,14 +120,29 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ```
 
         **Parameters:**
-        - **domain**: Service domain (light, climate, automation, etc.)
-        - **service**: Service name (turn_on, set_temperature, trigger, etc.)
+        - **domain**: Service domain (light, climate, automation, etc.). Not needed when using intent.
+        - **service**: Service name (turn_on, set_temperature, trigger, etc.). Not needed when using intent.
         - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
-        - **data**: Optional dict of service-specific parameters
+        - **data**: Optional dict of service-specific parameters or intent data
         - **return_response**: Set to True for services that return data
         - **wait**: Wait for the entity state to change after the service call (default: True).
           Only applies to state-changing services on a single entity. Set to False for
           fire-and-forget calls, bulk operations, or services without observable state changes.
+        - **intent**: HA intent name (e.g., 'HassMediaSearch', 'HassMediaPause'). When set,
+          domain and service are ignored and the call is routed to POST /api/intent/handle.
+          Use for media intents that lack direct service equivalents. Requires the
+          ``conversation`` integration (enabled by default in HA 2023.2+).
+
+        **Intent examples (use when no direct service equivalent exists):**
+        ```python
+        # Search for media — no ha_call_service equivalent
+        ha_call_service(intent="HassMediaSearch",
+                        data={"media_type": "music", "search_term": "jazz"})
+
+        # Pause/resume via intent (resolves the active media player automatically)
+        ha_call_service(intent="HassMediaPause")
+        ha_call_service(intent="HassMediaUnpause")
+        ```
 
         **For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**
 
@@ -134,6 +150,22 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use ha_search_entities() to find correct entity IDs.
         """
         try:
+            # --- Intent routing ---
+            if intent is not None:
+                parsed_intent_data = parse_json_param(data, "data") if data is not None else None
+                intent_data = parsed_intent_data if isinstance(parsed_intent_data, dict) else {}
+                result = await client.call_intent(intent, intent_data or None)
+                response_block = result.get("response", {})
+                speech = response_block.get("speech", {}).get("plain", {}).get("speech", "")
+                return {
+                    "success": True,
+                    "intent": intent,
+                    "response_type": response_block.get("response_type"),
+                    "speech": speech,
+                    "raw": result,
+                }
+
+            # --- Normal service routing ---
             # Parse JSON data if provided as string
             try:
                 parsed_data = parse_json_param(data, "data")
