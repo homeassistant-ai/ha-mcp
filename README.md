@@ -286,6 +286,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
+- **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard.
+- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, docs sync automation, and file-read deduplication in check_sync.
+- **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
+- **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 
 ---
 
