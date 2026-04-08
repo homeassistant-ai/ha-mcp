@@ -154,3 +154,30 @@ class TestHaCallServiceIntentRouting:
         )
         assert result["success"] is True
 
+    @pytest.mark.asyncio
+    async def test_intent_call_failure_raises_tool_error(
+        self, call_service_tool, mock_client
+    ):
+        """client.call_intent raising an exception must surface as ToolError."""
+        from fastmcp.exceptions import ToolError
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+        mock_client.call_intent = AsyncMock(
+            side_effect=HomeAssistantConnectionError("intent endpoint unavailable")
+        )
+
+        with pytest.raises(ToolError):
+            await call_service_tool(intent="HassMediaPause")
+
+    @pytest.mark.asyncio
+    async def test_intent_response_type_never_none(self, call_service_tool, mock_client):
+        """response_type must be an empty string, not None, when HA returns no type."""
+        mock_client.call_intent = AsyncMock(return_value={
+            "response": {"speech": {"plain": {"speech": "Done"}}}
+            # response_type intentionally absent
+        })
+
+        result = await call_service_tool(intent="HassMediaUnpause")
+        assert result["response_type"] == ""
+        assert "raw" not in result
+
