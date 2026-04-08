@@ -310,13 +310,13 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "service": service,
                     "entity_id": entity_id,
                 },
-                suggestions=_build_service_suggestions(domain, service, entity_id),
+                suggestions=_build_service_suggestions(domain or "", service or "", entity_id),
             )
         except ToolError:
             raise
         except Exception as error:
             # Use structured error response
-            suggestions = _build_service_suggestions(domain, service, entity_id)
+            suggestions = _build_service_suggestions(domain or "", service or "", entity_id)
             if entity_id:
                 suggestions.extend(
                     [
