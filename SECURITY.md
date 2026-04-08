@@ -15,7 +15,6 @@
 - Prompt injection paths that circumvent tool-level safeguards
   (e.g., HA entity data triggering unintended tool calls)
 - Privilege escalation within the MCP tool surface
-- Sandbox escape via sandboxed code execution, if that feature is enabled
 - Unintended information disclosure via API responses
 - Dependency vulnerabilities with a credible exploit path
 
@@ -27,7 +26,7 @@
 - Attacks requiring physical access to the HA host
 - "The LLM performed a destructive action using valid, authorized tools" —
   this is a configuration or usage issue, not a security vulnerability.
-  Tool visibility controls (`DISABLED_TOOLS`, group toggles) exist for this purpose.
+  Tool visibility controls (`ENABLED_TOOL_MODULES`, group toggles) exist for this purpose.
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
   (e.g., standard-mode instance exposed to the internet without TLS)
 
@@ -38,7 +37,7 @@ and carries a larger attack surface than the standard LLAT setup.
 
 - Not recommended for production without TLS and network access restrictions
 - Requires explicit opt-in (`ha-mcp-oauth`); the default entrypoint is unaffected
-- Two CVEs were published and fixed in v7.x (XSS: GHSA-pf93-j98v-25pv;
+- CVEs were published and fixed in v7.x (XSS: GHSA-pf93-j98v-25pv;
   SSRF: GHSA-fmfg-9g7c-3vq7). Upgrade to the latest release before deploying.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted networks
