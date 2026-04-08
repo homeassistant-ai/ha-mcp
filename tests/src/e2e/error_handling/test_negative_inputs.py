@@ -82,7 +82,7 @@ async def test_ha_get_state_invalid_input_returns_error(
         mcp_client, "ha_get_state", {"entity_id": entity_id}
     )
 
-    assert result.get("success") is False, (
+    assert result["success"] is False, (
         f"Expected success=False for entity_id={entity_id!r} ({description}), "
         f"got: {result}"
     )
@@ -131,7 +131,7 @@ async def test_ha_get_entity_nonexistent_returns_error(mcp_client) -> None:
         mcp_client, "ha_get_entity", {"entity_id": entity_id}
     )
 
-    assert result.get("success") is False, (
+    assert result["success"] is False, (
         f"Expected success=False for nonexistent entity {entity_id!r}, "
         f"got: {result}"
     )
