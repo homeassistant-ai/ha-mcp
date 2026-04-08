@@ -11,7 +11,7 @@
 **In scope** — please report these:
 
 - Authentication bypass in standard (LLAT) or OAuth mode
-- OAuth mode: XSS, SSRF, token leakage, auth bypass, open redirect
+- OAuth mode: XSS, SSRF, token leakage, open redirect
 - Prompt injection paths that circumvent tool-level safeguards
   (e.g., HA entity data triggering unintended tool calls)
 - Privilege escalation within the MCP tool surface
