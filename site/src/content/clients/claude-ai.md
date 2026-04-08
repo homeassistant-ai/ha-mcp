@@ -1,7 +1,7 @@
 ---
 name: Claude.ai
 company: Anthropic
-logo: /logos/anthropic.svg
+logo: /logos/claude.svg
 transports: ['sse', 'streamable-http']
 configFormat: ui
 accuracy: 4

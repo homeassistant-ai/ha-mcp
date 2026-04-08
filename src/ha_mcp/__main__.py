@@ -61,7 +61,9 @@ class OAuthProxyClient:
         claims = token.claims
 
         if not claims or "ha_token" not in claims:
-            logger.error(f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}")
+            logger.error(
+                f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}"
+            )
             raise RuntimeError("No Home Assistant credentials in OAuth token claims")
 
         ha_token = claims["ha_token"]
@@ -610,7 +612,9 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
     """
     if path in _registered_landing_paths:
-        logger.warning("register_browser_landing: %r already registered, skipping", path)
+        logger.warning(
+            "register_browser_landing: %r already registered, skipping", path
+        )
         return
     _registered_landing_paths.add(path)
 
@@ -710,6 +714,15 @@ def main_oauth() -> None:
     Note: HOMEASSISTANT_TOKEN is NOT required in this mode.
     Per-user tokens are collected via the OAuth consent form.
     """
+    # In OAuth mode, per-user tokens come from the consent form — no
+    # server-level HOMEASSISTANT_TOKEN is needed.  Set the sentinel so
+    # Settings validation passes even when the env var is empty (e.g.
+    # Dockerfile sets HOMEASSISTANT_TOKEN="").  Fixes #886.
+    if not os.getenv("HOMEASSISTANT_TOKEN"):
+        from ha_mcp.config import OAUTH_MODE_TOKEN
+
+        os.environ["HOMEASSISTANT_TOKEN"] = OAUTH_MODE_TOKEN
+
     # Configure logging for OAuth mode
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     _setup_logging(log_level, force=True)
@@ -791,9 +804,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
         f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
-    await _run_with_shutdown(
-        mcp.run_async(**_http_run_kwargs("http", port, path))
-    )
+    await _run_with_shutdown(mcp.run_async(**_http_run_kwargs("http", port, path)))
 
 
 if __name__ == "__main__":

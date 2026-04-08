@@ -21,7 +21,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.1.3"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.4.1"
 
 jobs:
   # Comprehensive E2E validation for main branch

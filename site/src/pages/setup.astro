@@ -1498,6 +1498,41 @@ mcpServers:
             <li>Click <strong>Save</strong></li>
           </ol>
         </div>`;
+      } else if (state.client.id === 'copilot-cli') {
+        if (isStdio) {
+          uiSteps = `<div class="instruction-block">
+            <h4 class="instruction-title">⚙️ Copilot CLI Configuration (STDIO)</h4>
+            <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+              <li>Start Copilot CLI: <code class="bg-slate-800 px-1 rounded">copilot</code></li>
+              <li>Run the <code class="bg-slate-800 px-1 rounded">/mcp add</code> slash command</li>
+              <li>Fill in the form (use <strong>Tab</strong> to navigate, <strong>Ctrl+S</strong> to save):
+                <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                  <li>Server Name: <code class="bg-slate-800 px-1 rounded">home-assistant</code></li>
+                  <li>Server Type: Press <strong>2</strong> for STDIO</li>
+                  <li>Command: <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code></li>
+                  <li>Environment Variables: <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}</code></li>
+                  <li>Tools: <code class="bg-slate-800 px-1 rounded">*</code></li>
+                </ul>
+              </li>
+            </ol>
+          </div>`;
+        } else {
+          uiSteps = `<div class="instruction-block">
+            <h4 class="instruction-title">⚙️ Copilot CLI Configuration (HTTP)</h4>
+            <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+              <li>Start Copilot CLI: <code class="bg-slate-800 px-1 rounded">copilot</code></li>
+              <li>Run the <code class="bg-slate-800 px-1 rounded">/mcp add</code> slash command</li>
+              <li>Fill in the form (use <strong>Tab</strong> to navigate, <strong>Ctrl+S</strong> to save):
+                <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                  <li>Server Name: <code class="bg-slate-800 px-1 rounded">home-assistant</code></li>
+                  <li>Server Type: Press <strong>3</strong> for HTTP</li>
+                  <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
+                  <li>Tools: <code class="bg-slate-800 px-1 rounded">*</code></li>
+                </ul>
+              </li>
+            </ol>
+          </div>`;
+        }
       }
       instructions.push(uiSteps);
     }

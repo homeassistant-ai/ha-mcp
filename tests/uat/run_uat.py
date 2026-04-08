@@ -36,10 +36,9 @@ TESTS_DIR = SCRIPT_DIR.parent
 REPO_ROOT = TESTS_DIR.parent
 
 sys.path.insert(0, str(TESTS_DIR))
-from test_constants import TEST_TOKEN  # noqa: E402
+from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 
-# renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+HA_IMAGE = HA_TEST_IMAGE
 
 DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
