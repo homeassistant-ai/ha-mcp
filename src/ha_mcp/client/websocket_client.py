@@ -718,7 +718,7 @@ class WebSocketManager:
                 for client in self._clients.values():
                     try:
                         await client.disconnect()
-                    except Exception:
+                    except (OSError, asyncio.CancelledError):
                         pass
                 self._clients.clear()
                 self._last_used.clear()
@@ -771,7 +771,7 @@ class WebSocketManager:
         if stale:
             try:
                 await stale.disconnect()
-            except Exception:
+            except (OSError, asyncio.CancelledError):
                 logger.warning(
                     "Error disconnecting evicted WebSocket client",
                     exc_info=True,
@@ -787,7 +787,7 @@ class WebSocketManager:
             for client in self._clients.values():
                 try:
                     await client.disconnect()
-                except Exception:
+                except (OSError, asyncio.CancelledError):
                     logger.warning(
                         "Error disconnecting WebSocket client", exc_info=True
                     )
