@@ -28,7 +28,8 @@
 - "The LLM performed a destructive action using valid, authorized tools" —
   this is a configuration or usage issue, not a security vulnerability.
   Tool visibility controls (`DISABLED_TOOLS`, group toggles) exist for this purpose.
-- Standard-mode deployments with no web-facing endpoint and a correctly scoped token
+- Vulnerabilities that are only exploitable due to a misconfigured deployment
+  (e.g., standard-mode instance exposed to the internet without TLS)
 
 ## OAuth Mode — Beta Warning
 
