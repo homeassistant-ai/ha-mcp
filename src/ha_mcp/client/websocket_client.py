@@ -324,20 +324,26 @@ class HomeAssistantWebSocketClient:
 
         # Handle events
         if message_type == "event":
-            if message_id is not None:
-                render_future = self._state.resolve_event_response(message_id)
-                if render_future:
-                    if not render_future.cancelled():
-                        render_future.set_result(data)
-                    return
+            await self._handle_event_message(data, message_id)
 
-            event_type = data.get("event", {}).get("event_type")
-            if event_type:
-                for handler in self._state.get_event_handlers(event_type):
-                    try:
-                        await handler(data["event"])
-                    except Exception as e:
-                        logger.error(f"Error in event handler: {e}")
+    async def _handle_event_message(
+        self, data: dict[str, Any], message_id: int | None
+    ) -> None:
+        """Handle an incoming event message."""
+        if message_id is not None:
+            render_future = self._state.resolve_event_response(message_id)
+            if render_future:
+                if not render_future.cancelled():
+                    render_future.set_result(data)
+                return
+
+        event_type = data.get("event", {}).get("event_type")
+        if event_type:
+            for handler in self._state.get_event_handlers(event_type):
+                try:
+                    await handler(data["event"])
+                except Exception as e:
+                    logger.error(f"Error in event handler: {e}")
 
     def _ensure_send_lock(self) -> None:
         """Ensure the send lock belongs to the current event loop."""
@@ -751,21 +757,25 @@ class WebSocketManager:
             self._clients[key] = client
             self._last_used[key] = time.monotonic()
 
-            # Evict least-recently-used connection if over limit
-            if len(self._clients) > MAX_POOL_SIZE:
-                oldest_key = min(self._last_used, key=lambda k: self._last_used[k])
-                stale = self._clients.pop(oldest_key, None)
-                self._last_used.pop(oldest_key, None)
-                if stale:
-                    try:
-                        await stale.disconnect()
-                    except Exception:
-                        logger.warning(
-                            "Error disconnecting evicted WebSocket client",
-                            exc_info=True,
-                        )
+            await self._evict_lru_if_needed()
 
             return client
+
+    async def _evict_lru_if_needed(self) -> None:
+        """Evict the least-recently-used connection if pool exceeds limit."""
+        if len(self._clients) <= MAX_POOL_SIZE:
+            return
+        oldest_key = min(self._last_used, key=lambda k: self._last_used[k])
+        stale = self._clients.pop(oldest_key, None)
+        self._last_used.pop(oldest_key, None)
+        if stale:
+            try:
+                await stale.disconnect()
+            except Exception:
+                logger.warning(
+                    "Error disconnecting evicted WebSocket client",
+                    exc_info=True,
+                )
 
     async def disconnect(self) -> None:
         """Disconnect all WebSocket clients."""
