@@ -499,9 +499,11 @@ except Exception as e:
 
 The `except ToolError: raise` guard is required whenever `raise_tool_error()` or validation errors are called inside the same `try` block — without it, `except Exception` catches the `ToolError` and re-maps it to `INTERNAL_ERROR`.
 
-**Pattern B — Validation / service failures**: use `raise_tool_error(create_error_response(ErrorCode.XXX, message, context={...}, suggestions=[...]))` with appropriate error code (`VALIDATION_INVALID_PARAMETER`, `SERVICE_CALL_FAILED`, etc.).
+**Pattern B — Input validation errors**: use `raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, message, context={...}, suggestions=[...]))`.
 
-**Pattern C — Batch item failures** (items inside a results list — do NOT raise):
+**Pattern C — Service call failures**: check `result.get("success")` and raise with `ErrorCode.SERVICE_CALL_FAILED` using `result.get("error", "Operation failed")` as the message.
+
+**Pattern D — Batch item failures** (items inside a results list — do NOT raise):
 ```python
 results.append(create_error_response(
     ErrorCode.SERVICE_CALL_FAILED,
