@@ -71,6 +71,7 @@ All MCP tools MUST follow `ha_<verb>_<noun>` pattern:
 - `ha_set_*` — create/update operations
 - `ha_delete_*` — remove operations
 - `ha_call_*` — execute operations
+- `ha_manage_*` — multi-modal tools combining several operations
 
 Flag MEDIUM severity if tools don't follow this pattern.
 
@@ -101,7 +102,7 @@ Flag HIGH severity if errors use plain exceptions or dict returns instead of str
 These rules apply to new or modified tool docstrings in the PR diff only -- not to pre-existing docstrings in unchanged files.
 
 **Flag MEDIUM severity when a new or modified tool docstring:**
-- Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`)
+- Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
 - Is missing entirely or is still a placeholder
 - References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`

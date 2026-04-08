@@ -526,6 +526,7 @@ src/ha_mcp/
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
 - `call` — execute (`ha_call_service`)
+- `manage` — multi-modal tools combining several operations (`ha_manage_addon`, `ha_manage_custom_tool`)
 
 ### Tool Structure
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
@@ -551,7 +552,7 @@ def register_<domain>_tools(mcp, client, **kwargs):
 The single-line template is the default -- extend it only where it genuinely helps.
 
 **Required for every tool:**
-- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`)
+- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
 - One sentence describing what the tool does (not how)
 
 **Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
