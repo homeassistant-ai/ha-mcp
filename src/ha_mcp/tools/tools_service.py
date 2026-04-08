@@ -11,7 +11,7 @@ import httpx
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import (
     create_validation_error,
 )
@@ -164,9 +164,25 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 invalid_json=True,
                             )
                         )
-                intent_data = parsed_intent_data if isinstance(parsed_intent_data, dict) else {}
+                intent_data: dict[str, Any] | None = None
+                if parsed_intent_data is not None:
+                    if isinstance(parsed_intent_data, dict):
+                        intent_data = parsed_intent_data
+                    else:
+                        raise_tool_error(
+                            create_validation_error(
+                                "The 'data' parameter for intent calls must be a JSON object, not a list or scalar.",
+                                parameter="data",
+                            )
+                        )
                 try:
                     result = await client.call_intent(intent, intent_data or None)
+                except HomeAssistantAPIError as error:
+                    exception_to_structured_error(
+                        error,
+                        context={"intent": intent},
+                        suggestions=["Verify the intent name is valid and registered in Home Assistant"],
+                    )
                 except HomeAssistantConnectionError as error:
                     exception_to_structured_error(
                         error,
