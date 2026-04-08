@@ -104,3 +104,53 @@ class TestHaCallServiceIntentRouting:
         mock_client.call_intent.assert_not_called()
         assert result["success"] is True
         assert result["domain"] == "light"
+
+    @pytest.mark.asyncio
+    async def test_intent_invalid_json_data_raises_tool_error(
+        self, call_service_tool, mock_client
+    ):
+        """Invalid JSON in data= with intent= must raise ToolError, not crash."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            await call_service_tool(
+                intent="HassMediaSearch",
+                data="{not valid json",
+            )
+
+        mock_client.call_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_domain_and_service_raises_tool_error(
+        self, call_service_tool, mock_client
+    ):
+        """Calling without intent= and without domain/service must raise ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            await call_service_tool()
+
+        mock_client.call_service.assert_not_called()
+        mock_client.call_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_intent_with_json_string_data(self, call_service_tool, mock_client):
+        """data= as a JSON string must be parsed and forwarded correctly."""
+        mock_client.call_intent = AsyncMock(return_value={
+            "response": {
+                "speech": {"plain": {"speech": "Searching for jazz"}},
+                "response_type": "action_done",
+            },
+            "conversation_id": None,
+        })
+
+        result = await call_service_tool(
+            intent="HassMediaSearch",
+            data='{"media_type": "music", "search_term": "jazz"}',
+        )
+
+        mock_client.call_intent.assert_called_once_with(
+            "HassMediaSearch", {"media_type": "music", "search_term": "jazz"}
+        )
+        assert result["success"] is True
+
