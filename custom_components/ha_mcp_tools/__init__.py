@@ -67,7 +67,9 @@ class _HALoader(yaml.SafeLoader):
 def _ha_multi_constructor(
     loader: yaml.Loader, tag_suffix: str, node: yaml.ScalarNode
 ) -> _HATag:
-    return _HATag(tag_suffix, loader.construct_scalar(node))
+    # add_multi_constructor strips the prefix ("!"), so tag_suffix is e.g. "include".
+    # Re-add "!" so represent_scalar emits the shorthand !include, not !<include>.
+    return _HATag("!" + tag_suffix, loader.construct_scalar(node))
 
 
 # "!" prefix catches all local tags while leaving tag:yaml.org,2002:* intact.
