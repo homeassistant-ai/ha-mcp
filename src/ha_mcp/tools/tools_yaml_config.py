@@ -24,8 +24,9 @@ from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
 )
-SERVICE_WRITE_YAML_FILE = "write_yaml_file"
 from .util_helpers import add_timezone_metadata, coerce_bool_param, unwrap_service_response
+
+SERVICE_WRITE_YAML_FILE = "write_yaml_file"
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,85 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         return
 
     logger.info("YAML config editing tools enabled")
+
+    @mcp.tool(
+        tags={"System"},
+        annotations={
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get YAML Config",
+        },
+    )
+    @log_tool_usage
+    async def ha_config_get_yaml(
+        yaml_path: Annotated[
+            str,
+            Field(
+                description=(
+                    "Top-level YAML key to retrieve (e.g., 'template', 'sensor', "
+                    "'automation')."
+                ),
+            ),
+        ],
+        file: Annotated[
+            str,
+            Field(
+                default="configuration.yaml",
+                description=(
+                    "Relative path to the YAML config file. Defaults to "
+                    "'configuration.yaml'. Also supports 'packages/*.yaml'."
+                ),
+            ),
+        ] = "configuration.yaml",
+    ) -> dict[str, Any]:
+        """Retrieve the content of a top-level key from configuration.yaml or package files.
+
+        Returns the requested section as a YAML string. This is useful for
+        inspecting current configuration before making edits with ha_config_set_yaml.
+
+        Safeguards: path traversal blocking, whitelist check for file paths.
+        """
+        try:
+            await _assert_mcp_tools_available(client)
+
+            service_data: dict[str, Any] = {
+                "file": file,
+                "yaml_path": yaml_path,
+            }
+
+            result = await client.call_service(
+                MCP_TOOLS_DOMAIN,
+                "get_yaml_config",
+                service_data,
+                return_response=True,
+            )
+
+            if isinstance(result, dict):
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
+
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from YAML config service",
+                    context={"file": file, "yaml_path": yaml_path},
+                )
+            )
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_config_get_yaml",
+                    "file": file,
+                    "yaml_path": yaml_path,
+                },
+            )
 
     @mcp.tool(
         tags={"System"},
