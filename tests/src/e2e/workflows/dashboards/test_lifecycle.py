@@ -369,7 +369,7 @@ class TestDashboardErrorHandling:
 
 
 class TestFindCard:
-    """E2E tests for ha_dashboard_find_card."""
+    """E2E tests for ha_config_get_dashboard search mode."""
 
     async def test_find_card_by_entity(self, mcp_client):
         """Test finding cards by entity_id."""
@@ -408,7 +408,7 @@ class TestFindCard:
         try:
             # Find card by entity
             result = await mcp.call_tool_success(
-                "ha_dashboard_find_card",
+                "ha_config_get_dashboard",
                 {
                     "url_path": "test-find-entity",
                     "entity_id": "sensor.temperature",
@@ -461,7 +461,7 @@ class TestFindCard:
         try:
             # Find all tile cards
             result = await mcp.call_tool_success(
-                "ha_dashboard_find_card",
+                "ha_config_get_dashboard",
                 {
                     "url_path": "test-find-type",
                     "card_type": "tile",
