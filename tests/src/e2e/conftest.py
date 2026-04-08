@@ -45,7 +45,7 @@ from .utilities.assertions import parse_mcp_result
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import TEST_TOKEN
+from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
@@ -262,9 +262,7 @@ def ha_container_with_fresh_config():
     )
 
     # Create testcontainer with port configuration
-    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
-    container = DockerContainer(HA_IMAGE)
+    container = DockerContainer(HA_TEST_IMAGE)
 
     # Check for custom port via environment variable
     custom_port = os.environ.get("HA_TEST_PORT")
@@ -366,7 +364,7 @@ def ha_container_with_fresh_config():
         # components; 50 is the minimum needed for tests (covers automation,
         # script, input_*, group, scene, and other commonly-tested domains).
         MIN_COMPONENTS = 50
-        STABILIZATION_TIMEOUT = 20
+        STABILIZATION_TIMEOUT = 30
 
         logger.info("⏳ Waiting for Home Assistant components to stabilize...")
         last_count = 0
@@ -402,6 +400,47 @@ def ha_container_with_fresh_config():
                 f"Home Assistant component stabilization timed out after {STABILIZATION_TIMEOUT}s. "
                 f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS}). "
                 f"Check Docker logs."
+            )
+
+        # Wait for entities to actually register (components loaded ≠
+        # entities available). HA 2026.4+ can report 80+ components while
+        # individual integrations (demo, sun, helpers) are still registering
+        # their entities and WebSocket handlers. The demo integration alone
+        # creates 60+ entities (lights, sensors, switches, etc.).
+        MIN_ENTITIES = 50
+        ENTITY_STABILIZATION_TIMEOUT = 30
+        logger.info("⏳ Waiting for entities to register...")
+        last_entity_count = 0
+        for entity_attempt in range(ENTITY_STABILIZATION_TIMEOUT):
+            try:
+                states_resp = requests.get(
+                    f"{base_url}/api/states",
+                    timeout=5,
+                    headers=headers,
+                )
+                if states_resp.status_code == 200:
+                    entity_count = len(states_resp.json())
+                    if entity_count >= MIN_ENTITIES:
+                        logger.info(
+                            f"✅ {entity_count} entities registered "
+                            f"after {entity_attempt + 1}s"
+                        )
+                        break
+                    if entity_count != last_entity_count:
+                        logger.info(
+                            f"⏳ {entity_count} entities registered, "
+                            f"waiting for more..."
+                        )
+                        last_entity_count = entity_count
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                logger.debug(f"Entity registration check failed: {exc}")
+            time.sleep(1)
+        else:
+            pytest.fail(
+                f"Entity registration timed out after "
+                f"{ENTITY_STABILIZATION_TIMEOUT}s. "
+                f"Only {last_entity_count} entities registered "
+                f"(minimum: {MIN_ENTITIES}). Check Docker logs."
             )
 
         # Store connection info for other fixtures

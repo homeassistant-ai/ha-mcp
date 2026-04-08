@@ -523,7 +523,8 @@ src/ha_mcp/
 - `list` — collections (`ha_list_areas`)
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
-- `delete` — remove (`ha_config_delete_automation`)
+- `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
+- `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
 - `call` — execute (`ha_call_service`)
 
 ### Tool Structure
@@ -534,9 +535,40 @@ def register_<domain>_tools(mcp, client, **kwargs):
     @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
     async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
-        """One-line summary starting with action verb."""
-        # For complex schemas, add: "Use ha_get_skill_home_assistant_best_practices for details."
+        """<Action verb> <what this tool does -- one sentence>.
+
+        <Optional: second sentence for key behavioral distinction or modes>
+        """
+        # Add to the docstring above only when genuinely needed:
+        # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
+        # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
+        # NOTE / WARNING: non-obvious gotcha or destructive side-effect
+        # For complex schemas: use ha_get_skill_home_assistant_best_practices
 ```
+
+### Tool Docstrings
+
+The single-line template is the default -- extend it only where it genuinely helps.
+
+**Required for every tool:**
+- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`)
+- One sentence describing what the tool does (not how)
+
+**Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
+Example: `ha_search_entities` hints at `ha_get_state`.
+
+**Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
+Omit when a single required parameter makes the call self-evident.
+
+**Add `NOTE` or `WARNING` when** there is a non-obvious gotcha, a destructive side-effect,
+or a behavioral quirk that causes silent failures if ignored.
+
+**Defer complex schemas** instead of embedding them:
+`# For complex schemas: use ha_get_skill_home_assistant_best_practices`
+
+**What NOT to include:** full parameter documentation, type descriptions already in the
+signature, HA domain internals the model already knows, or motivational prose.
+
 
 ### Tool Tags
 

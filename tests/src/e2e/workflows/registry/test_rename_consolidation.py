@@ -1,5 +1,5 @@
 """
-Edge Case Tests for Consolidated ha_rename_entity Tool
+Edge Case Tests for Consolidated ha_set_entity Tool
 
 Tests the new_device_name parameter behavior and response format
 differences between entity-only and entity+device rename paths.
@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 @pytest.mark.registry
 @pytest.mark.cleanup
 class TestRenameConsolidationEdgeCases:
-    """Test edge cases in consolidated ha_rename_entity tool."""
+    """Test edge cases in consolidated ha_set_entity tool."""
 
     async def test_rename_without_device_name_returns_simple_format(
         self, mcp_client, cleanup_tracker
     ):
         """
-        Test: Calling ha_rename_entity without new_device_name returns
+        Test: Calling ha_set_entity without new_device_name returns
         the simple entity-rename response (no 'results' key).
         """
         original_name = "test_simple_format"
@@ -48,7 +48,7 @@ class TestRenameConsolidationEdgeCases:
         # Rename without new_device_name
         rename_data = await safe_call_tool(
             mcp_client,
-            "ha_rename_entity",
+            "ha_set_entity",
             {
                 "entity_id": original_entity_id,
                 "new_entity_id": new_entity_id,
@@ -62,7 +62,12 @@ class TestRenameConsolidationEdgeCases:
             f"Simple rename should not have 'results' key: {rename_data.keys()}"
         )
 
-        logger.info("Verified simple response format (no 'results' key)")
+        # Rename should include a warning about updating references
+        assert "warning" in rename_data, (
+            f"Rename should include a warning about updating references: {rename_data.keys()}"
+        )
+
+        logger.info("Verified simple response format (no 'results' key, has warning)")
 
         # Cleanup
         await safe_call_tool(
@@ -75,7 +80,7 @@ class TestRenameConsolidationEdgeCases:
         self, mcp_client, cleanup_tracker
     ):
         """
-        Test: Calling ha_rename_entity with new_device_name returns the
+        Test: Calling ha_set_entity with new_device_name returns the
         combined response format (with 'results' key, old/new entity IDs).
         """
         original_name = "test_combined_format"
@@ -99,7 +104,7 @@ class TestRenameConsolidationEdgeCases:
         # Rename WITH new_device_name
         rename_data = await safe_call_tool(
             mcp_client,
-            "ha_rename_entity",
+            "ha_set_entity",
             {
                 "entity_id": original_entity_id,
                 "new_entity_id": new_entity_id,
@@ -109,18 +114,18 @@ class TestRenameConsolidationEdgeCases:
 
         assert rename_data.get("success"), f"Rename failed: {rename_data}"
 
-        # Combined format SHOULD have these keys
-        assert "results" in rename_data, (
-            f"Combined rename should have 'results' key: {rename_data.keys()}"
-        )
+        # Consolidated ha_set_entity response format
         assert "old_entity_id" in rename_data, (
             f"Should have old_entity_id: {rename_data.keys()}"
         )
-        assert "new_entity_id" in rename_data, (
-            f"Should have new_entity_id: {rename_data.keys()}"
+        assert "entity_id" in rename_data, (
+            f"Should have entity_id: {rename_data.keys()}"
+        )
+        assert "device_rename" in rename_data, (
+            f"Should have device_rename: {rename_data.keys()}"
         )
         assert rename_data["old_entity_id"] == original_entity_id
-        assert rename_data["new_entity_id"] == new_entity_id
+        assert rename_data["entity_id"] == new_entity_id
 
         logger.info(f"Verified combined response format: {list(rename_data.keys())}")
 
@@ -135,7 +140,7 @@ class TestRenameConsolidationEdgeCases:
         self, mcp_client, cleanup_tracker
     ):
         """
-        Test: Calling ha_rename_entity with new_device_name="" (empty string)
+        Test: Calling ha_set_entity with new_device_name="" (empty string)
         should be treated as entity-only rename (empty string normalized to None).
         """
         original_name = "test_empty_devname"
@@ -159,7 +164,7 @@ class TestRenameConsolidationEdgeCases:
         # Rename with empty new_device_name — should be treated as None
         rename_data = await safe_call_tool(
             mcp_client,
-            "ha_rename_entity",
+            "ha_set_entity",
             {
                 "entity_id": original_entity_id,
                 "new_entity_id": new_entity_id,

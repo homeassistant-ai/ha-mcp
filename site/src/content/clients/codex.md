@@ -1,7 +1,7 @@
 ---
 name: Codex
 company: OpenAI
-logo: /logos/openai.svg
+logo: /logos/codex.svg
 transports: ['stdio', 'streamable-http']
 configFormat: cli
 configLocation: ~/.codex/config.toml

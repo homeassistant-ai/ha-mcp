@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 91+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -212,7 +212,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~91 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -310,7 +310,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 91+ MCP tools for controlling Home Assistant:
+The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
@@ -353,7 +353,6 @@ The add-on provides 91+ MCP tools for controlling Home Assistant:
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
-- `ha_rename_entity` — Rename a Home Assistant entity by changing its entity_id, optionally renaming its device too.
 - `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Entity Registry
@@ -413,8 +412,7 @@ The add-on provides 91+ MCP tools for controlling Home Assistant:
 ### Search & Discovery
 - `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
-- `ha_get_state` — Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_get_states` — Get state information for multiple Home Assistant entities in a single call.
+- `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 - `ha_search_entities` — PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
 
 ### Service & Device Control
@@ -434,10 +432,9 @@ The add-on provides 91+ MCP tools for controlling Home Assistant:
 - `ha_restart` — Restart Home Assistant.
 
 ### Todo Lists
-- `ha_add_todo_item` — Add an item to a Home Assistant todo list.
 - `ha_get_todo` — Get todo lists or items - list all todo lists or get items from a specific list.
 - `ha_remove_todo_item` — Remove an item from a Home Assistant todo list.
-- `ha_update_todo_item` — Update or complete a todo item in Home Assistant.
+- `ha_set_todo_item` — Create or update a todo item in Home Assistant.
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
