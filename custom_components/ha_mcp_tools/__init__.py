@@ -54,6 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 _ryaml = YAML()           # typ='rt' (round-trip) by default
 _ryaml.preserve_quotes = True
 _ryaml.width = 4096       # prevent unwanted line-wrapping
+_ryaml.indent(mapping=2, sequence=4, offset=2)
 
 
 def _yaml_load(text: str):
@@ -75,6 +76,7 @@ SERVICE_WRITE_FILE = "write_file"
 SERVICE_DELETE_FILE = "delete_file"
 SERVICE_EDIT_YAML_CONFIG = "edit_yaml_config"
 SERVICE_WRITE_YAML_FILE = "write_yaml_file"
+SERVICE_GET_YAML_CONFIG = "get_yaml_config"
 
 # Service schemas
 SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
@@ -84,6 +86,13 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
         vol.Optional("backup", default=True): cv.boolean,
+    }
+)
+
+SERVICE_GET_YAML_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Required("file"): cv.string,
+        vol.Required("yaml_path"): cv.string,
     }
 )
 
@@ -589,8 +598,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "error": f"'content' is required for action '{action}'.",
                 }
             try:
-                parsed_content = ry.load(StringIO(content))
-            except YAMLError as err:
+                parsed_content = _yaml_load(content)
+            except RuamelYAMLError as err:
                 return {
                     "success": False,
                     "error": f"Invalid YAML content: {err}",
@@ -904,12 +913,77 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Error writing YAML file %s: %s", rel_path, err)
             return {"success": False, "error": str(err)}
 
+    async def handle_get_yaml_config(call: ServiceCall) -> ServiceResponse:
+        """Handle the get_yaml_config service call."""
+        rel_path = call.data["file"]
+        yaml_path = call.data["yaml_path"]
+
+        # Validate file path
+        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+        if normalized.startswith("..") or normalized.startswith("/"):
+            return {"success": False, "error": "Path traversal is not allowed."}
+
+        is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
+        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
+            normalized, "packages/**/*.yaml"
+        )
+        if not is_config_yaml and not is_package:
+            return {
+                "success": False,
+                "error": f"File '{rel_path}' is not allowed.",
+            }
+
+        target_file = config_dir / normalized
+        if not target_file.exists():
+            return {"success": False, "error": f"File does not exist: {rel_path}"}
+
+        try:
+            raw_content = await hass.async_add_executor_job(target_file.read_text)
+            try:
+                data = _yaml_load(raw_content)
+            except RuamelYAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Cannot parse file '{rel_path}': {err}",
+                }
+
+            if not isinstance(data, dict):
+                return {"success": False, "error": "YAML root is not a mapping."}
+
+            if yaml_path not in data:
+                return {
+                    "success": False,
+                    "error": f"Key '{yaml_path}' not found in '{rel_path}'.",
+                }
+
+            # Return the content of the key as YAML string
+            value = data[yaml_path]
+            content = _yaml_dump(value)
+
+            return {
+                "success": True,
+                "file": rel_path,
+                "yaml_path": yaml_path,
+                "content": content.strip(),
+            }
+
+        except Exception as err:
+            return {"success": False, "error": str(err)}
+
     # Register all services with response support
     hass.services.async_register(
         DOMAIN,
         SERVICE_EDIT_YAML_CONFIG,
         handle_edit_yaml_config,
         schema=SERVICE_EDIT_YAML_CONFIG_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_YAML_CONFIG,
+        handle_get_yaml_config,
+        schema=SERVICE_GET_YAML_CONFIG_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 
@@ -961,6 +1035,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
+    hass.services.async_remove(DOMAIN, SERVICE_GET_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)
