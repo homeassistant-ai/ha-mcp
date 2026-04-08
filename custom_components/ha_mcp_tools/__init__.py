@@ -849,7 +849,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if do_backup and target_file.exists():
                 backup_dir = config_dir / "www" / "yaml_backups"
                 await hass.async_add_executor_job(
-                    backup_dir.mkdir, parents=True, exist_ok=True
+                    lambda: backup_dir.mkdir(parents=True, exist_ok=True)
                 )
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_name = normalized.replace(os.sep, "_")
@@ -862,7 +862,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Create parent directories if needed
             if not target_file.parent.exists():
                 await hass.async_add_executor_job(
-                    target_file.parent.mkdir, parents=True, exist_ok=True
+                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
                 )
 
             is_new = not target_file.exists()
