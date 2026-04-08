@@ -176,3 +176,15 @@ class TestHaCallServiceIntentRouting:
         assert result["response_type"] == ""
         assert "raw" not in result
 
+    @pytest.mark.asyncio
+    async def test_intent_data_as_list_raises_tool_error(
+        self, call_service_tool, mock_client
+    ):
+        """data= as JSON array must raise ToolError — intent data must be a JSON object."""
+        with pytest.raises(ToolError):
+            await call_service_tool(
+                intent="HassMediaSearch",
+                data='["music", "jazz"]',
+            )
+        mock_client.call_intent.assert_not_called()
+
