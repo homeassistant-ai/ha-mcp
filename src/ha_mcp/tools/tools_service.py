@@ -165,15 +165,27 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
                 intent_data = parsed_intent_data if isinstance(parsed_intent_data, dict) else {}
-                result = await client.call_intent(intent, intent_data or None)
+                try:
+                    result = await client.call_intent(intent, intent_data or None)
+                except HomeAssistantConnectionError as error:
+                    exception_to_structured_error(
+                        error,
+                        context={"intent": intent},
+                        suggestions=["Verify the conversation integration is enabled in HA"],
+                    )
+                except Exception as error:
+                    exception_to_structured_error(
+                        error,
+                        context={"intent": intent},
+                        suggestions=["Verify the intent name is valid and the conversation integration is enabled"],
+                    )
                 response_block = result.get("response", {})
                 speech = response_block.get("speech", {}).get("plain", {}).get("speech", "")
                 return {
                     "success": True,
                     "intent": intent,
-                    "response_type": response_block.get("response_type"),
+                    "response_type": response_block.get("response_type") or "",
                     "speech": speech,
-                    "raw": result,
                 }
 
             # --- Normal service routing ---
@@ -185,10 +197,6 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"parameters": ["domain", "service"]},
                     )
                 )
-            # Mypy narrowing: after raise_tool_error (NoReturn), domain and service are str
-            assert domain is not None
-            assert service is not None
-
             # Parse JSON data if provided as string
             try:
                 parsed_data = parse_json_param(data, "data")
