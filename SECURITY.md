@@ -15,7 +15,7 @@
 - Prompt injection paths that circumvent tool-level safeguards
   (e.g., HA entity data triggering unintended tool calls)
 - Privilege escalation within the MCP tool surface
-- Sandbox escape in `ha_manage_custom_tool` (if enabled)
+- Sandbox escape via sandboxed code execution, if that feature is enabled
 - Unintended information disclosure via API responses
 - Dependency vulnerabilities with a credible exploit path
 
