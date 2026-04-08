@@ -719,7 +719,12 @@ class WebSocketManager:
                     try:
                         await client.disconnect()
                     except (OSError, asyncio.CancelledError):
-                        pass
+                        # Best-effort cleanup — failure is expected when the
+                        # event loop changed and connections are stale.
+                        logger.debug(
+                            "Ignoring error disconnecting stale WebSocket client",
+                            exc_info=True,
+                        )
                 self._clients.clear()
                 self._last_used.clear()
 
