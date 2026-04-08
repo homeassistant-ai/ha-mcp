@@ -17,10 +17,10 @@ async def test_simple_connection(mcp_client):
     """Test basic MCP client connection and tool execution."""
     logger.info("☀️ Testing basic MCP connection with sun.sun entity")
 
-    # Test a simple tool that doesn't use WebSocket - just get state
+    # Test a simple tool that doesn't use WebSocket - just get state.
+    # sun.sun is part of default_config and guaranteed by conftest entity wait.
     result = await mcp_client.call_tool(
-        "ha_get_state",
-        {"entity_id": "sun.sun"},  # Sun entity should always exist
+        "ha_get_state", {"entity_id": "sun.sun"}
     )
 
     # Parse and verify the result using standard assertion utility
