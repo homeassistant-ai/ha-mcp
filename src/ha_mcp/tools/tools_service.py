@@ -166,6 +166,18 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             # --- Normal service routing ---
+            # Validate required parameters for service calls
+            if domain is None or service is None:
+                raise_tool_error(
+                    create_validation_error(
+                        "domain and service are required when intent is not set",
+                        parameter="domain" if domain is None else "service",
+                    )
+                )
+            # Mypy narrowing: after raise_tool_error (NoReturn), domain and service are str
+            assert domain is not None
+            assert service is not None
+
             # Parse JSON data if provided as string
             try:
                 parsed_data = parse_json_param(data, "data")
