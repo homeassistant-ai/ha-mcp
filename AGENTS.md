@@ -527,6 +527,17 @@ raise ToolError(json.dumps({...}))                   # Tool-level failure (isErr
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
 
+**When consolidation is wrong:** Do not merge two tools by adding a `source`, `mode`, or `type` dispatcher parameter that makes other parameters conditionally relevant. If merging would require annotations like "Ignored when source=..." on multiple parameters, the tools are distinct operations — not duplicates. A tool where half the parameters are irrelevant depending on one switch is harder for LLMs to use than two focused tools.
+
+**Valid consolidation** means one tool already does everything the other does. The removed tool is truly redundant — not "similar but with different parameters." Per [MCP best practices](https://modelcontextprotocol.io/docs/concepts/tools): tools must be "focused and atomic" with descriptions that "narrowly and unambiguously describe functionality."
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
+| Tools share all parameters, differ only in data source | `ha_get_logs` with `source=` (all sources use same params) | Consolidate via `source` param |
+| Tools share few parameters, have different schemas | `ha_get_history` vs `ha_get_statistics` (3 shared, 5 divergent params) | Keep separate |
+| Tools call different APIs with different semantics | `ha_call_service` vs intent handling | Keep separate |
+
 ### Breaking Changes Definition
 
 A change is **BREAKING** only if it removes functionality that users depend on without providing an alternative.
