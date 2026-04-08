@@ -133,7 +133,6 @@ ignore = [
 "__init__.py" = ["F401"]
 "tests/**/*" = ["E501", "B011"]
 "src/ha_mcp/tools/**" = ["C901"]
-"src/ha_mcp/utils/python_sandbox.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
