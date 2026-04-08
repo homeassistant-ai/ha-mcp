@@ -37,10 +37,30 @@ jobs:
             echo "should_skip=false" >> $GITHUB_OUTPUT
           fi
 
-  build-addon-dev:
-    name: Build Dev Add-on (${{ matrix.arch }})
+  prepare:
     needs: check-skip
     if: needs.check-skip.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      dev_version: ${{ steps.version.outputs.dev_version }}
+      short_sha: ${{ steps.version.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Generate dev version
+        id: version
+        run: |
+          BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DEV_VERSION="${BASE_VERSION}.dev${{ github.run_number }}"
+
+          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Dev add-on version: $DEV_VERSION (sha: $SHORT_SHA)"
+
+  build-addon-dev:
+    name: Build Dev Add-on (${{ matrix.arch }})
+    needs: prepare
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,15 +91,6 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Generate dev version
-      id: version
-      run: |
-        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-        DEV_VERSION="dev-${SHORT_SHA}"
-        echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
-        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-        echo "Dev add-on version: $DEV_VERSION"
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v7
       with:
@@ -90,15 +101,30 @@ jobs:
         tags: |
           ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:latest
           ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:dev
-          ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+          ${{ env.IMAGE_PREFIX }}-${{ matrix.arch }}:${{ needs.prepare.outputs.dev_version }}
         labels: |
           io.hass.name=Home Assistant MCP Server (Dev)
           io.hass.description=Development channel - AI assistant integration via MCP
-          io.hass.version=${{ steps.version.outputs.version }}
+          io.hass.version=${{ needs.prepare.outputs.dev_version }}
           io.hass.type=addon
           io.hass.arch=${{ matrix.arch }}
         cache-from: type=gha,scope=addon-dev-${{ matrix.arch }}
         cache-to: type=gha,mode=max,scope=addon-dev-${{ matrix.arch }}
         build-args: |
-          BUILD_VERSION=${{ steps.version.outputs.version }}
+          BUILD_VERSION=${{ needs.prepare.outputs.dev_version }}
           BUILD_ARCH=${{ matrix.arch }}
+
+  # Update dev addon config.yaml so HA Supervisor detects new versions
+  update-addon-dev-config:
+    needs: [prepare, build-addon-dev]
+    uses: ./.github/workflows/_update-addon-config.yml
+    with:
+      version: ${{ needs.prepare.outputs.dev_version }}
+      config_path: homeassistant-addon-dev/config.yaml
+      commit_message_prefix: 'publish dev addon version'
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+    permissions:
+      contents: write
