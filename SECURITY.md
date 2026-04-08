@@ -53,6 +53,7 @@ Reports are assessed within 48 hours; fixes may take an additional 24–48 hours
 Severity is assessed using CVSS base scores where applicable.
 
 **Requirements for a valid report:**
+- Reports must be made in good faith
 - Demonstrate a real, reproducible issue with steps to reproduce
 - Accurately reflect severity and impact — overstated reports are deprioritized
 - Low-quality or AI-generated submissions without a working proof of concept
