@@ -3,7 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_service import register_service_tools
 
 
@@ -110,8 +112,6 @@ class TestHaCallServiceIntentRouting:
         self, call_service_tool, mock_client
     ):
         """Invalid JSON in data= with intent= must raise ToolError, not crash."""
-        from fastmcp.exceptions import ToolError
-
         with pytest.raises(ToolError):
             await call_service_tool(
                 intent="HassMediaSearch",
@@ -125,8 +125,6 @@ class TestHaCallServiceIntentRouting:
         self, call_service_tool, mock_client
     ):
         """Calling without intent= and without domain/service must raise ToolError."""
-        from fastmcp.exceptions import ToolError
-
         with pytest.raises(ToolError):
             await call_service_tool()
 
@@ -159,9 +157,6 @@ class TestHaCallServiceIntentRouting:
         self, call_service_tool, mock_client
     ):
         """client.call_intent raising an exception must surface as ToolError."""
-        from fastmcp.exceptions import ToolError
-        from ha_mcp.client.rest_client import HomeAssistantConnectionError
-
         mock_client.call_intent = AsyncMock(
             side_effect=HomeAssistantConnectionError("intent endpoint unavailable")
         )
