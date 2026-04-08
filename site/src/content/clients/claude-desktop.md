@@ -1,7 +1,7 @@
 ---
 name: Claude Desktop
 company: Anthropic
-logo: /logos/anthropic.svg
+logo: /logos/claude.svg
 transports: ['stdio']
 configFormat: json
 configLocation: |
