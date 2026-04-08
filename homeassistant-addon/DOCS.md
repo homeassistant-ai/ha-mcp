@@ -310,7 +310,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 88+ MCP tools for controlling Home Assistant:
+The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
