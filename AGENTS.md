@@ -527,14 +527,15 @@ raise ToolError(json.dumps({...}))                   # Tool-level failure (isErr
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
 
-**When consolidation is wrong:** Do not merge two tools by adding a `source`, `mode`, or `type` dispatcher parameter that makes other parameters conditionally relevant. If merging would require annotations like "Ignored when source=..." on multiple parameters, the tools are distinct operations — not duplicates. A tool where half the parameters are irrelevant depending on one switch is harder for LLMs to use than two focused tools.
+Anthropic's tool-use docs [recommend consolidating related operations](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/define-tools) with an `action` parameter when operations share parameters and semantics. This works well when parameters are uniformly relevant across all actions. Anthropic's [MCP best practices](https://github.com/anthropics/skills/blob/main/skills/mcp-builder/reference/mcp_best_practices.md) also advise keeping tool operations "focused and atomic."
 
-**Valid consolidation** means one tool already does everything the other does. The removed tool is truly redundant — not "similar but with different parameters." Per [MCP best practices](https://modelcontextprotocol.io/docs/concepts/tools): tools must be "focused and atomic" with descriptions that "narrowly and unambiguously describe functionality."
+**Where consolidation hurts in this project:** merging tools whose parameters are mostly disjoint. If merging requires "Ignored when source=..." on multiple parameters, the tools serve distinct operations — consolidating them makes the schema harder for LLMs to use, not easier. `ha_get_logs` (7 of 10 params conditional on `source`) is existing tech debt that illustrates this.
 
-| Pattern | Example | Verdict |
-|---------|---------|---------|
+| Pattern | Example | Guideline |
+|---------|---------|-----------|
 | Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
-| Dispatcher with conditional params | `ha_get_logs` (7 of 10 params are source-specific) | Anti-pattern — do not replicate |
+| Shared params, shared semantics | Operations that differ only by action on the same resource | Consolidate with `action` param |
+| Mostly disjoint params | `ha_get_logs` (7 of 10 params are source-specific) | Keep separate — conditional params add confusion |
 
 ### Breaking Changes Definition
 
