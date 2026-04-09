@@ -12,8 +12,6 @@ This test creates the dashboard, verifies it, and cleans up.
 import logging
 from typing import Any
 
-import pytest
-
 from tests.src.e2e.utilities.assertions import MCPAssertions
 
 logger = logging.getLogger(__name__)
