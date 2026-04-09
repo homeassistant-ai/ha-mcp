@@ -444,7 +444,7 @@ class TestGetHistoryStatisticsSource:
             result = await mcp_client.call_tool(
                 "ha_get_history",
                 {
-                "source": "statistics",
+                    "source": "statistics",
                     "entity_ids": test_sensor,
                     "start_time": "30d",
                     "period": period,
