@@ -30,21 +30,40 @@ TOOL_NAME = "ha_manage_custom_tool"
 @pytest.fixture(scope="module")
 def code_mode_enabled(ha_container_with_fresh_config):
     """Enable code mode feature flag for the test module."""
+    old_val = os.environ.get(FEATURE_FLAG, "")
     os.environ[FEATURE_FLAG] = "true"
+    # Reset cached settings so the new server reads the fresh env var
+    import ha_mcp.config
+    ha_mcp.config._settings = None
     logger.info("Code mode feature flag enabled")
     yield
-    os.environ.pop(FEATURE_FLAG, None)
+    os.environ["ENABLE_CODE_MODE"] = old_val
+    ha_mcp.config._settings = None
+
+
+@pytest.fixture(scope="module")
+async def _code_mode_server(code_mode_enabled, ha_container_with_fresh_config):
+    """Create a single MCP server with code mode enabled for the module."""
+    from ha_mcp.client.rest_client import HomeAssistantClient
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+    from tests.test_constants import TEST_TOKEN
+
+    container_info = ha_container_with_fresh_config
+    base_url = container_info["base_url"]
+    client = HomeAssistantClient(base_url=base_url, token=TEST_TOKEN)
+    server = HomeAssistantSmartMCPServer(client=client)
+    yield server
 
 
 @pytest.fixture
-async def mcp_client_with_code_mode(code_mode_enabled, mcp_server):
-    """Create MCP client with code mode enabled."""
+async def mcp_client_with_code_mode(_code_mode_server):
+    """Create MCP client connected to the code-mode-enabled server."""
     from fastmcp import Client
 
-    client = Client(mcp_server.mcp)
-    async with client:
+    mcp_client = Client(_code_mode_server.mcp)
+    async with mcp_client:
         logger.debug("FastMCP client with code mode connected")
-        yield client
+        yield mcp_client
 
 
 async def _check_tool_available(mcp_client) -> tuple[bool, str | None]:
