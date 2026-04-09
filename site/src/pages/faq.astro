@@ -27,6 +27,8 @@ const withBase = (path: string) => {
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
+        <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
       </ul>
@@ -138,6 +140,36 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">full migration guide</a> for details.</p>
         </div>
 
+        <div class="faq-item" id="macos-connection">
+          <h3 class="text-lg font-medium text-white mb-2">macOS: "All connection attempts failed" to local Home Assistant</h3>
+          <p class="text-slate-300 mb-4">If ha-mcp connects to the demo server but fails to reach your local Home Assistant (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>, etc.) on macOS, check the following. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/867" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#867</a> (Local Network Privacy), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/630" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#630</a> (env vars), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/773" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#773</a> (Python version) for related reports.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">1. macOS Local Network Privacy (Sequoia 15+)</h4>
+          <p class="text-slate-300 mb-3">macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns <code class="bg-slate-800 px-1 rounded">uvx</code> as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.</p>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
+            <li>Check <strong>System Settings &rarr; Privacy &amp; Security &rarr; Local Network</strong> for Claude Desktop</li>
+            <li>If Claude Desktop is not listed, try restarting it to trigger the permission prompt</li>
+          </ul>
+          <p class="text-slate-400 mb-2">Workaround &mdash; SSH tunnel to localhost:</p>
+          <p class="text-slate-300 mb-3">macOS does not restrict connections to <code class="bg-slate-800 px-1 rounded">localhost</code>, so an SSH port forward bypasses the restriction:</p>
+          <pre class="code-block"><code>ssh -N -L 8123:localhost:8123 user@your-ha-server-ip</code></pre>
+          <p class="text-slate-400 text-sm mt-2 mb-4">Then set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> to <code class="bg-slate-800 px-1 rounded">http://localhost:8123</code> in your config.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">2. Firewall software (Little Snitch, Lulu, etc.)</h4>
+          <p class="text-slate-300 mb-3">Third-party firewalls may block <code class="bg-slate-800 px-1 rounded">python</code> or <code class="bg-slate-800 px-1 rounded">node</code> processes spawned by Claude Desktop. Check your firewall rules and allow connections for these processes. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/780" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#780</a> for an example resolution.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">3. http:// vs https://</h4>
+          <p class="text-slate-300 mb-3">Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using <code class="bg-slate-800 px-1 rounded">https://</code> causes a TLS handshake error. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you have explicitly configured SSL/TLS or a reverse proxy.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">4. Python version too old</h4>
+          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
+          <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
+          <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
+          <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.13, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.13</code> to your config args:</p>
+          <pre class="code-block mt-2"><code>"args": ["--python", "3.13", "ha-mcp@latest"]</code></pre>
+        </div>
+
         <div class="faq-item" id="ssl-certificates">
           <h3 class="text-lg font-medium text-white mb-2">SSL certificate errors (self-signed certificates)</h3>
           <p class="text-slate-300 mb-4">If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.</p>
@@ -223,6 +255,69 @@ source ~/.zshrc
             <li><strong>Subsequent requests</strong> - Should be faster (packages cached)</li>
             <li><strong>Alternative</strong> - Use Docker for consistent performance</li>
           </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- Custom Component -->
+    <section class="mb-12" id="custom-component">
+      <h2 class="text-2xl font-semibold text-white mb-6">Custom Component (ha_mcp_tools)</h2>
+
+      <div class="space-y-6">
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">What is the custom component and why do I need it?</h3>
+          <p class="text-slate-300 mb-3">Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.</p>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Tools that require the component:</strong></p>
+          <ul class="list-disc list-inside text-slate-300 space-y-1 ml-2">
+            <li><code class="bg-slate-800 px-1 rounded">ha_config_set_yaml</code> — Safely add, replace, or remove top-level YAML keys in configuration.yaml and package files (automatic backup, validation, and config check)</li>
+            <li><code class="bg-slate-800 px-1 rounded">ha_list_files</code> — List files in allowed directories (www/, themes/, custom_templates/)</li>
+            <li><code class="bg-slate-800 px-1 rounded">ha_read_file</code> — Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/)</li>
+            <li><code class="bg-slate-800 px-1 rounded">ha_write_file</code> — Write files to allowed directories</li>
+            <li><code class="bg-slate-800 px-1 rounded">ha_delete_file</code> — Delete files from allowed directories</li>
+          </ul>
+          <p class="text-slate-400 text-sm mt-3">All other tools work without the component. These five return an error with installation instructions if the component is missing.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">How do I install it?</h3>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Using HACS (recommended):</strong></p>
+          <p class="text-slate-300 mb-3">
+            <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" class="inline-block" target="_blank" rel="noopener">
+              <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." />
+            </a>
+          </p>
+          <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> (category: Integration) &gt; <strong class="text-white">Download</strong>.</p>
+          <p class="text-slate-300 mb-3">After installing, restart Home Assistant. Then open <strong class="text-white">Settings</strong> &gt; <strong class="text-white">Devices &amp; Services</strong> &gt; <strong class="text-white">Add Integration</strong> and search for <strong class="text-white">HA MCP Tools</strong>.</p>
+          <p class="text-slate-300"><strong class="text-white">Manual install:</strong> Copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> from the <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank">repository</a> into your HA config's <code class="bg-slate-800 px-1 rounded">custom_components/</code> directory. Restart Home Assistant, then add the integration as described above.</p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Do I also need to enable feature flags?</h3>
+          <p class="text-slate-300">Yes. The component is required, but the tools are also gated by feature flags for safety:</p>
+          <div class="overflow-x-auto mt-3">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-700">
+                  <th class="text-left py-2 text-slate-300">Variable</th>
+                  <th class="text-left py-2 text-slate-300">Enables</th>
+                </tr>
+              </thead>
+              <tbody class="text-slate-400">
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">HAMCP_ENABLE_FILESYSTEM_TOOLS=true</code></td>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">ha_list_files</code>, <code class="bg-slate-800 px-1 rounded">ha_read_file</code>, <code class="bg-slate-800 px-1 rounded">ha_write_file</code>, <code class="bg-slate-800 px-1 rounded">ha_delete_file</code></td>
+                </tr>
+                <tr class="border-b border-slate-800">
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">ENABLE_YAML_CONFIG_EDITING=true</code></td>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">ha_config_set_yaml</code></td>
+                </tr>
+                <tr>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true</code></td>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">ha_install_mcp_tools</code> (automated installer)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>

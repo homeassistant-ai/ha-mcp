@@ -47,12 +47,10 @@ def parse_mcp_result(result) -> dict[str, Any]:
         if hasattr(result.content[0], "text"):
             response_text = result.content[0].text
             try:
-                return json.loads(response_text)
+                parsed = json.loads(response_text)
+                return parsed
             except json.JSONDecodeError:
-                try:
-                    return eval(response_text)
-                except Exception:
-                    return {"raw_response": response_text}
+                return {"raw_response": response_text}
         return {"content": str(result.content[0])}
     return {"error": "No content in result"}
 
@@ -112,10 +110,8 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     data = parse_mcp_result(result)
 
     # Handle different success indicators
-    # Some tools return success in the top level, others in data.success
     success_indicators = [
         data.get("success") is True,
-        data.get("data", {}).get("success") is True,
         # If no explicit success field but has data and no error, consider success
         ("data" in data and data.get("error") is None and data.get("success") is None),
         # Bulk operations success: has operational data without explicit success field
@@ -135,8 +131,7 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     ]
 
     if not any(success_indicators):
-        error_msg = data.get("error") or data.get("data", {}).get(
-            "error", "Unknown error"
+        error_msg = data.get("error", "Unknown error"
         )
         suggestions = data.get("suggestions", [])
 

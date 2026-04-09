@@ -24,9 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
 TOOLS_JSON_PATH = REPO_ROOT / "site" / "src" / "data" / "tools.json"
 README_PATH = REPO_ROOT / "README.md"
+DOCS_PATH = REPO_ROOT / "homeassistant-addon" / "DOCS.md"
+
 
 README_START_MARKER = "<!-- TOOLS_TABLE_START -->"
 README_END_MARKER = "<!-- TOOLS_TABLE_END -->"
+DOCS_START_MARKER = "<!-- ADDON_TOOLS_START -->"
+DOCS_END_MARKER = "<!-- ADDON_TOOLS_END -->"
 
 TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py"])
 
@@ -132,6 +136,61 @@ def extract_tools() -> list[dict]:
     return tools
 
 
+def generate_docs_section(tools: list[dict]) -> str:
+    """Generate the Available Tools section for homeassistant-addon/DOCS.md."""
+    categories: dict[str, list[dict]] = {}
+    for tool in tools:
+        cat = tool["tags"][0] if tool["tags"] else "Other"
+        categories.setdefault(cat, []).append(tool)
+
+    lines = [
+        DOCS_START_MARKER,
+        "",
+        f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
+        "",
+    ]
+    for cat in sorted(categories):
+        lines.append(f"### {cat}")
+        for tool in sorted(categories[cat], key=lambda t: t["name"]):
+            desc = tool["description"].split("\n")[0].strip() if tool["description"] else ""
+            entry = f"- `{tool['name']}`"
+            if desc:
+                entry += f" — {desc}"
+            lines.append(entry)
+        lines.append("")
+    lines.append(DOCS_END_MARKER)
+    return "\n".join(lines)
+
+
+def update_docs(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the auto-generated section in DOCS.md between sync markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading DOCS_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads DOCS_PATH internally.
+    """
+    docs = content if content is not None else DOCS_PATH.read_text(encoding="utf-8")
+    if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
+        print(
+            f"ERROR: {DOCS_PATH} is missing sync markers.\n"
+            f"  Add {DOCS_START_MARKER!r} and {DOCS_END_MARKER!r} to the file first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    new_section = generate_docs_section(tools)
+    pattern = re.compile(
+        rf"{re.escape(DOCS_START_MARKER)}.*?{re.escape(DOCS_END_MARKER)}",
+        re.DOTALL,
+    )
+    updated = pattern.sub(new_section, docs)
+    updated = re.sub(r"\bprovides \d+\+ tools\b", f"provides {len(tools)}+ tools", updated)
+    updated = re.sub(r"\bcatalog \(~\d+ tools\b", f"catalog (~{len(tools)} tools", updated)
+    assert DOCS_START_MARKER in updated and DOCS_END_MARKER in updated
+    return updated
+
+
 def generate_tools_json(tools: list[dict]) -> str:
     return json.dumps(tools, indent=2, ensure_ascii=False) + "\n"
 
@@ -158,8 +217,16 @@ def generate_readme_table(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def update_readme(tools: list[dict]) -> str:
-    readme = README_PATH.read_text()
+def update_readme(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the tool table in README.md between markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading README_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads README_PATH internally.
+    """
+    readme = content if content is not None else README_PATH.read_text(encoding="utf-8")
     table = generate_readme_table(tools)
     count = len(tools)
 
@@ -198,9 +265,16 @@ def check_sync(tools: list[dict]) -> bool:
         print("MISSING: site/src/data/tools.json", file=sys.stderr)
         in_sync = False
 
-    if README_PATH.read_text() != update_readme(tools):
+    readme_content = README_PATH.read_text(encoding="utf-8")
+    if readme_content != update_readme(tools, content=readme_content):
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
+
+    if DOCS_PATH.exists():
+        docs_content = DOCS_PATH.read_text(encoding="utf-8")
+        if docs_content != update_docs(tools, content=docs_content):
+            print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
+            in_sync = False
 
     return in_sync
 
@@ -225,8 +299,11 @@ def main() -> None:
         TOOLS_JSON_PATH.write_text(generate_tools_json(tools))
         print(f"Wrote {TOOLS_JSON_PATH.relative_to(REPO_ROOT)}")
 
-        README_PATH.write_text(update_readme(tools))
+        README_PATH.write_text(update_readme(tools), encoding="utf-8")
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
+
+        DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")
+        print(f"Updated {DOCS_PATH.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

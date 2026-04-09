@@ -474,10 +474,10 @@ class TestHaSetEntityCombined:
         assert "No updates specified" in error_msg
 
     @pytest.mark.asyncio
-    async def test_expose_failure_after_registry_success_returns_partial(
+    async def test_expose_failure_after_registry_success_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If registry update succeeds but expose fails, return partial success info."""
+        """If registry update succeeds but expose fails, raise ToolError with partial context."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 # Registry update succeeds
@@ -507,26 +507,27 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            name="Updated",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                name="Updated",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result.get("partial") is True
         assert "entity_entry" in result
         assert result["entity_entry"]["name"] == "Updated"
-        # Should report which assistants succeeded and failed
         assert "exposure_succeeded" in result
         assert "exposure_failed" in result
         assert result["exposure_failed"] == {"conversation": True}
 
     @pytest.mark.asyncio
-    async def test_expose_only_failure_returns_error_without_partial(
+    async def test_expose_only_failure_raises_tool_error_without_partial(
         self, mock_mcp, mock_client
     ):
-        """If only expose_to is set and it fails, return error without partial flag."""
+        """If only expose_to is set and it fails, raise ToolError without partial flag."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": False,
@@ -536,21 +537,23 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert "partial" not in result
         assert result["exposure_succeeded"] == {}
         assert result["exposure_failed"] == {"conversation": True}
 
     @pytest.mark.asyncio
-    async def test_expose_mixed_partial_failure_reports_succeeded(
+    async def test_expose_mixed_partial_failure_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If first exposure group succeeds but second fails, report which succeeded."""
+        """If first exposure group succeeds but second fails, raise ToolError with context."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose_true succeeds
@@ -560,20 +563,22 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True, "cloud.alexa": False},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.test",
+                expose_to={"conversation": True, "cloud.alexa": False},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["exposure_succeeded"] == {"conversation": True}
         assert result["exposure_failed"] == {"cloud.alexa": False}
 
     @pytest.mark.asyncio
-    async def test_expose_only_entity_not_found_returns_error(
+    async def test_expose_only_entity_not_found_raises_tool_error(
         self, mock_mcp, mock_client
     ):
-        """If only expose_to is set and entity fetch fails, return error."""
+        """If only expose_to is set and entity fetch fails, raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose call succeeds
@@ -583,14 +588,16 @@ class TestHaSetEntityCombined:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.nonexistent",
-            expose_to={"conversation": True},
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="light.nonexistent",
+                expose_to={"conversation": True},
+            )
 
+        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert "not found" in result["error"]["message"]
-        assert "exposure_succeeded" in result
+        assert result["exposure_succeeded"] == {"conversation": True}
 
     @pytest.mark.asyncio
     async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
@@ -1229,3 +1236,96 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         result = await set_entity_tool(entity_id="sensor.temperature", enabled=False)
         assert result["success"] is True
+
+
+class TestHaRemoveEntity:
+    """Test ha_remove_entity tool."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP server."""
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock Home Assistant client."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def remove_entity_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_remove_entity function."""
+        register_entity_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_remove_entity"]
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_success(self, remove_entity_tool, mock_client):
+        """Successfully removing an entity should return success with entity_id."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": None}
+        )
+        entity_id = "input_boolean.test_entity"
+
+        result = await remove_entity_tool(entity_id=entity_id)
+
+        assert result["success"] is True
+        assert result["entity_id"] == entity_id
+
+        # Verify correct WebSocket message type and payload
+        call_args = mock_client.send_websocket_message.call_args[0][0]
+        assert call_args["type"] == "config/entity_registry/remove"
+        assert call_args["entity_id"] == entity_id
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_not_found(self, remove_entity_tool, mock_client):
+        """Removing a non-existent entity should raise ToolError containing 'not found'.
+
+        Note: send_websocket_message returns errors as plain strings, never as dicts.
+        Detection: "not found" in error_msg.lower() -- NOT error.get("code").
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Entity not found",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.definitely_not_real_12345")
+
+        error_msg = str(exc_info.value).lower()
+        assert "not found" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
+        """WebSocket connection failure should raise ToolError."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=Exception("conn failed")
+        )
+
+        with pytest.raises(ToolError):
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_general_failure(self, remove_entity_tool, mock_client):
+        """Generic failures should raise ToolError with SERVICE_CALL_FAILED message."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "Permission denied"}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await remove_entity_tool(entity_id="sensor.test_entity")
+
+        error_msg = str(exc_info.value).lower()
+        assert "permission denied" in error_msg

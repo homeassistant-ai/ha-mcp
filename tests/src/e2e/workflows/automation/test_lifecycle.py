@@ -21,6 +21,7 @@ from ...utilities.assertions import (
 from ...utilities.wait_helpers import (
     wait_for_entity_state,
     wait_for_logbook_entry,
+    wait_for_tool_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -848,20 +849,20 @@ async def test_automation_with_choose_block(mcp_client):
     """
     logger.info("🧪 Testing automation with choose block...")
 
-    # Find a test light entity
-    search_result = await mcp_client.call_tool(
-        "ha_search_entities",
-        {"query": "light", "domain_filter": "light", "limit": 5},
+    # Find a test light entity (poll — entities may not be loaded yet on slow runners)
+    def _has_light(data: dict) -> bool:
+        results = data.get("data", data).get("results", [])
+        return len(results) > 0
+
+    search_data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_search_entities",
+        arguments={"query": "light", "domain_filter": "light", "limit": 5},
+        predicate=_has_light,
+        timeout=15,
+        description="light entities available",
     )
-    search_data = parse_mcp_result(search_result)
-
-    # Handle nested data structure
-    if "data" in search_data:
-        entities = search_data.get("data", {}).get("results", [])
-    else:
-        entities = search_data.get("results", [])
-
-    assert len(entities) > 0, "No light entities found for testing"
+    entities = search_data.get("data", search_data).get("results", [])
     light_entity = entities[0]["entity_id"]
     logger.info(f"🔦 Using test light: {light_entity}")
 

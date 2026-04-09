@@ -51,7 +51,7 @@ def _get_backup_hint_text() -> str:
 
 async def _get_backup_password(
     ws_client: HomeAssistantWebSocketClient,
-) -> tuple[str | None, dict[str, Any] | None]:
+) -> str:
     """
     Retrieve default backup password from Home Assistant configuration.
 
@@ -59,27 +59,30 @@ async def _get_backup_password(
         ws_client: Connected WebSocket client
 
     Returns:
-        Tuple of (password, error_dict). If retrieval fails, password is None.
+        The backup password string.
+
+    Raises:
+        ToolError: If backup config cannot be retrieved or no password is configured.
     """
     backup_config = await ws_client.send_command("backup/config/info")
     if not backup_config.get("success"):
-        return None, {
-            "success": False,
-            "error": "Failed to retrieve backup configuration",
-            "details": backup_config,
-        }
+        raise_tool_error(create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Failed to retrieve backup configuration",
+            context={"details": backup_config},
+        ))
 
     config_data = backup_config.get("result", {}).get("config", {})
     default_password = config_data.get("create_backup", {}).get("password")
 
     if not default_password:
-        return None, {
-            "success": False,
-            "error": "No default backup password configured in Home Assistant",
-            "suggestion": "Configure automatic backups in Home Assistant settings to set a default password",
-        }
+        raise_tool_error(create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "No default backup password configured in Home Assistant",
+            suggestions=["Configure automatic backups in Home Assistant settings to set a default password"],
+        ))
 
-    return default_password, None
+    return cast(str, default_password)
 
 
 async def create_backup(
@@ -107,13 +110,8 @@ async def create_backup(
             ))
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
-        # Get backup password
-        password, error = await _get_backup_password(ws_client)
-        if error:
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                error.get("error", "Failed to retrieve backup password"),
-            ))
+        # Get backup password (raises ToolError on failure)
+        password = await _get_backup_password(ws_client)
 
         # Generate backup name if not provided
         if not name:
@@ -283,12 +281,15 @@ async def restore_backup(
         safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
 
         # Get backup password
-        password, error = await _get_backup_password(ws_client)
-        if error:
+        try:
+            password = await _get_backup_password(ws_client)
+        except ToolError:
             # Password error - log warning but continue (restore might still work)
             logger.warning("No default password - proceeding without safety backup")
+            password = None
             safety_backup_id = None
-        else:
+
+        if password is not None:
             safety_backup = await ws_client.send_command(
                 "backup/generate",
                 name=safety_backup_name,

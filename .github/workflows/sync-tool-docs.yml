@@ -39,7 +39,7 @@ jobs:
         token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.13'
 
@@ -50,7 +50,7 @@ jobs:
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add site/src/data/tools.json README.md
+        git add site/src/data/tools.json README.md homeassistant-addon/DOCS.md
         if ! git diff --staged --quiet; then
           git commit -m "chore(internal): sync tool docs after merge [skip ci]"
           git push

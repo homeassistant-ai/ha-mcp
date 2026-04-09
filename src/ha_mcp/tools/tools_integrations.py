@@ -13,7 +13,7 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import coerce_bool_param
+from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Integration"
-        }
+            "title": "Get Integration",
+        },
     )
     @log_tool_usage
     async def ha_get_integration(
@@ -83,35 +83,36 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=True,
             ),
         ] = True,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=50,
+                description="Max entries to return per page in list mode (default: 50)",
+            ),
+        ] = 50,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of entries to skip for pagination (default: 0)",
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
-        """
-        Get integration (config entry) information - list all or get a specific one.
+        """Get integration (config entry) information with pagination.
 
         Without an entry_id: Lists all configured integrations with optional filters.
         With an entry_id: Returns detailed information including full options/configuration.
 
-        Use this to audit existing configurations (e.g. template sensor Jinja code).
-        When creating new functionality, prefer UI-based helpers over templates when possible.
-
         EXAMPLES:
         - List all integrations: ha_get_integration()
-        - Search integrations: ha_get_integration(query="zigbee")
+        - Paginate: ha_get_integration(offset=50)
+        - Search: ha_get_integration(query="zigbee")
         - Get specific entry: ha_get_integration(entry_id="abc123")
         - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
-        - List template entries with definitions: ha_get_integration(domain="template")
-        - List all with options: ha_get_integration(include_options=True)
+        - List template entries: ha_get_integration(domain="template")
 
-        STATES: 'loaded' (running), 'setup_error', 'setup_retry', 'not_loaded',
+        STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
-
-        RETURNS (when listing):
-        - entries: List of integrations with domain, title, state, capabilities
-        - state_summary: Count of entries in each state
-        - When domain filter or include_options is set, each entry includes the 'options' object
-
-        RETURNS (when getting specific entry):
-        - entry: Full config entry details including options/configuration
-        - options_schema: Options flow schema when include_schema=True and supports_options=true
         """
         try:
             include_opts = coerce_bool_param(
@@ -123,6 +124,10 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exact_match_bool = coerce_bool_param(
                 exact_match, "exact_match", default=True
             )
+            limit_int = coerce_int_param(
+                limit, "limit", default=50, min_value=1, max_value=200
+            )
+            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
             # Auto-enable options when domain filter is set
             if domain is not None:
                 include_opts = True
@@ -266,16 +271,22 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 matches.sort(key=lambda x: x[0], reverse=True)
                 formatted_entries = [match[1] for match in matches]
 
-            # Group by state for summary
+            # Group by state for summary (computed before pagination for full picture)
             state_summary: dict[str, int] = {}
             for entry in formatted_entries:
                 state = entry.get("state", "unknown")
                 state_summary[state] = state_summary.get(state, 0) + 1
 
+            # Apply pagination
+            total_entries = len(formatted_entries)
+            paginated_entries = formatted_entries[offset_int : offset_int + limit_int]
+
             result_data: dict[str, Any] = {
                 "success": True,
-                "total": len(formatted_entries),
-                "entries": formatted_entries,
+                **build_pagination_metadata(
+                    total_entries, offset_int, limit_int, len(paginated_entries)
+                ),
+                "entries": paginated_entries,
                 "state_summary": state_summary,
                 "query": query if query else None,
             }
@@ -298,10 +309,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Integrations"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Set Integration Enabled"
-        }
+        annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
     )
     @log_tool_usage
     async def ha_set_integration_enabled(
@@ -365,10 +373,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Integrations"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Delete Config Entry"
-        }
+        annotations={"destructiveHint": True, "title": "Delete Config Entry"},
     )
     @log_tool_usage
     async def ha_delete_config_entry(

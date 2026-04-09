@@ -158,56 +158,54 @@ def validate_expression(expr: str) -> tuple[bool, str]:
 
     # Validate all nodes
     for node in ast.walk(tree):
-        # Check if node type is whitelisted
-        if type(node) not in SAFE_NODES:
-            return False, f"Forbidden node type: {type(node).__name__}"
-
-        # Block imports
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            return False, "Forbidden: imports not allowed"
-
-        # Block dunder attribute access
-        if isinstance(node, ast.Attribute):
-            if node.attr.startswith("__") and node.attr.endswith("__"):
-                return False, f"Forbidden: dunder attribute access ({node.attr})"
-
-        # Validate function calls
-        if isinstance(node, ast.Call):
-            # Direct function calls (e.g., eval(), open())
-            if isinstance(node.func, ast.Name):
-                func_name = node.func.id
-                if func_name in BLOCKED_FUNCTIONS:
-                    return False, f"Forbidden function: {func_name}"
-
-            # Method calls (e.g., config.append())
-            elif isinstance(node.func, ast.Attribute):
-                method_name = node.func.attr
-                if method_name.startswith("__") and method_name.endswith("__"):
-                    return False, f"Forbidden: dunder method call ({method_name})"
-                if method_name not in SAFE_METHODS:
-                    return (
-                        False,
-                        f"Forbidden method: {method_name} (allowed: {', '.join(sorted(SAFE_METHODS))})",
-                    )
-
-            # Reject subscript calls, chained calls, and all other non-standard targets
-            # e.g., config['fn']() or config.get('fn')() would bypass Name/Attribute checks
-            else:
-                return False, f"Forbidden call target type: {type(node.func).__name__}"
-
-        # Block function definitions (could be used for obfuscation)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            return False, "Forbidden: function/class definitions not allowed"
-
-        # Block with statements (context managers)
-        if isinstance(node, (ast.With, ast.AsyncWith)):
-            return False, "Forbidden: with statements not allowed"
-
-        # Block try/except (could hide errors)
-        if isinstance(node, (ast.Try, ast.ExceptHandler)):
-            return False, "Forbidden: try/except not allowed"
+        error = _validate_node(node)
+        if error:
+            return False, error
 
     return True, ""
+
+
+def _validate_node(node: ast.AST) -> str | None:
+    """Validate a single AST node. Returns error message or None if safe."""
+    if type(node) not in SAFE_NODES:
+        return f"Forbidden node type: {type(node).__name__}"
+
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return "Forbidden: imports not allowed"
+
+    if isinstance(node, ast.Attribute):
+        if node.attr.startswith("__") and node.attr.endswith("__"):
+            return f"Forbidden: dunder attribute access ({node.attr})"
+
+    if isinstance(node, ast.Call):
+        return _validate_call_node(node)
+
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return "Forbidden: function/class definitions not allowed"
+
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return "Forbidden: with statements not allowed"
+
+    if isinstance(node, (ast.Try, ast.ExceptHandler)):
+        return "Forbidden: try/except not allowed"
+
+    return None
+
+
+def _validate_call_node(node: ast.Call) -> str | None:
+    """Validate a function/method call node. Returns error message or None."""
+    if isinstance(node.func, ast.Name):
+        if node.func.id in BLOCKED_FUNCTIONS:
+            return f"Forbidden function: {node.func.id}"
+    elif isinstance(node.func, ast.Attribute):
+        method_name = node.func.attr
+        if method_name.startswith("__") and method_name.endswith("__"):
+            return f"Forbidden: dunder method call ({method_name})"
+        if method_name not in SAFE_METHODS:
+            return f"Forbidden method: {method_name} (allowed: {', '.join(sorted(SAFE_METHODS))})"
+    else:
+        return f"Forbidden call target type: {type(node.func).__name__}"
+    return None
 
 
 def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:

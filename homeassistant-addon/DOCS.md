@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 92+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -212,7 +212,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~92 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~87 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -332,66 +332,146 @@ If the add-on is slow or unresponsive:
 
 ## Available Tools
 
-The add-on provides 80+ MCP tools for controlling Home Assistant:
+<!-- ADDON_TOOLS_START -->
 
-### Core Tools
-- `ha_search_entities` - Fuzzy entity search
-- `ha_deep_search` - Search within automation/script/helper configurations
-- `ha_get_overview` - System overview
-- `ha_get_state` - Entity state with details
-- `ha_call_service` - Universal service control
-- `ha_list_services` - List available services
+The add-on provides 87+ MCP tools for controlling Home Assistant:
 
-### Configuration Management
-- **Helpers**: `ha_config_list_helpers`, `ha_config_set_helper`, `ha_config_remove_helper`
-- **Scripts**: `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`
-- **Automations**: `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`
-- **Groups**: `ha_config_list_groups`, `ha_config_set_group`, `ha_config_remove_group`
-- **Dashboards**: `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`
-- **Areas & Floors**: `ha_config_list_areas`, `ha_config_set_area`, `ha_config_remove_area`, `ha_config_list_floors`, `ha_config_set_floor`, `ha_config_remove_floor`
-- **Labels**: `ha_config_get_label`, `ha_config_set_label`, `ha_config_remove_label`, `ha_manage_entity_labels`
-- **Zones**: `ha_get_zone`, `ha_create_zone`, `ha_update_zone`, `ha_delete_zone`
+### Add-ons
+- `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
+- `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
 
-### Todo & Calendar
-- **Todo Lists**: `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item`
-- **Calendar**: `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event`
+### Areas & Floors
+- `ha_config_list_areas` — List all Home Assistant areas (rooms).
+- `ha_config_list_floors` — List all Home Assistant floors.
+- `ha_config_remove_area` — Delete a Home Assistant area.
+- `ha_config_remove_floor` — Delete a Home Assistant floor.
+- `ha_config_set_area` — Create or update a Home Assistant area (room).
+- `ha_config_set_floor` — Create or update a Home Assistant floor.
 
-### Device Control
-- `ha_bulk_control` - Multi-device control with verification
-- `ha_get_operation_status` - Check operation status
-- `ha_get_device`, `ha_update_device`, `ha_remove_device`
-- `ha_rename_entity` - Rename entity ID
-
-### History & Monitoring
-- `ha_get_history` - Query entity state history with time ranges
-- `ha_get_statistics` - Long-term statistics for sensors (energy, climate, etc.)
-- `ha_get_automation_traces` - Execution traces for automation debugging
-- `ha_get_camera_image` - Capture camera snapshots
-
-### ZHA & Integration Tools
-- `ha_get_zha_devices` - List ZHA (Zigbee) devices with endpoints and clusters
-- `ha_get_entity_integration_source` - Get integration source for any entity
-
-### Add-ons (Supervisor only)
-- `ha_get_addon` - List installed or available add-ons (source="installed" or "available")
-
-### System & Updates
-- `ha_check_config`, `ha_restart`, `ha_reload_core`
-- `ha_get_system_info`, `ha_get_system_health`
-- `ha_get_updates` - List updates or get details for a specific update entity (use `include_release_notes=True` for Core pre-update breaking change analysis)
+### Automations
+- `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
+- `ha_config_remove_automation` — Delete a Home Assistant automation.
+- `ha_config_set_automation` — Create or update a Home Assistant automation.
 
 ### Blueprints
-- `ha_list_blueprints`, `ha_get_blueprint`, `ha_import_blueprint`
+- `ha_get_blueprint` — Get blueprint information - list all blueprints or get details for a specific one.
+- `ha_import_blueprint` — Import a blueprint from a URL.
 
-### Backup & Restore
-- `ha_backup_create` - Fast local backups
-- `ha_backup_restore` - Restore from backup
+### Calendar
+- `ha_config_get_calendar_events` — Retrieve calendar events from a calendar entity.
+- `ha_config_remove_calendar_event` — Delete an event from a calendar.
+- `ha_config_set_calendar_event` — Create a new event in a calendar.
 
-### Utility
-- `ha_get_logs` - Logs (logbook, system, error, supervisor)
-- `ha_eval_template` - Evaluate Jinja2 templates
-- Domain documentation available via the `ha_get_skill_home_assistant_best_practices` skill
-- `ha_get_integration` - List or get integration info
+### Camera
+- `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
+
+### Dashboards
+- `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
+- `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
+- `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
+- `ha_config_list_dashboard_resources` — List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
+- `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
+- `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
+
+### Device Registry
+- `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
+- `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
+- `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
+
+### Entity Registry
+- `ha_get_entity` — Get entity registry information for one or more entities.
+- `ha_get_entity_exposure` — Get entity exposure settings - list all or get settings for a specific entity.
+- `ha_remove_entity` — Remove an entity from the Home Assistant entity registry.
+- `ha_set_entity` — Update entity properties in the entity registry.
+
+### Files
+- `ha_delete_file` — Delete a file from allowed directories in the Home Assistant config.
+- `ha_list_files` — List files in a directory within the Home Assistant config directory.
+- `ha_read_file` — Read a file from the Home Assistant config directory.
+- `ha_write_file` — Write a file to allowed directories in the Home Assistant config.
+
+### Groups
+- `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
+- `ha_config_remove_group` — Remove a Home Assistant entity group.
+- `ha_config_set_group` — Create or update a Home Assistant entity group.
+
+### HACS
+- `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
+- `ha_hacs_download` — Download and install a HACS repository.
+- `ha_hacs_repository_info` — Get detailed repository information including README and documentation.
+- `ha_hacs_search` — Search HACS store for repositories, or list installed repositories.
+
+### Helper Entities
+- `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
+- `ha_config_remove_helper` — Delete a Home Assistant helper entity.
+- `ha_config_set_helper` — Create or update Home Assistant helper entities.
+- `ha_get_helper_schema` — Get configuration schema for a helper type.
+- `ha_set_config_entry_helper` — Create or update a Config Entry Flow helper (template, group, utility_meter, etc.).
+
+### History & Statistics
+- `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
+- `ha_get_history` — Retrieve raw state change history for entities (last ~10 days).
+- `ha_get_logs` — Get Home Assistant logs from various sources.
+- `ha_get_statistics` — Retrieve pre-aggregated long-term statistics for trend analysis.
+
+### Integrations
+- `ha_delete_config_entry` — Delete config entry permanently. Requires confirm=True.
+- `ha_get_integration` — Get integration (config entry) information with pagination.
+- `ha_set_integration_enabled` — Enable/disable integration (config entry).
+
+### Labels & Categories
+- `ha_config_get_category` — Get category info - list all categories for a scope or get a specific one by ID.
+- `ha_config_get_label` — Get label info - list all labels or get a specific one by ID.
+- `ha_config_remove_category` — Delete a Home Assistant category.
+- `ha_config_remove_label` — Delete a Home Assistant label.
+- `ha_config_set_category` — Create or update a Home Assistant category.
+- `ha_config_set_label` — Create or update a Home Assistant label.
+
+### Scripts
+- `ha_config_get_script` — Retrieve Home Assistant script configuration.
+- `ha_config_remove_script` — Delete a Home Assistant script.
+- `ha_config_set_script` — Create or update a Home Assistant script.
+
+### Search & Discovery
+- `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
+- `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
+- `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
+- `ha_search_entities` — PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+
+### Service & Device Control
+- `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
+- `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
+- `ha_get_operation_status` — Check status of one or more device operations with real-time WebSocket verification.
+- `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
+
+### System
+- `ha_backup_create` — Create a fast Home Assistant backup (local only).
+- `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
+- `ha_check_config` — Check Home Assistant configuration for errors.
+- `ha_config_set_yaml` — Add, replace, or remove a top-level key in configuration.yaml or package files.
+- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
+- `ha_get_updates` — Get update information - list all updates or get details for a specific one.
+- `ha_reload_core` — Reload Home Assistant configuration without full restart.
+- `ha_restart` — Restart Home Assistant.
+
+### Todo Lists
+- `ha_get_todo` — Get todo lists or items - list all todo lists or get items from a specific list.
+- `ha_remove_todo_item` — Remove an item from a Home Assistant todo list.
+- `ha_set_todo_item` — Create or update a todo item in Home Assistant.
+
+### Utilities
+- `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
+- `ha_install_mcp_tools` — Install the ha_mcp_tools custom component via HACS.
+- `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
+
+### Zones
+- `ha_get_zone` — Get zone information - list all zones or get details for a specific one.
+- `ha_remove_zone` — Remove a Home Assistant zone.
+- `ha_set_zone` — Create or update a Home Assistant zone.
+
+<!-- ADDON_TOOLS_END -->
+
+For domain-specific Home Assistant documentation, use the `ha_get_skill_home_assistant_best_practices` resource.
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 

@@ -95,6 +95,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Lazily create and return the Home Assistant client."""
         if self._client is None:
             from .client.rest_client import HomeAssistantClient
+
             self._client = HomeAssistantClient()
             logger.debug("Lazily created HomeAssistantClient")
         return self._client
@@ -104,6 +105,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Lazily create and return the smart search tools."""
         if self._smart_tools is None:
             from .tools.smart_search import create_smart_search_tools
+
             self._smart_tools = create_smart_search_tools(self.client)
             logger.debug("Lazily created SmartSearchTools")
         return self._smart_tools
@@ -113,6 +115,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Lazily create and return the device control tools."""
         if self._device_tools is None:
             from .tools.device_control import create_device_control_tools
+
             self._device_tools = create_device_control_tools(self.client)
             logger.debug("Lazily created DeviceControlTools")
         return self._device_tools
@@ -122,6 +125,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """Lazily create and return the tools registry."""
         if self._tools_registry is None:
             from .tools.registry import ToolsRegistry
+
             self._tools_registry = ToolsRegistry(
                 self, enabled_modules=self.settings.enabled_tool_modules
             )
@@ -228,7 +232,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "This server uses search-based tool discovery. Most tools "
                 "are NOT listed directly \u2014 use ha_search_tools to find them.\n\n"
                 "WORKFLOW:\n"
-                "1. Call ha_search_tools(query=\"...\") to find relevant tools\n"
+                '1. Call ha_search_tools(query="...") to find relevant tools\n'
                 "2. Results include name, description, parameters, and "
                 "annotations (readOnlyHint/destructiveHint)\n"
                 "3. Execute the discovered tool \u2014 two options:\n"
@@ -286,9 +290,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return frontmatter
 
-    def _build_skill_block(
-        self, skill_name: str, main_file: Path
-    ) -> str | None:
+    def _build_skill_block(self, skill_name: str, main_file: Path) -> str | None:
         """Build an instruction block for a single skill.
 
         Reads the description field from YAML frontmatter and includes it
@@ -367,18 +369,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "get entity state attributes details single specific entity_id"
         ),
         "ha_get_state": (
-            "get current state value single entity check status"
-        ),
-        "ha_get_states": (
-            "get all states entities bulk overview list"
+            "get current state value single entity check status bulk multiple states"
         ),
         "ha_config_set_automation": (
             "create update modify edit automation triggers conditions actions "
             "new automation write save"
         ),
         "ha_config_set_script": (
-            "create update modify edit script sequence actions "
-            "new script write save"
+            "create update modify edit script sequence actions new script write save"
         ),
         "ha_config_set_yaml": (
             "edit yaml configuration.yaml packages template sensor "
@@ -454,10 +452,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # Original tool docstrings are unchanged.
             from .transforms import SearchKeywordsTransform
 
-            self.mcp.add_transform(SearchKeywordsTransform(
-                keywords=self._SEARCH_KEYWORDS,
-                overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
-            ))
+            self.mcp.add_transform(
+                SearchKeywordsTransform(
+                    keywords=self._SEARCH_KEYWORDS,
+                    overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
+                )
+            )
 
             self.mcp.add_transform(
                 CategorizedSearchTransform(
@@ -466,9 +466,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     search_tool_description=description,
                 )
             )
-            logger.info(
-                "Tool search transform applied (%d pinned tools)", len(pinned)
-            )
+            logger.info("Tool search transform applied (%d pinned tools)", len(pinned))
         except Exception:
             logger.exception("Failed to apply tool search transform")
 
@@ -503,9 +501,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
                 return
 
-            self.mcp.add_provider(SkillsDirectoryProvider(
-                roots=[skills_dir], supporting_files="resources"
-            ))
+            self.mcp.add_provider(
+                SkillsDirectoryProvider(
+                    roots=[skills_dir], supporting_files="resources"
+                )
+            )
             logger.info("Registered bundled skills as MCP resources")
         except Exception:
             logger.exception("Failed to register skills as resources")
@@ -574,27 +574,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 f"the file URI to load specific guides as needed."
             )
 
-            # Collect available reference files for the listing.
-            # Filter out symlinks and verify path containment to prevent
-            # traversal via symlinked directories.
-            ref_files = []
-            resolved_root = skill_dir.resolve()
-            try:
-                for f in sorted(skill_dir.rglob("*")):
-                    if not f.is_file() or f.is_symlink():
-                        continue
-                    # Ensure resolved path stays within the skill directory
-                    if not f.resolve().is_relative_to(resolved_root):
-                        continue
-                    rel = f.relative_to(skill_dir)
-                    ref_uri = f"skill://{skill_name}/{rel}"
-                    ref_files.append({"name": str(rel), "uri": ref_uri})
-            except OSError:
-                logger.warning("Error reading skill files in %s", skill_dir)
+            ref_files = self._collect_skill_ref_files(skill_dir, skill_name)
 
             # Use factory to capture ref_files in closure
             def _make_skill_handler(
-                s_name: str, s_uri: str, files: list[dict[str, str]],
+                s_name: str,
+                s_uri: str,
+                files: list[dict[str, str]],
             ) -> Callable[[], Coroutine[Any, Any, dict[str, Any]]]:
                 async def handler() -> dict[str, Any]:
                     return {
@@ -607,6 +593,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                         ),
                         "available_files": files,
                     }
+
                 return handler
 
             self.mcp.tool(
@@ -622,15 +609,37 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 len(ref_files),
             )
 
+    @staticmethod
+    def _collect_skill_ref_files(
+        skill_dir: Path, skill_name: str
+    ) -> list[dict[str, str]]:
+        """Collect reference files for a skill, filtering symlinks and path traversal."""
+        ref_files: list[dict[str, str]] = []
+        resolved_root = skill_dir.resolve()
+        try:
+            for f in sorted(skill_dir.rglob("*")):
+                if not f.is_file() or f.is_symlink():
+                    continue
+                if not f.resolve().is_relative_to(resolved_root):
+                    continue
+                rel = f.relative_to(skill_dir)
+                ref_files.append({"name": str(rel), "uri": f"skill://{skill_name}/{rel}"})
+        except OSError:
+            logger.warning("Error reading skill files in %s", skill_dir)
+        return ref_files
+
     # Helper methods required by EnhancedToolsMixin
 
     async def smart_entity_search(
         self, query: str, domain_filter: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
         """Bridge method to existing smart search implementation."""
-        return cast(dict[str, Any], await self.smart_tools.smart_entity_search(
-            query=query, limit=limit, include_attributes=False
-        ))
+        return cast(
+            dict[str, Any],
+            await self.smart_tools.smart_entity_search(
+                query=query, limit=limit, include_attributes=False
+            ),
+        )
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         """Bridge method to existing entity state implementation."""
@@ -651,9 +660,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
     async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
         """Bridge method to existing area functionality."""
-        return cast(dict[str, Any], await self.smart_tools.get_entities_by_area(
-            area_query=area_name, group_by_domain=True
-        ))
+        return cast(
+            dict[str, Any],
+            await self.smart_tools.get_entities_by_area(
+                area_query=area_name, group_by_domain=True
+            ),
+        )
 
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""

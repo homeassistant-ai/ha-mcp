@@ -33,7 +33,7 @@ import Nav from '../components/Nav.astro';
             <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0 text-sm">3</span>
             <div>
               <strong>Test:</strong> (requires Docker)
-              <pre class="code-block mt-2"><code>uv run pytest tests/src/e2e/ -v</code></pre>
+              <pre class="code-block mt-2"><code>uv run pytest tests/src/e2e/ -n2 --dist loadscope -v</code></pre>
             </div>
           </li>
           <li class="flex gap-3">
@@ -74,7 +74,7 @@ uv run mypy src/                   # Type check</code></pre>
       <div class="bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
         <p class="text-slate-300 mb-4">Tests use Docker containers via testcontainers. No manual setup needed.</p>
         <pre class="code-block"><code># Run all E2E tests
-HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/ -v
+HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/ -n2 --dist loadscope -v
 
 # Run specific test file
 uv run pytest tests/src/e2e/workflows/automation/test_lifecycle.py -v</code></pre>

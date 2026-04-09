@@ -106,7 +106,7 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
             return False, "ha_mcp_tools custom component not installed in Home Assistant"
 
         # Check for success
-        inner_data = data.get("data", data)
+        inner_data = data
         if inner_data.get("success") is True:
             return True, None
 
@@ -191,7 +191,7 @@ class TestListFiles:
             )
 
             # Check response structure
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"List files failed: {data}"
             assert "files" in data, f"Missing files in response: {data}"
             assert "count" in data, f"Missing count in response: {data}"
@@ -219,7 +219,7 @@ class TestListFiles:
                 {"path": "www/", "pattern": "*.jpg"},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"List files failed: {data}"
 
             # All returned files should match the pattern
@@ -234,37 +234,27 @@ class TestListFiles:
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "List files in disallowed dir")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            # Try to list files in root config directory (not allowed)
-            result_data = await mcp.call_tool_success(
-                "ha_list_files",
-                {"path": "./"},
-            )
+        # Try to list files in root config directory (not allowed)
+        data = await safe_call_tool(mcp_client_with_filesystem, "ha_list_files", {"path": "./"})
 
-            data = result_data.get("data", result_data)
-            # Should fail with security error
-            assert data.get("success") is False, f"Should have failed: {data}"
-            assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
-                f"Wrong error message: {data.get('error')}"
-            )
-            logger.info("Correctly rejected listing disallowed directory")
+        # Should fail with security error
+        assert data.get("success") is False, f"Should have failed: {data}"
+        assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
+            f"Wrong error message: {data.get('error')}"
+        )
+        logger.info("Correctly rejected listing disallowed directory")
 
     async def test_list_files_path_traversal_blocked(self, mcp_client_with_filesystem):
         """Test that path traversal attempts are blocked."""
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Path traversal blocked")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            # Try path traversal
-            result_data = await mcp.call_tool_success(
-                "ha_list_files",
-                {"path": "www/../"},
-            )
+        # Try path traversal
+        data = await safe_call_tool(mcp_client_with_filesystem, "ha_list_files", {"path": "www/../"})
 
-            data = result_data.get("data", result_data)
-            # Should fail with security error
-            assert data.get("success") is False, f"Path traversal should fail: {data}"
-            logger.info("Correctly blocked path traversal attempt")
+        # Should fail with security error
+        assert data.get("success") is False, f"Path traversal should fail: {data}"
+        logger.info("Correctly blocked path traversal attempt")
 
 
 @pytest.mark.filesystem
@@ -282,7 +272,7 @@ class TestReadFile:
                 {"path": "configuration.yaml"},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Read file failed: {data}"
             assert "content" in data, f"Missing content in response: {data}"
 
@@ -305,7 +295,7 @@ class TestReadFile:
                 {"path": "secrets.yaml"},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Read file failed: {data}"
 
             content = data.get("content", "")
@@ -330,7 +320,7 @@ class TestReadFile:
                 {"path": "www/"},
             )
 
-            list_data = list_result.get("data", list_result)
+            list_data = list_result
             files = list_data.get("files", [])
 
             # Skip binary files - look for text files
@@ -347,7 +337,7 @@ class TestReadFile:
                 {"path": f"www/{file_to_read['name']}"},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Read file failed: {data}"
             logger.info(f"Successfully read www/{file_to_read['name']}")
 
@@ -356,34 +346,28 @@ class TestReadFile:
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Read nonexistent file")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            result_data = await mcp.call_tool_success(
-                "ha_read_file",
-                {"path": "nonexistent_file_xyz123.yaml"},
-            )
+        data = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_read_file", {"path": "nonexistent_file_xyz123.yaml"}
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should have failed: {data}"
-            assert "not exist" in data.get("error", "").lower() or "not allowed" in data.get("error", "").lower(), (
-                f"Wrong error: {data.get('error')}"
-            )
-            logger.info("Correctly handled nonexistent file")
+        assert data.get("success") is False, f"Should have failed: {data}"
+        assert "not exist" in data.get("error", "").lower() or "not allowed" in data.get("error", "").lower(), (
+            f"Wrong error: {data.get('error')}"
+        )
+        logger.info("Correctly handled nonexistent file")
 
     async def test_read_disallowed_file(self, mcp_client_with_filesystem):
         """Test reading a file outside allowed paths."""
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Read disallowed file")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            # Try to read /etc/passwd (path traversal attempt)
-            result_data = await mcp.call_tool_success(
-                "ha_read_file",
-                {"path": "../../../etc/passwd"},
-            )
+        # Try to read /etc/passwd (path traversal attempt)
+        data = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_read_file", {"path": "../../../etc/passwd"}
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should have failed: {data}"
-            logger.info("Correctly blocked read of disallowed file")
+        assert data.get("success") is False, f"Should have failed: {data}"
+        logger.info("Correctly blocked read of disallowed file")
 
 
 @pytest.mark.filesystem
@@ -408,7 +392,7 @@ class TestWriteFile:
                 },
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Write file failed: {data}"
             assert data.get("created") is True, f"Should be marked as created: {data}"
 
@@ -421,7 +405,7 @@ class TestWriteFile:
                 {"path": f"www/{test_filename}"},
             )
 
-            read_data = read_result.get("data", read_result)
+            read_data = read_result
             assert read_data.get("success") is True, f"Read back failed: {read_data}"
             assert read_data.get("content") == test_content, (
                 f"Content mismatch: {read_data.get('content')}"
@@ -450,25 +434,26 @@ class TestWriteFile:
                 {"path": f"www/{test_filename}", "content": "Original content"},
             )
 
-            # Try to overwrite without flag (should fail)
-            result_data = await mcp.call_tool_success(
-                "ha_write_file",
-                {"path": f"www/{test_filename}", "content": "New content", "overwrite": False},
-            )
+        # Try to overwrite without flag (should fail)
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_write_file",
+            {"path": f"www/{test_filename}", "content": "New content", "overwrite": False},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should have failed without overwrite: {data}"
-            assert "exists" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
+        assert data.get("success") is False, f"Should have failed without overwrite: {data}"
+        assert "exists" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
 
-            logger.info("Correctly blocked overwrite without flag")
+        logger.info("Correctly blocked overwrite without flag")
 
+        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
             # Now overwrite with flag (should succeed)
             result_data = await mcp.call_tool_success(
                 "ha_write_file",
                 {"path": f"www/{test_filename}", "content": "New content", "overwrite": True},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Overwrite with flag should work: {data}"
 
             logger.info("Successfully overwrote file with flag")
@@ -494,7 +479,7 @@ class TestWriteFile:
                 {"path": test_path, "content": "Nested file content", "create_dirs": True},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Write with create_dirs failed: {data}"
 
             logger.info(f"Successfully created nested file {test_path}")
@@ -505,7 +490,7 @@ class TestWriteFile:
                 {"path": test_path},
             )
 
-            read_data = read_result.get("data", read_result)
+            read_data = read_result
             assert read_data.get("success") is True, f"Read nested file failed: {read_data}"
 
             # Clean up - delete the file first
@@ -534,27 +519,30 @@ class TestDeleteFile:
                 {"path": f"www/{test_filename}", "content": "To be deleted"},
             )
 
-            # Try to delete without confirmation (should fail)
-            result_data = await mcp.call_tool_success(
-                "ha_delete_file",
-                {"path": f"www/{test_filename}", "confirm": False},
-            )
+        # Try to delete without confirmation (should fail)
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_delete_file",
+            {"path": f"www/{test_filename}", "confirm": False},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should require confirmation: {data}"
-            assert "confirm" in data.get("error", "").lower() or "not confirmed" in data.get("message", "").lower(), (
-                f"Wrong error message: {data}"
-            )
+        assert data.get("success") is False, f"Should require confirmation: {data}"
+        error = data.get("error", {})
+        error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
+        assert "not confirmed" in error_msg.lower(), (
+            f"Wrong error message: {data}"
+        )
 
-            logger.info("Correctly required confirmation for delete")
+        logger.info("Correctly required confirmation for delete")
 
+        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
             # Now delete with confirmation
             result_data = await mcp.call_tool_success(
                 "ha_delete_file",
                 {"path": f"www/{test_filename}", "confirm": True},
             )
 
-            data = result_data.get("data", result_data)
+            data = result_data
             assert data.get("success") is True, f"Delete with confirmation should work: {data}"
 
             logger.info("Successfully deleted file with confirmation")
@@ -564,17 +552,16 @@ class TestDeleteFile:
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Delete nonexistent file")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            result_data = await mcp.call_tool_success(
-                "ha_delete_file",
-                {"path": "www/nonexistent_file_xyz123.txt", "confirm": True},
-            )
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_delete_file",
+            {"path": "www/nonexistent_file_xyz123.txt", "confirm": True},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should have failed: {data}"
-            assert "not exist" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
+        assert data.get("success") is False, f"Should have failed: {data}"
+        assert "not exist" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
 
-            logger.info("Correctly handled delete of nonexistent file")
+        logger.info("Correctly handled delete of nonexistent file")
 
 
 @pytest.mark.filesystem
@@ -586,77 +573,73 @@ class TestSecurityBoundaries:
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Cannot write to config")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            result_data = await mcp.call_tool_success(
-                "ha_write_file",
-                {"path": "configuration.yaml", "content": "# Malicious content", "overwrite": True},
-            )
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_write_file",
+            {"path": "configuration.yaml", "content": "# Malicious content", "overwrite": True},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should block writing to config: {data}"
-            assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
-                f"Wrong error message: {data.get('error')}"
-            )
+        assert data.get("success") is False, f"Should block writing to config: {data}"
+        assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
+            f"Wrong error message: {data.get('error')}"
+        )
 
-            logger.info("Correctly blocked write to configuration.yaml")
+        logger.info("Correctly blocked write to configuration.yaml")
 
     async def test_cannot_write_to_secrets_yaml(self, mcp_client_with_filesystem):
         """Test that writing to secrets.yaml is blocked."""
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Cannot write to secrets")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            result_data = await mcp.call_tool_success(
-                "ha_write_file",
-                {"path": "secrets.yaml", "content": "malicious_secret: hacked", "overwrite": True},
-            )
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_write_file",
+            {"path": "secrets.yaml", "content": "malicious_secret: hacked", "overwrite": True},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should block writing to secrets: {data}"
+        assert data.get("success") is False, f"Should block writing to secrets: {data}"
 
-            logger.info("Correctly blocked write to secrets.yaml")
+        logger.info("Correctly blocked write to secrets.yaml")
 
     async def test_cannot_delete_configuration_files(self, mcp_client_with_filesystem):
         """Test that deleting configuration files is blocked."""
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Cannot delete config")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            # Try to delete configuration.yaml
-            result_data = await mcp.call_tool_success(
-                "ha_delete_file",
-                {"path": "configuration.yaml", "confirm": True},
-            )
+        # Try to delete configuration.yaml
+        data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_delete_file",
+            {"path": "configuration.yaml", "confirm": True},
+        )
 
-            data = result_data.get("data", result_data)
-            assert data.get("success") is False, f"Should block deleting config: {data}"
+        assert data.get("success") is False, f"Should block deleting config: {data}"
 
-            logger.info("Correctly blocked delete of configuration.yaml")
+        logger.info("Correctly blocked delete of configuration.yaml")
 
     async def test_cannot_access_files_outside_config(self, mcp_client_with_filesystem):
         """Test that files outside config directory cannot be accessed."""
         service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
         _skip_if_component_not_installed(service_check, "Cannot access outside config")
 
-        async with MCPAssertions(mcp_client_with_filesystem) as mcp:
-            # Try various path traversal attacks
-            malicious_paths = [
-                "../../../etc/passwd",
-                "/etc/passwd",
-                "www/../../etc/passwd",
-                "www/../../../etc/hosts",
-            ]
+        # Try various path traversal attacks
+        malicious_paths = [
+            "../../../etc/passwd",
+            "/etc/passwd",
+            "www/../../etc/passwd",
+            "www/../../../etc/hosts",
+        ]
 
-            for path in malicious_paths:
-                result_data = await mcp.call_tool_success(
-                    "ha_read_file",
-                    {"path": path},
-                )
+        for path in malicious_paths:
+            data = await safe_call_tool(
+                mcp_client_with_filesystem,
+                "ha_read_file",
+                {"path": path},
+            )
 
-                data = result_data.get("data", result_data)
-                assert data.get("success") is False, f"Should block path traversal {path}: {data}"
+            assert data.get("success") is False, f"Should block path traversal {path}: {data}"
 
-            logger.info("Correctly blocked all path traversal attempts")
+        logger.info("Correctly blocked all path traversal attempts")
 
 
 @pytest.mark.filesystem
@@ -679,7 +662,7 @@ class TestFullCRUDWorkflow:
                 {"path": test_path, "content": ".test { color: red; }"},
             )
 
-            create_data = create_result.get("data", create_result)
+            create_data = create_result
             assert create_data.get("success") is True
             assert create_data.get("created") is True
             logger.info(f"   Created {test_path}")
@@ -691,7 +674,7 @@ class TestFullCRUDWorkflow:
                 {"path": test_path},
             )
 
-            read_data = read_result.get("data", read_result)
+            read_data = read_result
             assert read_data.get("success") is True
             assert read_data.get("content") == ".test { color: red; }"
             logger.info("   Content verified")
@@ -703,7 +686,7 @@ class TestFullCRUDWorkflow:
                 {"path": "www/", "pattern": "crud_test_*.css"},
             )
 
-            list_data = list_result.get("data", list_result)
+            list_data = list_result
             assert list_data.get("success") is True
             files = list_data.get("files", [])
             assert any(f["name"] == test_filename for f in files), f"File not in listing: {files}"
@@ -716,7 +699,7 @@ class TestFullCRUDWorkflow:
                 {"path": test_path, "content": ".test { color: blue; background: white; }", "overwrite": True},
             )
 
-            update_data = update_result.get("data", update_result)
+            update_data = update_result
             assert update_data.get("success") is True
             assert update_data.get("created") is False  # Not created, updated
             logger.info("   File updated")
@@ -727,7 +710,7 @@ class TestFullCRUDWorkflow:
                 {"path": test_path},
             )
 
-            read_data2 = read_result2.get("data", read_result2)
+            read_data2 = read_result2
             assert "background: white" in read_data2.get("content", "")
             logger.info("   Update verified")
 
@@ -738,22 +721,22 @@ class TestFullCRUDWorkflow:
                 {"path": test_path, "confirm": True},
             )
 
-            delete_data = delete_result.get("data", delete_result)
+            delete_data = delete_result
             assert delete_data.get("success") is True
             logger.info("   File deleted")
 
-            # Verify deletion
-            final_read = await mcp.call_tool_success(
-                "ha_read_file",
-                {"path": test_path},
-            )
+        # Verify deletion
+        final_data = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_read_file",
+            {"path": test_path},
+        )
 
-            final_data = final_read.get("data", final_read)
-            assert final_data.get("success") is False
-            assert "not exist" in final_data.get("error", "").lower() or "not allowed" in final_data.get("error", "").lower()
-            logger.info("   Deletion verified")
+        assert final_data.get("success") is False
+        assert "not exist" in final_data.get("error", "").lower() or "not allowed" in final_data.get("error", "").lower()
+        logger.info("   Deletion verified")
 
-            logger.info("Complete CRUD lifecycle test PASSED")
+        logger.info("Complete CRUD lifecycle test PASSED")
 
 
 @pytest.mark.filesystem
@@ -786,8 +769,8 @@ class TestMcpToolsComponentNotInstalled:
                 )
 
                 # Should fail with helpful message about installing component
-                if data.get("success") is False or data.get("data", {}).get("success") is False:
-                    error = data.get("error", {}) or data.get("data", {}).get("error", {})
+                if data.get("success") is False:
+                    error = data.get("error", {})
                     error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
                     error_code = error.get("code", "") if isinstance(error, dict) else ""
 

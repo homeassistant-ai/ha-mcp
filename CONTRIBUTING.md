@@ -7,7 +7,7 @@ Thank you for your interest in contributing!
 1. **Fork and clone** the repository
 2. **Install**: `uv sync --group dev`
 3. **Install hooks**: `uv run lefthook install`
-4. **Test**: `uv run pytest tests/src/e2e/ -v` (requires Docker)
+4. **Test**: `uv run pytest tests/src/e2e/ -n2 --dist loadscope -v` (requires Docker)
 5. **Make changes** and commit
 6. **Open Pull Request**
 

@@ -61,6 +61,7 @@ class TestAutomationWaitParameter:
             def decorator(fn):
                 registered_tools[fn.__name__] = fn
                 return fn
+
             return decorator
 
         mock_mcp = MagicMock()
@@ -70,7 +71,10 @@ class TestAutomationWaitParameter:
 
     async def test_set_automation_wait_default_true(self, register_tools, mock_client):
         """wait defaults to True and polls for entity registration."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_set_automation"](
                 config={
@@ -82,9 +86,14 @@ class TestAutomationWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_set_automation_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_set_automation_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips polling."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_set_automation"](
                 config={
                     "alias": "Test",
@@ -96,9 +105,14 @@ class TestAutomationWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_set_automation_wait_timeout_adds_warning(self, register_tools, mock_client):
+    async def test_set_automation_wait_timeout_adds_warning(
+        self, register_tools, mock_client
+    ):
         """When wait times out, a warning is added to the response."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = False
             result = await register_tools["ha_config_set_automation"](
                 config={
@@ -110,9 +124,14 @@ class TestAutomationWaitParameter:
             assert result["success"] is True
             assert "warning" in result
 
-    async def test_remove_automation_wait_default_true(self, register_tools, mock_client):
+    async def test_remove_automation_wait_default_true(
+        self, register_tools, mock_client
+    ):
         """wait defaults to True for removal and polls for entity removal."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_automation"](
                 identifier="automation.test",
@@ -120,9 +139,14 @@ class TestAutomationWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_remove_automation_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_remove_automation_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips removal polling."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
                 identifier="automation.test",
                 wait=False,
@@ -130,9 +154,14 @@ class TestAutomationWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_remove_automation_by_unique_id_still_waits(self, register_tools, mock_client):
+    async def test_remove_automation_by_unique_id_still_waits(
+        self, register_tools, mock_client
+    ):
         """wait=True works even when identifier is a unique_id, not an entity_id."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_automation"](
                 identifier="12345",  # unique_id, not entity_id
@@ -144,10 +173,15 @@ class TestAutomationWaitParameter:
             call_args = mock_wait.call_args
             assert call_args[0][1] == "automation.test"
 
-    async def test_remove_automation_get_states_failure_skips_wait(self, register_tools, mock_client):
+    async def test_remove_automation_get_states_failure_skips_wait(
+        self, register_tools, mock_client
+    ):
         """When get_states fails, wait is skipped but deletion still succeeds."""
         mock_client.get_states.side_effect = Exception("connection error")
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_remove_automation"](
                 identifier="12345",  # unique_id, can't resolve without get_states
             )
@@ -155,9 +189,14 @@ class TestAutomationWaitParameter:
             # wait should be skipped because entity_id_for_wait is None
             mock_wait.assert_not_called()
 
-    async def test_set_automation_wait_exception_still_succeeds(self, register_tools, mock_client):
+    async def test_set_automation_wait_exception_still_succeeds(
+        self, register_tools, mock_client
+    ):
         """Wait exception doesn't collapse the successful create operation."""
-        with patch("ha_mcp.tools.tools_config_automations.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.side_effect = HomeAssistantConnectionError("network down")
             result = await register_tools["ha_config_set_automation"](
                 config={
@@ -197,6 +236,7 @@ class TestScriptWaitParameter:
             def decorator(fn):
                 registered_tools[fn.__name__] = fn
                 return fn
+
             return decorator
 
         mock_mcp = MagicMock()
@@ -206,7 +246,10 @@ class TestScriptWaitParameter:
 
     async def test_set_script_wait_default_true(self, register_tools, mock_client):
         """wait defaults to True and polls for entity registration."""
-        with patch("ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_set_script"](
                 script_id="test_script",
@@ -215,9 +258,14 @@ class TestScriptWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_set_script_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_set_script_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips polling."""
-        with patch("ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_set_script"](
                 script_id="test_script",
                 config={"alias": "Test", "sequence": [{"delay": {"seconds": 1}}]},
@@ -228,7 +276,10 @@ class TestScriptWaitParameter:
 
     async def test_remove_script_wait_default_true(self, register_tools, mock_client):
         """wait defaults to True for removal."""
-        with patch("ha_mcp.tools.tools_config_scripts.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_script"](
                 script_id="test_script",
@@ -236,9 +287,14 @@ class TestScriptWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_remove_script_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_remove_script_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips removal polling."""
-        with patch("ha_mcp.tools.tools_config_scripts.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_remove_script"](
                 script_id="test_script",
                 wait=False,
@@ -274,6 +330,7 @@ class TestHelperWaitParameter:
             def decorator(fn):
                 registered_tools[fn.__name__] = fn
                 return fn
+
             return decorator
 
         mock_mcp = MagicMock()
@@ -283,7 +340,10 @@ class TestHelperWaitParameter:
 
     async def test_set_helper_wait_default_true(self, register_tools, mock_client):
         """wait defaults to True and polls for entity registration."""
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -292,9 +352,14 @@ class TestHelperWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_set_helper_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_set_helper_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips polling."""
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
@@ -305,7 +370,10 @@ class TestHelperWaitParameter:
 
     async def test_set_helper_wait_string_true(self, register_tools, mock_client):
         """wait='true' (string) is coerced to True."""
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -317,7 +385,10 @@ class TestHelperWaitParameter:
 
     async def test_set_helper_wait_string_false(self, register_tools, mock_client):
         """wait='false' (string) is coerced to False."""
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
@@ -328,11 +399,25 @@ class TestHelperWaitParameter:
 
     async def test_update_helper_wait_default_true(self, register_tools, mock_client):
         """UPDATE path: wait defaults to True and polls for entity registration."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"entity_entry": {"entity_id": "input_boolean.test"}},
-        }
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        mock_client.send_websocket_message.side_effect = [
+            # config/entity_registry/get → returns unique_id
+            {
+                "success": True,
+                "result": {
+                    "unique_id": "abc123",
+                    "entity_id": "input_boolean.test",
+                    "platform": "input_boolean",
+                },
+            },
+            # input_boolean/list → current config for backfill
+            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
+            # input_boolean/update
+            {"success": True, "result": {"id": "abc123"}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -343,13 +428,29 @@ class TestHelperWaitParameter:
             assert result["action"] == "update"
             mock_wait.assert_called_once()
 
-    async def test_update_helper_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_update_helper_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """UPDATE path: wait=False skips polling."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"entity_entry": {"entity_id": "input_boolean.test"}},
-        }
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        mock_client.send_websocket_message.side_effect = [
+            # config/entity_registry/get → returns unique_id
+            {
+                "success": True,
+                "result": {
+                    "unique_id": "abc123",
+                    "entity_id": "input_boolean.test",
+                    "platform": "input_boolean",
+                },
+            },
+            # input_boolean/list → current config for backfill
+            {"success": True, "result": [{"id": "abc123", "name": "Test Switch"}]},
+            # input_boolean/update
+            {"success": True, "result": {"id": "abc123"}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test Switch",
@@ -369,7 +470,10 @@ class TestHelperWaitParameter:
             # Delete
             {"success": True},
         ]
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.return_value = True
             result = await register_tools["ha_config_remove_helper"](
                 helper_type="input_boolean",
@@ -378,7 +482,9 @@ class TestHelperWaitParameter:
             assert result["success"] is True
             mock_wait.assert_called_once()
 
-    async def test_remove_helper_wait_false_skips_polling(self, register_tools, mock_client):
+    async def test_remove_helper_wait_false_skips_polling(
+        self, register_tools, mock_client
+    ):
         """wait=False skips removal polling."""
         mock_client.send_websocket_message.side_effect = [
             # Registry get
@@ -386,7 +492,10 @@ class TestHelperWaitParameter:
             # Delete
             {"success": True},
         ]
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_removed", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             result = await register_tools["ha_config_remove_helper"](
                 helper_type="input_boolean",
                 helper_id="test",
@@ -395,9 +504,14 @@ class TestHelperWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_set_helper_wait_exception_still_succeeds(self, register_tools, mock_client):
+    async def test_set_helper_wait_exception_still_succeeds(
+        self, register_tools, mock_client
+    ):
         """Wait exception doesn't collapse the successful create operation."""
-        with patch("ha_mcp.tools.tools_config_helpers.wait_for_entity_registered", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+        ) as mock_wait:
             mock_wait.side_effect = HomeAssistantConnectionError("network down")
             result = await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
@@ -433,6 +547,7 @@ class TestServiceCallWaitParameter:
             def decorator(fn):
                 registered_tools[fn.__name__] = fn
                 return fn
+
             return decorator
 
         mock_mcp = MagicMock()
@@ -440,9 +555,13 @@ class TestServiceCallWaitParameter:
         register_service_tools(mock_mcp, mock_client, device_tools=mock_device_tools)
         return registered_tools
 
-    async def test_call_service_wait_default_for_state_changing(self, register_tools, mock_client):
+    async def test_call_service_wait_default_for_state_changing(
+        self, register_tools, mock_client
+    ):
         """wait defaults to True and verifies state for state-changing services."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             mock_wait.return_value = {"state": "on", "entity_id": "light.test"}
             result = await register_tools["ha_call_service"](
                 domain="light",
@@ -453,9 +572,13 @@ class TestServiceCallWaitParameter:
             assert result.get("verified_state") == "on"
             mock_wait.assert_called_once()
 
-    async def test_call_service_wait_false_skips_verification(self, register_tools, mock_client):
+    async def test_call_service_wait_false_skips_verification(
+        self, register_tools, mock_client
+    ):
         """wait=False skips state verification."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             result = await register_tools["ha_call_service"](
                 domain="light",
                 service="turn_on",
@@ -468,7 +591,9 @@ class TestServiceCallWaitParameter:
 
     async def test_call_service_no_wait_for_trigger(self, register_tools, mock_client):
         """Non-state-changing services like trigger don't wait even with wait=True."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             result = await register_tools["ha_call_service"](
                 domain="automation",
                 service="trigger",
@@ -477,9 +602,13 @@ class TestServiceCallWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_call_service_no_wait_without_entity(self, register_tools, mock_client):
+    async def test_call_service_no_wait_without_entity(
+        self, register_tools, mock_client
+    ):
         """Services without entity_id don't wait."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             result = await register_tools["ha_call_service"](
                 domain="light",
                 service="turn_on",
@@ -487,9 +616,13 @@ class TestServiceCallWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_call_service_wait_timeout_adds_warning(self, register_tools, mock_client):
+    async def test_call_service_wait_timeout_adds_warning(
+        self, register_tools, mock_client
+    ):
         """When state verification times out, a warning is added."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             mock_wait.return_value = None  # timeout
             result = await register_tools["ha_call_service"](
                 domain="light",
@@ -501,7 +634,9 @@ class TestServiceCallWaitParameter:
 
     async def test_call_service_toggle_waits(self, register_tools, mock_client):
         """toggle is a state-changing service and triggers wait."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             mock_wait.return_value = {"state": "on", "entity_id": "light.test"}
             result = await register_tools["ha_call_service"](
                 domain="light",
@@ -512,11 +647,18 @@ class TestServiceCallWaitParameter:
             mock_wait.assert_called_once()
             # toggle has no mapping in _SERVICE_TO_STATE, so expected_state should be None
             call_kwargs = mock_wait.call_args
-            assert call_kwargs[1].get("expected_state") is None or call_kwargs[0][2] is None
+            assert (
+                call_kwargs[1].get("expected_state") is None
+                or call_kwargs[0][2] is None
+            )
 
-    async def test_call_service_wait_exception_still_succeeds(self, register_tools, mock_client):
+    async def test_call_service_wait_exception_still_succeeds(
+        self, register_tools, mock_client
+    ):
         """Wait exception doesn't collapse the successful service call."""
-        with patch("ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock) as mock_wait:
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
             mock_wait.side_effect = HomeAssistantConnectionError("network down")
             result = await register_tools["ha_call_service"](
                 domain="light",

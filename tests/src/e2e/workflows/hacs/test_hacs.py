@@ -37,12 +37,18 @@ def extract_hacs_data(raw_result) -> dict:
     This helper extracts the actual data dict.
     """
     parsed = parse_mcp_result(raw_result)
-    if isinstance(parsed, dict) and "data" in parsed and isinstance(parsed["data"], dict):
+    if (
+        isinstance(parsed, dict)
+        and "data" in parsed
+        and isinstance(parsed["data"], dict)
+    ):
         return parsed["data"]
     return parsed
 
 
-async def safe_hacs_call(mcp_client, tool_name: str, params: dict | None = None) -> dict:
+async def safe_hacs_call(
+    mcp_client, tool_name: str, params: dict | None = None
+) -> dict:
     """Call a HACS tool and extract data, handling ToolError exceptions.
 
     HACS tools raise ToolError when the tool fails (e.g., HACS not installed,
@@ -73,9 +79,19 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
 
     unavailable_indicators = [
         (error_code == "HACS_NOT_AVAILABLE", "HACS not available"),
-        (error_code == "HACS_DISABLED", f"HACS disabled: {data.get('disabled_reason', 'unknown')}"),
-        ((error_code == "INTERNAL_ERROR" and "rate" in error_str) or ("rate" in error_str and "limit" in error_str), "GitHub rate limit"),
-        (error_code == "INTERNAL_ERROR" and "github" in error_str, "GitHub access issue"),
+        (
+            error_code == "HACS_DISABLED",
+            f"HACS disabled: {data.get('disabled_reason', 'unknown')}",
+        ),
+        (
+            (error_code == "INTERNAL_ERROR" and "rate" in error_str)
+            or ("rate" in error_str and "limit" in error_str),
+            "GitHub rate limit",
+        ),
+        (
+            error_code == "INTERNAL_ERROR" and "github" in error_str,
+            "GitHub access issue",
+        ),
         (error_code == "INTERNAL_ERROR", f"HACS internal error: {error_str}"),
         ("not found" in error_str, "Command not found"),
         ("unknown command" in error_str, "Unknown command"),
@@ -91,156 +107,119 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
 
 
 @pytest.mark.hacs
-class TestHacsInfo:
-    """Test HACS info tool functionality."""
-
-    async def test_hacs_info_success(self, mcp_client):
-        """
-        Test: Get HACS info when HACS is installed
-
-        This test validates that we can retrieve HACS status information
-        including version, enabled categories, and stage.
-
-        Note: HACS requires a valid GitHub token to function. In test
-        environments without a valid token, HACS will be disabled and
-        this test will be skipped.
-        """
-        logger.info("Testing ha_hacs_info...")
-
-        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
-
-        logger.info(f"HACS info response: success={data.get('success')}, version={data.get('version')}")
-
-        # HACS should be installed and responsive
-        if data.get("success"):
-            logger.info(f"HACS version: {data.get('version')}")
-            logger.info(f"HACS categories: {data.get('categories')}")
-            logger.info(f"HACS stage: {data.get('stage')}")
-
-            # Verify response structure
-            assert "version" in data, "Response should include version"
-            assert "categories" in data, "Response should include categories"
-            assert "stage" in data, "Response should include stage"
-
-            # Categories should include at least integration and plugin (lovelace)
-            categories = data.get("categories", [])
-            assert isinstance(categories, list), "Categories should be a list"
-
-            # Check disabled_reason - HACS may be partially disabled but still responding
-            if data.get("disabled_reason"):
-                logger.warning(f"HACS has disabled_reason: {data.get('disabled_reason')}")
-
-            logger.info("HACS info test passed")
-        else:
-            # HACS not available - might not have loaded yet or token issue
-            unavailable, reason = is_hacs_unavailable(data)
-            if unavailable:
-                pytest.skip(f"HACS not available in test environment: {reason}")
-            else:
-                pytest.fail(f"HACS info failed unexpectedly: {data.get('error', 'Unknown error')}")
-
-    async def test_hacs_info_response_structure(self, mcp_client):
-        """
-        Test: Verify HACS info response structure
-
-        Check that all expected fields are present with correct types.
-        """
-        logger.info("Testing HACS info response structure...")
-
-        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
-
-        if not data.get("success"):
-            unavailable, reason = is_hacs_unavailable(data)
-            if unavailable:
-                pytest.skip(f"HACS not available: {reason}")
-            pytest.fail(f"HACS info failed: {data.get('error')}")
-
-        # Check field types
-        if "version" in data:
-            assert isinstance(data["version"], str | None), "version should be string or None"
-
-        if "categories" in data:
-            assert isinstance(data["categories"], list), "categories should be a list"
-
-        if "stage" in data:
-            assert isinstance(data["stage"], str | None), "stage should be string or None"
-
-        if "lovelace_mode" in data:
-            assert isinstance(data["lovelace_mode"], str | None), "lovelace_mode should be string or None"
-
-        logger.info("HACS info response structure test passed")
-
-
-@pytest.mark.hacs
-class TestHacsListInstalled:
-    """Test HACS list installed repositories functionality."""
+class TestHacsSearchInstalled:
+    """Test HACS search with installed_only filter functionality."""
 
     async def test_list_all_installed(self, mcp_client):
         """
-        Test: List all installed HACS repositories
+        Test: List all installed HACS repositories via ha_hacs_search
 
-        This test validates listing installed repositories without any filter.
-        In a fresh test environment, there should be no installed repos.
+        This test validates listing installed repositories using the
+        installed_only parameter. In a fresh test environment, there
+        should be no installed repos.
         """
-        logger.info("Testing ha_hacs_list_installed without filters...")
+        logger.info("Testing ha_hacs_search with installed_only=True...")
 
-        data = await safe_hacs_call(mcp_client, "ha_hacs_list_installed")
+        data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"installed_only": True}
+        )
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
             if unavailable:
                 pytest.skip(f"HACS not available: {reason}")
-            pytest.fail(f"HACS list installed failed: {data.get('error')}")
+            pytest.fail(f"HACS search installed failed: {data.get('error')}")
 
         # Verify response structure
-        assert "total_installed" in data, "Response should include total_installed"
-        assert "repositories" in data, "Response should include repositories list"
+        assert "total_matches" in data, "Response should include total_matches"
+        assert "results" in data, "Response should include results list"
         assert "category_filter" in data, "Response should include category_filter"
 
-        total = data["total_installed"]
-        repos = data["repositories"]
+        total = data["total_matches"]
+        repos = data["results"]
 
         logger.info(f"Found {total} installed HACS repositories")
 
         # Validate count matches
         assert total >= 0, "Total should be non-negative"
-        assert isinstance(repos, list), "Repositories should be a list"
-        assert len(repos) == total, "Repository count should match total"
+        assert isinstance(repos, list), "Results should be a list"
+        assert len(repos) == total, "Results count should match total"
 
         # No filter should be applied
         assert data["category_filter"] is None, "No category filter should be applied"
+        assert data["installed_only"] is True, "Response should indicate installed_only=True"
 
         logger.info("List all installed test passed")
+
+    async def test_search_installed_with_query(self, mcp_client):
+        """
+        Test: Search installed repositories with a keyword query.
+
+        Exercises the code path where installed_only=True AND query is non-empty,
+        ensuring only installed repos are returned even when scoring by relevance.
+        """
+        logger.info("Testing ha_hacs_search with installed_only=True and query...")
+
+        data = await safe_hacs_call(
+            mcp_client,
+            "ha_hacs_search",
+            {"query": "hacs", "installed_only": True},
+        )
+
+        if not data.get("success"):
+            unavailable, reason = is_hacs_unavailable(data)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            pytest.fail(f"HACS search installed with query failed: {data.get('error')}")
+
+        assert data["installed_only"] is True
+        # All returned results must be installed
+        for repo in data["results"]:
+            assert repo.get("installed") is True, (
+                f"Repo {repo.get('name')} should be installed"
+            )
+
+        logger.info(
+            f"Search installed with query: {data['total_matches']} matches"
+        )
 
     async def test_list_by_category(self, mcp_client):
         """
         Test: List installed HACS repositories filtered by category
 
-        Test filtering by different categories.
+        Test filtering by different categories using ha_hacs_search with installed_only.
         """
-        logger.info("Testing ha_hacs_list_installed with category filter...")
+        logger.info("Testing ha_hacs_search installed_only with category filter...")
 
         categories = ["integration", "lovelace", "theme"]
 
         for category in categories:
             data = await safe_hacs_call(
-                mcp_client, "ha_hacs_list_installed", {"category": category}
+                mcp_client,
+                "ha_hacs_search",
+                {"installed_only": True, "category": category},
             )
 
             if not data.get("success"):
                 unavailable, reason = is_hacs_unavailable(data)
                 if unavailable:
                     pytest.skip(f"HACS not available: {reason}")
-                pytest.fail(f"HACS list by {category} failed: {data.get('error')}")
+                pytest.fail(
+                    f"HACS search installed by {category} failed: {data.get('error')}"
+                )
 
             # Verify filter was applied
-            assert data["category_filter"] == category, f"Category filter should be {category}"
+            assert data["category_filter"] == category, (
+                f"Category filter should be {category}"
+            )
 
-            # All returned repos should match the category
-            for repo in data["repositories"]:
-                assert repo["category"] == category, f"Repo category should be {category}"
+            # All returned results should match the category
+            for repo in data["results"]:
+                assert repo["category"] == category, (
+                    f"Repo category should be {category}"
+                )
 
-            logger.info(f"Category {category}: {data['total_installed']} installed")
+            logger.info(f"Category {category}: {data['total_matches']} installed")
 
         logger.info("List by category test passed")
 
@@ -275,7 +254,9 @@ class TestHacsSearch:
         # Query should be recorded
         assert data["query"] == "mushroom", "Query should match input"
 
-        logger.info(f"Search 'mushroom': {data['total_matches']} matches, {data['count']} returned")
+        logger.info(
+            f"Search 'mushroom': {data['total_matches']} matches, {data['count']} returned"
+        )
 
         # Verify result structure if we have results
         if data["results"]:
@@ -305,11 +286,15 @@ class TestHacsSearch:
             pytest.fail(f"HACS search with category failed: {data.get('error')}")
 
         # Verify category filter was applied
-        assert data["category_filter"] == "lovelace", "Category filter should be lovelace"
+        assert data["category_filter"] == "lovelace", (
+            "Category filter should be lovelace"
+        )
 
         # All results should be in the lovelace category
         for result_item in data["results"]:
-            assert result_item["category"] == "lovelace", "Result category should be lovelace"
+            assert result_item["category"] == "lovelace", (
+                "Result category should be lovelace"
+            )
 
         logger.info(f"Search 'card' in lovelace: {data['total_matches']} matches")
         logger.info("Search with category test passed")
@@ -336,7 +321,9 @@ class TestHacsSearch:
         assert data["count"] <= 5, "Results should not exceed max_results"
         assert len(data["results"]) <= 5, "Actual results should not exceed max_results"
 
-        logger.info(f"Max results test: {data['count']}/{data['total_matches']} returned")
+        logger.info(
+            f"Max results test: {data['count']}/{data['total_matches']} returned"
+        )
         logger.info("Search with max_results test passed")
 
     async def test_search_no_results(self, mcp_client):
@@ -444,7 +431,9 @@ class TestHacsRepositoryInfo:
         assert "full_name" in info_data, "Response should include full_name"
         assert "category" in info_data, "Response should include category"
 
-        logger.info(f"Repository info: {info_data.get('name')} ({info_data.get('category')})")
+        logger.info(
+            f"Repository info: {info_data.get('name')} ({info_data.get('category')})"
+        )
         logger.info("Repository info test passed")
 
 
@@ -470,7 +459,11 @@ class TestHacsWriteOperations:
             "ha_hacs_add_repository",
             {"repository": "invalid-format-no-slash", "category": "integration"},
         )
-        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
+        data = (
+            parsed.get("data", parsed)
+            if isinstance(parsed.get("data"), dict)
+            else parsed
+        )
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -478,9 +471,10 @@ class TestHacsWriteOperations:
 
         # Should fail with format error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "INVALID_REPOSITORY_FORMAT" in str(data.get("error_code", "")) or \
-               "format" in str(data.get("error", "")).lower(), \
-               "Error should mention invalid format"
+        assert (
+            "INVALID_REPOSITORY_FORMAT" in str(data.get("error_code", ""))
+            or "format" in str(data.get("error", "")).lower()
+        ), "Error should mention invalid format"
 
         logger.info("Invalid repository format test passed")
 
@@ -497,7 +491,11 @@ class TestHacsWriteOperations:
             "ha_hacs_download",
             {"repository_id": "nonexistent/fake-repo-12345"},
         )
-        data = parsed.get("data", parsed) if isinstance(parsed.get("data"), dict) else parsed
+        data = (
+            parsed.get("data", parsed)
+            if isinstance(parsed.get("data"), dict)
+            else parsed
+        )
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -518,7 +516,9 @@ async def test_hacs_discovery(mcp_client):
     """
     logger.info("Testing basic HACS discovery...")
 
-    data = await safe_hacs_call(mcp_client, "ha_hacs_info")
+    data = await safe_hacs_call(
+        mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+    )
 
     unavailable, reason = is_hacs_unavailable(data)
     if unavailable:
@@ -526,7 +526,7 @@ async def test_hacs_discovery(mcp_client):
         pytest.skip(f"HACS not installed or not loaded: {reason}")
 
     if data.get("success"):
-        logger.info(f"HACS discovery successful: v{data.get('version')}")
+        logger.info("HACS discovery successful")
     else:
         logger.warning(f"HACS discovery returned error: {data.get('error')}")
 
@@ -554,7 +554,9 @@ class TestMcpToolsInstallation:
         This prevents flaky test failures when HACS is rate-limited or temporarily unavailable.
         """
         logger.info("Pre-flight check: verifying HACS availability...")
-        data = await safe_hacs_call(mcp_client, "ha_hacs_info")
+        data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        )
 
         unavailable, reason = is_hacs_unavailable(data)
         if unavailable:
@@ -564,7 +566,7 @@ class TestMcpToolsInstallation:
             error = data.get("error", "Unknown error")
             pytest.skip(f"HACS not ready: {error}")
 
-        logger.info(f"Pre-flight check passed: HACS v{data.get('version')} is available")
+        logger.info("Pre-flight check passed: HACS is available")
 
     async def test_install_mcp_tools_basic(self, mcp_client):
         """
@@ -576,14 +578,20 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_install_mcp_tools (without restart)...")
 
         # Before installation, verify HACS is available and ready
-        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
+        info_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
 
-        data = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
+        data = await safe_hacs_call(
+            mcp_client, "ha_install_mcp_tools", {"restart": False}
+        )
 
-        logger.info(f"Install result: success={data.get('success')}, message={data.get('message')}")
+        logger.info(
+            f"Install result: success={data.get('success')}, message={data.get('message')}"
+        )
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -592,14 +600,19 @@ class TestMcpToolsInstallation:
 
             # Check for GitHub token issues
             error = str(data.get("error", ""))
-            if "401" in error or "token" in error.lower() or "rate limit" in error.lower():
+            if (
+                "401" in error
+                or "token" in error.lower()
+                or "rate limit" in error.lower()
+            ):
                 pytest.skip(f"GitHub access issue: {error}")
 
             pytest.fail(f"Installation failed: {data.get('error')}")
 
         # Verify successful installation response
-        assert data.get("installed") or data.get("already_installed"), \
+        assert data.get("installed") or data.get("already_installed"), (
             "Response should indicate installation status"
+        )
 
         if data.get("already_installed"):
             logger.info(f"ha_mcp_tools already installed: {data.get('version')}")
@@ -610,7 +623,9 @@ class TestMcpToolsInstallation:
         # Verify services list is provided
         services = data.get("services", [])
         assert len(services) > 0, "Should list available services"
-        assert any("list_files" in s for s in services), "Should mention list_files service"
+        assert any("list_files" in s for s in services), (
+            "Should mention list_files service"
+        )
 
         logger.info("Install MCP tools (no restart) test passed")
 
@@ -623,13 +638,17 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_install_mcp_tools idempotency...")
 
         # Before installation, verify HACS is available and ready
-        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
+        info_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
 
         # First install
-        data1 = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
+        data1 = await safe_hacs_call(
+            mcp_client, "ha_install_mcp_tools", {"restart": False}
+        )
 
         if not data1.get("success"):
             unavailable, reason = is_hacs_unavailable(data1)
@@ -641,10 +660,16 @@ class TestMcpToolsInstallation:
             pytest.fail(f"First install failed: {data1.get('error')}")
 
         # Second install should also succeed
-        data2 = await safe_hacs_call(mcp_client, "ha_install_mcp_tools", {"restart": False})
+        data2 = await safe_hacs_call(
+            mcp_client, "ha_install_mcp_tools", {"restart": False}
+        )
 
-        assert data2.get("success"), f"Second install should succeed: {data2.get('error')}"
-        assert data2.get("already_installed"), "Second install should report already_installed"
+        assert data2.get("success"), (
+            f"Second install should succeed: {data2.get('error')}"
+        )
+        assert data2.get("already_installed"), (
+            "Second install should report already_installed"
+        )
 
         logger.info("Install MCP tools idempotency test passed")
 
@@ -657,7 +682,9 @@ class TestMcpToolsInstallation:
         logger.info("Testing ha_mcp_tools appears in HACS list...")
 
         # Before installation, verify HACS is available and ready
-        info_data = await safe_hacs_call(mcp_client, "ha_hacs_info")
+        info_data = await safe_hacs_call(
+            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
             pytest.skip(f"HACS not available or not ready: {reason}")
@@ -676,29 +703,34 @@ class TestMcpToolsInstallation:
                 pytest.skip(f"GitHub access issue: {error}")
             pytest.fail(f"Install failed: {install_data.get('error')}")
 
-        # Now check HACS list for the integration
+        # Now check HACS search for installed integrations
         list_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_list_installed", {"category": "integration"}
+            mcp_client,
+            "ha_hacs_search",
+            {"installed_only": True, "category": "integration"},
         )
 
         if not list_data.get("success"):
-            pytest.fail(f"Failed to list installed: {list_data.get('error')}")
+            pytest.fail(f"Failed to search installed: {list_data.get('error')}")
 
-        repos = list_data.get("repositories", [])
+        repos = list_data.get("results", [])
         mcp_tools_repo = None
 
         for repo in repos:
             full_name = repo.get("full_name", "").lower()
             name = repo.get("name", "").lower()
             # Match either the main repo or test fork
-            if "homeassistant-ai/ha-mcp" in full_name or \
-               "ha-mcp-test-custom-component" in full_name or \
-               "ha_mcp_tools" in name:
+            if (
+                "homeassistant-ai/ha-mcp" in full_name
+                or "ha-mcp-test-custom-component" in full_name
+                or "ha_mcp_tools" in name
+            ):
                 mcp_tools_repo = repo
                 break
 
-        assert mcp_tools_repo is not None, \
+        assert mcp_tools_repo is not None, (
             "ha_mcp_tools should appear in HACS installed list after installation"
+        )
 
         logger.info(f"Found ha_mcp_tools in HACS: {mcp_tools_repo.get('full_name')}")
         logger.info(f"Version: {mcp_tools_repo.get('installed_version')}")

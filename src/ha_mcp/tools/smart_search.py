@@ -4,6 +4,7 @@ Smart search tools for Home Assistant MCP server.
 
 import asyncio
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -23,11 +24,23 @@ BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
 BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
-# Time budgets for fallback individual fetching (in seconds)
-AUTOMATION_CONFIG_TIME_BUDGET = (
-    15.0  # Max time for fetching automation configs individually
-)
-SCRIPT_CONFIG_TIME_BUDGET = 10.0  # Max time for fetching script configs individually
+# Time budgets for fallback individual fetching (in seconds).
+# Configurable via env vars for instances with many automations/scripts.
+def _env_float(key: str, default: float) -> float:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid value for {key}={raw!r}, using default {default}")
+        return default
+
+AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
+SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
+
+# Batch size for parallel individual config fetches (Attempt C fallback)
+INDIVIDUAL_FETCH_BATCH_SIZE = 10
 
 
 def _simplify_states_summary(
@@ -903,39 +916,61 @@ class SmartSearchTools:
                                 f"Automation WebSocket bulk fetch ({ws_type}) failed: {e}"
                             )
 
-                # Attempt C: Individual REST calls with time budget (LAST RESORT)
-                # Prioritize name-matched automations so we at least get their configs
+                # Attempt C: Parallel individual REST calls with time budget (LAST RESORT)
+                # Fetch configs in parallel batches (subject to time budget) — don't prioritize by name score.
+                # Name score is only used for result ranking, not fetch order, because
+                # deep_search's purpose is to find matches INSIDE configs (conditions/actions),
+                # not just by name. Prioritizing by name would skip the configs most likely
+                # to contain non-obvious matches. See #879.
                 if not bulk_fetched:
                     budget_start = time.perf_counter()
-                    sorted_by_score = sorted(
-                        name_scored, key=lambda x: x[2], reverse=True
-                    )
+                    uids_to_fetch = [
+                        uid
+                        for _, _, _, uid in name_scored
+                        if uid and uid not in all_automation_configs
+                    ]
+                    total_to_fetch = len(uids_to_fetch)
+                    fetched_count = 0
+                    failed_count = 0
 
-                    for (
-                        _entity_id,
-                        _friendly_name,
-                        _name_score,
-                        unique_id,
-                    ) in sorted_by_score:
+                    async def _fetch_automation_config(uid: str) -> tuple[str, dict[str, Any] | None]:
+                        try:
+                            config = await asyncio.wait_for(
+                                self.client._request(
+                                    "GET", f"/config/automation/config/{uid}"
+                                ),
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                            )
+                            return (uid, config)
+                        except Exception as e:
+                            logger.debug(
+                                f"Automation individual config fetch ({uid}) failed: {e}"
+                            )
+                            return (uid, None)
+
+                    for i in range(0, len(uids_to_fetch), INDIVIDUAL_FETCH_BATCH_SIZE):
                         if (
                             time.perf_counter() - budget_start
                             > AUTOMATION_CONFIG_TIME_BUDGET
                         ):
+                            skipped = total_to_fetch - fetched_count - failed_count
+                            logger.warning(
+                                f"Automation config fetch budget exhausted "
+                                f"({AUTOMATION_CONFIG_TIME_BUDGET}s). "
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), skipped {skipped} automations."
+                            )
                             break
-                        if not unique_id or unique_id in all_automation_configs:
-                            continue
-                        try:
-                            config = await asyncio.wait_for(
-                                self.client._request(
-                                    "GET", f"/config/automation/config/{unique_id}"
-                                ),
-                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                            )
-                            all_automation_configs[unique_id] = config
-                        except Exception as e:
-                            logger.debug(
-                                f"Automation individual config fetch ({unique_id}) failed: {e}"
-                            )
+                        batch = uids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
+                        batch_results = await asyncio.gather(
+                            *[_fetch_automation_config(uid) for uid in batch],
+                        )
+                        for uid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_automation_configs[uid_result] = config_result
+                                fetched_count += 1
+                            else:
+                                failed_count += 1
 
                 # Phase 3: Score with whatever configs we have
                 for entity_id, friendly_name, name_score, unique_id in name_scored:
@@ -1040,37 +1075,54 @@ class SmartSearchTools:
                                 f"Script WebSocket bulk fetch ({ws_type}) failed: {e}"
                             )
 
-                # Attempt C: Individual fetch with budget
+                # Attempt C: Parallel individual fetch with budget (see #879)
                 if not script_bulk_fetched:
                     budget_start = time.perf_counter()
-                    sorted_scripts = sorted(
-                        script_name_scored, key=lambda x: x[3], reverse=True
-                    )
-                    for (
-                        _entity_id,
-                        _friendly_name,
-                        script_id,
-                        _name_score,
-                    ) in sorted_scripts:
+                    sids_to_fetch = [
+                        sid
+                        for _, _, sid, _ in script_name_scored
+                        if sid and sid not in all_script_configs
+                    ]
+                    total_to_fetch = len(sids_to_fetch)
+                    fetched_count = 0
+                    failed_count = 0
+
+                    async def _fetch_script_config(sid: str) -> tuple[str, dict[str, Any] | None]:
+                        try:
+                            config_resp = await asyncio.wait_for(
+                                self.client.get_script_config(sid),
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                            )
+                            return (sid, config_resp.get("config", {}))
+                        except Exception as e:
+                            logger.debug(
+                                f"Script individual config fetch ({sid}) failed: {e}"
+                            )
+                            return (sid, None)
+
+                    for i in range(0, len(sids_to_fetch), INDIVIDUAL_FETCH_BATCH_SIZE):
                         if (
                             time.perf_counter() - budget_start
                             > SCRIPT_CONFIG_TIME_BUDGET
                         ):
+                            skipped = total_to_fetch - fetched_count - failed_count
+                            logger.warning(
+                                f"Script config fetch budget exhausted "
+                                f"({SCRIPT_CONFIG_TIME_BUDGET}s). "
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), skipped {skipped} scripts."
+                            )
                             break
-                        if script_id in all_script_configs:
-                            continue
-                        try:
-                            config_resp = await asyncio.wait_for(
-                                self.client.get_script_config(script_id),
-                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                            )
-                            all_script_configs[script_id] = config_resp.get(
-                                "config", {}
-                            )
-                        except Exception as e:
-                            logger.debug(
-                                f"Script individual config fetch ({script_id}) failed: {e}"
-                            )
+                        batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
+                        batch_results = await asyncio.gather(
+                            *[_fetch_script_config(sid) for sid in batch],
+                        )
+                        for sid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_script_configs[sid_result] = config_result
+                                fetched_count += 1
+                            else:
+                                failed_count += 1
 
                 # Phase 3: Score scripts
                 for (

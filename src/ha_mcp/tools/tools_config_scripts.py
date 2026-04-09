@@ -20,7 +20,9 @@ from .best_practice_checker import (
 )
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    apply_entity_category,
     coerce_bool_param,
+    fetch_entity_category,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -82,6 +84,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         try:
             config_result = await client.get_script_config(script_id)
+
+            # Fetch category from entity registry (best-effort)
+            entity_id = f"script.{script_id}"
+            cat_id = await fetch_entity_category(client, entity_id, "script")
+            if cat_id:
+                config_result["category"] = cat_id
+
             return {
                 "success": True,
                 "action": "get",
@@ -119,6 +128,13 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
             ),
         ],
+        category: Annotated[
+            str | None,
+            Field(
+                description="Category ID to assign to this script. Use ha_config_get_category(scope='script') to list available categories, or ha_config_set_category() to create one.",
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -259,6 +275,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             config_dict = cast(dict[str, Any], parsed_config)
 
+            # Extract category before sending to HA REST API (which rejects unknown keys).
+            # Parameter takes precedence over config dict value.
+            config_category = config_dict.pop("category", None)
+            effective_category = category if category is not None else config_category
+
             # Validate required fields based on script type
             # Blueprint scripts only need use_blueprint, regular scripts need sequence
             if "use_blueprint" in config_dict:
@@ -288,6 +309,12 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
                 except Exception as e:
                     result["warning"] = f"Script created but verification failed: {e}"
+
+            # Apply category to entity registry if provided
+            if effective_category and entity_id:
+                await apply_entity_category(
+                    client, entity_id, effective_category, "script", result, "script"
+                )
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
