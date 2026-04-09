@@ -8,11 +8,13 @@ on how to create effective bug reports.
 import logging
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote_plus
 
+import httpx
 from pydantic import Field
 
 from ha_mcp import __version__
@@ -29,6 +31,12 @@ logger = logging.getLogger(__name__)
 # GitHub issue template URLs
 RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
 AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
+
+# ANSI escape code pattern (terminal colors in container logs)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# Max characters to include from addon container logs
+_ADDON_LOG_MAX_CHARS = 3000
 
 
 def _detect_installation_method() -> str:
@@ -79,6 +87,60 @@ def _detect_platform() -> dict[str, str]:
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
     }
+
+
+def _sanitize_log_text(text: str) -> str:
+    """Strip common secrets from log text before including in reports."""
+    # JWT tokens (header.payload.signature)
+    text = re.sub(
+        r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        "[REDACTED_JWT]",
+        text,
+    )
+    # Bearer tokens
+    text = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+    # Long hex strings (API keys, tokens) - 32+ contiguous hex chars
+    text = re.sub(
+        r"(?<![a-fA-F0-9])[a-fA-F0-9]{32,}(?![a-fA-F0-9])",
+        "[REDACTED_HEX]",
+        text,
+    )
+    # IPv4 addresses
+    text = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "[IP]", text)
+    return text
+
+
+async def _fetch_addon_logs() -> str:
+    """Fetch ha-mcp addon container logs via the Supervisor REST API.
+
+    Only works when running as a Home Assistant add-on (SUPERVISOR_TOKEN set).
+    Uses /addons/self/logs which resolves to the calling addon's own logs.
+
+    Returns sanitized log text (last _ADDON_LOG_MAX_CHARS chars), or empty
+    string on failure.
+    """
+    token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not token:
+        return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            resp = await http_client.get(
+                "http://supervisor/addons/self/logs",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 200:
+                raw = resp.text
+                # Strip ANSI escape codes (terminal colors)
+                raw = _ANSI_ESCAPE_RE.sub("", raw)
+                # Take the tail (most recent logs)
+                if len(raw) > _ADDON_LOG_MAX_CHARS:
+                    raw = raw[-_ADDON_LOG_MAX_CHARS:]
+                return _sanitize_log_text(raw)
+    except Exception as e:
+        logger.warning(f"Failed to fetch addon logs: {e}")
+
+    return ""
 
 
 def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -184,6 +246,11 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Get startup logs (first minute of server operation)
         startup_logs = get_startup_logs()
 
+        # Fetch addon container logs when running as HA add-on
+        addon_logs = ""
+        if install_method == "addon":
+            addon_logs = await _fetch_addon_logs()
+
         # Format logs for inclusion (sanitized summary)
         log_summary = _format_logs_for_report(recent_logs)
         startup_log_summary = _format_startup_logs(startup_logs)
@@ -221,11 +288,19 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 log_summary,
             ])
 
+        if addon_logs:
+            report_lines.extend([
+                "",
+                "=== Add-on Container Logs ===",
+                addon_logs,
+            ])
+
         formatted_report = "\n".join(report_lines)
 
         # Generate BOTH templates
         runtime_bug_template = _generate_runtime_bug_template(
-            diagnostic_info, log_summary, startup_log_summary, recent_logs, startup_logs
+            diagnostic_info, log_summary, startup_log_summary, recent_logs, startup_logs,
+            addon_logs=addon_logs,
         )
 
         agent_behavior_template = _generate_agent_behavior_template(
@@ -250,6 +325,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "diagnostic_info": diagnostic_info,
             "recent_logs": recent_logs,
             "startup_logs": startup_logs,
+            "addon_logs": addon_logs,
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
             "formatted_report": formatted_report,
@@ -447,6 +523,8 @@ def _generate_runtime_bug_template(
     startup_log_summary: str,
     recent_logs: list[dict[str, Any]],
     startup_logs: list[dict[str, Any]],
+    *,
+    addon_logs: str = "",
 ) -> str:
     """
     Generate a runtime bug report template matching runtime_bug.md format.
@@ -473,6 +551,24 @@ def _generate_runtime_bug_template(
 
 ```
 {startup_log_summary}
+```
+
+</details>
+"""
+
+    # Show addon container logs section only when available (addon installs only)
+    addon_section = ""
+    if addon_logs:
+        addon_section = f"""
+---
+
+## 📦 Add-on Container Logs
+
+<details>
+<summary>Click to expand ha-mcp add-on logs</summary>
+
+```
+{addon_logs}
 ```
 
 </details>
@@ -539,7 +635,7 @@ def _generate_runtime_bug_template(
 ```
 
 </details>
-{startup_section}
+{startup_section}{addon_section}
 ---
 
 ## 💡 Additional Context
