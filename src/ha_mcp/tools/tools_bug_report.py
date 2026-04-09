@@ -137,7 +137,7 @@ async def _fetch_addon_logs() -> str:
                 if len(raw) > _ADDON_LOG_MAX_CHARS:
                     raw = raw[-_ADDON_LOG_MAX_CHARS:]
                 return _sanitize_log_text(raw)
-    except Exception as e:
+    except httpx.RequestError as e:
         logger.warning(f"Failed to fetch addon logs: {e}")
 
     return ""
