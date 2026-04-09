@@ -660,23 +660,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 f"the file URI to load specific guides as needed."
             )
 
-            # Collect available reference files for the listing.
-            # Filter out symlinks and verify path containment to prevent
-            # traversal via symlinked directories.
-            ref_files = []
-            resolved_root = skill_dir.resolve()
-            try:
-                for f in sorted(skill_dir.rglob("*")):
-                    if not f.is_file() or f.is_symlink():
-                        continue
-                    # Ensure resolved path stays within the skill directory
-                    if not f.resolve().is_relative_to(resolved_root):
-                        continue
-                    rel = f.relative_to(skill_dir)
-                    ref_uri = f"skill://{skill_name}/{rel}"
-                    ref_files.append({"name": str(rel), "uri": ref_uri})
-            except OSError:
-                logger.warning("Error reading skill files in %s", skill_dir)
+            ref_files = self._collect_skill_ref_files(skill_dir, skill_name)
 
             # Use factory to capture ref_files in closure
             def _make_skill_handler(
@@ -710,6 +694,25 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 tool_name,
                 len(ref_files),
             )
+
+    @staticmethod
+    def _collect_skill_ref_files(
+        skill_dir: Path, skill_name: str
+    ) -> list[dict[str, str]]:
+        """Collect reference files for a skill, filtering symlinks and path traversal."""
+        ref_files: list[dict[str, str]] = []
+        resolved_root = skill_dir.resolve()
+        try:
+            for f in sorted(skill_dir.rglob("*")):
+                if not f.is_file() or f.is_symlink():
+                    continue
+                if not f.resolve().is_relative_to(resolved_root):
+                    continue
+                rel = f.relative_to(skill_dir)
+                ref_files.append({"name": str(rel), "uri": f"skill://{skill_name}/{rel}"})
+        except OSError:
+            logger.warning("Error reading skill files in %s", skill_dir)
+        return ref_files
 
     # Helper methods required by EnhancedToolsMixin
 

@@ -4,7 +4,6 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -14,7 +13,6 @@ from typing import Annotated, Any, cast
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -285,26 +283,78 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = False,
         force_reload: Annotated[
-            bool, Field(description="Force reload from storage (bypass cache)")
+            bool, Field(description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results).")
+        ] = False,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description="Find cards by entity ID. Supports wildcards, e.g. "
+                "'sensor.temperature_*'. Matches cards with this entity in "
+                "'entity' or 'entities' field, view-level badges, and header cards. "
+                "When provided, activates search mode (returns matches, not full config)."
+            ),
+        ] = None,
+        card_type: Annotated[
+            str | None,
+            Field(
+                description="Find cards by type, e.g. 'tile', 'button', 'heading'. "
+                "When provided, activates search mode."
+            ),
+        ] = None,
+        heading: Annotated[
+            str | None,
+            Field(
+                description="Find cards by heading/title text (case-insensitive partial match). "
+                "When provided, activates search mode."
+            ),
+        ] = None,
+        include_config: Annotated[
+            bool,
+            Field(
+                description="In search mode: include each matched card's own configuration "
+                "object in results (increases output size). Does not affect whether the full "
+                "dashboard config is returned — search mode always returns matches only, "
+                "not the full dashboard. Ignored outside search mode."
+            ),
         ] = False,
     ) -> dict[str, Any]:
         """
-        Get dashboard info - list all dashboards or get config for a specific one.
+        Get dashboard info - list all dashboards, get config, or search for cards.
 
-        Without url_path (or with list_only=True): Lists all storage-mode dashboards
-        with metadata including url_path, title, icon, admin requirements.
+        MODE 1 — List: list_only=True
+          Lists all storage-mode dashboards with metadata (url_path, title, icon).
 
-        With url_path: Returns the full Lovelace dashboard configuration
-        including all views and cards.
+        MODE 2 — Search: any of entity_id / card_type / heading provided
+          Finds cards, badges, and header cards matching the criteria.
+          Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).
+          Multiple criteria are AND-ed. Always fetches fresh config (force=True).
+          Strategy dashboards are not searchable (no explicit cards).
+
+        MODE 3 — Get: Active when list_only=False and no search parameters are provided.
+          Returns the full Lovelace dashboard config, defaulting to the
+          main dashboard if url_path is omitted.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
         - Get default dashboard: ha_config_get_dashboard(url_path="default")
         - Get custom dashboard: ha_config_get_dashboard(url_path="lovelace-mobile")
         - Force reload: ha_config_get_dashboard(url_path="lovelace-home", force_reload=True)
+        - Find cards by entity: ha_config_get_dashboard(url_path="my-dash", entity_id="light.living_room")
+        - Find by wildcard: ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
+        - Find by type: ha_config_get_dashboard(url_path="my-dash", card_type="tile")
+        - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
+
+        SEARCH WORKFLOW EXAMPLE:
+        1. find = ha_config_get_dashboard(url_path="my-dash", entity_id="light.bedroom")
+        2. ha_config_set_dashboard(
+               url_path="my-dash",
+               config_hash=find["config_hash"],
+               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
+           )
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
+        search_mode = entity_id is not None or card_type is not None or heading is not None
         try:
             # List mode
             if list_only:
@@ -323,6 +373,86 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "action": "list",
                     "dashboards": dashboards,
                     "count": len(dashboards),
+                }
+
+            # Search mode — find cards, badges, or header cards
+            if search_mode:
+                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+                if url_path and url_path != "default":
+                    get_data["url_path"] = url_path
+
+                response = await client.send_websocket_message(get_data)
+
+                if isinstance(response, dict) and not response.get("success", True):
+                    error_msg = response.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Failed to get dashboard: {error_msg}",
+                            suggestions=[
+                                "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
+                                "Check HA connection",
+                            ],
+                            context={"action": "find_card", "url_path": url_path},
+                        )
+                    )
+
+                config = (
+                    response.get("result") if isinstance(response, dict) else response
+                )
+                if not isinstance(config, dict):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            "Dashboard config is empty or invalid",
+                            suggestions=[
+                                "Initialize dashboard with ha_config_set_dashboard"
+                            ],
+                            context={"action": "find_card", "url_path": url_path},
+                        )
+                    )
+
+                if "strategy" in config:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            "Strategy dashboards have no explicit cards to search",
+                            suggestions=[
+                                "Use 'Take Control' in HA UI to convert to editable",
+                                "Or create a non-strategy dashboard",
+                            ],
+                            context={"action": "find_card", "url_path": url_path},
+                        )
+                    )
+
+                matches = _find_cards_in_config(config, entity_id, card_type, heading)
+
+                if not include_config:
+                    for match in matches:
+                        del match["card_config"]
+
+                config_hash: str | None = _compute_config_hash(config)
+
+                return {
+                    "success": True,
+                    "action": "find_card",
+                    "url_path": url_path,
+                    "config_hash": config_hash,
+                    "search_criteria": {
+                        "entity_id": entity_id,
+                        "card_type": card_type,
+                        "heading": heading,
+                    },
+                    "matches": matches,
+                    "match_count": len(matches),
+                    "hint": (
+                        "Use jq_path with ha_config_set_dashboard(python_transform=...) "
+                        "for targeted updates"
+                        if matches
+                        else "No matches found. Try broader search criteria."
+                    ),
                 }
 
             # Get mode - build WebSocket message
@@ -375,7 +505,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if config_size >= 10000:
                 result["hint"] = (
                     f"Large config ({config_size:,} bytes). For edits, use "
-                    "ha_dashboard_find_card() + ha_config_set_dashboard(python_transform=...) "
+                    "ha_config_get_dashboard(entity_id=...) to find card positions, "
+                    "then ha_config_set_dashboard(python_transform=...) "
                     "instead of full config replacement."
                 )
 
@@ -383,18 +514,39 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error getting dashboard: {e}")
-            exception_to_structured_error(
-                e,
-                context={
-                    "action": "get" if not list_only else "list",
+            if search_mode:
+                logger.error(
+                    f"Error finding card in dashboard: url_path={url_path}, "
+                    f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
+                    f"error={e}",
+                    exc_info=True,
+                )
+                suggestions = [
+                    "Check HA connection",
+                    "Verify dashboard with ha_config_get_dashboard(list_only=True)",
+                ]
+                context: dict[str, Any] = {
+                    "action": "find_card",
                     "url_path": url_path,
-                },
-                suggestions=[
+                    "entity_id": entity_id,
+                    "card_type": card_type,
+                    "heading": heading,
+                }
+            else:
+                logger.error(f"Error getting dashboard: {e}", exc_info=True)
+                suggestions = [
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Check if you have permission to access this dashboard",
                     "Use url_path='default' for default dashboard",
-                ],
+                ]
+                context = {
+                    "action": "get" if not list_only else "list",
+                    "url_path": url_path,
+                }
+            exception_to_structured_error(
+                e,
+                context=context,
+                suggestions=suggestions,
             )
 
     @mcp.tool(
@@ -485,10 +637,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         - config: New dashboards only, or full restructure. Replaces everything.
 
         IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
-        must use fresh config_hash from ha_dashboard_find_card() or ha_config_get_dashboard()
+        must use fresh config_hash from ha_config_get_dashboard()
         to get updated structure. Chain multiple ops in ONE expression when possible.
 
-        TIP: Use ha_dashboard_find_card() to get the path for any card.
+        TIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.
 
         PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
         - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
@@ -1142,220 +1294,3 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # - ha_config_delete_dashboard_resource: Delete resources
     # =========================================================================
 
-    # =========================================================================
-    # Card Search Tool (partial update tools - controlled by feature flag)
-    # Card add/update/remove replaced by python_transform in ha_config_set_dashboard
-    # =========================================================================
-
-    # Check feature flag for partial update tools (lazy check, default enabled)
-    try:
-        settings = get_global_settings()
-        if not settings.enable_dashboard_partial_tools:
-            return  # Skip registering find_card if partial tools disabled
-    except Exception:
-        pass  # Default: register the tool if settings unavailable
-
-    @mcp.tool(
-        tags={"Dashboards"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Find Dashboard Card"
-        }
-    )
-    @log_tool_usage
-    async def ha_dashboard_find_card(
-        url_path: Annotated[
-            str | None,
-            Field(
-                description="Dashboard URL path, e.g. 'lovelace-home'. Omit for default."
-            ),
-        ] = None,
-        entity_id: Annotated[
-            str | None,
-            Field(
-                description="Find cards by entity ID. Supports wildcards, e.g. 'sensor.temperature_*'. "
-                "Matches cards with this entity in 'entity' or 'entities' field."
-            ),
-        ] = None,
-        card_type: Annotated[
-            str | None,
-            Field(description="Find cards by type, e.g. 'tile', 'button', 'heading'."),
-        ] = None,
-        heading: Annotated[
-            str | None,
-            Field(
-                description="Find cards by heading/title text (case-insensitive partial match). "
-                "Useful for finding section headings (type: 'heading')."
-            ),
-        ] = None,
-        include_config: Annotated[
-            bool,
-            Field(
-                description="Include full card configuration in results (increases output size)."
-            ),
-        ] = False,
-    ) -> dict[str, Any]:
-        """
-        Find cards, badges, and header cards in a dashboard by entity_id, type, or heading text.
-
-        Returns card/badge/header locations (view_index, section_index, card_index/badge_index)
-        and path for use with ha_config_set_dashboard(python_transform=...).
-
-        Also searches view-level badges (views[n].badges) and sections-view header cards
-        (views[n].header.card). Badges are the chip row at the top of a view, and header
-        cards are Markdown cards in the view header — both reference entities and are
-        often missed during entity rename operations.
-
-        Use this tool BEFORE targeted updates to find exact card positions without
-        manually parsing the full dashboard config.
-
-        SEARCH CRITERIA (at least one required):
-        - entity_id: Match cards and badges containing this entity (supports wildcards with *)
-        - card_type: Match cards of this type (e.g., 'tile', 'button', 'heading')
-        - heading: Match cards with this text in heading/title (partial, case-insensitive)
-
-        Multiple criteria are AND-ed together.
-
-        EXAMPLES:
-
-        Find all tile cards:
-        ha_dashboard_find_card(url_path="my-dashboard", card_type="tile")
-
-        Find cards for a specific entity:
-        ha_dashboard_find_card(url_path="my-dashboard", entity_id="light.living_room")
-
-        Find all temperature sensors (wildcard):
-        ha_dashboard_find_card(url_path="my-dashboard", entity_id="sensor.temperature_*")
-
-        Find the "Climate" section heading:
-        ha_dashboard_find_card(url_path="my-dashboard", heading="Climate", card_type="heading")
-
-        WORKFLOW EXAMPLE:
-        1. find = ha_dashboard_find_card(url_path="my-dash", entity_id="light.bedroom")
-        2. # Use jq_path and config_hash from result to update:
-        3. ha_config_set_dashboard(
-               url_path="my-dash",
-               config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
-           )
-        """
-        try:
-            # Validate at least one search criteria
-            if entity_id is None and card_type is None and heading is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "At least one search criteria required",
-                        suggestions=[
-                            "Provide entity_id, card_type, or heading parameter",
-                            "Use entity_id='sensor.*' to find all sensor cards",
-                            "Use card_type='heading' to find section headings",
-                        ],
-                        context={"action": "find_card"},
-                    )
-                )
-
-            # Fetch dashboard config
-            get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-            if url_path:
-                get_data["url_path"] = url_path
-
-            response = await client.send_websocket_message(get_data)
-
-            if isinstance(response, dict) and not response.get("success", True):
-                error_msg = response.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to get dashboard: {error_msg}",
-                        suggestions=[
-                            "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
-                            "Check HA connection",
-                        ],
-                        context={"action": "find_card", "url_path": url_path},
-                    )
-                )
-
-            config = response.get("result") if isinstance(response, dict) else response
-            if not isinstance(config, dict):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Dashboard config is empty or invalid",
-                        suggestions=[
-                            "Initialize dashboard with ha_config_set_dashboard"
-                        ],
-                        context={"action": "find_card", "url_path": url_path},
-                    )
-                )
-
-            # Check for strategy dashboard
-            if "strategy" in config:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_FAILED,
-                        "Strategy dashboards have no explicit cards to search",
-                        suggestions=[
-                            "Use 'Take Control' in HA UI to convert to editable",
-                            "Or create a non-strategy dashboard",
-                        ],
-                        context={"action": "find_card", "url_path": url_path},
-                    )
-                )
-
-            # Find matching cards
-            matches = _find_cards_in_config(config, entity_id, card_type, heading)
-
-            # Optionally strip config to reduce output size
-            if not include_config:
-                for match in matches:
-                    del match["card_config"]
-
-            # Compute config hash for potential follow-up operations
-            config_hash = _compute_config_hash(config)
-
-            return {
-                "success": True,
-                "action": "find_card",
-                "url_path": url_path,
-                "config_hash": config_hash,
-                "search_criteria": {
-                    "entity_id": entity_id,
-                    "card_type": card_type,
-                    "heading": heading,
-                },
-                "matches": matches,
-                "match_count": len(matches),
-                "hint": "Use jq_path with ha_config_set_dashboard(python_transform=...) for targeted updates"
-                if matches
-                else "No matches found. Try broader search criteria.",
-            }
-
-        except asyncio.CancelledError:
-            raise
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error finding card: url_path={url_path}, "
-                f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
-                f"error={e}",
-                exc_info=True,
-            )
-            exception_to_structured_error(
-                e,
-                context={
-                    "action": "find_card",
-                    "url_path": url_path,
-                    "entity_id": entity_id,
-                    "card_type": card_type,
-                    "heading": heading,
-                },
-                suggestions=[
-                    "Check HA connection",
-                    "Verify dashboard with ha_config_get_dashboard(list_only=True)",
-                ],
-            )

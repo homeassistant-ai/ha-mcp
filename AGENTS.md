@@ -113,40 +113,12 @@ When implementing features or debugging, consult these resources:
 
 ### Issue Analysis Workflow
 
-**Two-Tier System:**
+- **Automated Triage (Gemini)**: Runs on new issues via `.github/workflows/gemini-triage.yml`. Adds `triaged` label.
+- **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then launch **parallel** `issue-analysis` agents (one per issue, ALL in a single message). Each agent explores the codebase, posts analysis, and updates labels.
 
-- **Automated Triage (Gemini)**: Runs automatically on new issues via `.github/workflows/gemini-triage.yml`. Performs quick completeness check and adds initial guidance. Adds `triaged` label when complete.
-
-- **Deep Analysis (Human-Directed - Claude)**: Comprehensive codebase exploration, implementation planning, and architectural assessment. Use for issues requiring detailed planning or architectural decisions.
-
-**When the user says "analyze issues" or "deep analysis":**
-
-1. **List issues needing deep analysis**:
-   ```bash
-   gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["issue-analyzed"]) | not) | "#\(.number): \(.title)"'
-   ```
-
-2. **Report the list to the user** showing all issues that need deep analysis
-
-3. **Launch parallel issue-analysis agents** - one Task tool call per issue, ALL IN THE SAME MESSAGE:
-   ```
-   # In a SINGLE assistant message, make multiple Task tool calls:
-   <Task tool call: subagent_type="issue-analysis", prompt="Analyze issue #42 on homeassistant-ai/ha-mcp">
-   <Task tool call: subagent_type="issue-analysis", prompt="Analyze issue #43 on homeassistant-ai/ha-mcp">
-   <Task tool call: subagent_type="issue-analysis", prompt="Analyze issue #44 on homeassistant-ai/ha-mcp">
-   # ... one for each issue needing deep analysis
-   ```
-
-4. **Each issue-analysis agent independently**:
-   - Fetches and analyzes the issue
-   - Performs deep codebase exploration
-   - Assesses implementation approaches and complexity
-   - Evaluates priority relative to other issues
-   - Updates labels (`ready-to-implement`, `needs-choice`, `needs-info`, priority)
-   - Adds the `issue-analyzed` label
-   - Posts detailed analysis comment to the issue
-
-5. **Collect and summarize results** from all parallel agents
+```bash
+gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["issue-analyzed"]) | not) | "#\(.number): \(.title)"'
+```
 
 ### PR Review Comments
 
@@ -279,106 +251,27 @@ Once the PR is ready (all checks green, comments addressed), provide:
 
 ### Implementing Improvements in Separate PRs
 
-**When you identify improvements with long-term benefit, implement them in separate PRs:**
-
-**Types of improvements to implement:**
-- Workflow improvements (updates to CLAUDE.md/AGENTS.md)
-- Code quality improvements (refactoring, better patterns)
-- Documentation improvements
-- Test infrastructure improvements
-- Build/CI improvements
-
-**Branching strategy:**
-```bash
-# Prefer branching from master when possible
-git checkout master
-git pull
-git checkout -b improve/description
-
-# Only branch from PR branch if improvement depends on PR changes
-git checkout feature/main-pr-branch
-git checkout -b improve/description-depends-on-main-pr
-```
-
-**Rules:**
-1. **Separate PR required** - never mix improvements with main feature PR
-2. **Branch from master** when possible (most improvements are independent)
-3. **Branch from PR branch** only if improvement depends on PR changes
-4. **Avoid merge conflicts** - keep improvements focused and minimal
-5. **Only implement long-term benefits** - skip "nice to have" without clear value
-6. **For `.claude/agents/` changes**: Always branch from and PR to master
-
-**Workflow:**
-1. Complete main PR (all checks green, comments addressed)
-2. Identify improvements during work
-3. Create separate PR(s) for improvements
-4. Mention improvement PRs in main PR final comment
-5. Return control to user with status of all PRs
+Implement long-term improvements (workflow, code quality, docs, tests, CI) in **separate PRs** — never mix with the main feature PR. Branch from master when possible; only branch from the PR branch if the improvement depends on those changes. For `.claude/agents/` changes, always branch from and PR to master. Mention improvement PRs in the main PR's final comment.
 
 ### Hotfix Process (Critical Bugs Only)
 
-**When to use hotfix vs regular fix:**
-- **Hotfix**: Critical production bug in current stable release that needs immediate patch
-- **Regular fix**: Bug introduced after latest stable release, or non-critical fixes
+Hotfix = critical production bug in current stable release. Regular fix = bug after latest stable, or non-critical.
 
-**Important**: Hotfix branches MUST be based on the `stable` tag. The code you're fixing must exist in stable.
+**Hotfix branches MUST be based on `stable` tag.** Always verify the buggy code exists in stable first — if not, use `git checkout -b fix/description master` instead.
 
-**Before creating a hotfix, verify the code exists in stable:**
 ```bash
-# Check what version stable points to
 git fetch --tags --force
-git log -1 --oneline stable
-
-# Verify the buggy code exists in stable
-git show stable:path/to/file.py | grep "buggy_code"
-```
-
-**If the code doesn't exist in stable**, use a regular fix branch from master instead:
-```bash
-# Example: jq dependency added in v5.0.0, but stable was at v4.22.1
-# → Cannot hotfix, must use regular fix branch
-git checkout -b fix/description master
-```
-
-**Creating a hotfix:**
-```bash
+git show stable:path/to/file.py | grep "buggy_code"  # verify code exists in stable
 git checkout -b hotfix/description stable
-# Make your fix
-git add . && git commit -m "fix: description"
+# fix, commit, then:
 gh pr create --draft --base master
 ```
 
-**Hotfix workflow execution:**
-When hotfix PR merges, `hotfix-release.yml` runs:
-1. Validates branch is based on stable tag
-2. Runs semantic-release (creates version tag, updates CHANGELOG.md)
-3. Creates draft GitHub release
-4. Copies CHANGELOG.md to `homeassistant-addon/` and pushes to master
-5. Updates `stable` tag to point to new release commit
-6. Builds binaries and publishes release
-
-The `stable` tag is updated AFTER the changelog sync, ensuring it points to the exact release commit, not subsequent maintenance commits.
+On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
 
 ### Boy Scout Rule
 
-**Principle**: "Always leave the code cleaner than you found it." — Robert C. Martin, *Clean Code*
-
-This principle guides incremental quality improvements during implementation work. The goal is continuous, low-risk enhancement without introducing regressions.
-
-**Where this principle applies most strongly:**
-
-1. **Tool descriptions** - Always improve clarity, accuracy, and usefulness when touching tool docstrings
-2. **Tests** - See testing guidelines below
-
-**For production code (non-test, non-docs):**
-
-Balance improvement against regression risk. Consider:
-- Code complexity and brittleness
-- Test coverage for the affected area
-- Scope of your current work
-- Impact of potential bugs
-
-**Testing guidelines:**
+Improve code incrementally when touching it — especially tool docstrings and tests. Balance against regression risk (complexity, coverage, scope).
 
 | Scenario | Action |
 |----------|--------|
@@ -523,7 +416,8 @@ src/ha_mcp/
 - `list` — collections (`ha_list_areas`)
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
-- `delete` — remove (`ha_config_delete_automation`)
+- `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
+- `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
 - `call` — execute (`ha_call_service`)
 
 ### Tool Structure
@@ -534,9 +428,40 @@ def register_<domain>_tools(mcp, client, **kwargs):
     @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
     async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
-        """One-line summary starting with action verb."""
-        # For complex schemas, add: "Use ha_get_skill_home_assistant_best_practices for details."
+        """<Action verb> <what this tool does -- one sentence>.
+
+        <Optional: second sentence for key behavioral distinction or modes>
+        """
+        # Add to the docstring above only when genuinely needed:
+        # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
+        # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
+        # NOTE / WARNING: non-obvious gotcha or destructive side-effect
+        # For complex schemas: use ha_get_skill_home_assistant_best_practices
 ```
+
+### Tool Docstrings
+
+The single-line template is the default -- extend it only where it genuinely helps.
+
+**Required for every tool:**
+- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`)
+- One sentence describing what the tool does (not how)
+
+**Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
+Example: `ha_search_entities` hints at `ha_get_state`.
+
+**Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
+Omit when a single required parameter makes the call self-evident.
+
+**Add `NOTE` or `WARNING` when** there is a non-obvious gotcha, a destructive side-effect,
+or a behavioral quirk that causes silent failures if ignored.
+
+**Defer complex schemas** instead of embedding them:
+`# For complex schemas: use ha_get_skill_home_assistant_best_practices`
+
+**What NOT to include:** full parameter documentation, type descriptions already in the
+signature, HA domain internals the model already knows, or motivational prose.
+
 
 ### Tool Tags
 
@@ -574,28 +499,9 @@ except Exception as e:
 
 The `except ToolError: raise` guard is required whenever `raise_tool_error()` or validation errors are called inside the same `try` block — without it, `except Exception` catches the `ToolError` and re-maps it to `INTERNAL_ERROR`.
 
-**Pattern B — Input validation errors**:
-```python
-from ..errors import ErrorCode, create_error_response, create_validation_error
+**Pattern B — Input validation errors**: use `raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, message, context={...}, suggestions=[...]))`.
 
-if not entity_id.startswith("light."):
-    raise_tool_error(create_error_response(
-        ErrorCode.VALIDATION_INVALID_PARAMETER,
-        f"entity_id must start with 'light.', got: {entity_id}",
-        suggestions=["Use ha_search_entities(domain_filter='light') to find valid IDs"],
-        context={"entity_id": entity_id},
-    ))
-```
-
-**Pattern C — WebSocket / service call failures**:
-```python
-if not result.get("success"):
-    raise_tool_error(create_error_response(
-        ErrorCode.SERVICE_CALL_FAILED,
-        result.get("error", "Operation failed"),
-        context={"entity_id": entity_id},
-    ))
-```
+**Pattern C — Service call failures**: check `result.get("success")` and raise with `ErrorCode.SERVICE_CALL_FAILED` using `result.get("error", "Operation failed")` as the message.
 
 **Pattern D — Batch item failures** (items inside a results list — do NOT raise):
 ```python
@@ -606,26 +512,9 @@ results.append(create_error_response(
 ))
 ```
 
-**Special case** — only use `raise_error=False` when you need to mutate the error dict before raising (e.g., merging in extra context fields that `exception_to_structured_error` doesn't support). By default, omit it and let the function raise on its own:
-```python
-# Default — let exception_to_structured_error raise directly:
-except Exception as e:
-    exception_to_structured_error(e, context={"entity_id": entity_id})
+Only use `raise_error=False` on `exception_to_structured_error` when you need to mutate the dict before raising. Never add `add_timezone_metadata` to errors.
 
-# Only use raise_error=False when you need to post-process the dict:
-except Exception as e:
-    error_response = exception_to_structured_error(
-        e, context={"entity_id": entity_id}, raise_error=False
-    )
-    error_response["extra_field"] = "value"  # mutation that justifies raise_error=False
-    raise_tool_error(error_response)
-```
-
-**Never add `add_timezone_metadata` to errors.** Timezone context is only meaningful for successful responses containing timestamps. Errors are read by the LLM to decide next steps — timezone info is irrelevant and adds a pointless network call.
-
-Available `errors.py` helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, and the generic `create_error_response`.
-
-`exception_to_structured_error` already classifies 404s, auth errors, timeouts, etc. based on exception type. Pass `context={"entity_id": ...}` so it produces `ENTITY_NOT_FOUND` for 404 errors automatically — no manual string matching needed.
+`exception_to_structured_error` auto-classifies 404s, auth errors, timeouts by exception type. Pass `context={"entity_id": ...}` for automatic `ENTITY_NOT_FOUND` on 404s. Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, `create_error_response`.
 
 ### Return Values
 ```python
@@ -653,19 +542,7 @@ Tool consolidation, refactoring, parameter/return changes, and renaming are **NO
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
 
-**Implementation (#381)**: Tools have an optional `wait` parameter (default `True`) that controls whether they poll for completion:
-
-```python
-# Config operations wait by default
-await ha_config_set_helper(...)  # Polls until entity registered
-
-# Opt-out for bulk operations
-for config in configs:
-    await ha_config_set_automation(config, wait=False)
-await _verify_all_created(entity_ids)  # Batch verification
-```
-
-**Tool Categories**:
+Tools have an optional `wait` parameter (default `True`) that polls for completion. Use `wait=False` for bulk operations, then batch-verify. Categories:
 - **Config ops** (automations, helpers, scripts): Wait by default (poll until entity queryable/removed)
 - **Service calls** (lights, switches): Wait for state change on state-changing services (turn_on, turn_off, toggle, etc.)
 - **Async ops** (automation triggers, external integrations): Return immediately (not state-changing)
@@ -678,62 +555,16 @@ await _verify_all_created(entity_ids)  # Batch verification
 
 ## Context Engineering & Progressive Disclosure
 
-This project applies [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principles to tool design. These complementary approaches help manage cognitive load for both the LLM and the end user.
+Provide minimum context needed; let models fetch more on demand. LLM context is finite — more often means worse.
 
-### Context Engineering
-
-Context engineering treats LLM context as a finite resource with diminishing returns. Rather than front-loading all information, provide the minimum context needed and let the model fetch more when required.
-
-**Guiding principles:**
-- **Favor statelessness** — Avoid server-side session tracking or MCP-side state when possible. Use content-derived identifiers (hashes, IDs) that the client can pass back. Example: dashboard updates use content hashing for optimistic locking—hash is computed on read, verified on write to detect conflicts, no session state needed.
-- Delegate validation to backend systems when they already handle it well (HA Core uses voluptuous schemas with clear error messages)
-- Keep tool parameters simple—let the backend API handle type coercion, defaults, and validation
-- Rely on documentation tools rather than embedding extensive docs in every tool description
-- Trust that model knowledge + on-demand docs = sufficient context
-
-**When tool-side logic adds value:** format normalization, parsing JSON strings from MCP clients, combining multiple HA API calls into one logical operation. Otherwise, let HA validate and return its own error messages (pass-through).
-
-### Progressive Disclosure
-
-[Jakob Nielsen's progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) principle: show essential features first, reveal complexity gradually. This applies directly to [LLM context management](https://www.inferable.ai/blog/posts/llm-progressive-context-encrichment)—giving LLMs more context often makes them perform worse by diluting attention.
-
-**How we apply this in ha-mcp:**
-
-| Pattern | Example |
-|---------|---------|
-| **Docs on demand** | Tool descriptions reference the `ha_get_skill_home_assistant_best_practices` skill instead of embedding full documentation |
-| **Hints in UX flow** | First tool in a workflow hints at related tools (e.g., `ha_search_entities` suggests `ha_get_state`) |
-| **Error-driven discovery** | When a tool fails, the error response hints at the skill guidance tool for help |
-| **Layered parameters** | Required params first, optional params with sensible defaults |
-| **Focused returns** | Return essential data; let user request details via follow-up tools |
-
-**Practical examples in this codebase:**
-- `ha_config_set_helper` has minimal docstring, points to the skill guidance tool for each helper type
-- Search tools return entity IDs and names; full state requires `ha_get_state`
-- Error responses include `suggestions` array guiding next steps
+**Principles:**
+- **Favor statelessness** — use content-derived identifiers (hashes, IDs) instead of server-side state. Example: dashboard optimistic locking via content hash.
+- **Delegate validation** to HA backend (voluptuous schemas with clear errors). Tool-side logic adds value for: format normalization, JSON string parsing, combining multiple API calls.
+- **Progressive disclosure** — docs on demand (`ha_get_skill_home_assistant_best_practices`), workflow hints between tools, error-driven discovery via `suggestions` arrays, layered params (required first, optional with defaults), focused returns (IDs/names; full state via follow-up).
 
 ### Testing Model Knowledge
 
-Before adding extensive documentation to tool descriptions, test what models already know. Use a **no-context sub-agent** to probe baseline knowledge:
-
-```
-Task tool with model=haiku or model=sonnet:
-"Without searching or fetching anything, answer from your training data only:
- How do you create a [X] in Home Assistant via WebSocket API?
- What parameters are required vs optional?
- Be honest if you're uncertain."
-```
-
-This reveals:
-- What the model knows from training (no need to document)
-- What gaps exist (target these with skill guidance hints)
-- Confidence levels across model tiers (haiku vs sonnet vs opus)
-
-**Important: Fact-check model claims.** Models can hallucinate plausible-sounding syntax. Always verify against HA Core source:
-```bash
-gh api /repos/home-assistant/core/contents/homeassistant/components/{domain}/__init__.py \
-  --jq '.content' | base64 -d | grep -A 20 "CREATE_FIELDS\|vol.Schema"
-```
+Before adding docs to tool descriptions, test what models already know using a no-context sub-agent (haiku/sonnet). Document only gaps. Always fact-check model claims against HA Core source — models hallucinate plausible syntax.
 
 ## Home Assistant Add-on
 
@@ -826,46 +657,7 @@ Located in `.claude/skills/`:
 | `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
 | `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
 
-### BAT Ad-Hoc Testing
-
-**Usage:** `/bat-adhoc [scenario-description]`
-
-Quick summary:
-- Validates MCP tools work correctly from a real AI agent's perspective (Claude/Gemini CLIs)
-- Runner at `tests/uat/run_uat.py` returns concise summary to stdout, full results to temp file
-- Use for PR validation, regression detection, and end-to-end integration verification
-- Progressive disclosure: only read `results_file` when you need to dig deeper
-
-For complete workflow, scenario design guidelines, examples, and output format, invoke `/bat-adhoc --help` or read `.claude/skills/bat-adhoc/SKILL.md`.
-
-### BAT Story Evaluation
-
-**Usage:** `/bat-story-eval --baseline v6.6.1 [--agents gemini] [--stories s01,s02]`
-
-Quick summary:
-- Compares MCP tool behavior between target (local code) and baseline (released version)
-- Diff-based triage: analyzes `git diff` to select relevant pre-built stories
-- Generates custom stories (~50-50 with pre-built) to test code paths the diff affects but pre-built stories don't cover
-- Black-box verification via `ha_query.py`, white-box analysis via session files
-- Scores each story: pass/partial/fail with regression detection
-- Report includes full custom story details (rationale, setup, prompts, verification)
-
-For complete workflow and evaluation criteria, invoke `/bat-story-eval --help` or read `.claude/skills/bat-story-eval/SKILL.md`.
-
-### Contributor PR Review
-
-**Usage:** `/contrib-pr-review <pr-number>`
-
-Review external contributor PRs with comprehensive security-first analysis:
-- **Security assessment** - prompt injection, AGENTS.md changes, workflow modifications
-- **Test coverage** - checks for pre-existing tests and new tests (uses both naming conventions and grep for function/class names)
-- **Contributor experience** - assesses both project contributions and overall GitHub experience
-- **PR size appropriateness** - validates size matches contributor experience level
-- **Intent alignment** - checks issue linkage and scope
-
-**When to use:** Reviewing PRs from external contributors (not your own PRs). Provides structured review framework focusing on safety and quality.
-
-See `.claude/skills/contrib-pr-review/SKILL.md` for full documentation.
+Invoke any skill with `/<skill-name> --help` for full documentation, or read `.claude/skills/<name>/SKILL.md`.
 
 ## Documentation Updates
 

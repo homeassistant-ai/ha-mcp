@@ -1,7 +1,7 @@
 ---
 name: Antigravity
 company: Google
-logo: /logos/google.svg
+logo: /logos/antigravity.svg
 transports: ['stdio']
 configFormat: json
 configLocation: mcp_config.json (in Antigravity UI)
