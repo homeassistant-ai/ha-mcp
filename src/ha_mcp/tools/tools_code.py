@@ -93,6 +93,16 @@ async def _run_sandboxed_code(
     """
     call_count = 0
 
+    def _sandbox_error(code: ErrorCode, message: str) -> dict[str, Any]:
+        """Build an error dict to return to sandbox code (not a tool-level error).
+
+        These are returned to the sandbox caller, not to the MCP client,
+        so they intentionally do NOT use raise_tool_error.
+        """
+        err: dict[str, Any] = {"error": {"code": str(code), "message": message}}
+        err["success"] = False
+        return err
+
     def _normalize_endpoint(endpoint: str) -> str:
         """Normalize endpoint to be relative to the httpx base URL (/api).
 
@@ -144,20 +154,18 @@ async def _run_sandboxed_code(
         nonlocal call_count
 
         if tool_name in _BLOCKED_TOOLS:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                message=f"Tool '{tool_name}' cannot be called from sandbox code",
-            ))
+            return _sandbox_error(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                f"Tool '{tool_name}' cannot be called from sandbox code",
+            )
 
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_FAILED,
-                message=(
-                    f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
-                    f"calls per execution)"
-                ),
-            ))
+            return _sandbox_error(
+                ErrorCode.VALIDATION_FAILED,
+                f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
+                f"calls per execution)",
+            )
 
         try:
             result = await ctx.fastmcp.call_tool(tool_name, arguments)
@@ -165,16 +173,12 @@ async def _run_sandboxed_code(
             try:
                 return json.loads(str(te))
             except (json.JSONDecodeError, TypeError):
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.INTERNAL_ERROR,
-                    message=str(te),
-                ))
+                return _sandbox_error(ErrorCode.INTERNAL_ERROR, str(te))
         except Exception as exc:
-            msg = str(exc)[:200]
-            raise_tool_error(create_error_response(
-                code=ErrorCode.INTERNAL_ERROR,
-                message=f"Tool call failed: {msg}",
-            ))
+            return _sandbox_error(
+                ErrorCode.INTERNAL_ERROR,
+                f"Tool call failed: {str(exc)[:200]}",
+            )
 
         # FastMCP call_tool returns a ToolResult or list of content objects.
         # Monty can only handle basic Python types, so serialize everything.

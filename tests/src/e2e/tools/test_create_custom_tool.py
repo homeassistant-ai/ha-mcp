@@ -30,14 +30,17 @@ TOOL_NAME = "ha_manage_custom_tool"
 @pytest.fixture(scope="module")
 def code_mode_enabled(ha_container_with_fresh_config):
     """Enable code mode feature flag for the test module."""
-    old_val = os.environ.get(FEATURE_FLAG, "")
+    old_val = os.environ.get(FEATURE_FLAG)
     os.environ[FEATURE_FLAG] = "true"
     # Reset cached settings so the new server reads the fresh env var
     import ha_mcp.config
     ha_mcp.config._settings = None
     logger.info("Code mode feature flag enabled")
     yield
-    os.environ["ENABLE_CODE_MODE"] = old_val
+    if old_val is not None:
+        os.environ[FEATURE_FLAG] = old_val
+    else:
+        os.environ.pop(FEATURE_FLAG, None)
     ha_mcp.config._settings = None
 
 
