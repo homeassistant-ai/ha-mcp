@@ -527,15 +527,12 @@ raise ToolError(json.dumps({...}))                   # Tool-level failure (isErr
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
 
-Anthropic's tool-use docs [recommend consolidating related operations](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/define-tools) with an `action` parameter when operations share parameters and semantics. This works well when parameters are uniformly relevant across all actions. Anthropic's [MCP best practices](https://github.com/anthropics/skills/blob/main/skills/mcp-builder/reference/mcp_best_practices.md) also advise keeping tool operations "focused and atomic."
-
-**Where consolidation hurts in this project:** merging tools whose parameters are mostly disjoint. If merging requires "Ignored when source=..." on multiple parameters, the tools serve distinct operations — consolidating them makes the schema harder for LLMs to use, not easier. `ha_get_logs` (7 of 10 params conditional on `source`) is existing tech debt that illustrates this.
+With 92+ tools, this project exceeds the [10-20 tool threshold](https://ai.google.dev/gemini-api/docs/function-calling) where tool selection accuracy degrades ([OpenAI](https://developers.openai.com/api/docs/guides/function-calling), [Google](https://ai.google.dev/gemini-api/docs/function-calling)). Reducing tool count is a priority, but how matters. Anthropic's [tool design blog](https://www.anthropic.com/engineering/writing-tools-for-agents) recommends combining frequently chained operations: "Instead of implementing a `list_users`, `list_events`, and `create_event` tools, consider implementing a `schedule_event` tool which finds availability and schedules an event." Their [context engineering guide](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) warns against "bloated tool sets that cover too much functionality or lead to ambiguous decision points about which tool to use." Each tool should have "a clear, distinct purpose" ([Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents)).
 
 | Pattern | Example | Guideline |
 |---------|---------|-----------|
 | Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
-| Shared params, shared semantics | Operations that differ only by action on the same resource | Consolidate with `action` param |
-| Mostly disjoint params | `ha_get_logs` (7 of 10 params are source-specific) | Keep separate — conditional params add confusion |
+| Frequently chained operations | Multi-step workflows combined into one tool | Consolidate — reduces round-trips |
 
 ### Breaking Changes Definition
 
