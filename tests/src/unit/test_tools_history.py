@@ -45,12 +45,14 @@ class TestHaGetHistoryExceptionSuggestions:
     @pytest.mark.asyncio
     async def test_statistics_exception_includes_state_class_hint(self, history_tool):
         """Unexpected exception with source=statistics surfaces state_class suggestion."""
-        with patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            side_effect=RuntimeError("unexpected"),
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            pytest.raises(ToolError) as exc_info,
         ):
-            with pytest.raises(ToolError) as exc_info:
-                await history_tool(entity_ids="sensor.test", source="statistics")
+            await history_tool(entity_ids="sensor.test", source="statistics")
 
         suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
         assert any("state_class" in s for s in suggestions)
@@ -60,12 +62,14 @@ class TestHaGetHistoryExceptionSuggestions:
         self, history_tool
     ):
         """Unexpected exception with source=history does not surface state_class suggestion."""
-        with patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            side_effect=RuntimeError("unexpected"),
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            pytest.raises(ToolError) as exc_info,
         ):
-            with pytest.raises(ToolError) as exc_info:
-                await history_tool(entity_ids="sensor.test", source="history")
+            await history_tool(entity_ids="sensor.test", source="history")
 
         suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
         assert not any("state_class" in s for s in suggestions)
