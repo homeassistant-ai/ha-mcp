@@ -1,7 +1,7 @@
 name: Update Add-on Config Version
 
-# Reusable workflow to update homeassistant-addon/config.yaml after Docker images are published.
-# Called from semver-release.yml and hotfix-release.yml to avoid duplication.
+# Reusable workflow to update addon config.yaml after Docker images are published.
+# Called from semver-release.yml, hotfix-release.yml, and addon-publish-dev.yml.
 on:
   workflow_call:
     inputs:
@@ -9,6 +9,11 @@ on:
         description: 'Version to set in config.yaml (without v prefix)'
         required: true
         type: string
+      config_path:
+        description: 'Path to config.yaml to update'
+        required: false
+        type: string
+        default: 'homeassistant-addon/config.yaml'
       commit_message_prefix:
         description: 'Prefix for commit message (e.g., "publish version" or "publish hotfix version")'
         required: false
@@ -68,11 +73,12 @@ jobs:
           VERSION="${{ inputs.version }}"
           echo "Updating addon config.yaml to version $VERSION (using token: ${{ steps.token.outputs.source }})"
 
-          yq -i ".version = \"$VERSION\"" homeassistant-addon/config.yaml
+          CONFIG_PATH="${{ inputs.config_path }}"
+          yq -i ".version = \"$VERSION\"" "$CONFIG_PATH"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add homeassistant-addon/config.yaml
+          git add "$CONFIG_PATH"
 
           # Only commit if there are changes
           if git diff --staged --quiet; then
