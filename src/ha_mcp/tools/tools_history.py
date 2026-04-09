@@ -316,14 +316,19 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            exception_to_structured_error(
-                e,
-                suggestions=[
+            if source == "statistics":
+                suggestions = [
+                    "Check Home Assistant connection",
+                    "Verify entities have state_class attribute",
+                    "Ensure recorder component is enabled with statistics",
+                ]
+            else:
+                suggestions = [
                     "Check Home Assistant connection",
                     "Verify entity IDs are correct",
                     "Ensure recorder component is enabled",
-                ],
-            )
+                ]
+            exception_to_structured_error(e, suggestions=suggestions)
 
 
 async def _fetch_history(
