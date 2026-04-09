@@ -90,6 +90,25 @@ No token or credential setup needed — the add-on connects to Home Assistant au
 
 </details>
 
+<details>
+<summary><b>🌐 Remote Access (Nabu Casa / Webhook Proxy)</b></summary>
+
+Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
+
+1. Install the **MCP Server add-on** (see above) and the **Webhook Proxy** add-on from the same store
+2. Start the webhook proxy and **restart Home Assistant** when prompted
+3. Copy the webhook URL from the add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+4. Configure your AI client with that URL
+
+For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
+
+[Webhook proxy documentation →](homeassistant-addon-webhook-proxy/DOCS.md)
+
+</details>
+
 ### 🧙 Setup Wizard for 15+ clients
 
 **Claude Code, Gemini CLI, ChatGPT, Open WebUI, VSCode, Cursor, and more.**

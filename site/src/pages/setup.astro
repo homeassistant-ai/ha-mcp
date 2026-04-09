@@ -382,7 +382,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="selected-badge" id="selected-server-setup"></span>
         </h2>
         <p class="text-slate-400 text-sm mb-4">Expose your MCP server securely to the internet</p>
-        <div class="grid md:grid-cols-2 gap-4" id="proxy-grid">
+        <div class="grid md:grid-cols-3 gap-4" id="proxy-grid">
           <button data-proxy="cloudflared" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
               <span class="text-2xl">☁️</span>
@@ -390,6 +390,14 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
             </div>
             <h3 class="font-semibold text-white">Cloudflare Tunnel</h3>
             <p class="text-sm text-slate-400">Free, no port forwarding needed</p>
+          </button>
+          <button data-proxy="webhook-proxy" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-2xl">🏠</span>
+              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">Nabu Casa / Webhook Proxy</h3>
+            <p class="text-sm text-slate-400">Uses existing HA reverse proxy</p>
           </button>
           <button data-proxy="custom" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
@@ -772,7 +780,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     }
     if (state.proxy || (state.serverSetup && !isRemote)) {
       const finalText = state.proxy ?
-        (state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : 'Custom Proxy') :
+        (state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : state.proxy === 'webhook-proxy' ? 'Webhook Proxy' : 'Custom Proxy') :
         serverSetupOptions[state.serverSetup]?.label;
       document.getElementById('selected-final').textContent = finalText || '';
     }
@@ -1009,7 +1017,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     if (state.connection) badges.push(`<span class="px-3 py-1 rounded-full bg-green-900/50 text-green-300">${state.connection.name}</span>`);
     if (state.platform && isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-purple-900/50 text-purple-300">${state.platform.name}</span>`);
     if (setupInfo && !isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-orange-900/50 text-orange-300">${setupInfo.label}</span>`);
-    if (state.proxy) badges.push(`<span class="px-3 py-1 rounded-full bg-cyan-900/50 text-cyan-300">${state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : 'Custom Proxy'}</span>`);
+    if (state.proxy) badges.push(`<span class="px-3 py-1 rounded-full bg-cyan-900/50 text-cyan-300">${state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : state.proxy === 'webhook-proxy' ? 'Webhook Proxy' : 'Custom Proxy'}</span>`);
     summaryEl.innerHTML = badges.join('');
 
     // Build instructions
@@ -1070,8 +1078,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     // Deployment instructions (for network/remote)
     if (derivedDeployment && !isLocal) {
       let deployInstr = '';
-      // For remote connections, add secret path for security
-      const secretPathNote = isRemote ? `
+      // For remote connections, add secret path for security (not needed for webhook-proxy — handled automatically)
+      const secretPathNote = (isRemote && state.proxy !== 'webhook-proxy') ? `
           <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mt-3">
             <p class="text-red-300 text-sm font-medium">🔒 Security Warning</p>
             <p class="text-red-200/80 text-xs mt-1">When exposing to the internet, <strong>always use a secret path</strong> to prevent unauthorized access. Keep this path private!</p>
@@ -1171,6 +1179,32 @@ cloudflared tunnel run ha-mcp</code></pre>
               <li>Select <strong>"do not block (allow crawlers)"</strong></li>
             </ol>
             <p class="text-amber-200/80 text-xs mt-2"><a href="https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg" target="_blank" class="text-blue-400 hover:underline">Screenshot of the setting</a></p>
+          </div>
+        </div>`;
+      } else if (state.proxy === 'webhook-proxy') {
+        proxyInstr = `<div class="instruction-block">
+          <h4 class="instruction-title">🏠 Webhook Proxy Add-on</h4>
+          <p class="text-slate-300 mb-3">The Webhook Proxy add-on routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>Install the MCP Server add-on</strong> first (if not already installed):
+              <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mt-2 mb-2">
+                <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
+              </a>
+            </li>
+            <li><strong>Install the "Webhook Proxy for HA MCP"</strong> add-on from the same store</li>
+            <li><strong>Start the add-on</strong> — it will ask you to restart Home Assistant</li>
+            <li><strong>Restart Home Assistant</strong> (Settings &gt; System &gt; Restart)</li>
+            <li><strong>Copy the remote URL</strong> from the webhook proxy add-on logs:
+              <pre class="code-block mt-2"><code>MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx</code></pre>
+            </li>
+          </ol>
+          <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
+            <p class="text-blue-300 text-sm font-medium">💡 When to use this method</p>
+            <p class="text-blue-200/80 text-xs mt-1">If you already have <strong>Nabu Casa</strong> or another reverse proxy pointing at your Home Assistant instance, the Webhook Proxy is the simplest remote setup — no Cloudflare account, no tunnel configuration, no extra ports.</p>
+          </div>
+          <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
+            <p class="text-slate-300 text-sm font-medium">Non-Nabu Casa users</p>
+            <p class="text-slate-400 text-xs mt-1">If you use a custom reverse proxy (Cloudflare, DuckDNS, nginx, etc.), set <code class="bg-slate-800 px-1 rounded">remote_url</code> in the webhook proxy add-on configuration to your external HA URL (e.g., <code class="bg-slate-800 px-1 rounded">https://ha.example.com</code>).</p>
           </div>
         </div>`;
       } else if (state.proxy === 'custom') {
@@ -1560,11 +1594,14 @@ mcpServers:
       }
       hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> → Your long-lived access token</li>`);
     }
-    if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker')) {
+    if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker') && state.proxy !== 'webhook-proxy') {
       hints.push(`<li><code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> → A random secret string (e.g., <code>abc123xyz</code>) - <strong class="text-red-400">keep this private!</strong></li>`);
     }
     if (!isStdio) {
-      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> → Your MCP server URL (from deployment step above)</li>`);
+      const urlHint = state.proxy === 'webhook-proxy'
+        ? 'Your webhook proxy URL (from the webhook proxy add-on logs)'
+        : 'Your MCP server URL (from deployment step above)';
+      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> → ${urlHint}</li>`);
     }
     hintsEl.innerHTML = hints.join('');
 
