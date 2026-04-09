@@ -103,7 +103,7 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
 
 
 # Source-dependent default look-back periods
-_DEFAULT_START_HOURS: dict[str, int] = {"history": 24, "statistics": 30 * 24}
+_DEFAULT_START_HOURS_BY_SOURCE: dict[str, int] = {"history": 24, "statistics": 30 * 24}
 
 
 def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -257,7 +257,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ))
 
             # Source-dependent default hours
-            default_hours = _DEFAULT_START_HOURS[source]
+            default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
 
             # Parse time parameters
             try:
