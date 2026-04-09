@@ -1,7 +1,10 @@
-"""Unit tests for ha_dashboard_find_card error handling.
+"""Unit tests for ha_config_get_dashboard search mode error handling.
 
-Validates that ha_dashboard_find_card uses structured error responses and
-does NOT leak internal Python type names or tracebacks.
+Validates that ha_config_get_dashboard in search mode uses structured error
+responses and does NOT leak internal Python type names or tracebacks.
+
+Replaces test_dashboard_find_card_error.py after ha_dashboard_find_card
+was merged into ha_config_get_dashboard (issue #901).
 """
 
 import json
@@ -13,8 +16,8 @@ from fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
 
 
-class TestDashboardFindCardErrorHandling:
-    """Test ha_dashboard_find_card error path does not leak internals."""
+class TestConfigGetDashboardSearchErrorHandling:
+    """Test ha_config_get_dashboard search mode error path does not leak internals."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -42,16 +45,16 @@ class TestDashboardFindCardErrorHandling:
         return client
 
     @pytest.fixture
-    def find_card_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_dashboard_find_card function."""
+    def get_dashboard_tool(self, mock_mcp, mock_client):
+        """Register tools and return the ha_config_get_dashboard function."""
         register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_dashboard_find_card"]
+        return self.registered_tools["ha_config_get_dashboard"]
 
     @pytest.mark.asyncio
-    async def test_error_does_not_leak_internals(self, find_card_tool):
+    async def test_error_does_not_leak_internals(self, get_dashboard_tool):
         """Error response must NOT contain 'error_type' or 'traceback'."""
         with pytest.raises(ToolError) as exc_info:
-            await find_card_tool(url_path="lovelace", entity_id="light.test")
+            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
 
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
@@ -62,10 +65,10 @@ class TestDashboardFindCardErrorHandling:
         assert "traceback" not in result
 
     @pytest.mark.asyncio
-    async def test_error_includes_suggestions(self, find_card_tool):
+    async def test_error_includes_suggestions(self, get_dashboard_tool):
         """Error response must include dashboard-specific suggestions."""
         with pytest.raises(ToolError) as exc_info:
-            await find_card_tool(url_path="lovelace", entity_id="light.test")
+            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
 
         result = json.loads(str(exc_info.value))
         suggestions = result["error"]["suggestions"]
@@ -88,7 +91,7 @@ class TestDashboardFindCardErrorHandling:
         self,
         mock_mcp,
         mock_client,
-        find_card_tool,
+        get_dashboard_tool,
         exception_cls,
         exception_msg,
         expected_code,
@@ -99,7 +102,7 @@ class TestDashboardFindCardErrorHandling:
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await find_card_tool(url_path="lovelace", entity_id="light.test")
+            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
 
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
