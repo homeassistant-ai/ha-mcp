@@ -22,6 +22,7 @@ class TestHaGetHistoryExceptionSuggestions:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -55,7 +56,9 @@ class TestHaGetHistoryExceptionSuggestions:
         assert any("state_class" in s for s in suggestions)
 
     @pytest.mark.asyncio
-    async def test_history_exception_does_not_include_state_class_hint(self, history_tool):
+    async def test_history_exception_does_not_include_state_class_hint(
+        self, history_tool
+    ):
         """Unexpected exception with source=history does not surface state_class suggestion."""
         with patch(
             "ha_mcp.tools.tools_history.get_connected_ws_client",
