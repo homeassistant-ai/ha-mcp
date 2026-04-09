@@ -144,24 +144,20 @@ async def _run_sandboxed_code(
         nonlocal call_count
 
         if tool_name in _BLOCKED_TOOLS:
-            return {
-                "success": False,
-                "error": {
-                    "message": f"Tool '{tool_name}' cannot be called from sandbox code"
-                },
-            }
+            raise_tool_error(create_error_response(
+                code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                message=f"Tool '{tool_name}' cannot be called from sandbox code",
+            ))
 
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
-            return {
-                "success": False,
-                "error": {
-                    "message": (
-                        f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
-                        f"calls per execution)"
-                    )
-                },
-            }
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_FAILED,
+                message=(
+                    f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
+                    f"calls per execution)"
+                ),
+            ))
 
         try:
             result = await ctx.fastmcp.call_tool(tool_name, arguments)
@@ -169,13 +165,16 @@ async def _run_sandboxed_code(
             try:
                 return json.loads(str(te))
             except (json.JSONDecodeError, TypeError):
-                return {"success": False, "error": {"message": str(te)}}
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.INTERNAL_ERROR,
+                    message=str(te),
+                ))
         except Exception as exc:
             msg = str(exc)[:200]
-            return {
-                "success": False,
-                "error": {"message": f"Tool call failed: {msg}"},
-            }
+            raise_tool_error(create_error_response(
+                code=ErrorCode.INTERNAL_ERROR,
+                message=f"Tool call failed: {msg}",
+            ))
 
         # FastMCP call_tool returns a ToolResult or list of content objects.
         # Monty can only handle basic Python types, so serialize everything.
