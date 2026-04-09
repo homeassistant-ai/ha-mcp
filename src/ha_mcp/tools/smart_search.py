@@ -14,6 +14,7 @@ from ..config import get_global_settings
 from ..utils.fuzzy_search import (
     BM25Scorer,
     calculate_partial_ratio,
+    calculate_ratio,
     create_fuzzy_searcher,
     tokenize,
 )
@@ -1477,8 +1478,6 @@ class SmartSearchTools:
             return 100  # all query tokens have IDF=0 but scored > 0 — shouldn't happen
 
         # Tier-3 fallback: token-level SequenceMatcher for typos
-        from ..utils.fuzzy_search import calculate_ratio
-
         best = 0
         for qt in query_tokens:
             for dt in set(doc_tokens):
