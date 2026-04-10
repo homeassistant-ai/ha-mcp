@@ -144,7 +144,6 @@ ignore = [
 "src/ha_mcp/tools/tools_areas.py" = ["C901"]
 "src/ha_mcp/tools/tools_blueprints.py" = ["C901"]
 "src/ha_mcp/tools/tools_calendar.py" = ["C901"]
-"src/ha_mcp/tools/tools_camera.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_automations.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_dashboards.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_entry_flow.py" = ["C901"]
@@ -167,8 +166,6 @@ ignore = [
 "src/ha_mcp/tools/tools_traces.py" = ["C901"]
 "src/ha_mcp/tools/tools_updates.py" = ["C901"]
 "src/ha_mcp/tools/tools_utility.py" = ["C901"]
-"src/ha_mcp/tools/tools_voice_assistant.py" = ["C901"]
-"src/ha_mcp/tools/tools_zones.py" = ["C901"]
 "src/ha_mcp/tools/util_helpers.py" = ["C901"]
 
 [tool.pytest.ini_options]

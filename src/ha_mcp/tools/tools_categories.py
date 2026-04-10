@@ -94,7 +94,6 @@ class CategoryTools:
 
             categories = result.get("result", [])
 
-            # List mode - return all categories
             if category_id is None:
                 return {
                     "success": True,
@@ -104,7 +103,6 @@ class CategoryTools:
                     "message": f"Found {len(categories)} category(ies) for scope '{scope}'",
                 }
 
-            # Get mode - find specific category
             category = next(
                 (cat for cat in categories if cat.get("category_id") == category_id),
                 None,
@@ -196,7 +194,6 @@ class CategoryTools:
         After creating a category, use ha_set_entity(categories={"automation": "category_id"}) to assign it.
         """
         try:
-            # Determine if this is a create or update
             action = "update" if category_id else "create"
 
             message: dict[str, Any] = {
@@ -208,7 +205,6 @@ class CategoryTools:
             if action == "update":
                 message["category_id"] = category_id
 
-            # Add optional fields only if they are explicitly provided (not None)
             if icon is not None:
                 message["icon"] = icon
 

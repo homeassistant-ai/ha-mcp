@@ -80,7 +80,6 @@ class ZoneTools:
 
             zones = result.get("result", [])
 
-            # If no zone_id provided, return list of all zones
             if zone_id is None:
                 return {
                     "success": True,
@@ -89,7 +88,6 @@ class ZoneTools:
                     "message": f"Found {len(zones)} zone(s)",
                 }
 
-            # Find specific zone by ID
             zone = next((z for z in zones if z.get("id") == zone_id), None)
 
             if zone is None:
@@ -116,6 +114,27 @@ class ZoneTools:
                 "Verify WebSocket connection is active",
                 "Use ha_search_entities(domain_filter='zone') as alternative",
             ])
+
+    @staticmethod
+    def _validate_coordinates(
+        latitude: float | None, longitude: float | None, radius: float | None,
+    ) -> None:
+        """Validate zone coordinate parameters, raising ToolError on invalid values."""
+        if latitude is not None and not (-90 <= latitude <= 90):
+            raise_tool_error(create_validation_error(
+                f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                parameter="latitude",
+            ))
+        if longitude is not None and not (-180 <= longitude <= 180):
+            raise_tool_error(create_validation_error(
+                f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                parameter="longitude",
+            ))
+        if radius is not None and radius <= 0:
+            raise_tool_error(create_validation_error(
+                f"Invalid radius: {radius}. Must be greater than 0.",
+                parameter="radius",
+            ))
 
     @tool(
         name="ha_set_zone",
@@ -210,22 +229,7 @@ class ZoneTools:
                         context={"zone_id": zone_id},
                     ))
 
-                # Validate coordinates if provided
-                if latitude is not None and not (-90 <= latitude <= 90):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                        parameter="latitude",
-                    ))
-                if longitude is not None and not (-180 <= longitude <= 180):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                        parameter="longitude",
-                    ))
-                if radius is not None and radius <= 0:
-                    raise_tool_error(create_validation_error(
-                        f"Invalid radius: {radius}. Must be greater than 0.",
-                        parameter="radius",
-                    ))
+                self._validate_coordinates(latitude, longitude, radius)
 
                 message: dict[str, Any] = {
                     "type": "zone/update",
@@ -239,22 +243,7 @@ class ZoneTools:
                         "name, latitude, and longitude are required when creating a zone.",
                     ))
 
-                # Validate coordinates
-                if not (-90 <= latitude <= 90):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                        parameter="latitude",
-                    ))
-                if not (-180 <= longitude <= 180):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                        parameter="longitude",
-                    ))
-                if radius is not None and radius <= 0:
-                    raise_tool_error(create_validation_error(
-                        f"Invalid radius: {radius}. Must be greater than 0.",
-                        parameter="radius",
-                    ))
+                self._validate_coordinates(latitude, longitude, radius)
 
                 message = {
                     "type": "zone/create",

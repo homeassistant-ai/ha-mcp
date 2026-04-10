@@ -424,10 +424,16 @@ src/ha_mcp/
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
-def register_<domain>_tools(mcp, client, **kwargs):
-    @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
+from fastmcp.tools import tool
+from .helpers import log_tool_usage, register_tool_methods
+
+class DomainTools:
+    def __init__(self, client):
+        self._client = client
+
+    @tool(name="ha_<verb>_<noun>", tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
-    async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
+    async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:
         """<Action verb> <what this tool does -- one sentence>.
 
         <Optional: second sentence for key behavioral distinction or modes>
@@ -437,7 +443,12 @@ def register_<domain>_tools(mcp, client, **kwargs):
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
         # NOTE / WARNING: non-obvious gotcha or destructive side-effect
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
+
+def register_<domain>_tools(mcp, client, **kwargs):
+    register_tool_methods(mcp, DomainTools(client))
 ```
+
+`@tool` (from `fastmcp.tools`) attaches metadata to the method. `@tool` must be the outermost decorator (above `@log_tool_usage`) so that `__fastmcp__` is present on the final method object. `register_tool_methods()` auto-discovers all `@tool`-decorated methods and calls `mcp.add_tool()` for each. The registry discovers `register_*_tools` functions by convention.
 
 ### Tool Docstrings
 

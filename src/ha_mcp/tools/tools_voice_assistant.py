@@ -37,6 +37,61 @@ class VoiceAssistantTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    @staticmethod
+    def _get_entity_exposure(entity_id: str, exposed_entities: dict[str, Any]) -> dict[str, Any]:
+        """Build response for a specific entity's exposure settings."""
+        entity_settings = exposed_entities.get(entity_id, {})
+        is_exposed = any(entity_settings.get(asst) for asst in KNOWN_ASSISTANTS)
+        return {
+            "success": True,
+            "entity_id": entity_id,
+            "exposed_to": {
+                asst: entity_settings.get(asst, False)
+                for asst in KNOWN_ASSISTANTS
+            },
+            "is_exposed_anywhere": is_exposed,
+            "has_custom_settings": entity_id in exposed_entities,
+            "note": (
+                "If has_custom_settings is False, the entity uses default exposure settings"
+                if entity_id not in exposed_entities
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _list_exposures(exposed_entities: dict[str, Any], assistant: str | None) -> dict[str, Any]:
+        """Build response listing all exposed entities with optional filter."""
+        filtered = exposed_entities
+        if assistant:
+            filtered = {
+                eid: settings
+                for eid, settings in filtered.items()
+                if settings.get(assistant)
+            }
+
+        summary: dict[str, int] = dict.fromkeys(KNOWN_ASSISTANTS, 0)
+        for settings in filtered.values():
+            for asst in KNOWN_ASSISTANTS:
+                if settings.get(asst):
+                    summary[asst] += 1
+
+        filters_applied: dict[str, Any] = {}
+        if assistant:
+            filters_applied["assistant"] = assistant
+
+        return {
+            "success": True,
+            "exposed_entities": filtered,
+            "count": len(filtered),
+            "total_entities_with_settings": len(exposed_entities),
+            "summary": (
+                summary
+                if not assistant
+                else {assistant: summary.get(assistant, 0)}
+            ),
+            "filters_applied": filters_applied,
+        }
+
     @tool(
         name="ha_get_entity_exposure",
         tags={"Entity Registry"},
@@ -87,7 +142,6 @@ class VoiceAssistantTools:
         - is_exposed_anywhere: True if exposed to at least one assistant
         """
         try:
-            # Validate assistant filter if provided
             if assistant and assistant not in KNOWN_ASSISTANTS:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -118,67 +172,10 @@ class VoiceAssistantTools:
 
             exposed_entities = result.get("result", {}).get("exposed_entities", {})
 
-            # If entity_id provided, return specific entity exposure
             if entity_id is not None:
-                entity_settings = exposed_entities.get(entity_id, {})
+                return self._get_entity_exposure(entity_id, exposed_entities)
 
-                # Check if entity is exposed to any assistant
-                is_exposed = any(entity_settings.get(asst) for asst in KNOWN_ASSISTANTS)
-
-                return {
-                    "success": True,
-                    "entity_id": entity_id,
-                    "exposed_to": {
-                        asst: entity_settings.get(asst, False)
-                        for asst in KNOWN_ASSISTANTS
-                    },
-                    "is_exposed_anywhere": is_exposed,
-                    "has_custom_settings": entity_id in exposed_entities,
-                    "note": (
-                        "If has_custom_settings is False, the entity uses default exposure settings"
-                        if entity_id not in exposed_entities
-                        else None
-                    ),
-                }
-
-            # List mode - return all exposed entities with optional assistant filter
-            filtered = exposed_entities
-            if assistant:
-                # Filter to only show entities exposed to this assistant
-                filtered = {
-                    eid: settings
-                    for eid, settings in filtered.items()
-                    if settings.get(assistant)
-                }
-
-            # Build summary
-            summary = {
-                "conversation": 0,
-                "cloud.alexa": 0,
-                "cloud.google_assistant": 0,
-            }
-            for settings in filtered.values():
-                for asst in KNOWN_ASSISTANTS:
-                    if settings.get(asst):
-                        summary[asst] += 1
-
-            # Build filters_applied dict
-            filters_applied: dict[str, Any] = {}
-            if assistant:
-                filters_applied["assistant"] = assistant
-
-            return {
-                "success": True,
-                "exposed_entities": filtered,
-                "count": len(filtered),
-                "total_entities_with_settings": len(exposed_entities),
-                "summary": (
-                    summary
-                    if not assistant
-                    else {assistant: summary.get(assistant, 0)}
-                ),
-                "filters_applied": filters_applied,
-            }
+            return self._list_exposures(exposed_entities, assistant)
 
         except ToolError:
             raise
@@ -188,5 +185,5 @@ class VoiceAssistantTools:
 
 
 def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register voice assistant exposure management tools."""
+    """Register voice assistant exposure query tools."""
     register_tool_methods(mcp, VoiceAssistantTools(client))

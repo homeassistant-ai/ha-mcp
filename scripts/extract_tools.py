@@ -93,6 +93,10 @@ def extract_tools() -> list[dict]:
                             tool_dec = dec
                             tool_name = str(kw.value.value)
                             break
+                    # Fallback: @tool() without name= on ha_* function
+                    if tool_dec is None and node.name.startswith("ha_"):
+                        tool_dec = dec
+                        tool_name = node.name
                     if tool_dec:
                         break
 
@@ -150,6 +154,18 @@ def extract_tools() -> list[dict]:
                 "tags": sorted(tags),
                 "source_file": f.name,
             })
+
+    # Detect duplicate tool names
+    seen: dict[str, str] = {}
+    for t in tools:
+        if t["name"] in seen:
+            print(
+                f"ERROR: Duplicate tool name '{t['name']}' in {t['source_file']} "
+                f"(first seen in {seen[t['name']]})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        seen[t["name"]] = t["source_file"]
 
     tools.sort(key=lambda x: (next(iter(x["tags"]), "zzz"), x["name"]))
     return tools

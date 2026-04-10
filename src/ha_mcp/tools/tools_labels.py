@@ -78,7 +78,6 @@ class LabelTools:
 
             labels = result.get("result", [])
 
-            # List mode - return all labels
             if label_id is None:
                 return {
                     "success": True,
@@ -87,7 +86,6 @@ class LabelTools:
                     "message": f"Found {len(labels)} label(s)",
                 }
 
-            # Get mode - find specific label
             label = next(
                 (lbl for lbl in labels if lbl.get("label_id") == label_id), None
             )
@@ -173,7 +171,6 @@ class LabelTools:
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities.
         """
         try:
-            # Determine if this is a create or update
             action = "update" if label_id else "create"
 
             message: dict[str, Any] = {
@@ -186,7 +183,6 @@ class LabelTools:
                 # Note: name is always provided as it's a required parameter
                 # The validation of at least one field is satisfied by name being required
 
-            # Add optional fields only if they are explicitly provided (not None)
             if color is not None:
                 message["color"] = color
             if icon is not None:
