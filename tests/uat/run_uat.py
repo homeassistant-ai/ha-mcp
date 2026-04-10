@@ -36,6 +36,7 @@ REPO_ROOT = TESTS_DIR.parent
 
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
 
@@ -79,8 +80,6 @@ def setup_config_directory() -> Path:
 
 def wait_for_ha(url: str, token: str) -> None:
     """Poll HA until the API, components, and entities are ready."""
-    from ha_wait import wait_for_ha_ready
-
     wait_for_ha_ready(url, token, log=log)
 
 

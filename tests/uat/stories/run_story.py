@@ -59,6 +59,7 @@ sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
 
 from scripts.verify_story import verify_ha_checks  # noqa: E402
+from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +124,6 @@ def _start_container(*, keep_alive: bool = False) -> dict:
         log(f"HA container started on {url}")
 
         # Wait for HA to be fully ready (API + components + entities)
-        from ha_wait import wait_for_ha_ready
-
         wait_for_ha_ready(url, TEST_TOKEN, log=log)
     except Exception:
         container.stop()

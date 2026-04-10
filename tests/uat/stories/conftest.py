@@ -30,6 +30,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from fastmcp import Client  # noqa: E402
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 from ha_mcp.client import HomeAssistantClient  # noqa: E402
 from ha_mcp.server import HomeAssistantSmartMCPServer  # noqa: E402
@@ -85,8 +86,6 @@ def _setup_config_directory() -> Path:
 
 def _wait_for_ha(url: str) -> None:
     """Wait until HA is fully ready (API + components + entities)."""
-    from ha_wait import wait_for_ha_ready
-
     wait_for_ha_ready(url, TEST_TOKEN, log=logger.info)
 
 
