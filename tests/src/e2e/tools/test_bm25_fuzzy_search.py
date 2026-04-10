@@ -36,7 +36,13 @@ async def test_fuzzy_search_multi_word_non_adjacent(mcp_client):
     assert data.get("success") is True
     results = data.get("results", [])
     # BM25 should return results where both terms appear (tokenized matching)
-    # Even if "light kitchen" is not a contiguous substring
+    # even if "light kitchen" is not a contiguous substring. The test HA
+    # instance always has light entities, so a tokenized match must find at
+    # least one.
+    assert len(results) > 0, (
+        "BM25 should return results for multi-word query when query tokens "
+        "exist in entity name/ID corpus"
+    )
     logger.info(
         f"Multi-word fuzzy search returned {len(results)} results "
         f"(total_matches={data.get('total_matches', 0)})"
@@ -171,8 +177,8 @@ async def test_deep_search_fuzzy_multi_word(mcp_client):
                 "ha_config_remove_automation",
                 {"entity_id": "automation.bm25_test_load_sharing"},
             )
-        except Exception:
-            logger.debug("Cleanup of BM25 test automation failed (may not exist)")
+        except Exception as e:
+            logger.debug("Cleanup of BM25 test automation failed: %s", e)
 
 
 @pytest.mark.asyncio
@@ -229,5 +235,5 @@ async def test_deep_search_exact_match_still_works(mcp_client):
                 "ha_config_remove_automation",
                 {"entity_id": "automation.bm25_exact_match_test"},
             )
-        except Exception:
-            logger.debug("Cleanup of exact match test automation failed")
+        except Exception as e:
+            logger.debug("Cleanup of exact match test automation failed: %s", e)

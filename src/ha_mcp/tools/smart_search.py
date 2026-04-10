@@ -1469,15 +1469,29 @@ class SmartSearchTools:
         raw = scorer.score(query_tokens, 0)
 
         if raw > 0:
-            # Normalise: max possible score ≈ sum of IDF for all query tokens
-            # With 1 document and all tokens present, IDF = log(1.5) ≈ 0.405 each.
-            # Scale to 0-100 range relative to a perfect match.
-            max_possible = sum(scorer._idf.get(t, 0.0) for t in query_tokens)
+            # Normalise against the theoretical max (sum of IDF per query
+            # token). With a 1-document corpus every token's IDF is identical
+            # (~0.288 with smoothing), so the ratio effectively measures how
+            # many query tokens the config contains. Cap at 100 for the edge
+            # case where high TF pushes raw above the sum-of-IDFs baseline.
+            max_possible = scorer.max_possible_score(query_tokens)
             if max_possible > 0:
                 return min(100, round(raw / max_possible * 100))
-            return 100  # all query tokens have IDF=0 but scored > 0 — shouldn't happen
+            logger.warning(
+                "BM25 scored > 0 but max_possible IDF is 0; "
+                "query_tokens=%s, doc_tokens_len=%d",
+                query_tokens,
+                len(doc_tokens),
+            )
+            return 100
 
         # Tier-3 fallback: token-level SequenceMatcher for typos
+        logger.debug(
+            "BM25 returned 0 for query_tokens=%s; "
+            "falling back to SequenceMatcher typo scoring over %d unique tokens",
+            query_tokens,
+            len(set(doc_tokens)),
+        )
         best = 0
         for qt in query_tokens:
             for dt in set(doc_tokens):

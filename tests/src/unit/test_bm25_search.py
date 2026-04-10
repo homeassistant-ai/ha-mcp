@@ -139,6 +139,33 @@ class TestFuzzyEntitySearcherBM25:
         assert total > 0
         assert results[0]["entity_id"] == "light.kitchen_ceiling"
 
+    def test_production_threshold_passes_full_match(self, entities):
+        """A match containing all query tokens must pass the production threshold (60)."""
+        searcher = FuzzyEntitySearcher(threshold=60)
+        results, total = searcher.search_entities(
+            entities, "kitchen ceiling", limit=5
+        )
+        assert total > 0, (
+            "Full token match ('kitchen' + 'ceiling') must survive threshold=60 "
+            "under absolute IDF-based normalization"
+        )
+        assert results[0]["entity_id"] == "light.kitchen_ceiling"
+
+    def test_production_threshold_filters_partial_match(self, entities):
+        """A query sharing only a common token should not dominate at threshold=60."""
+        searcher = FuzzyEntitySearcher(threshold=60)
+        # "light nonexistent" only matches on the very common 'light' token —
+        # with absolute normalization, a half-match of a common term should
+        # score well below 60.
+        results, _ = searcher.search_entities(
+            entities, "light nonexistent", limit=5
+        )
+        # Either zero results or only those where 'light' carries enough IDF
+        # weight — no noise floor of 100 from empirical normalization.
+        assert all(r["score"] < 100 for r in results), (
+            "Partial match on common token should not be normalized to 100"
+        )
+
     def test_single_word_query(self, entities):
         searcher = FuzzyEntitySearcher(threshold=30)
         results, total = searcher.search_entities(entities, "garage", limit=5)

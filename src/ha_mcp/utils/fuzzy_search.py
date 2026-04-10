@@ -64,6 +64,9 @@ class BM25Scorer:
 
         self._doc_lens = [len(doc) for doc in corpus]
         self._avgdl = sum(self._doc_lens) / n
+        # Guard against all-empty corpora: avoids nan from 0/0 in length normalization
+        if self._avgdl == 0.0:
+            self._avgdl = 1.0
 
         # document frequency per token
         df: dict[str, int] = {}
@@ -106,6 +109,22 @@ class BM25Scorer:
     def score_all(self, query_tokens: list[str]) -> list[float]:
         """Return BM25 scores for every document in the fitted corpus."""
         return [self.score(query_tokens, i) for i in range(len(self._doc_tokens))]
+
+    def max_possible_score(self, query_tokens: list[str]) -> float:
+        """Return the theoretical maximum BM25 score for *query_tokens*.
+
+        Used for absolute normalization: dividing a raw score by this produces
+        a 0-1 ratio representing how close a document is to a perfect match.
+
+        Query tokens absent from the corpus contribute the corpus's maximum
+        IDF as a penalty — this prevents partial matches from scoring as
+        perfect matches when the other query tokens simply do not exist in
+        the corpus.
+        """
+        if not self._idf:
+            return 0.0
+        max_idf = max(self._idf.values())
+        return sum(self._idf.get(t, max_idf) for t in query_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -163,15 +182,18 @@ class FuzzyEntitySearcher:
         scorer.fit(docs)
         raw_scores = scorer.score_all(query_tokens)
 
-        # Normalise BM25 scores to 0-100 range for threshold comparison
-        max_raw = max(raw_scores) if raw_scores else 0.0
+        # Normalise against theoretical max (sum of IDFs) to produce absolute
+        # scores in the 0-100 range. Empirical-max normalization would always
+        # inflate the best match to 100 regardless of actual relevance, which
+        # defeats the purpose of a threshold-based quality gate.
+        theoretical_max = scorer.max_possible_score(query_tokens)
         matches: list[dict[str, Any]] = []
 
-        if max_raw > 0:
+        if theoretical_max > 0:
             for i, raw in enumerate(raw_scores):
                 if raw <= 0:
                     continue
-                score = round(raw / max_raw * 100)
+                score = min(100, round(raw / theoretical_max * 100))
                 if score < self.threshold:
                     continue
                 eid, fname, domain, attrs, state = meta[i]
@@ -185,8 +207,13 @@ class FuzzyEntitySearcher:
                     "match_type": self._get_match_type(eid, fname, domain, query_lower),
                 })
 
-        # Tier-3 fallback: token-level SequenceMatcher if BM25 found nothing
-        if not matches:
+        # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
+        # every document at zero. Firing the fallback when BM25 found valid
+        # partial matches (just below threshold) would allow a character-level
+        # match on the same token to inflate the score to 100, re-introducing
+        # exactly the noise floor the new absolute normalization is fixing.
+        bm25_found_any = any(raw > 0 for raw in raw_scores)
+        if not matches and not bm25_found_any:
             matches = self._typo_fallback(query_tokens, query_lower, docs, meta)
 
         matches.sort(key=lambda x: x["score"], reverse=True)
@@ -227,7 +254,13 @@ class FuzzyEntitySearcher:
     def _calculate_entity_score(
         self, entity_id: str, friendly_name: str, domain: str, query: str
     ) -> int:
-        """Calculate comprehensive fuzzy score for an entity (legacy, used by deep_search name scoring)."""
+        """Calculate a comprehensive fuzzy score for an entity name/domain.
+
+        Actively used by ``ha_deep_search`` name scoring (automation, script,
+        helper phases) to produce a score comparable to the legacy additive
+        output those paths already rely on. Do not remove without migrating
+        the deep-search callers to a BM25-based scheme.
+        """
         score = 0
 
         # Exact matches get highest scores
