@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -212,7 +212,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~87 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -310,7 +310,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 87+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
@@ -386,9 +386,8 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
-- `ha_get_history` — Retrieve raw state change history for entities (last ~10 days).
+- `ha_get_history` — Retrieve historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
-- `ha_get_statistics` — Retrieve pre-aggregated long-term statistics for trend analysis.
 
 ### Integrations
 - `ha_delete_config_entry` — Delete config entry permanently. Requires confirm=True.
