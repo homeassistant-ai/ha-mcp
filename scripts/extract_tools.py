@@ -158,14 +158,16 @@ def extract_tools() -> list[dict]:
     # Detect duplicate tool names
     seen: dict[str, str] = {}
     for t in tools:
-        if t["name"] in seen:
+        name = str(t["name"])
+        source = str(t["source_file"])
+        if name in seen:
             print(
-                f"ERROR: Duplicate tool name '{t['name']}' in {t['source_file']} "
-                f"(first seen in {seen[t['name']]})",
+                f"ERROR: Duplicate tool name '{name}' in {source} "
+                f"(first seen in {seen[name]})",
                 file=sys.stderr,
             )
             sys.exit(1)
-        seen[t["name"]] = t["source_file"]
+        seen[name] = source
 
     tools.sort(key=lambda x: (next(iter(x["tags"]), "zzz"), x["name"]))
     return tools
