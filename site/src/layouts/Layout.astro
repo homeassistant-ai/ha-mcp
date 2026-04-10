@@ -21,7 +21,7 @@ const { title } = Astro.props;
     <!-- Cloudflare Web Analytics -->
     <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "65196c0f415f4f3690e13ad77fa44cb0"}'></script>
   </head>
-  <body class="min-h-screen text-[var(--text-primary)] antialiased" style="background-color: var(--surface-0); background-image: radial-gradient(ellipse 60% 50% at 25% 0%, rgba(47,193,207,0.03), transparent), radial-gradient(ellipse 50% 40% at 75% 100%, rgba(47,193,207,0.02), transparent);">
+  <body class="min-h-screen text-[var(--text-primary)] antialiased body-background">
     <slot />
     <script>
       document.addEventListener('DOMContentLoaded', () => {

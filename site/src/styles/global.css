@@ -24,6 +24,13 @@ html {
   scroll-behavior: smooth;
 }
 
+.body-background {
+  background-color: var(--surface-0);
+  background-image:
+    radial-gradient(ellipse 60% 50% at 25% 0%, rgba(47,193,207,0.03), transparent),
+    radial-gradient(ellipse 50% 40% at 75% 100%, rgba(47,193,207,0.02), transparent);
+}
+
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Plus Jakarta Sans', sans-serif;
 }
