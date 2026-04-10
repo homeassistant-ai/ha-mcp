@@ -14,10 +14,16 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,19 +31,20 @@ logger = logging.getLogger(__name__)
 KNOWN_ASSISTANTS = ["conversation", "cloud.alexa", "cloud.google_assistant"]
 
 
-def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register voice assistant exposure management tools."""
+class VoiceAssistantTools:
+    """Voice assistant exposure query tools."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_entity_exposure",
         tags={"Entity Registry"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Entity Exposure"
-        }
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Entity Exposure"},
     )
     @log_tool_usage
     async def ha_get_entity_exposure(
+        self,
         entity_id: Annotated[
             str | None,
             Field(
@@ -94,7 +101,7 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
 
             message: dict[str, Any] = {"type": "homeassistant/expose_entity/list"}
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 error = result.get("error", {})
@@ -178,3 +185,8 @@ def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         except Exception as e:
             logger.error(f"Error getting entity exposure: {e}")
             exception_to_structured_error(e, context={"entity_id": entity_id})
+
+
+def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register voice assistant exposure management tools."""
+    register_tool_methods(mcp, VoiceAssistantTools(client))

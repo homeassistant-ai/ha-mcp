@@ -8,19 +8,28 @@ that returns images directly to the LLM for visual analysis.
 import logging
 from typing import Any
 
+from fastmcp.tools import tool
 from fastmcp.utilities.types import Image
 
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, register_tool_methods
 
 logger = logging.getLogger(__name__)
 
 
-def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant camera tools."""
+class CameraTools:
+    """Camera tools for retrieving and analyzing camera snapshots."""
 
-    @mcp.tool(tags={"Camera"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Camera Image"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_camera_image",
+        tags={"Camera"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Camera Image"},
+    )
     @log_tool_usage
     async def ha_get_camera_image(
+        self,
         entity_id: str,
         width: int | None = None,
         height: int | None = None,
@@ -91,7 +100,7 @@ def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
             # Use the client's httpx_client directly for binary image data
-            response = await client.httpx_client.get(endpoint, params=params or None)
+            response = await self._client.httpx_client.get(endpoint, params=params or None)
 
             # Handle authentication errors
             if response.status_code == 401:
@@ -147,3 +156,8 @@ def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"Failed to retrieve camera image from {entity_id}: {str(e)}. "
                 "Ensure the camera is online and accessible."
             ) from e
+
+
+def register_camera_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant camera tools."""
+    register_tool_methods(mcp, CameraTools(client))

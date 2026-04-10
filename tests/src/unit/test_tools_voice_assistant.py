@@ -8,27 +8,12 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_voice_assistant import (
     KNOWN_ASSISTANTS,
-    register_voice_assistant_tools,
+    VoiceAssistantTools,
 )
 
 
 class TestHaListExposedEntities:
     """Test ha_get_entity_exposure tool validation logic."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -38,13 +23,12 @@ class TestHaListExposedEntities:
         return client
 
     @pytest.fixture
-    def list_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_get_entity_exposure function."""
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_get_entity_exposure"]
+    def tools(self, mock_client):
+        """Create VoiceAssistantTools instance."""
+        return VoiceAssistantTools(mock_client)
 
     @pytest.mark.asyncio
-    async def test_list_all_entities_success(self, mock_mcp, mock_client):
+    async def test_list_all_entities_success(self, mock_client):
         """List all exposed entities should succeed."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -57,10 +41,8 @@ class TestHaListExposedEntities:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool()
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure()
 
         assert result["success"] is True
         assert result["count"] == 2
@@ -68,7 +50,7 @@ class TestHaListExposedEntities:
         assert "summary" in result
 
     @pytest.mark.asyncio
-    async def test_filter_by_valid_assistant(self, mock_mcp, mock_client):
+    async def test_filter_by_valid_assistant(self, mock_client):
         """Filter by valid assistant should work."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -81,22 +63,19 @@ class TestHaListExposedEntities:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(assistant="conversation")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(assistant="conversation")
 
         assert result["success"] is True
         assert result["filters_applied"]["assistant"] == "conversation"
-        # Only entities exposed to conversation should be in filtered results
         assert "light.living_room" in result["exposed_entities"]
         assert "light.bedroom" not in result["exposed_entities"]
 
     @pytest.mark.asyncio
-    async def test_filter_by_invalid_assistant_rejected(self, list_tool):
+    async def test_filter_by_invalid_assistant_rejected(self, tools):
         """Filter by invalid assistant should be rejected."""
         with pytest.raises(ToolError) as exc_info:
-            await list_tool(assistant="invalid_assistant")
+            await tools.ha_get_entity_exposure(assistant="invalid_assistant")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
@@ -105,7 +84,7 @@ class TestHaListExposedEntities:
         assert error_data["valid_assistants"] == KNOWN_ASSISTANTS
 
     @pytest.mark.asyncio
-    async def test_filter_by_entity_id(self, mock_mcp, mock_client):
+    async def test_filter_by_entity_id(self, mock_client):
         """Filter by specific entity_id should work."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -118,20 +97,17 @@ class TestHaListExposedEntities:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         assert result["success"] is True
         assert result["entity_id"] == "light.living_room"
-        # When entity_id is provided, returns exposed_to dict showing status per assistant
         assert result["exposed_to"]["conversation"] is True
         assert result["is_exposed_anywhere"] is True
         assert result["has_custom_settings"] is True
 
     @pytest.mark.asyncio
-    async def test_filter_by_nonexistent_entity_id(self, mock_mcp, mock_client):
+    async def test_filter_by_nonexistent_entity_id(self, mock_client):
         """Filter by nonexistent entity_id should return defaults."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -143,20 +119,17 @@ class TestHaListExposedEntities:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.nonexistent")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.nonexistent")
 
         assert result["success"] is True
         assert result["entity_id"] == "light.nonexistent"
         assert result["is_exposed_anywhere"] is False
         assert result["has_custom_settings"] is False
-        # Note field should be present when entity has no custom settings
         assert result["note"] is not None
 
     @pytest.mark.asyncio
-    async def test_summary_counts_per_assistant(self, mock_mcp, mock_client):
+    async def test_summary_counts_per_assistant(self, mock_client):
         """Summary should count entities per assistant."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -170,10 +143,8 @@ class TestHaListExposedEntities:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool()
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure()
 
         assert result["success"] is True
         assert result["summary"]["conversation"] == 2
@@ -181,7 +152,7 @@ class TestHaListExposedEntities:
         assert result["summary"]["cloud.google_assistant"] == 1
 
     @pytest.mark.asyncio
-    async def test_websocket_error_response(self, mock_mcp, mock_client):
+    async def test_websocket_error_response(self, mock_client):
         """WebSocket error response should be handled."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -189,27 +160,23 @@ class TestHaListExposedEntities:
                 "error": {"message": "Service unavailable"}
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
+        tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
-            await tool()
+            await tools.ha_get_entity_exposure()
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         assert "Service unavailable" in error_data["error"]["message"]
 
     @pytest.mark.asyncio
-    async def test_websocket_exception(self, mock_mcp, mock_client):
+    async def test_websocket_exception(self, mock_client):
         """WebSocket exception should be caught."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=Exception("Network error")
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
+        tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
-            await tool()
+            await tools.ha_get_entity_exposure()
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
@@ -220,35 +187,14 @@ class TestHaGetEntityExposure:
     """Test ha_get_entity_exposure tool validation logic."""
 
     @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
         client.send_websocket_message = AsyncMock()
         return client
 
-    @pytest.fixture
-    def get_exposure_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_get_entity_exposure function."""
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_get_entity_exposure"]
-
     @pytest.mark.asyncio
-    async def test_get_exposure_with_custom_settings(self, mock_mcp, mock_client):
+    async def test_get_exposure_with_custom_settings(self, mock_client):
         """Entity with custom settings should show exposure status."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -263,10 +209,8 @@ class TestHaGetEntityExposure:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         assert result["success"] is True
         assert result["entity_id"] == "light.living_room"
@@ -277,7 +221,7 @@ class TestHaGetEntityExposure:
         assert result["has_custom_settings"] is True
 
     @pytest.mark.asyncio
-    async def test_get_exposure_without_custom_settings(self, mock_mcp, mock_client):
+    async def test_get_exposure_without_custom_settings(self, mock_client):
         """Entity without custom settings should show defaults."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -287,19 +231,17 @@ class TestHaGetEntityExposure:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         assert result["success"] is True
         assert result["entity_id"] == "light.living_room"
         assert result["is_exposed_anywhere"] is False
         assert result["has_custom_settings"] is False
-        assert result["note"] is not None  # Should have note about default settings
+        assert result["note"] is not None
 
     @pytest.mark.asyncio
-    async def test_get_exposure_all_assistants(self, mock_mcp, mock_client):
+    async def test_get_exposure_all_assistants(self, mock_client):
         """Entity exposed to all assistants should show all True."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -315,10 +257,8 @@ class TestHaGetEntityExposure:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         assert result["success"] is True
         assert result["exposed_to"]["conversation"] is True
@@ -327,7 +267,7 @@ class TestHaGetEntityExposure:
         assert result["is_exposed_anywhere"] is True
 
     @pytest.mark.asyncio
-    async def test_get_exposure_no_assistants(self, mock_mcp, mock_client):
+    async def test_get_exposure_no_assistants(self, mock_client):
         """Entity hidden from all assistants should show all False."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -343,16 +283,14 @@ class TestHaGetEntityExposure:
                 }
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        result = await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         assert result["success"] is True
         assert result["is_exposed_anywhere"] is False
 
     @pytest.mark.asyncio
-    async def test_websocket_error_response(self, mock_mcp, mock_client):
+    async def test_websocket_error_response(self, mock_client):
         """WebSocket error should be handled."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -360,11 +298,9 @@ class TestHaGetEntityExposure:
                 "error": {"message": "Access denied"}
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
+        tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.living_room")
+            await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
@@ -372,16 +308,14 @@ class TestHaGetEntityExposure:
         assert error_data["entity_id"] == "light.living_room"
 
     @pytest.mark.asyncio
-    async def test_websocket_exception(self, mock_mcp, mock_client):
+    async def test_websocket_exception(self, mock_client):
         """WebSocket exception should be caught."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=Exception("Timeout")
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
+        tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.living_room")
+            await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
@@ -393,39 +327,20 @@ class TestKnownAssistants:
     """Test KNOWN_ASSISTANTS constant."""
 
     def test_known_assistants_includes_conversation(self):
-        """KNOWN_ASSISTANTS should include 'conversation'."""
         assert "conversation" in KNOWN_ASSISTANTS
 
     def test_known_assistants_includes_cloud_alexa(self):
-        """KNOWN_ASSISTANTS should include 'cloud.alexa'."""
         assert "cloud.alexa" in KNOWN_ASSISTANTS
 
     def test_known_assistants_includes_cloud_google_assistant(self):
-        """KNOWN_ASSISTANTS should include 'cloud.google_assistant'."""
         assert "cloud.google_assistant" in KNOWN_ASSISTANTS
 
     def test_known_assistants_count(self):
-        """KNOWN_ASSISTANTS should have exactly 3 entries."""
         assert len(KNOWN_ASSISTANTS) == 3
 
 
 class TestWebSocketMessageFormat:
     """Test that WebSocket messages are formatted correctly."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -435,7 +350,7 @@ class TestWebSocketMessageFormat:
         return client
 
     @pytest.mark.asyncio
-    async def test_list_entities_message_format(self, mock_mcp, mock_client):
+    async def test_list_entities_message_format(self, mock_client):
         """List entities should send correct WebSocket message."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -443,18 +358,15 @@ class TestWebSocketMessageFormat:
                 "result": {"exposed_entities": {}}
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        await tool()
+        tools = VoiceAssistantTools(mock_client)
+        await tools.ha_get_entity_exposure()
 
         mock_client.send_websocket_message.assert_called_once()
         call_args = mock_client.send_websocket_message.call_args[0][0]
-
         assert call_args["type"] == "homeassistant/expose_entity/list"
 
     @pytest.mark.asyncio
-    async def test_get_exposure_message_format(self, mock_mcp, mock_client):
+    async def test_get_exposure_message_format(self, mock_client):
         """Get exposure should send correct WebSocket message."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
@@ -462,12 +374,9 @@ class TestWebSocketMessageFormat:
                 "result": {"exposed_entities": {}}
             }
         )
-        register_voice_assistant_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity_exposure"]
-
-        await tool(entity_id="light.living_room")
+        tools = VoiceAssistantTools(mock_client)
+        await tools.ha_get_entity_exposure(entity_id="light.living_room")
 
         mock_client.send_websocket_message.assert_called_once()
         call_args = mock_client.send_websocket_message.call_args[0][0]
-
         assert call_args["type"] == "homeassistant/expose_entity/list"

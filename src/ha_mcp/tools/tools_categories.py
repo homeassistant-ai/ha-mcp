@@ -12,27 +12,34 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant category management tools."""
+class CategoryTools:
+    """Category management tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_config_get_category",
         tags={"Labels & Categories"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get Category"
-        }
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Category"},
     )
     @log_tool_usage
     async def ha_config_get_category(
+        self,
         scope: Annotated[
             str,
             Field(
@@ -74,7 +81,7 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "scope": scope,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 raise_tool_error(
@@ -142,15 +149,14 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_set_category",
         tags={"Labels & Categories"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Create or Update Category"
-        }
+        annotations={"destructiveHint": True, "title": "Create or Update Category"},
     )
     @log_tool_usage
     async def ha_config_set_category(
+        self,
         name: Annotated[str, Field(description="Display name for the category")],
         scope: Annotated[
             str,
@@ -206,7 +212,7 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if icon is not None:
                 message["icon"] = icon
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 category_data = result.get("result", {})
@@ -245,16 +251,14 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_remove_category",
         tags={"Labels & Categories"},
-        annotations={
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Category"
-        }
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Category"},
     )
     @log_tool_usage
     async def ha_config_remove_category(
+        self,
         scope: Annotated[
             str,
             Field(
@@ -288,7 +292,7 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "category_id": category_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -318,3 +322,8 @@ def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify the category_id exists using ha_config_get_category()",
                 ],
             )
+
+
+def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant category management tools."""
+    register_tool_methods(mcp, CategoryTools(client))

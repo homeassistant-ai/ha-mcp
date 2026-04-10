@@ -9,20 +9,34 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant zone configuration tools."""
+class ZoneTools:
+    """Zone configuration management tools for Home Assistant."""
 
-    @mcp.tool(tags={"Zones"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_zone",
+        tags={"Zones"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"},
+    )
     @log_tool_usage
     async def ha_get_zone(
+        self,
         zone_id: Annotated[
             str | None,
             Field(
@@ -55,7 +69,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "zone/list",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 raise_tool_error(create_error_response(
@@ -103,9 +117,14 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Use ha_search_entities(domain_filter='zone') as alternative",
             ])
 
-    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "title": "Set Zone"})
+    @tool(
+        name="ha_set_zone",
+        tags={"Zones"},
+        annotations={"destructiveHint": True, "title": "Set Zone"},
+    )
     @log_tool_usage
     async def ha_set_zone(
+        self,
         name: Annotated[
             str | None,
             Field(
@@ -248,7 +267,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if icon:
                     message["icon"] = icon
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 zone_data = result.get("result", {})
@@ -282,9 +301,14 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"})
+    @tool(
+        name="ha_remove_zone",
+        tags={"Zones"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"},
+    )
     @log_tool_usage
     async def ha_remove_zone(
+        self,
         zone_id: Annotated[
             str,
             Field(description="Zone ID to remove (use ha_get_zone to find IDs)"),
@@ -307,7 +331,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "zone_id": zone_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -335,3 +359,8 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure zone is not the 'home' zone (YAML-defined)",
                 ],
             )
+
+
+def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant zone configuration tools."""
+    register_tool_methods(mcp, ZoneTools(client))
