@@ -108,13 +108,14 @@ For secure remote access, you have two options:
 
 The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
 
-1. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
-2. Start it and **restart Home Assistant** when prompted
-3. Copy the URL from the webhook proxy add-on logs:
+1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+3. Start it and **restart Home Assistant** when prompted
+4. Copy the URL from the webhook proxy add-on logs:
    ```
    MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
    ```
-4. Use that URL in your MCP client
+5. Use that URL in your MCP client
 
 Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
 

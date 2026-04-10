@@ -1086,10 +1086,11 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </div>` : '';
 
       if (derivedDeployment === 'uvx') {
-        const serverPath = isRemote ? '/private_{{RANDOM_STRING}}' : '/mcp';
+        const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
+        const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const portNote = `<p class="text-xs text-slate-500 mt-2">Optional: Set <code>MCP_PORT</code> to change the default port (8086).</p>`;
         if (platformId === 'windows') {
-          const secretPathEnv = isRemote ? `$env:MCP_SECRET_PATH="/private_{{RANDOM_STRING}}"  # Keep this secret!\n` : '';
+          const secretPathEnv = useSecretPath ? `$env:MCP_SECRET_PATH="/private_{{RANDOM_STRING}}"  # Keep this secret!\n` : '';
           deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐍 Start HTTP Server (uvx) - PowerShell</h4>
           <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
@@ -1098,7 +1099,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}
         </div>`;
         } else {
-          const secretPathEnv = isRemote ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
+          const secretPathEnv = useSecretPath ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
           deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐍 Start HTTP Server (uvx)</h4>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
@@ -1108,8 +1109,9 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         </div>`;
         }
       } else if (derivedDeployment === 'docker') {
-        const secretPathEnv = isRemote ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
-        const serverPath = isRemote ? '/private_{{RANDOM_STRING}}' : '/mcp';
+        const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
+        const secretPathEnv = useSecretPath ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
+        const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">🐳 Start Docker Container</h4>

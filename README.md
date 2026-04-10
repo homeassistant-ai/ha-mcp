@@ -105,7 +105,7 @@ Already have **Nabu Casa** or another reverse proxy pointing at your Home Assist
 
 For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 
-[Webhook proxy documentation →](homeassistant-addon-webhook-proxy/DOCS.md)
+[Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
 
 </details>
 

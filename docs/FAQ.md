@@ -206,7 +206,7 @@ source ~/.zshrc
 4. If "Home Assistant" is not listed, check your config file syntax
 5. Try asking Claude: "Can you list your available tools?"
 
-### Can't connect remotely? Try the Webhook Proxy add-on
+### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
 
 If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
 

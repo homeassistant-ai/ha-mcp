@@ -53,6 +53,6 @@ AI Client → HTTPS → Your Reverse Proxy → HA (port 8123) → Webhook → MC
 |---|---|---|
 | **Setup** | Install add-on, restart HA | Install Cloudflared, configure tunnel |
 | **Requires** | Existing reverse proxy / Nabu Casa (paid) | Cloudflare account (free) |
-| **Extra hop** | Yes (HA → webhook → MCP) | No (direct to port 9583) |
+| **Routing** | Through HA web server (port 8123) | Direct to MCP port (9583) |
 | **Port** | Uses HA's port 8123 | Dedicated port 9583 |
 | **Best for** | Already have Nabu Casa / reverse proxy | No existing proxy, or want direct connection |
