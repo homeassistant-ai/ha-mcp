@@ -424,10 +424,16 @@ src/ha_mcp/
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
 ```python
-def register_<domain>_tools(mcp, client, **kwargs):
-    @mcp.tool(tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
+from fastmcp.tools import tool
+from .helpers import log_tool_usage, register_tool_methods
+
+class DomainTools:
+    def __init__(self, client):
+        self._client = client
+
+    @tool(name="ha_<verb>_<noun>", tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
     @log_tool_usage
-    async def ha_<verb>_<noun>(param: str) -> dict[str, Any]:
+    async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:
         """<Action verb> <what this tool does -- one sentence>.
 
         <Optional: second sentence for key behavioral distinction or modes>
@@ -437,7 +443,12 @@ def register_<domain>_tools(mcp, client, **kwargs):
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
         # NOTE / WARNING: non-obvious gotcha or destructive side-effect
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
+
+def register_<domain>_tools(mcp, client, **kwargs):
+    register_tool_methods(mcp, DomainTools(client))
 ```
+
+`@tool` (from `fastmcp.tools`) attaches metadata to the method. `@tool` must be the outermost decorator (above `@log_tool_usage`) so that `__fastmcp__` is present on the final method object. `register_tool_methods()` auto-discovers all `@tool`-decorated methods and calls `mcp.add_tool()` for each. The registry discovers `register_*_tools` functions by convention.
 
 ### Tool Docstrings
 
@@ -526,6 +537,13 @@ raise ToolError(json.dumps({...}))                   # Tool-level failure (isErr
 
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
+
+With 92+ tools, this project exceeds the [10-20 tool threshold](https://ai.google.dev/gemini-api/docs/function-calling) where tool selection accuracy degrades ([OpenAI](https://developers.openai.com/api/docs/guides/function-calling), [Google](https://ai.google.dev/gemini-api/docs/function-calling)). Reducing tool count is a priority, but how matters. Anthropic's [tool design blog](https://www.anthropic.com/engineering/writing-tools-for-agents) recommends combining frequently chained operations: "Instead of implementing a `list_users`, `list_events`, and `create_event` tools, consider implementing a `schedule_event` tool which finds availability and schedules an event." Their [context engineering guide](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) warns against "bloated tool sets that cover too much functionality or lead to ambiguous decision points about which tool to use." Each tool should have "a clear, distinct purpose" ([Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents)).
+
+| Pattern | Example | Guideline |
+|---------|---------|-----------|
+| Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
+| Frequently chained operations | Multi-step workflows combined into one tool | Consolidate — reduces round-trips |
 
 ### Breaking Changes Definition
 

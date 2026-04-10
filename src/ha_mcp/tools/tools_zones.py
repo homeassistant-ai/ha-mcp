@@ -9,20 +9,34 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant zone configuration tools."""
+class ZoneTools:
+    """Zone configuration management tools for Home Assistant."""
 
-    @mcp.tool(tags={"Zones"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_zone",
+        tags={"Zones"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Zone"},
+    )
     @log_tool_usage
     async def ha_get_zone(
+        self,
         zone_id: Annotated[
             str | None,
             Field(
@@ -55,7 +69,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "zone/list",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 raise_tool_error(create_error_response(
@@ -66,7 +80,6 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             zones = result.get("result", [])
 
-            # If no zone_id provided, return list of all zones
             if zone_id is None:
                 return {
                     "success": True,
@@ -75,7 +88,6 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(zones)} zone(s)",
                 }
 
-            # Find specific zone by ID
             zone = next((z for z in zones if z.get("id") == zone_id), None)
 
             if zone is None:
@@ -103,9 +115,35 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Use ha_search_entities(domain_filter='zone') as alternative",
             ])
 
-    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "title": "Set Zone"})
+    @staticmethod
+    def _validate_coordinates(
+        latitude: float | None, longitude: float | None, radius: float | None,
+    ) -> None:
+        """Validate zone coordinate parameters, raising ToolError on invalid values."""
+        if latitude is not None and not (-90 <= latitude <= 90):
+            raise_tool_error(create_validation_error(
+                f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                parameter="latitude",
+            ))
+        if longitude is not None and not (-180 <= longitude <= 180):
+            raise_tool_error(create_validation_error(
+                f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                parameter="longitude",
+            ))
+        if radius is not None and radius <= 0:
+            raise_tool_error(create_validation_error(
+                f"Invalid radius: {radius}. Must be greater than 0.",
+                parameter="radius",
+            ))
+
+    @tool(
+        name="ha_set_zone",
+        tags={"Zones"},
+        annotations={"destructiveHint": True, "title": "Set Zone"},
+    )
     @log_tool_usage
     async def ha_set_zone(
+        self,
         name: Annotated[
             str | None,
             Field(
@@ -191,22 +229,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"zone_id": zone_id},
                     ))
 
-                # Validate coordinates if provided
-                if latitude is not None and not (-90 <= latitude <= 90):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                        parameter="latitude",
-                    ))
-                if longitude is not None and not (-180 <= longitude <= 180):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                        parameter="longitude",
-                    ))
-                if radius is not None and radius <= 0:
-                    raise_tool_error(create_validation_error(
-                        f"Invalid radius: {radius}. Must be greater than 0.",
-                        parameter="radius",
-                    ))
+                self._validate_coordinates(latitude, longitude, radius)
 
                 message: dict[str, Any] = {
                     "type": "zone/update",
@@ -220,22 +243,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "name, latitude, and longitude are required when creating a zone.",
                     ))
 
-                # Validate coordinates
-                if not (-90 <= latitude <= 90):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                        parameter="latitude",
-                    ))
-                if not (-180 <= longitude <= 180):
-                    raise_tool_error(create_validation_error(
-                        f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                        parameter="longitude",
-                    ))
-                if radius is not None and radius <= 0:
-                    raise_tool_error(create_validation_error(
-                        f"Invalid radius: {radius}. Must be greater than 0.",
-                        parameter="radius",
-                    ))
+                self._validate_coordinates(latitude, longitude, radius)
 
                 message = {
                     "type": "zone/create",
@@ -248,7 +256,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if icon:
                     message["icon"] = icon
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 zone_data = result.get("result", {})
@@ -282,9 +290,14 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Zones"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"})
+    @tool(
+        name="ha_remove_zone",
+        tags={"Zones"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"},
+    )
     @log_tool_usage
     async def ha_remove_zone(
+        self,
         zone_id: Annotated[
             str,
             Field(description="Zone ID to remove (use ha_get_zone to find IDs)"),
@@ -307,7 +320,7 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "zone_id": zone_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -335,3 +348,8 @@ def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure zone is not the 'home' zone (YAML-defined)",
                 ],
             )
+
+
+def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant zone configuration tools."""
+    register_tool_methods(mcp, ZoneTools(client))
