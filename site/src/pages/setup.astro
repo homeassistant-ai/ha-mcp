@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
+import PlatformIcon from '../components/PlatformIcon.astro';
 import { getCollection } from 'astro:content';
 
 const base = import.meta.env.BASE_URL;
@@ -56,22 +57,19 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
   <div class="container mx-auto px-4 py-8 max-w-4xl">
     <!-- Hero Section -->
     <header class="text-center mb-10">
-      <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-amber-900/50 text-amber-400 rounded-full border border-amber-700/50 align-middle">BETA</span></h1>
+      <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
       <p class="text-slate-400 mb-8">Configure the Home Assistant MCP Server for your AI assistant</p>
 
       <!-- Get Started Quick Options -->
       <div class="mb-8">
         <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-sm mb-4">
-          <span class="relative flex h-2 w-2">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-          </span>
+          <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
           Get Started - Easy Setup
         </div>
         <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
           <a href={withBase('/guide-macos')} class="quick-start-card group">
             <div class="flex items-center gap-4">
-              <span class="text-5xl">🍎</span>
+              <PlatformIcon icon="apple" size={40} class="text-[var(--text-secondary)]" />
               <div class="text-left">
                 <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">macOS + Claude Desktop</h3>
                 <p class="text-slate-400">Complete guided setup</p>
@@ -81,7 +79,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </a>
           <a href={withBase('/guide-windows')} class="quick-start-card group">
             <div class="flex items-center gap-4">
-              <span class="text-5xl">🪟</span>
+              <PlatformIcon icon="windows" size={40} class="text-[var(--text-secondary)]" />
               <div class="text-left">
                 <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Windows + Claude Desktop</h3>
                 <p class="text-slate-400">Complete guided setup</p>
@@ -148,15 +146,11 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               class="option-card-large connection-option"
             >
               <div class="flex items-center gap-2 mb-2">
-                <span class="text-2xl">
-                  {conn.data.icon === 'computer' && '💻'}
-                  {conn.data.icon === 'network' && '🌐'}
-                  {conn.data.icon === 'globe' && '🌍'}
-                </span>
+                <PlatformIcon icon={conn.data.icon === 'network' ? 'computer' : conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
                 <span class="complexity-badge" data-complexity={conn.slug === 'local' ? 'quick' : conn.slug === 'network' ? 'complex' : 'advanced'}>
-                  {conn.slug === 'local' && '⚡ Quick'}
-                  {conn.slug === 'network' && '🔧 Complex'}
-                  {conn.slug === 'remote' && '🛠️ Advanced'}
+                  {conn.slug === 'local' && 'Quick'}
+                  {conn.slug === 'network' && 'Complex'}
+                  {conn.slug === 'remote' && 'Advanced'}
                 </span>
               </div>
               <h3 class="font-semibold text-white mb-1">{conn.data.name}</h3>
@@ -171,10 +165,18 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
       </section>
 
+      <!-- Shared SVG symbols for architecture diagrams -->
+      <svg class="hidden" aria-hidden="true">
+        <symbol id="icon-computer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+        <symbol id="icon-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M9 16v4M15 16v4"/></symbol>
+        <symbol id="icon-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></symbol>
+        <symbol id="icon-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></symbol>
+        <symbol id="icon-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></symbol>
+      </svg>
+
       <!-- Architecture Diagram (shows after connection selected) -->
       <section class="wizard-section hidden" id="section-architecture">
         <h2 class="section-header">
-          <span class="text-xl">📐</span>
           Architecture Overview
         </h2>
 
@@ -183,7 +185,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <div class="architecture-diagram arch-local-diagram">
             <div class="arch-row">
               <div class="arch-box arch-client">
-                <div class="arch-icon">💻</div>
+                <div class="arch-icon"><svg width="18" height="18"><use href="#icon-computer"/></svg></div>
                 <div class="arch-label">Your Computer</div>
                 <div class="arch-sublabel">AI Client + ha-mcp</div>
               </div>
@@ -192,7 +194,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
                 <div class="arch-transport-label">HTTP/HTTPS*</div>
               </div>
               <div class="arch-box arch-ha">
-                <div class="arch-icon">🏠</div>
+                <div class="arch-icon"><svg width="18" height="18"><use href="#icon-home"/></svg></div>
                 <div class="arch-label">Home Assistant</div>
                 <div class="arch-sublabel">API</div>
               </div>
@@ -211,11 +213,11 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
             <div class="arch-row">
               <div class="arch-col">
                 <div class="arch-box arch-client arch-small">
-                  <div class="arch-icon">💻</div>
+                  <div class="arch-icon"><svg width="18" height="18"><use href="#icon-computer"/></svg></div>
                   <div class="arch-label">Desktop</div>
                 </div>
                 <div class="arch-box arch-client arch-small mt-2">
-                  <div class="arch-icon">💻</div>
+                  <div class="arch-icon"><svg width="18" height="18"><use href="#icon-computer"/></svg></div>
                   <div class="arch-label">Laptop</div>
                 </div>
               </div>
@@ -224,12 +226,12 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
                 <div class="arch-transport-label">HTTP*</div>
               </div>
               <div class="arch-box arch-server">
-                <div class="arch-icon">🖥️</div>
+                <div class="arch-icon"><svg width="18" height="18"><use href="#icon-server"/></svg></div>
                 <div class="arch-label">ha-mcp Server</div>
               </div>
               <div class="arch-arrow">→</div>
               <div class="arch-box arch-ha">
-                <div class="arch-icon">🏠</div>
+                <div class="arch-icon"><svg width="18" height="18"><use href="#icon-home"/></svg></div>
                 <div class="arch-label">Home Assistant</div>
               </div>
             </div>
@@ -246,7 +248,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <div class="architecture-diagram arch-remote-diagram">
             <div class="arch-row arch-row-top">
               <div class="arch-box arch-client">
-                <div class="arch-icon">🌍</div>
+                <div class="arch-icon"><svg width="18" height="18"><use href="#icon-globe"/></svg></div>
                 <div class="arch-label">AI Client</div>
                 <div class="arch-sublabel">Anywhere</div>
               </div>
@@ -257,7 +259,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               <div class="arch-network-boundary">
                 <div class="arch-network-row">
                   <div class="arch-box arch-proxy arch-gateway-overlap">
-                    <div class="arch-icon">🔒</div>
+                    <div class="arch-icon"><svg width="18" height="18"><use href="#icon-lock"/></svg></div>
                     <div class="arch-label">Reverse Proxy</div>
                     <div class="arch-sublabel">SSL Certificate</div>
                   </div>
@@ -266,13 +268,13 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
                     <div class="arch-transport-label">HTTP</div>
                   </div>
                   <div class="arch-box arch-server arch-small">
-                    <div class="arch-icon">🖥️</div>
+                    <div class="arch-icon"><svg width="18" height="18"><use href="#icon-server"/></svg></div>
                     <div class="arch-label">ha-mcp</div>
                     <div class="arch-sublabel">Secret URL</div>
                   </div>
                   <div class="arch-arrow">→</div>
                   <div class="arch-box arch-ha arch-small">
-                    <div class="arch-icon">🏠</div>
+                    <div class="arch-icon"><svg width="18" height="18"><use href="#icon-home"/></svg></div>
                     <div class="arch-label">Home Assistant</div>
                   </div>
                 </div>
@@ -298,11 +300,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               data-platform={platform.slug}
               class="option-card-large"
             >
-              <div class="text-3xl mb-2">
-                {platform.data.icon === 'apple' && '🍎'}
-                {platform.data.icon === 'linux' && '🐧'}
-                {platform.data.icon === 'windows' && '🪟'}
-                {platform.data.icon === 'docker' && '🐳'}
+              <div class="mb-2 text-[var(--text-secondary)]">
+                <PlatformIcon icon={platform.data.icon} size={28} />
               </div>
               <h3 class="font-semibold text-white">{platform.data.name}</h3>
             </button>
@@ -322,24 +321,24 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <!-- uvx options with platform -->
           <button data-server-setup="macos-uvx" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🍎</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="apple" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">macOS</h3>
             <p class="text-sm text-slate-400">uvx</p>
           </button>
           <button data-server-setup="linux-uvx" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🐧</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="linux" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">Linux</h3>
             <p class="text-sm text-slate-400">uvx</p>
           </button>
           <button data-server-setup="windows-uvx" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🪟</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="windows" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">Windows</h3>
             <p class="text-sm text-slate-400">uvx</p>
@@ -347,8 +346,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <!-- HA Add-on -->
           <button data-server-setup="ha-addon" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🏠</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">HA OS</h3>
             <p class="text-sm text-slate-400">Add-on</p>
@@ -356,8 +355,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <!-- Docker -->
           <button data-server-setup="docker" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🐳</span>
-              <span class="complexity-badge" data-complexity="complex">🔧 Complex</span>
+              <PlatformIcon icon="docker" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="complex">Complex</span>
             </div>
             <h3 class="font-semibold text-white">Docker</h3>
             <p class="text-sm text-slate-400">Container</p>
@@ -365,8 +364,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <!-- HA Custom Component -->
           <button data-server-setup="ha-component" class="option-card-large opacity-50" disabled>
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🏠</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">HA Component</h3>
             <p class="text-sm text-slate-400">Coming Soon</p>
@@ -385,8 +384,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         <div class="grid md:grid-cols-3 gap-4" id="proxy-grid">
           <button data-proxy="cloudflared" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">☁️</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="cloud" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">Cloudflare Tunnel</h3>
             <p class="text-sm text-slate-400">Free, no port forwarding needed</p>
@@ -401,8 +400,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </button>
           <button data-proxy="custom" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🔧</span>
-              <span class="complexity-badge" data-complexity="advanced">🛠️ Advanced</span>
+              <PlatformIcon icon="wrench" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="advanced">Advanced</span>
             </div>
             <h3 class="font-semibold text-white">Custom Reverse Proxy</h3>
             <p class="text-sm text-slate-400">Caddy, Nginx, Traefik, etc.</p>
@@ -432,11 +431,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
         <!-- Configuration -->
         <div class="mb-6" id="config-section">
-          <div class="flex items-center justify-between mb-2">
+          <div class="mb-2">
             <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Client Configuration</h3>
-            <button id="copy-btn" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors">
-              Copy
-            </button>
           </div>
           <pre id="config-output" class="text-sm bg-slate-900/50 p-4 rounded-lg overflow-x-auto border border-slate-700"><code></code></pre>
         </div>
@@ -591,7 +587,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     @apply border-amber-600/50 bg-amber-900/20;
   }
   .arch-icon {
-    @apply text-2xl mb-1;
+    @apply mb-1;
   }
   .arch-label {
     @apply text-white font-medium text-sm;
@@ -1048,25 +1044,25 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     if (isDockerPlatform && isLocal) {
       // Docker platform instructions
       instructions.push(`<div class="instruction-block">
-        <h4 class="instruction-title">🐳 Docker Required</h4>
+        <h4 class="instruction-title">Docker Required</h4>
         <p class="text-slate-300">Make sure Docker or Docker Desktop is installed and running.</p>
       </div>`);
     } else if (platformId && !isDockerPlatform && (isLocal || derivedDeployment === 'uvx' || needsMcpProxy)) {
       let uvInstall = '';
       if (platformId === 'macos') {
         uvInstall = `<div class="instruction-block">
-          <h4 class="instruction-title">🍎 Install uv (macOS)</h4>
+          <h4 class="instruction-title">Install uv (macOS)</h4>
           <pre class="code-block"><code>brew install uv</code></pre>
           <p class="text-xs text-slate-400 mt-2">Or: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></p>
         </div>`;
       } else if (platformId === 'linux') {
         uvInstall = `<div class="instruction-block">
-          <h4 class="instruction-title">🐧 Install uv (Linux)</h4>
+          <h4 class="instruction-title">Install uv (Linux)</h4>
           <pre class="code-block"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
         </div>`;
       } else if (platformId === 'windows') {
         uvInstall = `<div class="instruction-block">
-          <h4 class="instruction-title">🪟 Install uv (Windows)</h4>
+          <h4 class="instruction-title">Install uv (Windows)</h4>
           <pre class="code-block"><code>winget install astral-sh.uv</code></pre>
         </div>`;
       }
@@ -1081,7 +1077,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       // For remote connections, add secret path for security (not needed for webhook-proxy — handled automatically)
       const secretPathNote = (isRemote && state.proxy !== 'webhook-proxy') ? `
           <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mt-3">
-            <p class="text-red-300 text-sm font-medium">🔒 Security Warning</p>
+            <p class="text-red-300 text-sm font-medium">Security Warning</p>
             <p class="text-red-200/80 text-xs mt-1">When exposing to the internet, <strong>always use a secret path</strong> to prevent unauthorized access. Keep this path private!</p>
           </div>` : '';
 
@@ -1114,13 +1110,13 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         deployInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🐳 Start Docker Container</h4>
+          <h4 class="instruction-title">Start Docker Container</h4>
           <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv.trim() : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🏠 Home Assistant Add-on</h4>
+          <h4 class="instruction-title">Home Assistant Add-on</h4>
           <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
@@ -1137,7 +1133,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
       let proxyInstr = '';
       if (state.proxy === 'cloudflared') {
         proxyInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">☁️ Cloudflare Tunnel</h4>
+          <h4 class="instruction-title">Cloudflare Tunnel</h4>
           <p class="text-slate-300 mb-3">Install cloudflared:</p>
           <pre class="code-block"><code># macOS
 brew install cloudflared
@@ -1156,10 +1152,10 @@ docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.interna
           <p class="text-slate-300 mb-2">Quick tunnel (temporary URL - changes on restart):</p>
           <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
-          <p class="text-sm text-green-400 font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/private_{{RANDOM_STRING}}</code></p>
+          <p class="text-sm text-brand font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/private_{{RANDOM_STRING}}</code></p>
           <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
           <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
-            <p class="text-blue-300 text-sm font-medium">💡 Want a permanent URL?</p>
+            <p class="text-blue-300 text-sm font-medium">Want a permanent URL?</p>
             <p class="text-blue-200/80 text-xs mt-1">Create a free <a href="https://dash.cloudflare.com/sign-up" target="_blank" class="text-blue-400 hover:underline">Cloudflare account</a> and set up a <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" target="_blank" class="text-blue-400 hover:underline">Named Tunnel</a> for a stable URL that persists across restarts.</p>
             <pre class="code-block mt-2 text-xs"><code># One-time setup (requires Cloudflare account)
 cloudflared tunnel login
@@ -1211,7 +1207,7 @@ cloudflared tunnel run ha-mcp</code></pre>
         </div>`;
       } else if (state.proxy === 'custom') {
         proxyInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🔧 Custom Reverse Proxy</h4>
+          <h4 class="instruction-title">Custom Reverse Proxy</h4>
           <p class="text-slate-300 mb-2">Configure your reverse proxy (Caddy, Nginx, Traefik) to:</p>
           <ul class="text-sm text-slate-400 list-disc list-inside space-y-1">
             <li>Proxy requests to <code>http://localhost:8086</code></li>
@@ -1617,12 +1613,4 @@ mcpServers:
     notesEl.innerHTML = notes;
   }
 
-  // Copy button
-  document.getElementById('copy-btn').addEventListener('click', () => {
-    const config = document.getElementById('config-output').querySelector('code').textContent;
-    navigator.clipboard.writeText(config);
-    const btn = document.getElementById('copy-btn');
-    btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 2000);
-  });
 </script>

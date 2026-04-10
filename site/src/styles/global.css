@@ -3,27 +3,101 @@
 @tailwind utilities;
 
 :root {
-  --accent: #03a9f4;
-  --accent-dark: #0288d1;
+  --brand: #2FC1CF;
+  --brand-light: #5DD3DE;
+  --brand-dark: #1A9DAA;
+  --surface-0: #0B1120;
+  --surface-1: #111827;
+  --surface-2: #1A2235;
+  --surface-3: #232D3F;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.12);
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
 }
 
 html {
-  font-family: system-ui, sans-serif;
-  background: #0f172a;
-  color: #e2e8f0;
+  font-family: 'DM Sans', sans-serif;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  scroll-behavior: smooth;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Plus Jakarta Sans', sans-serif;
 }
 
 code {
   font-family: 'Fira Code', 'Menlo', 'Monaco', 'Lucida Console', monospace;
 }
 
+.code-block {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-up {
+  animation: fade-up 0.5s ease-out both;
+}
+
+.fade-up-delay-1 { animation-delay: 0.08s; }
+.fade-up-delay-2 { animation-delay: 0.16s; }
+
+.glass-card {
+  background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
 pre {
+  position: relative;
   padding: 1.5rem;
   border-radius: 0.5rem;
   overflow-x: auto;
 }
 
-.code-block {
-  background: #1e293b;
-  border: 1px solid #334155;
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  line-height: 0;
+}
+
+pre:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.brand-glow {
+  box-shadow: 0 0 24px rgba(47, 193, 207, 0.15), 0 0 48px rgba(47, 193, 207, 0.05);
 }

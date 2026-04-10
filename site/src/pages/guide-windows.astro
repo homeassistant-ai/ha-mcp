@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
+import PlatformIcon from '../components/PlatformIcon.astro';
 
 const base = import.meta.env.BASE_URL;
 
@@ -20,7 +21,7 @@ const withBase = (path: string) => {
         <a href={withBase('/setup')} class="hover:text-white">&larr; Back to Setup</a>
       </div>
       <div class="flex items-center gap-4 mb-4">
-        <span class="text-5xl">🪟</span>
+        <PlatformIcon icon="windows" size={40} class="text-[var(--text-secondary)] flex-shrink-0" />
         <div>
           <h1 class="text-3xl font-bold text-white">Windows Setup Guide</h1>
           <p class="text-slate-400">Claude Desktop + Home Assistant in ~10 minutes</p>
@@ -210,6 +211,6 @@ const withBase = (path: string) => {
     @apply pl-11;
   }
   .code-block {
-    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-green-400;
+    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-brand;
   }
 </style>

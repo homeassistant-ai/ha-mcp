@@ -10,16 +10,40 @@ const { title } = Astro.props;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="description" content="Configure ha-mcp for your favorite AI assistant" />
+    <meta name="description" content="AI-powered smart home control through the Model Context Protocol" />
     <meta name="viewport" content="width=device-width" />
     <link rel="icon" type="image/svg+xml" href="/ha-mcp/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <!-- Cloudflare Web Analytics -->
     <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "65196c0f415f4f3690e13ad77fa44cb0"}'></script>
   </head>
-  <body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+  <body class="min-h-screen text-[var(--text-primary)] antialiased" style="background-color: var(--surface-0); background-image: radial-gradient(ellipse 60% 50% at 25% 0%, rgba(47,193,207,0.03), transparent), radial-gradient(ellipse 50% 40% at 75% 100%, rgba(47,193,207,0.02), transparent);">
     <slot />
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const svgAttrs = 'width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+        const copyIcon = `<svg ${svgAttrs}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
+        const checkIcon = `<svg ${svgAttrs}><path d="M20 6L9 17l-5-5"/></svg>`;
+        document.querySelectorAll('pre').forEach(pre => {
+          if (pre.querySelector('.copy-btn')) return;
+          const btn = document.createElement('button');
+          btn.className = 'copy-btn';
+          btn.setAttribute('aria-label', 'Copy to clipboard');
+          btn.innerHTML = copyIcon;
+          btn.addEventListener('click', async () => {
+            const text = (pre.querySelector('code') || pre).textContent || '';
+            await navigator.clipboard.writeText(text.trim());
+            btn.innerHTML = checkIcon;
+            setTimeout(() => { btn.innerHTML = copyIcon; }, 1500);
+          });
+          pre.appendChild(btn);
+        });
+      });
+    </script>
   </body>
 </html>
 

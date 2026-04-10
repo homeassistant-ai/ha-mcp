@@ -4,9 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        'ha-blue': '#03a9f4',
-        'ha-dark': '#1c1c1c',
-        'primary': '#3b82f6',
+        brand: {
+          DEFAULT: 'var(--brand)',
+          light: 'var(--brand-light)',
+          dark: 'var(--brand-dark)',
+        },
+        surface: {
+          0: 'var(--surface-0)',
+          1: 'var(--surface-1)',
+          2: 'var(--surface-2)',
+          3: 'var(--surface-3)',
+        },
+      },
+      fontFamily: {
+        display: ['"Plus Jakarta Sans"', 'sans-serif'],
       },
     },
   },

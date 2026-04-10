@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
+import PlatformIcon from '../components/PlatformIcon.astro';
 
 const base = import.meta.env.BASE_URL;
 
@@ -13,190 +14,197 @@ const withBase = (path: string) => {
 <Layout title="Home Assistant MCP Server">
   <Nav active="home" />
 
-  <div class="container mx-auto px-4 py-12 max-w-5xl">
-    <!-- Hero Section -->
-    <header class="text-center mb-16">
-      <img src={withBase('/icon.svg')} alt="Home Assistant MCP Server" class="w-32 mx-auto mb-6" />
-      <h1 class="text-4xl md:text-5xl font-bold text-white mb-4">Home Assistant MCP Server</h1>
-      <p class="text-xl text-slate-400 max-w-2xl mx-auto mb-8">
-        A comprehensive Model Context Protocol (MCP) server that enables AI assistants to interact with Home Assistant.
-        Control smart home devices, query states, execute services and manage automations using natural language.
+  <div class="container mx-auto px-4 max-w-5xl">
+
+    <!-- Hero -->
+    <header class="pt-20 pb-16 md:pt-28 md:pb-20 text-center fade-up">
+      <h1 class="font-display text-4xl md:text-5xl lg:text-6xl font-extrabold text-white mb-6 tracking-tight leading-[1.1]">
+        Home Assistant<br />
+        <span class="text-brand">MCP Server</span>
+      </h1>
+      <p class="text-lg md:text-xl text-[var(--text-secondary)] max-w-2xl mx-auto mb-10 leading-relaxed">
+        A Model Context Protocol server that enables AI assistants to interact with Home Assistant.
+        Control devices, query states, manage automations, and configure dashboards using natural language.
       </p>
-
-      <!-- Badges -->
-      <div class="flex flex-wrap justify-center gap-2 mb-8">
-        <img src="https://img.shields.io/badge/tools-92+-blue" alt="92+ Tools" class="h-6" />
-        <img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release" class="h-6" />
-        <img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests" class="h-6" />
-        <img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License" class="h-6" />
-      </div>
-
-      <!-- CTA Buttons -->
-      <div class="flex flex-wrap justify-center gap-4">
-        <a href={withBase('/setup')} class="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors shadow-lg shadow-blue-900/30">
+      <div class="flex flex-wrap justify-center gap-4 fade-up fade-up-delay-1">
+        <a href={withBase('/setup')} class="px-7 py-3 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors brand-glow">
           Get Started
         </a>
-        <a href="https://github.com/homeassistant-ai/ha-mcp" class="px-8 py-3 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-xl transition-colors">
+        <a href="https://github.com/homeassistant-ai/ha-mcp" class="px-7 py-3 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors">
           View on GitHub
         </a>
       </div>
     </header>
 
-    <!-- Demo GIF -->
-    <div class="mb-16 max-w-3xl mx-auto rounded-2xl overflow-hidden border border-slate-700 shadow-2xl">
-      <img src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/demo.webp" alt="Demo with Claude Desktop" class="w-full" />
+    <!-- Demo -->
+    <div class="mb-24 max-w-4xl mx-auto fade-up fade-up-delay-2">
+      <div class="rounded-2xl overflow-hidden border border-white/[0.06] shadow-2xl shadow-black/40">
+        <img src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/demo.webp" alt="Demo with Claude Desktop" class="w-full" loading="lazy" />
+      </div>
     </div>
 
-    <!-- Quick Start Section -->
-    <section class="mb-16">
-      <h2 class="text-2xl font-bold text-white mb-6 text-center">Quick Start (~5 min)</h2>
-      <p class="text-slate-400 text-center mb-8">No paid subscription required. Just copy-paste one command.</p>
+    <!-- Quick Start -->
+    <section class="mb-24 fade-up">
+      <div class="text-center mb-10">
+        <h2 class="font-display text-3xl md:text-4xl font-bold text-white mb-3 tracking-tight">Quick Start</h2>
+        <p class="text-[var(--text-secondary)]">No paid subscription required. Copy-paste one command to install.</p>
+      </div>
 
-      <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+      <div class="grid md:grid-cols-2 gap-5 max-w-4xl mx-auto">
         <!-- macOS -->
-        <div class="bg-slate-800/50 rounded-xl border border-slate-700 p-6">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="text-4xl">🍎</span>
-            <h3 class="text-xl font-semibold text-white">macOS</h3>
+        <div class="glass-card rounded-2xl p-6">
+          <div class="flex items-center gap-3 mb-5">
+            <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
+              <PlatformIcon icon="apple" size={20} class="text-[var(--text-secondary)]" />
+            </div>
+            <div>
+              <h3 class="font-display font-semibold text-white text-lg">macOS</h3>
+              <p class="text-sm text-[var(--text-muted)]">Terminal</p>
+            </div>
           </div>
-          <ol class="text-slate-300 space-y-3 text-sm mb-4">
-            <li>1. Sign in to <a href="https://claude.ai" class="text-blue-400 hover:underline">claude.ai</a></li>
-            <li>2. Open Terminal and run:</li>
+          <ol class="text-[var(--text-secondary)] space-y-3 text-sm mb-5">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Sign in to <a href="https://claude.ai" class="text-brand hover:underline">claude.ai</a></li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> Run in Terminal:</li>
           </ol>
-          <pre class="bg-slate-900 p-3 rounded-lg text-sm overflow-x-auto mb-4"><code class="text-green-400">curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh</code></pre>
-          <ol class="text-slate-300 space-y-2 text-sm" start="3">
-            <li>3. <a href="https://claude.ai/download" class="text-blue-400 hover:underline">Download Claude Desktop</a></li>
-            <li>4. Ask Claude: <em>"Can you see my Home Assistant?"</em></li>
+          <pre class="bg-surface-0 p-3.5 rounded-xl text-sm overflow-x-auto mb-5 border border-white/[0.04]"><code class="text-brand">curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-macos.sh | sh</code></pre>
+          <ol class="text-[var(--text-secondary)] space-y-2 text-sm" start="3">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> <a href="https://claude.ai/download" class="text-brand hover:underline">Download Claude Desktop</a></li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">4.</span> Ask Claude: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
           </ol>
         </div>
 
         <!-- Windows -->
-        <div class="bg-slate-800/50 rounded-xl border border-slate-700 p-6">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="text-4xl">🪟</span>
-            <h3 class="text-xl font-semibold text-white">Windows</h3>
+        <div class="glass-card rounded-2xl p-6">
+          <div class="flex items-center gap-3 mb-5">
+            <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
+              <PlatformIcon icon="windows" size={20} class="text-[var(--text-secondary)]" />
+            </div>
+            <div>
+              <h3 class="font-display font-semibold text-white text-lg">Windows</h3>
+              <p class="text-sm text-[var(--text-muted)]">PowerShell</p>
+            </div>
           </div>
-          <ol class="text-slate-300 space-y-3 text-sm mb-4">
-            <li>1. Sign in to <a href="https://claude.ai" class="text-blue-400 hover:underline">claude.ai</a></li>
-            <li>2. Open PowerShell and run:</li>
+          <ol class="text-[var(--text-secondary)] space-y-3 text-sm mb-5">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Sign in to <a href="https://claude.ai" class="text-brand hover:underline">claude.ai</a></li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> Run in PowerShell:</li>
           </ol>
-          <pre class="bg-slate-900 p-3 rounded-lg text-sm overflow-x-auto mb-4"><code class="text-green-400">irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-windows.ps1 | iex</code></pre>
-          <ol class="text-slate-300 space-y-2 text-sm" start="3">
-            <li>3. <a href="https://claude.ai/download" class="text-blue-400 hover:underline">Download Claude Desktop</a></li>
-            <li>4. Ask Claude: <em>"Can you see my Home Assistant?"</em></li>
+          <pre class="bg-surface-0 p-3.5 rounded-xl text-sm overflow-x-auto mb-5 border border-white/[0.04]"><code class="text-brand">irm https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-windows.ps1 | iex</code></pre>
+          <ol class="text-[var(--text-secondary)] space-y-2 text-sm" start="3">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> <a href="https://claude.ai/download" class="text-brand hover:underline">Download Claude Desktop</a></li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">4.</span> Ask Claude: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
           </ol>
         </div>
       </div>
 
-      <p class="text-center mt-6 text-slate-500">
-        Need more options? <a href={withBase('/setup')} class="text-blue-400 hover:underline">Use the Setup Wizard</a>
+      <p class="text-center mt-6 text-[var(--text-muted)] text-sm">
+        Need more options? <a href={withBase('/setup')} class="text-brand hover:underline">Use the Setup Wizard</a>
       </p>
     </section>
 
-    <!-- What Can You Do Section -->
-    <section class="mb-16">
-      <h2 class="text-2xl font-bold text-white mb-6 text-center">What Can You Do With It?</h2>
-      <p class="text-slate-400 text-center mb-8">Just talk to Claude naturally. Here are some examples:</p>
+    <!-- Examples -->
+    <section class="mb-24">
+      <div class="text-center mb-10">
+        <h2 class="font-display text-3xl md:text-4xl font-bold text-white mb-3 tracking-tight">What Can You Do With It?</h2>
+        <p class="text-[var(--text-secondary)]">Just talk to your AI assistant naturally. Here are some examples:</p>
+      </div>
 
-      <div class="grid gap-4 max-w-3xl mx-auto">
-        <div class="flex gap-4 items-start bg-slate-800/30 rounded-xl p-4 border border-slate-700/50">
-          <span class="text-2xl flex-shrink-0">💬</span>
-          <div>
-            <p class="text-white font-medium mb-1">"Create an automation that turns on the porch light at sunset"</p>
-            <p class="text-slate-400 text-sm">Creates the automation with proper triggers and actions</p>
+      <div class="grid md:grid-cols-2 gap-4 max-w-4xl mx-auto">
+        {[
+          { prompt: "Create an automation that turns on the porch light at sunset", desc: "Creates the automation with proper triggers and actions" },
+          { prompt: "Add a weather card to my dashboard", desc: "Updates your Lovelace dashboard with the new card" },
+          { prompt: "The motion sensor automation isn't working, debug it", desc: "Analyzes execution traces, identifies the issue, suggests fixes" },
+          { prompt: "Create a script that sets movie mode: dim lights, close blinds, turn on TV", desc: "Creates a reusable script with the sequence of actions" },
+        ].map(({ prompt, desc }) => (
+          <div class="glass-card rounded-xl p-5 group">
+            <p class="text-white font-medium mb-2 leading-snug">"{prompt}"</p>
+            <p class="text-[var(--text-muted)] text-sm">{desc}</p>
           </div>
-        </div>
-        <div class="flex gap-4 items-start bg-slate-800/30 rounded-xl p-4 border border-slate-700/50">
-          <span class="text-2xl flex-shrink-0">💬</span>
-          <div>
-            <p class="text-white font-medium mb-1">"Add a weather card to my dashboard"</p>
-            <p class="text-slate-400 text-sm">Updates your Lovelace dashboard with the new card</p>
-          </div>
-        </div>
-        <div class="flex gap-4 items-start bg-slate-800/30 rounded-xl p-4 border border-slate-700/50">
-          <span class="text-2xl flex-shrink-0">💬</span>
-          <div>
-            <p class="text-white font-medium mb-1">"The motion sensor automation isn't working, debug it"</p>
-            <p class="text-slate-400 text-sm">Analyzes execution traces, identifies the issue, suggests fixes</p>
-          </div>
-        </div>
-        <div class="flex gap-4 items-start bg-slate-800/30 rounded-xl p-4 border border-slate-700/50">
-          <span class="text-2xl flex-shrink-0">💬</span>
-          <div>
-            <p class="text-white font-medium mb-1">"Create a script that sets movie mode: dim lights, close blinds, turn on TV"</p>
-            <p class="text-slate-400 text-sm">Creates a reusable script with the sequence of actions</p>
-          </div>
-        </div>
+        ))}
       </div>
     </section>
 
-    <!-- Features Section -->
-    <section class="mb-16">
-      <h2 class="text-2xl font-bold text-white mb-6 text-center">Features</h2>
+    <!-- Features -->
+    <section class="mb-24">
+      <div class="text-center mb-10">
+        <h2 class="font-display text-3xl md:text-4xl font-bold text-white mb-3 tracking-tight">Features</h2>
+        <p class="text-[var(--text-secondary)]">92+ tools across 6 categories.</p>
+      </div>
 
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>🔍</span> Search
-          </h3>
-          <p class="text-slate-400 text-sm">Fuzzy entity search, deep config search, system overview</p>
-        </div>
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>🏠</span> Control
-          </h3>
-          <p class="text-slate-400 text-sm">Any service, bulk device control, real-time states</p>
-        </div>
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>🔧</span> Manage
-          </h3>
-          <p class="text-slate-400 text-sm">Automations, scripts, helpers, dashboards, areas, zones, groups</p>
-        </div>
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>📊</span> Monitor
-          </h3>
-          <p class="text-slate-400 text-sm">History, statistics, camera snapshots, automation traces</p>
-        </div>
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>💾</span> System
-          </h3>
-          <p class="text-slate-400 text-sm">Backup/restore, updates, add-ons, device registry</p>
-        </div>
-        <div class="bg-slate-800/30 rounded-xl p-5 border border-slate-700/50">
-          <h3 class="font-semibold text-white mb-2 flex items-center gap-2">
-            <span>🛠️</span> 92+ Tools
-          </h3>
-          <p class="text-slate-400 text-sm">Comprehensive toolset for complete HA control</p>
-        </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
+        {[
+          {
+            title: "Search",
+            desc: "Fuzzy entity search, deep config search, full system overview",
+            icon: `<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>`,
+          },
+          {
+            title: "Control",
+            desc: "Any service call, bulk device operations, real-time state tracking",
+            icon: `<path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>`,
+          },
+          {
+            title: "Manage",
+            desc: "Automations, scripts, helpers, dashboards, areas, zones, groups",
+            icon: `<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>`,
+          },
+          {
+            title: "Monitor",
+            desc: "History, statistics, camera snapshots, automation traces",
+            icon: `<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>`,
+          },
+          {
+            title: "System",
+            desc: "Backup and restore, updates, add-ons, device registry",
+            icon: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
+          },
+          {
+            title: "Flexible",
+            desc: "Works with Claude, ChatGPT, Cursor, Copilot, and 15+ AI clients",
+            icon: `<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>`,
+          },
+        ].map(({ title, desc, icon }) => (
+          <div class="glass-card rounded-xl p-5">
+            <div class="w-9 h-9 rounded-lg bg-brand/[0.08] flex items-center justify-center mb-4">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-brand">
+                <Fragment set:html={icon} />
+              </svg>
+            </div>
+            <h3 class="font-display font-semibold text-white mb-1.5">{title}</h3>
+            <p class="text-[var(--text-muted)] text-sm leading-relaxed">{desc}</p>
+          </div>
+        ))}
       </div>
     </section>
 
-    <!-- CTA Section -->
-    <section class="text-center bg-gradient-to-br from-blue-900/30 to-slate-800/30 rounded-2xl p-10 border border-blue-800/30">
-      <h2 class="text-2xl font-bold text-white mb-4">Ready to Get Started?</h2>
-      <p class="text-slate-400 mb-6">Set up ha-mcp with your AI assistant in minutes</p>
-      <a href={withBase('/setup')} class="inline-block px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-colors shadow-lg shadow-blue-900/30">
-        Open Setup Wizard
-      </a>
+    <!-- CTA -->
+    <section class="mb-20">
+      <div class="text-center rounded-2xl p-12 md:p-16 glass-card relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-brand/[0.04] to-transparent pointer-events-none"></div>
+        <div class="relative">
+          <h2 class="font-display text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">Ready to Get Started?</h2>
+          <p class="text-[var(--text-secondary)] mb-8 max-w-md mx-auto">Set up ha-mcp with your AI assistant in minutes.</p>
+          <a href={withBase('/setup')} class="inline-block px-8 py-3.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors brand-glow">
+            Open Setup Wizard
+          </a>
+        </div>
+      </div>
     </section>
 
     <!-- Footer -->
-    <footer class="mt-16 text-center text-slate-500 text-sm border-t border-slate-800 pt-8">
-      <p class="mb-2">
-        <a href="https://github.com/homeassistant-ai/ha-mcp" class="hover:text-slate-300">GitHub</a>
-        <span class="mx-2">·</span>
-        <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="hover:text-slate-300">Issues</a>
-        <span class="mx-2">·</span>
-        <a href={withBase('/tools')} class="hover:text-slate-300">Tools</a>
-        <span class="mx-2">·</span>
-        <a href={withBase('/faq')} class="hover:text-slate-300">FAQ</a>
-        <span class="mx-2">·</span>
-        <a href={withBase('/contribute')} class="hover:text-slate-300">Contribute</a>
-      </p>
-      <p class="text-slate-600">Built with FastMCP</p>
+    <footer class="pb-12 text-center text-sm border-t border-white/[0.06] pt-8">
+      <div class="flex flex-wrap justify-center gap-x-6 gap-y-2 mb-4">
+        <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-[var(--text-muted)] hover:text-white transition-colors">GitHub</a>
+        <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-[var(--text-muted)] hover:text-white transition-colors">Issues</a>
+        <a href={withBase('/tools')} class="text-[var(--text-muted)] hover:text-white transition-colors">Tools</a>
+        <a href={withBase('/faq')} class="text-[var(--text-muted)] hover:text-white transition-colors">FAQ</a>
+        <a href={withBase('/contribute')} class="text-[var(--text-muted)] hover:text-white transition-colors">Contribute</a>
+      </div>
+      <div class="flex flex-wrap justify-center gap-2 mb-4">
+        <img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release" class="h-5" loading="lazy" />
+        <img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests" class="h-5" loading="lazy" />
+        <img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License" class="h-5" loading="lazy" />
+      </div>
+      <p class="text-[var(--text-muted)]">Built with FastMCP</p>
     </footer>
   </div>
 </Layout>
