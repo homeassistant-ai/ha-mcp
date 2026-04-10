@@ -15,7 +15,6 @@ import os
 import shutil
 import sys
 import tempfile
-import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -84,27 +83,11 @@ def _setup_config_directory() -> Path:
     return config_dir
 
 
-def _wait_for_ha(url: str, timeout: int = 120) -> None:
-    """Poll HA until the API is ready."""
-    import requests
+def _wait_for_ha(url: str) -> None:
+    """Wait until HA is fully ready (API + components + entities)."""
+    from ha_wait import wait_for_ha_ready
 
-    logger.info(f"Waiting for HA at {url} ...")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            r = requests.get(
-                f"{url}/api/config",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"},
-                timeout=5,
-            )
-            if r.status_code == 200:
-                version = r.json().get("version", "unknown")
-                logger.info(f"HA ready (version {version})")
-                return
-        except requests.RequestException:
-            pass
-        time.sleep(3)
-    raise TimeoutError(f"HA not ready after {timeout}s")
+    wait_for_ha_ready(url, TEST_TOKEN, log=logger.info)
 
 
 @pytest.fixture(scope="session")
@@ -129,9 +112,7 @@ def ha_container():
         os.environ["HOMEASSISTANT_URL"] = url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
 
-        time.sleep(5)
         _wait_for_ha(url)
-        time.sleep(10)  # component stabilization
 
         yield {"url": url, "token": TEST_TOKEN, "port": port}
 

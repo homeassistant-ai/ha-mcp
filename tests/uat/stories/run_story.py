@@ -89,7 +89,6 @@ def _start_container(*, keep_alive: bool = False) -> dict:
     import shutil
     import tempfile
 
-    import requests
     from test_constants import HA_TEST_IMAGE, TEST_TOKEN
     from testcontainers.core.container import DockerContainer
 
@@ -123,27 +122,10 @@ def _start_container(*, keep_alive: bool = False) -> dict:
         url = f"http://localhost:{port}"
         log(f"HA container started on {url}")
 
-        # Wait for HA to be ready
-        time.sleep(5)
-        start = time.time()
-        while time.time() - start < 120:
-            try:
-                r = requests.get(
-                    f"{url}/api/config",
-                    headers={"Authorization": f"Bearer {TEST_TOKEN}"},
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    version = r.json().get("version", "unknown")
-                    log(f"HA ready (version {version})")
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(3)
-        else:
-            raise TimeoutError("HA not ready after 120s")
+        # Wait for HA to be fully ready (API + components + entities)
+        from ha_wait import wait_for_ha_ready
 
-        time.sleep(10)  # component stabilization
+        wait_for_ha_ready(url, TEST_TOKEN, log=log)
     except Exception:
         container.stop()
         shutil.rmtree(config_dir, ignore_errors=True)
