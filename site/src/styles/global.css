@@ -75,34 +75,33 @@ code {
 }
 
 pre {
-  position: relative;
   padding: 1.5rem;
   border-radius: 0.5rem;
   overflow-x: auto;
+}
+
+.pre-wrapper {
+  position: relative;
 }
 
 .copy-btn {
   position: absolute;
   top: 8px;
   right: 8px;
+  z-index: 1;
   padding: 7px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--surface-2);
+  border: 1px solid var(--border-hover);
   color: var(--text-secondary);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
   line-height: 0;
-}
-
-pre:hover .copy-btn {
-  opacity: 1;
 }
 
 .copy-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--surface-3);
 }
 
 .brand-glow {
