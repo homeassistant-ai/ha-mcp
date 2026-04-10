@@ -7,11 +7,14 @@ Mirrors the two-gate stabilization used by E2E tests (conftest.py):
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from collections.abc import Callable
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 MIN_COMPONENTS = 50
 MIN_ENTITIES = 50
@@ -55,8 +58,8 @@ def wait_for_ha_ready(
                 if component_count != last_count:
                     log(f"  {component_count} components loaded, waiting for {MIN_COMPONENTS}+...")
                     last_count = component_count
-        except (requests.RequestException, ValueError):
-            pass
+        except (requests.RequestException, ValueError) as exc:
+            logger.debug("Readiness check failed (retrying): %s", exc)
         time.sleep(1)
     else:
         raise TimeoutError(
@@ -78,8 +81,8 @@ def wait_for_ha_ready(
                 if entity_count != last_entity_count:
                     log(f"  {entity_count} entities registered, waiting for {MIN_ENTITIES}+...")
                     last_entity_count = entity_count
-        except (requests.RequestException, ValueError):
-            pass
+        except (requests.RequestException, ValueError) as exc:
+            logger.debug("Readiness check failed (retrying): %s", exc)
         time.sleep(1)
     else:
         raise TimeoutError(
