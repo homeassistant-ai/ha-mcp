@@ -504,37 +504,9 @@ class HomeAssistantClient:
             actual_entity_id = None
             entity_not_verified = False
             if operation == "created":
-                try:
-                    # Poll with retries — slower hardware may need more time
-                    for attempt in range(3):
-                        await asyncio.sleep(1 * (attempt + 1))
-
-                        states = await self.get_states()
-                        for state in states:
-                            if state.get("entity_id", "").startswith(
-                                "automation."
-                            ):
-                                attributes = state.get("attributes", {})
-                                if attributes.get("id") == unique_id:
-                                    actual_entity_id = state.get("entity_id")
-                                    logger.debug(
-                                        f"Found actual entity_id for unique_id {unique_id}: {actual_entity_id}"
-                                    )
-                                    break
-                        if actual_entity_id:
-                            break
-
-                    if not actual_entity_id:
-                        entity_not_verified = True
-                        logger.warning(
-                            f"Automation with unique_id {unique_id} was not found in HA state after creation"
-                        )
-
-                except Exception as e:
+                actual_entity_id = await self._poll_for_automation_entity(unique_id)
+                if not actual_entity_id:
                     entity_not_verified = True
-                    logger.warning(
-                        f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
-                    )
 
             result: dict[str, Any] = {
                 "unique_id": unique_id,
@@ -551,6 +523,32 @@ class HomeAssistantClient:
                     f"Invalid automation configuration: {str(e)}", status_code=400
                 ) from e
             raise
+
+    async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
+        """Poll HA state to find the entity_id assigned to a newly created automation."""
+        try:
+            for attempt in range(3):
+                await asyncio.sleep(1 * (attempt + 1))
+                states = await self.get_states()
+                for state in states:
+                    if not state.get("entity_id", "").startswith("automation."):
+                        continue
+                    if state.get("attributes", {}).get("id") == unique_id:
+                        entity_id = state.get("entity_id")
+                        logger.debug(
+                            f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
+                        )
+                        return entity_id
+        except Exception as e:
+            logger.warning(
+                f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
+            )
+            return None
+
+        logger.warning(
+            f"Automation with unique_id {unique_id} was not found in HA state after creation"
+        )
+        return None
 
     async def delete_automation_config(self, identifier: str) -> dict[str, Any]:
         """

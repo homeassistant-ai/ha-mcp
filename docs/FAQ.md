@@ -161,6 +161,33 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
    }
    ```
 
+### Windows: pywin32 installation fails
+
+If you see `Failed to install: pywin32` or `os error 32` ("file is used by another process") when starting ha-mcp on Windows, this is caused by two upstream bugs:
+
+1. The MCP Python SDK requires `pywin32` on Windows even though server-only users don't need it ([python-sdk#2233](https://github.com/modelcontextprotocol/python-sdk/issues/2233))
+2. `uv` has a known issue installing `pywin32` on Windows ([uv#17679](https://github.com/astral-sh/uv/issues/17679))
+
+**Workaround — use Docker:**
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_token",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+See [#672](https://github.com/homeassistant-ai/ha-mcp/issues/672) for details.
+
 ### "uvx not found" error
 
 After installing uv, **restart your terminal** (or Claude Desktop) for the PATH changes to take effect.
