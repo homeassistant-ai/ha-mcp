@@ -9,20 +9,34 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant label management tools."""
+class LabelTools:
+    """Label management tools for Home Assistant."""
 
-    @mcp.tool(tags={"Labels & Categories"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Label"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_config_get_label",
+        tags={"Labels & Categories"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Label"},
+    )
     @log_tool_usage
     async def ha_config_get_label(
+        self,
         label_id: Annotated[
             str | None,
             Field(
@@ -53,7 +67,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "config/label_registry/list",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 raise_tool_error(create_error_response(
@@ -64,7 +78,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             labels = result.get("result", [])
 
-            # List mode - return all labels
             if label_id is None:
                 return {
                     "success": True,
@@ -73,7 +86,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(labels)} label(s)",
                 }
 
-            # Get mode - find specific label
             label = next(
                 (lbl for lbl in labels if lbl.get("label_id") == label_id), None
             )
@@ -103,9 +115,14 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify WebSocket connection is active",
             ])
 
-    @mcp.tool(tags={"Labels & Categories"}, annotations={"destructiveHint": True, "title": "Create or Update Label"})
+    @tool(
+        name="ha_config_set_label",
+        tags={"Labels & Categories"},
+        annotations={"destructiveHint": True, "title": "Create or Update Label"},
+    )
     @log_tool_usage
     async def ha_config_set_label(
+        self,
         name: Annotated[str, Field(description="Display name for the label")],
         label_id: Annotated[
             str | None,
@@ -154,7 +171,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities.
         """
         try:
-            # Determine if this is a create or update
             action = "update" if label_id else "create"
 
             message: dict[str, Any] = {
@@ -167,7 +183,6 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # Note: name is always provided as it's a required parameter
                 # The validation of at least one field is satisfied by name being required
 
-            # Add optional fields only if they are explicitly provided (not None)
             if color is not None:
                 message["color"] = color
             if icon is not None:
@@ -175,7 +190,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if description is not None:
                 message["description"] = description
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 label_data = result.get("result", {})
@@ -203,9 +218,14 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "For updates, verify the label_id exists using ha_config_get_label()",
             ])
 
-    @mcp.tool(tags={"Labels & Categories"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Label"})
+    @tool(
+        name="ha_config_remove_label",
+        tags={"Labels & Categories"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Label"},
+    )
     @log_tool_usage
     async def ha_config_remove_label(
+        self,
         label_id: Annotated[
             str,
             Field(description="ID of the label to delete"),
@@ -231,7 +251,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "label_id": label_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -255,3 +275,7 @@ def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify the label_id exists using ha_config_get_label()",
             ])
 
+
+def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant label management tools."""
+    register_tool_methods(mcp, LabelTools(client))
