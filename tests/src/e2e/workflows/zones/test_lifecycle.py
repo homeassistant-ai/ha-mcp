@@ -451,7 +451,7 @@ class TestZoneLifecycle:
             logger.info("All zone deletions verified")
 
 
-    async def test_get_zone_nonexistent(self, mcp_client):
+    async def test_zone_get_nonexistent(self, mcp_client):
         """Test ha_get_zone returns ENTITY_NOT_FOUND for unknown zone_id."""
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_failure(
