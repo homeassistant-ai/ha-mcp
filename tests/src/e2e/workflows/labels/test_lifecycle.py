@@ -363,6 +363,18 @@ class TestLabelLifecycle:
 class TestLabelValidation:
     """Test label validation and error handling."""
 
+    async def test_get_label_nonexistent(self, mcp_client):
+        """Test ha_config_get_label returns ENTITY_NOT_FOUND for unknown label_id."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_get_label",
+            {"label_id": "nonexistent_label_e2e_xyz_404"},
+        )
+
+        assert result["success"] is False
+        assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+
+
     async def test_update_nonexistent_label(self, mcp_client):
         """Test updating a label that doesn't exist."""
         logger.info("Testing update of nonexistent label...")
