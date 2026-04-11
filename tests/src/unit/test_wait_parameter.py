@@ -51,23 +51,14 @@ class TestAutomationWaitParameter:
 
     @pytest.fixture
     def register_tools(self, mock_client):
-        from ha_mcp.tools.tools_config_automations import (
-            register_config_automation_tools,
-        )
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
-        registered_tools: dict[str, Any] = {}
-
-        def capture_tool(**kwargs):
-            def decorator(fn):
-                registered_tools[fn.__name__] = fn
-                return fn
-
-            return decorator
-
-        mock_mcp = MagicMock()
-        mock_mcp.tool = capture_tool
-        register_config_automation_tools(mock_mcp, mock_client)
-        return registered_tools
+        tools_instance = AutomationConfigTools(mock_client)
+        return {
+            "ha_config_set_automation": tools_instance.ha_config_set_automation,
+            "ha_config_remove_automation": tools_instance.ha_config_remove_automation,
+            "ha_config_get_automation": tools_instance.ha_config_get_automation,
+        }
 
     async def test_set_automation_wait_default_true(self, register_tools, mock_client):
         """wait defaults to True and polls for entity registration."""
