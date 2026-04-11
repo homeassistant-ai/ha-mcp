@@ -476,6 +476,13 @@ Consequence statements are plain prose: "This permanently deletes the dashboard.
 A backup is created before every edit." Route safety concerns through `annotations`
 (`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
 
+Tool descriptions should read as you would explain the tool to a new colleague
+([Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents): "think of how
+you would describe your tool to a new hire on your team"): state what it does, when to
+use it, when not to, and any caveats — factually. Avoid loaded framing ("wrong answer",
+"escape hatch", "last resort") and reader-directed imperatives ("STOP", "THINK BEFORE")
+that don't appear in any vendor's tool description examples.
+
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
 
