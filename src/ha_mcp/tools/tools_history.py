@@ -307,7 +307,14 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
                 ))
             return parsed_ids
         elif "," in entity_ids:
-            return [e.strip() for e in entity_ids.split(",") if e.strip()]
+            result = [e.strip() for e in entity_ids.split(",") if e.strip()]
+            if not result:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=["Provide at least one entity ID"],
+                ))
+            return result
         else:
             return [entity_ids.strip()]
     if not entity_ids:
