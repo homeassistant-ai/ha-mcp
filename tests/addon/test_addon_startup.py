@@ -209,6 +209,22 @@ class TestSkillsAsToolsMigration:
 
         assert result is True
 
+    def test_migration_survives_malformed_options_json(self, tmp_path):
+        """Corrupt options.json (JSONDecodeError) is logged, runtime override
+        still applied, marker still created — migration does not loop."""
+        config_file = tmp_path / "options.json"
+        with open(config_file, "w", encoding="utf-8") as f:
+            f.write("{not valid json")
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+        )
+
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+
 
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"

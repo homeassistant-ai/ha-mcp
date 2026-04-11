@@ -137,23 +137,29 @@ def migrate_skills_as_tools_default(
         )
         if config_file.exists():
             try:
-                with open(config_file) as f:
+                with open(config_file, encoding="utf-8") as f:
                     opts = json.load(f)
-                opts["enable_skills_as_tools"] = True
-                with open(config_file, "w") as f:
-                    json.dump(opts, f, indent=2)
-                log_info("Persisted enable_skills_as_tools=true to options.json")
-            except Exception as e:
+                if isinstance(opts, dict):
+                    opts["enable_skills_as_tools"] = True
+                    with open(config_file, "w", encoding="utf-8") as f:
+                        json.dump(opts, f, indent=2)
+                        f.write("\n")
+                    log_info("Persisted enable_skills_as_tools=true to options.json")
+            except (OSError, json.JSONDecodeError) as e:
                 log_error(
-                    f"Failed to persist migration to options.json: {e}. "
+                    f"Failed to persist migration to options.json "
+                    f"(operation: persist_skills_as_tools_migration): {e}. "
                     "Runtime override still applied for this session."
                 )
         stored_value = True
 
     try:
         marker.touch()
-    except Exception as e:
-        log_error(f"Failed to create migration marker: {e}")
+    except OSError as e:
+        log_error(
+            f"Failed to create migration marker "
+            f"(operation: create_skills_as_tools_marker): {e}"
+        )
 
     return stored_value
 
