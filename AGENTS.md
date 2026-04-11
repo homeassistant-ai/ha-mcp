@@ -470,6 +470,13 @@ or a behavioral quirk that causes silent failures if ignored.
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
 
+**Use RFC 2119 terms** (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY) for constraints and
+restrictions in tool docstrings and parameter descriptions. These terms are unambiguous
+and [well-understood by LLM agents](https://aws.amazon.com/blogs/opensource/introducing-strands-agent-sops-natural-language-workflows-for-ai-agents/).
+Avoid informal alternatives like "IMPORTANT:", "Prefer:", "Only use when", "STOP",
+or "escape hatch". Example: `MUST NOT be used for template sensors — use
+ha_set_config_entry_helper instead.`
+
 **What NOT to include:** full parameter documentation, type descriptions already in the
 signature, HA domain internals the model already knows, or motivational prose.
 
