@@ -476,11 +476,6 @@ Consequence statements are plain prose: "This permanently deletes the dashboard.
 A backup is created before every edit." Route safety concerns through `annotations`
 (`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
 
-**Do not editorialize.** Tool descriptions describe behavior, not opinions about the
-tool. Avoid value judgments ("wrong answer", "escape hatch", "last resort", "dangerous",
-"bad idea"), imperative commands to the reader ("STOP", "DO NOT TOUCH", "THINK BEFORE"),
-and ad-hoc emphasis markers ("IMPORTANT:", "CRITICAL:", all-caps sentences).
-
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
 
