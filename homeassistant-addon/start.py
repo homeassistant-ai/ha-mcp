@@ -99,46 +99,31 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
-def persist_addon_options(options: dict[str, Any]) -> bool:
-    """Persist the full addon options dict back to Supervisor.
+def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> None:
+    """POST the full addon options dict to the Supervisor.
 
-    Sends the provided options as-is to `POST /addons/self/options`, which
-    performs a full replace validated against the addon's schema. Callers
-    must pass the complete options dict (including all required fields) —
-    partial dicts are rejected by the Supervisor.
+    The endpoint is a full-replace validated against the addon schema, so
+    callers must pass the complete options dict (not a partial patch).
 
-    Used after auto-generating the secret path so the webhook proxy can
-    read it from addon info without having to parse addon logs (#941).
+    Used after auto-generating the secret path so other addons (the
+    webhook proxy) can read it from `GET /addons/{slug}/info → options`
+    instead of scraping it from addon logs (#941).
+
+    Raises the underlying `urllib.error.HTTPError` / `URLError` / `OSError`
+    on failure — callers decide how loudly to surface the problem.
     """
-    token = os.environ.get("SUPERVISOR_TOKEN")
-    if not token:
-        log_error("Cannot persist addon options: SUPERVISOR_TOKEN not set")
-        return False
     payload = json.dumps({"options": options}).encode()
     req = urllib.request.Request(
         "http://supervisor/addons/self/options",
         data=payload,
         method="POST",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {supervisor_token}",
             "Content-Type": "application/json",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            resp.read()
-        return True
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="replace")[:200]
-        except Exception:
-            pass
-        log_error(f"Failed to persist addon options: HTTP {e.code} — {body}")
-        return False
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        log_error(f"Failed to persist addon options: {e}")
-        return False
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
 
 
 def main() -> int:
@@ -173,20 +158,43 @@ def main() -> int:
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
+    # Validate Supervisor token (needed for both ha-mcp auth below and the
+    # options-persist call right after secret path resolution)
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
+        return 1
+
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
 
     # Persist secret path back to addon options so other addons (e.g. the
     # webhook proxy) can read it via `GET /addons/{slug}/info → options`
     # instead of scraping it from this addon's logs (#941). The webhook
-    # proxy's log-parsing fallback is fragile — the `(/private_\S+)` regex
-    # breaks on any whitespace the Supervisor log API inserts into the URL.
+    # proxy's log-parsing fallback uses `(/private_\S+)` which breaks on
+    # any whitespace the Supervisor log API inserts into the URL.
     #
     # Only write when the stored path differs from the path we just
-    # resolved. POST is a full replace validated against the addon schema,
-    # so we send the entire config dict with `secret_path` overwritten.
+    # resolved, so this is a one-time write per new path. The Supervisor
+    # endpoint is a full-replace validated against the addon schema, so we
+    # send the entire config dict with `secret_path` overwritten — a
+    # partial `{"secret_path": ...}` payload would fail validation (missing
+    # required fields) and persist nothing.
     if secret_path != config.get("secret_path", ""):
-        persist_addon_options({**config, "secret_path": secret_path})
+        try:
+            persist_addon_options(
+                {**config, "secret_path": secret_path}, supervisor_token
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+            detail = f"HTTP {e.code}: {e.reason}" if isinstance(e, urllib.error.HTTPError) else str(e)
+            log_error(
+                f"Failed to persist secret_path to addon options ({detail}). "
+                f"This addon will still run with secret_path={secret_path!r}, "
+                "but other addons (e.g. the webhook proxy) cannot auto-discover "
+                "it via Supervisor. Workaround: open this addon's Configuration "
+                "tab and paste the secret_path above into the 'Secret path override' "
+                "field, then save."
+            )
 
     log_info(f"Backup hint mode: {backup_hint}")
 
@@ -197,12 +205,6 @@ def main() -> int:
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
-
-    # Validate Supervisor token
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
-        return 1
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 

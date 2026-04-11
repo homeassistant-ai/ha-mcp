@@ -93,8 +93,7 @@ class TestPersistAddonOptions:
         self.addon = _load_addon_start()
 
     def test_sends_full_options_dict_as_post(self, monkeypatch):
-        """persist_addon_options sends a POST to /addons/self/options with the full dict wrapped in {options: ...}."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        """Sends POST /addons/self/options with body {"options": <full dict>}."""
         captured: dict = {}
 
         class FakeResp:
@@ -121,34 +120,23 @@ class TestPersistAddonOptions:
             "enable_skills": True,
             "secret_path": "/private_abc12345",
         }
-        assert self.addon.persist_addon_options(options) is True
+        # Returns None on success — helper communicates failure via exceptions.
+        assert self.addon.persist_addon_options(options, "test-token") is None
         assert captured["url"] == "http://supervisor/addons/self/options"
         assert captured["method"] == "POST"
-        # Header keys are lowercased by urllib.request.Request.header_items()
         assert captured["headers"]["Authorization"] == "Bearer test-token"
         assert captured["headers"]["Content-type"] == "application/json"
         assert json.loads(captured["body"]) == {"options": options}
 
-    def test_missing_supervisor_token_returns_false(self, monkeypatch):
-        """Without SUPERVISOR_TOKEN the helper refuses to POST."""
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        called = False
+    def test_http_error_propagates(self, monkeypatch):
+        """Validation failures from Supervisor propagate to the caller.
 
-        def fake_urlopen(*args, **kwargs):
-            nonlocal called
-            called = True
-            raise AssertionError("urlopen should not be called without token")
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
-        assert called is False
-
-    def test_http_error_returns_false(self, monkeypatch):
-        """Validation failures from Supervisor surface as False, not an exception."""
+        Silent suppression here would hide the exact failure this PR exists
+        to fix: the webhook proxy unable to discover the secret path. Main()
+        must see the exception so it can log an actionable recovery message.
+        """
         import io
         import urllib.error
-
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
 
         def fake_urlopen(req, timeout=None):
             raise urllib.error.HTTPError(
@@ -160,19 +148,19 @@ class TestPersistAddonOptions:
             )
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
+        with pytest.raises(urllib.error.HTTPError):
+            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
 
-    def test_connection_error_returns_false(self, monkeypatch):
-        """Network failures surface as False, not an exception."""
+    def test_connection_error_propagates(self, monkeypatch):
+        """Network failures propagate to the caller — no silent swallowing."""
         import urllib.error
-
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
 
         def fake_urlopen(req, timeout=None):
             raise urllib.error.URLError("connection refused")
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
+        with pytest.raises(urllib.error.URLError):
+            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
 
 
 IMAGE_TAG = "ha-mcp-addon-test"
