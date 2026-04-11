@@ -47,6 +47,9 @@ class TestAutomationWaitParameter:
                 }
             ]
         )
+        # Reference validator (#940) calls these during set_*; provide
+        # empty-but-valid payloads so the walker runs without errors.
+        client.get_services = AsyncMock(return_value=[])
         return client
 
     @pytest.fixture
@@ -215,6 +218,10 @@ class TestScriptWaitParameter:
         client.get_entity_state = AsyncMock(
             return_value={"state": "off", "entity_id": "script.test_script"}
         )
+        # Reference validator (#940) calls these during set_script;
+        # provide empty-but-valid payloads so the walker runs.
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
         return client
 
     @pytest.fixture
