@@ -746,8 +746,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        limit: int = 5,
-        offset: int = 0,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=5,
+                description="Maximum total results to return (default: 5)",
+            ),
+        ] = 5,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of results to skip for pagination (default: 0)",
+            ),
+        ] = 0,
         include_config: Annotated[
             bool | str,
             Field(
@@ -802,6 +814,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
         exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
         try:
+            limit = coerce_int_param(limit, "limit", default=5, min_value=1)
+            offset = coerce_int_param(offset, "offset", default=0, min_value=0)
             result = await smart_tools.deep_search(
                 query,
                 parsed_search_types,
