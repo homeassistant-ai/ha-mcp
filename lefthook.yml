@@ -19,7 +19,10 @@ pre-commit:
         jobs:
           - name: mypy
             glob: "**/*.py"
-            run: bash -c "set -e; uv run mypy src/ homeassistant-addon/ scripts/; uv run mypy homeassistant-addon-webhook-proxy/start.py"
+            run: uv run mypy src/ homeassistant-addon/ scripts/
+          - name: mypy-webhook-proxy
+            glob: "**/*.py"
+            run: uv run mypy homeassistant-addon-webhook-proxy/start.py
           - name: unit-tests
             glob:
               - "**/*.py"

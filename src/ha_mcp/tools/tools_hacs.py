@@ -296,7 +296,7 @@ class HacsTools:
             ws_client = await get_websocket_client()
 
             # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
-            actual_id = await _resolve_hacs_repo_id(ws_client, repository_id)
+            actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
 
             # Get repository info via WebSocket using numeric ID
             response = await ws_client.send_command(
@@ -541,17 +541,7 @@ class HacsTools:
             ws_client = await get_websocket_client()
 
             # Resolve GitHub path to numeric ID if needed
-            actual_id = await _resolve_hacs_repo_id(ws_client, repository_id)
-            repo_name = repository_id
-
-            # If we resolved from a path, try to get the name
-            if "/" in repository_id and actual_id != repository_id:
-                list_response = await ws_client.send_command("hacs/repositories/list")
-                if list_response.get("success"):
-                    for repo in list_response.get("result", []):
-                        if str(repo.get("id")) == actual_id:
-                            repo_name = repo.get("name") or repository_id
-                            break
+            actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
 
             # Build download command parameters
             download_kwargs: dict[str, Any] = {"repository": actual_id}
@@ -684,20 +674,23 @@ def _filter_and_score_repos(
     return matches
 
 
-async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> str:
-    """Resolve a GitHub path (owner/repo) to a HACS numeric repository ID.
+async def _resolve_hacs_repo_id(
+    ws_client: Any, repository_id: str
+) -> tuple[str, str]:
+    """Resolve a GitHub path (owner/repo) to a HACS numeric repository ID and name.
 
-    If repository_id is already numeric, returns it as-is.
+    Returns (numeric_id, display_name). If repository_id is already numeric,
+    returns (repository_id, repository_id).
     """
     if "/" not in repository_id:
-        return repository_id
+        return repository_id, repository_id
 
     list_response = await ws_client.send_command("hacs/repositories/list")
     if list_response.get("success"):
         repos = list_response.get("result", [])
         for repo in repos:
             if repo.get("full_name", "").lower() == repository_id.lower():
-                return str(repo.get("id"))
+                return str(repo.get("id")), repo.get("name") or repository_id
 
     raise_tool_error(
         create_error_response(

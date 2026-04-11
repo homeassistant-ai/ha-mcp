@@ -186,30 +186,6 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], normalized)
 
 
-def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Strip empty trigger/action/condition arrays from automation config.
-
-    Blueprint-based automations should not have trigger/action/condition fields
-    since these come from the blueprint itself. If empty arrays are present,
-    they override the blueprint's configuration and break the automation.
-
-    Args:
-        config: Automation configuration dict
-
-    Returns:
-        Configuration with empty trigger/action/condition arrays removed
-    """
-    cleaned = config.copy()
-
-    # Remove empty arrays for blueprint automations
-    for field in ["trigger", "action", "condition"]:
-        if field in cleaned and cleaned[field] == []:
-            del cleaned[field]
-
-    return cleaned
-
-
 class AutomationConfigTools:
     """Configuration management tools for Home Assistant automations."""
 
