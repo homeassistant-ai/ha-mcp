@@ -457,9 +457,9 @@ class TestZoneLifecycle:
             result = await mcp.call_tool_failure(
                 "ha_get_zone",
                 {"zone_id": "nonexistent_zone_e2e_xyz_404"},
+                expected_error="Zone not found",
             )
 
-        assert result["success"] is False
         assert result["error"]["code"] == "ENTITY_NOT_FOUND"
 
 async def test_zone_search_discovery(mcp_client):
