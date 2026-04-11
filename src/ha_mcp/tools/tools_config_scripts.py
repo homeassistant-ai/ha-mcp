@@ -26,11 +26,11 @@ from .helpers import (
     register_tool_methods,
 )
 from .reference_validator import validate_config_references
-from .tools_config_automations import _merge_validation_meta
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
     fetch_entity_category,
+    merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -359,7 +359,7 @@ class ConfigScriptTools:
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
 
-            _merge_validation_meta(result, validation_meta)
+            merge_validation_meta(result, validation_meta)
 
             return {
                 "success": True,

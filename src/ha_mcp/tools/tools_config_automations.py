@@ -34,6 +34,7 @@ from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
     fetch_entity_category,
+    merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -158,32 +159,6 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
             normalized_trigger["platform"] = normalized_trigger.pop("trigger")
         normalized_triggers.append(normalized_trigger)
     return normalized_triggers
-
-
-def _merge_validation_meta(
-    result: dict[str, Any], validation_meta: dict[str, Any]
-) -> None:
-    """Attach reference-validator output to a set-tool success ``result``.
-
-    Produces a single nested ``validation`` field when there's anything
-    worth reporting — warnings, skipped templates, or a blueprint
-    short-circuit. Keeps the happy-path response unchanged.
-    """
-    warnings = validation_meta.get("warnings") or []
-    unvalidated_templates = validation_meta.get("unvalidated_templates") or 0
-    blueprint_skipped = bool(validation_meta.get("blueprint_skipped"))
-
-    if not warnings and not unvalidated_templates and not blueprint_skipped:
-        return
-
-    entry: dict[str, Any] = {}
-    if warnings:
-        entry["warnings"] = warnings
-    if unvalidated_templates:
-        entry["unvalidated_templates"] = unvalidated_templates
-    if blueprint_skipped:
-        entry["blueprint_skipped"] = True
-    result["validation"] = entry
 
 
 def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
@@ -540,7 +515,7 @@ class AutomationConfigTools:
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
 
-            _merge_validation_meta(result, validation_meta)
+            merge_validation_meta(result, validation_meta)
 
             return {
                 "success": True,

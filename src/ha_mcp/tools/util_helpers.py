@@ -530,3 +530,34 @@ async def apply_entity_category(
         result_dict["category_warning"] = (
             f"{entity_type.capitalize()} saved but failed to set category: {e}"
         )
+
+
+def merge_validation_meta(
+    result: dict[str, Any], validation_meta: dict[str, Any]
+) -> None:
+    """Attach reference-validator output to a set-tool success ``result``.
+
+    Produces a single nested ``validation`` field when there's anything
+    worth reporting - warnings, skipped templates, or a blueprint
+    short-circuit. Keeps the happy-path response unchanged.
+
+    Shared between ``ha_config_set_automation`` and
+    ``ha_config_set_script``; see
+    :mod:`ha_mcp.tools.reference_validator` for the validator itself
+    and #940 for background.
+    """
+    warnings = validation_meta.get("warnings") or []
+    unvalidated_templates = validation_meta.get("unvalidated_templates") or 0
+    blueprint_skipped = bool(validation_meta.get("blueprint_skipped"))
+
+    if not warnings and not unvalidated_templates and not blueprint_skipped:
+        return
+
+    entry: dict[str, Any] = {}
+    if warnings:
+        entry["warnings"] = warnings
+    if unvalidated_templates:
+        entry["unvalidated_templates"] = unvalidated_templates
+    if blueprint_skipped:
+        entry["blueprint_skipped"] = True
+    result["validation"] = entry
