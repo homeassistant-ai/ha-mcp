@@ -6,9 +6,11 @@ import os
 import re
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
@@ -97,6 +99,48 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
+def persist_addon_options(options: dict[str, Any]) -> bool:
+    """Persist the full addon options dict back to Supervisor.
+
+    Sends the provided options as-is to `POST /addons/self/options`, which
+    performs a full replace validated against the addon's schema. Callers
+    must pass the complete options dict (including all required fields) —
+    partial dicts are rejected by the Supervisor.
+
+    Used after auto-generating the secret path so the webhook proxy can
+    read it from addon info without having to parse addon logs (#941).
+    """
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        log_error("Cannot persist addon options: SUPERVISOR_TOKEN not set")
+        return False
+    payload = json.dumps({"options": options}).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        return True
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        log_error(f"Failed to persist addon options: HTTP {e.code} — {body}")
+        return False
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        log_error(f"Failed to persist addon options: {e}")
+        return False
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -104,6 +148,7 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
@@ -130,6 +175,18 @@ def main() -> int:
 
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
+
+    # Persist secret path back to addon options so other addons (e.g. the
+    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
+    # instead of scraping it from this addon's logs (#941). The webhook
+    # proxy's log-parsing fallback is fragile — the `(/private_\S+)` regex
+    # breaks on any whitespace the Supervisor log API inserts into the URL.
+    #
+    # Only write when the stored path differs from the path we just
+    # resolved. POST is a full replace validated against the addon schema,
+    # so we send the entire config dict with `secret_path` overwritten.
+    if secret_path != config.get("secret_path", ""):
+        persist_addon_options({**config, "secret_path": secret_path})
 
     log_info(f"Backup hint mode: {backup_hint}")
 

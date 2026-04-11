@@ -84,6 +84,97 @@ class TestSecretPathValidation:
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
         assert self.addon._is_valid_secret_path("") is False
 
+
+class TestPersistAddonOptions:
+    """Unit tests for persisting addon options to Supervisor (#941)."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_sends_full_options_dict_as_post(self, monkeypatch):
+        """persist_addon_options sends a POST to /addons/self/options with the full dict wrapped in {options: ...}."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        captured: dict = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b""
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            return FakeResp()
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+
+        options = {
+            "backup_hint": "normal",
+            "enable_skills": True,
+            "secret_path": "/private_abc12345",
+        }
+        assert self.addon.persist_addon_options(options) is True
+        assert captured["url"] == "http://supervisor/addons/self/options"
+        assert captured["method"] == "POST"
+        # Header keys are lowercased by urllib.request.Request.header_items()
+        assert captured["headers"]["Authorization"] == "Bearer test-token"
+        assert captured["headers"]["Content-type"] == "application/json"
+        assert json.loads(captured["body"]) == {"options": options}
+
+    def test_missing_supervisor_token_returns_false(self, monkeypatch):
+        """Without SUPERVISOR_TOKEN the helper refuses to POST."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        called = False
+
+        def fake_urlopen(*args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("urlopen should not be called without token")
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
+        assert called is False
+
+    def test_http_error_returns_false(self, monkeypatch):
+        """Validation failures from Supervisor surface as False, not an exception."""
+        import io
+        import urllib.error
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                400,
+                "Bad Request",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=io.BytesIO(b'{"result":"error","message":"invalid options"}'),
+            )
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
+
+    def test_connection_error_returns_false(self, monkeypatch):
+        """Network failures surface as False, not an exception."""
+        import urllib.error
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+        assert self.addon.persist_addon_options({"secret_path": "/private_x"}) is False
+
+
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"
 
