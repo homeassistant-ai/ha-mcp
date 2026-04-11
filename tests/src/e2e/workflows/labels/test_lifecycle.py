@@ -373,6 +373,8 @@ class TestLabelValidation:
 
         assert result["success"] is False
         assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert "Label not found" in result["error"]["message"]
+        assert "available_label_ids" in result
 
 
     async def test_update_nonexistent_label(self, mcp_client):
