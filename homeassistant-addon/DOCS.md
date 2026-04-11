@@ -102,13 +102,32 @@ Replace the URL with the one from your add-on logs.
 
 ### <details><summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-For secure remote access without port forwarding, use the **Cloudflared add-on**:
+For secure remote access, you have two options:
 
-#### Install Cloudflared Add-on
+#### Option A: Webhook Proxy Add-on (Simplest — if you have Nabu Casa or an existing reverse proxy)
+
+The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
+
+1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+3. Start it and **restart Home Assistant** when prompted
+4. Copy the URL from the webhook proxy add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+5. Use that URL in your MCP client
+
+Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
+
+#### Option B: Cloudflared Add-on (No existing reverse proxy needed)
+
+Use the **Cloudflared add-on** for a dedicated tunnel:
+
+##### Install Cloudflared Add-on
 
 [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
 
-#### Configure Cloudflared
+##### Configure Cloudflared
 
 **Note:** The Cloudflared add-on requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
 
@@ -127,7 +146,7 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
-#### Authenticate and Get Your Public URL
+##### Authenticate and Get Your Public URL
 
 When you first start Cloudflared:
 
@@ -143,7 +162,7 @@ When you first start Cloudflared:
    - Named tunnel: `https://ha-mcp-<random>.cfargotunnel.com`
    - Custom domain: `https://ha-mcp.yourdomain.com` (if DNS configured)
 
-#### Use Your MCP Server
+##### Use Your MCP Server
 
 Combine the Cloudflare tunnel URL with your secret path:
 ```
@@ -158,7 +177,7 @@ https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 
 **Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
 
-#### ⚠️ Disable "Block AI Training Bots"
+##### ⚠️ Disable "Block AI Training Bots"
 
 > **This is the most common connection issue for Cloudflare users.** If your LLM client can't connect but visiting the URL in your browser works, this setting is almost certainly the cause.
 
@@ -251,7 +270,7 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 ### Network Exposure
 
 - **Local network only by default** - The add-on listens on port 9583
-- **Remote access** - Use the Cloudflared add-on for secure HTTPS tunnels
+- **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
 
 ---
