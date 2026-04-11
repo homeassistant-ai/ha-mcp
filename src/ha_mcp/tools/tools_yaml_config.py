@@ -85,16 +85,6 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        justification: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description=(
-                    "Required. Briefly explain why no dedicated tool fits. "
-                    "Logged for auditing."
-                ),
-            ),
-        ] = None,
         file: Annotated[
             str,
             Field(
@@ -132,11 +122,10 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms).
-        A non-empty ``justification`` is required and logged. Check
-        ``post_action`` in the response: most keys need a full HA restart;
-        template, mqtt, and group support reload. Preserves YAML comments and
-        HA tags (``!include``, ``!secret``) on round-trip; ``replace`` swaps
-        the subtree as-is.
+        Check ``post_action`` in the response: most keys need a full HA
+        restart; template, mqtt, and group support reload. Preserves YAML
+        comments and HA tags (``!include``, ``!secret``) on round-trip;
+        ``replace`` swaps the subtree as-is.
 
         For detailed routing guidance, use ha_get_skill_home_assistant_best_practices.
         """
@@ -156,24 +145,6 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            # Require a non-empty justification. Lightweight friction gate
-            # analogous to ha_restart's `confirm` parameter — forces the
-            # caller to pause and articulate intent before a destructive
-            # raw-YAML write. The justification is logged for auditing.
-            if not justification or not justification.strip():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "justification is required for ha_config_set_yaml",
-                        suggestions=[
-                            "Briefly explain why no dedicated tool fits this task",
-                            "For template sensors, automations, scripts, scenes, "
-                            "or input helpers, use the dedicated tool instead "
-                            "(see ha_get_skill_home_assistant_best_practices)",
-                        ],
-                    )
-                )
-
             # Validate content is provided for add/replace
             if action in ("add", "replace") and not content:
                 raise_tool_error(
@@ -185,14 +156,6 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ],
                     )
                 )
-
-            logger.info(
-                "ha_config_set_yaml invoked (yaml_path=%s, action=%s, file=%s) — justification: %s",
-                yaml_path,
-                action,
-                file,
-                justification[:200],
-            )
 
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)

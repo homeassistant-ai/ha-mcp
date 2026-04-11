@@ -2415,7 +2415,7 @@
   {
     "name": "ha_config_set_yaml",
     "title": "Raw YAML Config Edit",
-    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_set_config_entry_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- Input helpers -> ha_config_set_helper\n- Groups, min/max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x -> ha_set_config_entry_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nA non-empty ``justification`` is required and logged. Check\n``post_action`` in the response: most keys need a full HA restart;\ntemplate, mqtt, and group support reload. Preserves YAML comments and\nHA tags (``!include``, ``!secret``) on round-trip; ``replace`` swaps\nthe subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_set_config_entry_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- Input helpers -> ha_config_set_helper\n- Groups, min/max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x -> ha_set_config_entry_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nCheck ``post_action`` in the response: most keys need a full HA\nrestart; template, mqtt, and group support reload. Preserves YAML\ncomments and HA tags (``!include``, ``!secret``) on round-trip;\n``replace`` swaps the subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
@@ -2426,10 +2426,6 @@
         },
         "content": {
           "type": "Annotated[str | None, Field(default=None, description=\"YAML content for the value under yaml_path. Required for 'add' and 'replace' actions. Must be valid YAML.\")]",
-          "default": null
-        },
-        "justification": {
-          "type": "Annotated[str | None, Field(default=None, description='Required. Briefly explain why no dedicated tool fits. Logged for auditing.')]",
           "default": null
         },
         "file": {

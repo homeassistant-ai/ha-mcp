@@ -102,7 +102,6 @@ class TestYamlConfigSecurity:
                 "action": "add",
                 "content": "- sensor:\n    - name: test\n      state: 'ok'",
                 "file": "../etc/passwd",
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -120,7 +119,6 @@ class TestYamlConfigSecurity:
                 "action": "add",
                 "content": "- sensor:\n    - name: test\n      state: 'ok'",
                 "file": "automations.yaml",
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -140,7 +138,6 @@ class TestYamlConfigSecurity:
                 "action": "replace",
                 "content": "name: Hacked",
                 "file": "configuration.yaml",
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -173,7 +170,6 @@ class TestYamlConfigSecurity:
                     "content": "test: true",
                     "file": "configuration.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -205,7 +201,6 @@ class TestYamlConfigValidation:
                 "content": "null",
                 "file": "packages/_test_null.yaml",
                 "backup": False,
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -224,7 +219,6 @@ class TestYamlConfigValidation:
                 "content": "  bad:\n yaml: [\n  unclosed",
                 "file": "packages/_test_invalid.yaml",
                 "backup": False,
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -241,62 +235,11 @@ class TestYamlConfigValidation:
                 "yaml_path": "template",
                 "action": "add",
                 "file": "packages/_test_no_content.yaml",
-                "justification": "test fixture",
             },
         )
         inner = data
         assert inner.get("success") is False, f"Missing content should fail: {data}"
         logger.info("Correctly rejected missing content")
-
-    async def test_missing_justification_rejected(self, mcp_client_with_yaml_config):
-        """Calls without a justification must be rejected.
-
-        Justification is mandatory on every call — it forces the caller to
-        articulate why no UI/API alternative fits, creating friction that
-        discourages reaching for this escape hatch when a Template Helper,
-        ha_config_set_automation, etc. would be correct.
-        """
-
-        data = await safe_call_tool(
-            mcp_client_with_yaml_config,
-            TOOL_NAME,
-            {
-                "yaml_path": "template",
-                "action": "add",
-                "content": "- sensor:\n    - name: Needs Justification\n      state: 'ok'",
-                "file": "packages/_test_no_justification.yaml",
-                "backup": False,
-            },
-        )
-        inner = data
-        assert inner.get("success") is False, (
-            f"Missing justification should fail: {data}"
-        )
-        # create_error_response returns a nested dict under "error"; match
-        # against the stringified response instead of assuming a flat shape.
-        assert "justification" in str(data).lower(), (
-            f"Error should mention justification: {data}"
-        )
-        logger.info("Correctly rejected missing justification")
-
-    async def test_blank_justification_rejected(self, mcp_client_with_yaml_config):
-        """Whitespace-only justification must be rejected (prevents lazy bypass)."""
-
-        data = await safe_call_tool(
-            mcp_client_with_yaml_config,
-            TOOL_NAME,
-            {
-                "yaml_path": "template",
-                "action": "add",
-                "content": "- sensor:\n    - name: Blank Justification\n      state: 'ok'",
-                "file": "packages/_test_blank_justification.yaml",
-                "backup": False,
-                "justification": "   ",
-            },
-        )
-        inner = data
-        assert inner.get("success") is False, f"Blank justification should fail: {data}"
-        logger.info("Correctly rejected blank justification")
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +265,6 @@ class TestYamlConfigOperations:
                     "content": content,
                     "file": "packages/_e2e_test_add.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -346,7 +288,6 @@ class TestYamlConfigOperations:
                     "content": initial,
                     "file": "packages/_e2e_test_replace.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
 
@@ -358,7 +299,6 @@ class TestYamlConfigOperations:
                     "content": replacement,
                     "file": "packages/_e2e_test_replace.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -381,7 +321,6 @@ class TestYamlConfigOperations:
                     "content": content,
                     "file": "packages/_e2e_test_remove.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
 
@@ -393,7 +332,6 @@ class TestYamlConfigOperations:
                     "action": "remove",
                     "file": "packages/_e2e_test_remove.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -414,7 +352,6 @@ class TestYamlConfigOperations:
                     "content": "- platform: template\n  sensors:\n    test:\n      value_template: 'ok'",
                     "file": "packages/_e2e_test_remove_missing.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
 
@@ -426,7 +363,6 @@ class TestYamlConfigOperations:
                 "yaml_path": "template",
                 "action": "remove",
                 "file": "packages/_e2e_test_remove_missing.yaml",
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -448,7 +384,6 @@ class TestYamlConfigOperations:
                     "content": "- platform: template\n  sensors:\n    test:\n      value_template: 'ok'",
                     "file": "packages/_e2e_test_mismatch.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
 
@@ -462,7 +397,6 @@ class TestYamlConfigOperations:
                 "content": "key: value",
                 "file": "packages/_e2e_test_mismatch.yaml",
                 "backup": False,
-                "justification": "e2e fixture for ha_config_set_yaml validation",
             },
         )
         inner = data
@@ -495,7 +429,6 @@ class TestYamlConfigSafeguards:
                     "content": content,
                     "file": "packages/_e2e_test_backup.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
 
@@ -508,7 +441,6 @@ class TestYamlConfigSafeguards:
                     "content": "- sensor:\n    - name: Modified\n      state: 'v2'",
                     "file": "packages/_e2e_test_backup.yaml",
                     "backup": True,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -531,7 +463,6 @@ class TestYamlConfigSafeguards:
                     "content": content,
                     "file": "packages/_e2e_test_config_check.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -556,7 +487,6 @@ class TestYamlConfigSafeguards:
                     "content": content,
                     "file": "packages/_e2e_test_post_action_reload.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -586,7 +516,6 @@ class TestYamlConfigSafeguards:
                     "content": "test_cmd: echo hello",
                     "file": "packages/_e2e_test_post_action_restart.yaml",
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -631,7 +560,6 @@ class TestYamlConfigCommentPreservation:
                     "content": initial_content,
                     "file": test_file,
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -646,7 +574,6 @@ class TestYamlConfigCommentPreservation:
                     "content": "- platform: template\n  sensors:\n    extra:\n      value_template: 'yes'",
                     "file": test_file,
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -692,7 +619,6 @@ class TestYamlConfigCommentPreservation:
                     "content": initial_content,
                     "file": test_file,
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
@@ -707,7 +633,6 @@ class TestYamlConfigCommentPreservation:
                     "content": "- platform: time_date\n  display_options:\n    - date",
                     "file": test_file,
                     "backup": False,
-                    "justification": "e2e fixture for ha_config_set_yaml validation",
                 },
             )
             inner = data
