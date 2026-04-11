@@ -652,3 +652,97 @@ class TestSearchKeywordsTransform:
         call_next = AsyncMock(return_value=None)
         result = await transform.get_tool("ha_nonexistent", call_next)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# HomeAssistantSmartMCPServer._apply_search_keyword_enrichment
+#
+# Regression coverage for #940: SearchKeywordsTransform must be applied
+# unconditionally so Claude's native deferred-tool search (claude.ai, BM25)
+# can locate ha-mcp tools for common natural-language queries, regardless
+# of whether ENABLE_TOOL_SEARCH is set.
+# ---------------------------------------------------------------------------
+
+
+class TestApplySearchKeywordEnrichment:
+    """Tests for the always-on keyword enrichment hook on the server class."""
+
+    def _make_server_stub(self, *, enable_tool_search: bool) -> MagicMock:
+        """Minimal stub exposing only the attributes the method touches."""
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        stub = MagicMock()
+        stub._SEARCH_KEYWORDS = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS
+        stub._SEARCH_DESCRIPTION_OVERRIDES = (
+            HomeAssistantSmartMCPServer._SEARCH_DESCRIPTION_OVERRIDES
+        )
+        stub.settings = MagicMock(enable_tool_search=enable_tool_search)
+        stub.mcp = MagicMock()
+        return stub
+
+    def test_applies_keywords_when_tool_search_disabled(self):
+        """Keywords go on even when ENABLE_TOOL_SEARCH is false (#940)."""
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        stub = self._make_server_stub(enable_tool_search=False)
+        HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)
+
+        stub.mcp.add_transform.assert_called_once()
+        transform = stub.mcp.add_transform.call_args.args[0]
+        assert isinstance(transform, SearchKeywordsTransform)
+        assert transform._keywords == stub._SEARCH_KEYWORDS
+        # Overrides are gated behind enable_tool_search; flag is off so none
+        assert transform._overrides == {}
+
+    def test_applies_keywords_and_overrides_when_tool_search_enabled(self):
+        """With categorized search on, both keywords and overrides apply."""
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        stub = self._make_server_stub(enable_tool_search=True)
+        HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)
+
+        stub.mcp.add_transform.assert_called_once()
+        transform = stub.mcp.add_transform.call_args.args[0]
+        assert isinstance(transform, SearchKeywordsTransform)
+        assert transform._keywords == stub._SEARCH_KEYWORDS
+        assert transform._overrides == stub._SEARCH_DESCRIPTION_OVERRIDES
+
+    def test_transform_failure_is_logged_not_raised(self, caplog):
+        """Enrichment failures must not break server startup."""
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        stub = self._make_server_stub(enable_tool_search=False)
+        stub.mcp.add_transform.side_effect = RuntimeError("boom")
+        with caplog.at_level("ERROR"):
+            HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)
+        assert any(
+            "SearchKeywordsTransform" in rec.message for rec in caplog.records
+        )
+
+    @pytest.mark.anyio
+    async def test_canonical_keywords_end_to_end_for_940_tools(self):
+        """The specific tools in #940 actually get enriched descriptions."""
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS
+        # These are the tools named in the #940 reproduction
+        for tool_name in (
+            "ha_config_set_automation",
+            "ha_config_set_script",
+            "ha_config_set_helper",
+            "ha_search_entities",
+        ):
+            assert tool_name in keywords, f"{tool_name} missing from _SEARCH_KEYWORDS"
+
+        transform = SearchKeywordsTransform(keywords=keywords)
+        tool = _make_tool(
+            "ha_config_set_automation",
+            destructive=True,
+            description="Create or update a Home Assistant automation.",
+        )
+        enriched = (await transform.list_tools([tool]))[0]
+        assert enriched.description.startswith(
+            "Create or update a Home Assistant automation."
+        )
+        for term in ("create", "update", "modify", "edit", "new", "save"):
+            assert term in enriched.description.lower()
