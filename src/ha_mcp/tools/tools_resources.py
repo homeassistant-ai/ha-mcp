@@ -13,10 +13,16 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,23 +61,24 @@ def _is_inline_url(url: str) -> bool:
     return WORKER_BASE_URL in url
 
 
-def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register dashboard resource tools."""
+class ResourceTools:
+    """Dashboard resource hosting tools for Home Assistant."""
 
-    # =========================================================================
-    # List Dashboard Resources
-    # =========================================================================
+    def __init__(self, client: Any) -> None:
+        self._client = client
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_list_dashboard_resources",
         tags={"Dashboards"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "List Dashboard Resources"
-        }
+            "title": "List Dashboard Resources",
+        },
     )
     @log_tool_usage
     async def ha_config_list_dashboard_resources(
+        self,
         include_content: Annotated[
             bool,
             Field(
@@ -106,7 +113,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         management through the UI, but API access works regardless.
         """
         try:
-            result = await client.send_websocket_message({"type": "lovelace/resources"})
+            result = await self._client.send_websocket_message({"type": "lovelace/resources"})
 
             # Handle WebSocket response format
             if isinstance(result, dict) and "result" in result:
@@ -117,32 +124,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 resources = []
 
             # Process resources - decode inline URLs for preview
-            processed = []
-            for resource in resources:
-                res = dict(resource)
-                url = res.get("url", "")
-
-                if _is_inline_url(url):
-                    # Decode inline content
-                    content = _decode_inline_url(url)
-                    if content:
-                        res["_inline"] = True
-                        res["_size"] = len(content)
-
-                        if include_content:
-                            # Include full content when requested
-                            res["_content"] = content
-                        else:
-                            # Show preview (first 150 chars) to save tokens
-                            preview = content[:150]
-                            if len(content) > 150:
-                                preview += "..."
-                            res["_preview"] = preview
-
-                        # Replace URL with placeholder to save tokens
-                        res["url"] = "[inline]"
-
-                processed.append(res)
+            processed = _process_resource_list(resources, include_content)
 
             # Categorize resources by type
             categorized: dict[str, list[Any]] = {"module": [], "js": [], "css": []}
@@ -179,19 +161,17 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    # =========================================================================
-    # Set Dashboard Resource (upsert - supports both inline code and external URLs)
-    # =========================================================================
-
-    @mcp.tool(
+    @tool(
+        name="ha_config_set_dashboard_resource",
         tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "title": "Set Dashboard Resource"
-        }
+            "title": "Set Dashboard Resource",
+        },
     )
     @log_tool_usage
     async def ha_config_set_dashboard_resource(
+        self,
         content: Annotated[
             str | None,
             Field(
@@ -309,139 +289,110 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             ))
 
-        # ---- Inline content mode ----
         if content is not None:
-            if not content.strip():
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message="Content cannot be empty",
-                ))
+            return await self._set_inline_resource(content, resource_type, resource_id)
+        return await self._set_url_resource(url, resource_type, resource_id)
 
-            if resource_type == "js":
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message="Inline content does not support resource_type='js'",
-                    suggestions=[
-                        "Use resource_type='module' for ES6 JavaScript (recommended)",
-                        "Use url= mode with resource_type='js' for legacy files",
-                    ],
-                ))
+    async def _set_inline_resource(
+        self,
+        content: str,
+        resource_type: str,
+        resource_id: str | None,
+    ) -> dict[str, Any]:
+        """Create or update an inline dashboard resource."""
+        if not content.strip():
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message="Content cannot be empty",
+            ))
 
-            content_bytes = content.encode("utf-8")
-            content_size = len(content_bytes)
+        if resource_type == "js":
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message="Inline content does not support resource_type='js'",
+                suggestions=[
+                    "Use resource_type='module' for ES6 JavaScript (recommended)",
+                    "Use url= mode with resource_type='js' for legacy files",
+                ],
+            ))
 
-            if content_size > MAX_CONTENT_SIZE:
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                    context={"size": content_size},
-                    suggestions=[
-                        "Minify the code to reduce size",
-                        "Split into multiple smaller modules",
-                        "Use url= with a /local/ path for larger files",
-                    ],
-                ))
+        content_bytes = content.encode("utf-8")
+        content_size = len(content_bytes)
 
-            encoded, _, encoded_size = _encode_content(content)
+        if content_size > MAX_CONTENT_SIZE:
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
+                context={"size": content_size},
+                suggestions=[
+                    "Minify the code to reduce size",
+                    "Split into multiple smaller modules",
+                    "Use url= with a /local/ path for larger files",
+                ],
+            ))
 
-            if encoded_size > MAX_ENCODED_LENGTH:
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
-                    context={"size": content_size},
-                ))
+        encoded, _, encoded_size = _encode_content(content)
 
-            resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
+        if encoded_size > MAX_ENCODED_LENGTH:
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
+                context={"size": content_size},
+            ))
 
-            try:
-                if resource_id:
-                    result = await client.send_websocket_message(
-                        {
-                            "type": "lovelace/resources/update",
-                            "resource_id": resource_id,
-                            "url": resource_url,
-                            "res_type": resource_type,
-                        }
-                    )
-                    action = "updated"
-                else:
-                    result = await client.send_websocket_message(
-                        {
-                            "type": "lovelace/resources/create",
-                            "url": resource_url,
-                            "res_type": resource_type,
-                        }
-                    )
-                    action = "created"
+        resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
 
-                if isinstance(result, dict) and not result.get("success", True):
-                    error_msg = result.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    raise_tool_error(create_error_response(
-                        code=ErrorCode.SERVICE_CALL_FAILED,
-                        message=str(error_msg),
-                        context={"action": action},
-                    ))
-
-                resource_info = result.get("result") if isinstance(result, dict) else result
-                new_resource_id = resource_id
-                if isinstance(resource_info, dict):
-                    new_resource_id = resource_info.get("id", resource_id)
-
-                logger.info(
-                    f"Inline dashboard resource {action}: id={new_resource_id}, "
-                    f"type={resource_type}, size={content_size}"
-                )
-
-                return {
-                    "success": True,
-                    "action": action,
-                    "resource_id": new_resource_id,
-                    "resource_type": resource_type,
-                    "size": content_size,
-                    "note": "Clear browser cache or hard refresh to load changes",
-                }
-            except ToolError:
-                raise
-            except Exception as e:
-                logger.error(f"Error setting inline dashboard resource: {e}")
-                exception_to_structured_error(
-                    e,
-                    context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create"},
-                    suggestions=[
-                        "Ensure Home Assistant is running and accessible",
-                        "Check that you have admin permissions",
-                    ],
-                )
-
-        # ---- External URL mode ----
         try:
-            if resource_id:
-                result = await client.send_websocket_message(
-                    {
-                        "type": "lovelace/resources/update",
-                        "resource_id": resource_id,
-                        "url": url,
-                        "res_type": resource_type,
-                    }
-                )
-                action = "updated"
-            else:
-                result = await client.send_websocket_message(
-                    {
-                        "type": "lovelace/resources/create",
-                        "url": url,
-                        "res_type": resource_type,
-                    }
-                )
-                action = "created"
+            result, action = await self._upsert_resource(resource_id, resource_url, resource_type)
 
-            if isinstance(result, dict) and not result.get("success", True):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
+            error_msg = _check_ws_error(result)
+            if error_msg:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.SERVICE_CALL_FAILED,
+                    message=str(error_msg),
+                    context={"action": action},
+                ))
 
+            new_resource_id = _extract_resource_id(result, resource_id)
+
+            logger.info(
+                f"Inline dashboard resource {action}: id={new_resource_id}, "
+                f"type={resource_type}, size={content_size}"
+            )
+
+            return {
+                "success": True,
+                "action": action,
+                "resource_id": new_resource_id,
+                "resource_type": resource_type,
+                "size": content_size,
+                "note": "Clear browser cache or hard refresh to load changes",
+            }
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error setting inline dashboard resource: {e}")
+            exception_to_structured_error(
+                e,
+                context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create"},
+                suggestions=[
+                    "Ensure Home Assistant is running and accessible",
+                    "Check that you have admin permissions",
+                ],
+            )
+
+    async def _set_url_resource(
+        self,
+        url: str | None,
+        resource_type: str,
+        resource_id: str | None,
+    ) -> dict[str, Any]:
+        """Create or update an external URL dashboard resource."""
+        try:
+            result, action = await self._upsert_resource(resource_id, url, resource_type)
+
+            error_msg = _check_ws_error(result)
+            if error_msg:
                 error_str = str(error_msg).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
                     raise_tool_error(create_error_response(
@@ -453,17 +404,13 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "Provide resource_id to update the existing resource",
                         ],
                     ))
-
                 raise_tool_error(create_error_response(
                     code=ErrorCode.SERVICE_CALL_FAILED,
                     message=str(error_msg),
                     context={"action": action, "url": url},
                 ))
 
-            resource_info = result.get("result") if isinstance(result, dict) else result
-            new_resource_id = resource_id
-            if isinstance(resource_info, dict):
-                new_resource_id = resource_info.get("id", resource_id)
+            new_resource_id = _extract_resource_id(result, resource_id)
 
             logger.info(
                 f"Dashboard resource {action}: id={new_resource_id}, "
@@ -492,19 +439,44 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    # =========================================================================
-    # Delete Dashboard Resource
-    # =========================================================================
+    async def _upsert_resource(
+        self,
+        resource_id: str | None,
+        url: str | None,
+        resource_type: str,
+    ) -> tuple[dict[str, Any], str]:
+        """Create or update a lovelace resource. Returns (result, action)."""
+        if resource_id:
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "lovelace/resources/update",
+                    "resource_id": resource_id,
+                    "url": url,
+                    "res_type": resource_type,
+                }
+            )
+            return result, "updated"
+        else:
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "lovelace/resources/create",
+                    "url": url,
+                    "res_type": resource_type,
+                }
+            )
+            return result, "created"
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_delete_dashboard_resource",
         tags={"Dashboards"},
         annotations={
             "destructiveHint": True,
-            "title": "Delete Dashboard Resource"
-        }
+            "title": "Delete Dashboard Resource",
+        },
     )
     @log_tool_usage
     async def ha_config_delete_dashboard_resource(
+        self,
         resource_id: Annotated[
             str,
             Field(
@@ -528,7 +500,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         before deleting. Ensure no dashboards depend on the resource.
         """
         try:
-            result = await client.send_websocket_message(
+            result = await self._client.send_websocket_message(
                 {
                     "type": "lovelace/resources/delete",
                     "resource_id": resource_id,
@@ -536,14 +508,10 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             # Check for errors
-            if isinstance(result, dict) and not result.get("success", True):
-                error_msg = result.get("error", {})
-                if isinstance(error_msg, dict):
-                    error_str = error_msg.get("message", str(error_msg))
-                else:
-                    error_str = str(error_msg)
-
-                if "not found" in error_str.lower() or "unable to find" in error_str.lower():
+            error_msg = _check_ws_error(result)
+            if error_msg:
+                error_str = str(error_msg).lower()
+                if "not found" in error_str or "unable to find" in error_str:
                     raise_tool_error(create_resource_not_found_error(
                         "Dashboard resource",
                         resource_id,
@@ -555,7 +523,7 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 raise_tool_error(create_error_response(
                     code=ErrorCode.SERVICE_CALL_FAILED,
-                    message=f"Failed to delete dashboard resource: {error_str}",
+                    message=f"Failed to delete dashboard resource: {error_msg}",
                     context={"action": "delete", "resource_id": resource_id},
                     suggestions=[
                         "Verify resource ID using ha_config_list_dashboard_resources()",
@@ -583,3 +551,56 @@ def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check that you have admin permissions",
                 ],
             )
+
+
+def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register dashboard resource tools."""
+    register_tool_methods(mcp, ResourceTools(client))
+
+
+def _process_resource_list(
+    resources: list[Any], include_content: bool
+) -> list[dict[str, Any]]:
+    """Process raw resources, decoding inline URLs for preview."""
+    processed = []
+    for resource in resources:
+        res = dict(resource)
+        url = res.get("url", "")
+
+        if _is_inline_url(url):
+            content = _decode_inline_url(url)
+            if content:
+                res["_inline"] = True
+                res["_size"] = len(content)
+
+                if include_content:
+                    res["_content"] = content
+                else:
+                    preview = content[:150]
+                    if len(content) > 150:
+                        preview += "..."
+                    res["_preview"] = preview
+
+                res["url"] = "[inline]"
+
+        processed.append(res)
+    return processed
+
+
+def _check_ws_error(result: Any) -> str | None:
+    """Check a WebSocket result for errors. Returns error message or None."""
+    if isinstance(result, dict) and not result.get("success", True):
+        error = result.get("error", {})
+        if isinstance(error, dict):
+            msg: str = error.get("message", str(error)) or "Unknown error"
+            return msg
+        return str(error) or "Unknown error"
+    return None
+
+
+def _extract_resource_id(result: Any, fallback_id: str | None) -> str | None:
+    """Extract resource ID from a WebSocket result."""
+    resource_info = result.get("result") if isinstance(result, dict) else result
+    if isinstance(resource_info, dict):
+        return resource_info.get("id", fallback_id)
+    return fallback_id
