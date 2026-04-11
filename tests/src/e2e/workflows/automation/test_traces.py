@@ -9,9 +9,12 @@ import logging
 
 import pytest
 
+from typing import Any
+
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    safe_call_tool,
 )
 from ...utilities.wait_helpers import wait_for_condition
 
@@ -337,3 +340,17 @@ class TestAutomationTraces:
         assert trace_count > 0, (
             f"Expected at least 1 trace after running script, got {trace_count}"
         )
+
+@pytest.mark.automation
+class TestGetAutomationTracesNegativeInputs:
+    """Negative-input tests for ha_get_automation_traces."""
+
+    async def test_wrong_domain_prefix_rejected(self, mcp_client: Any) -> None:
+        """Rejects automation_id not starting with automation. or script. — domain-guard pre-flight."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_automation_traces",
+            {"automation_id": "sensor.some_entity"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

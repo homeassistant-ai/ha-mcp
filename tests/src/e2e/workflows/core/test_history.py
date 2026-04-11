@@ -7,6 +7,7 @@ state change history and long-term statistics via ha_get_history.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -605,59 +606,26 @@ async def test_get_history_query_params_in_response(mcp_client):
         logger.info("query_params not in response (may be by design)")
 
 
-@pytest.mark.asyncio
 @pytest.mark.core
 class TestGetHistoryNegativeInputs:
-    """Negative-input tests for ha_get_history.
+    """Negative-input tests for ha_get_history."""
 
-    Covers two pre-flight and WS-validation paths with no prior hard coverage.
-    Placement: workflows/core/ alongside happy-path tests (not error_handling/).
-    """
-
-    async def test_empty_string_entity_id_rejected(self, mcp_client):
-        """ha_get_history with entity_ids="" reaches HA WebSocket and is rejected.
-
-        Code path: tools_history.py — single-string branch sets entity_id_list=[""].
-        if-not-entity_id_list guard is False (non-empty list), so WS call proceeds.
-        HA websocket_api.py: valid_entity_id("") = False → send_error("invalid_entity_ids").
-        websocket_client.py: success=False → raise Exception("Command failed: ...").
-        exception_to_structured_error: generic Exception → INTERNAL_ERROR.
-        No prior hard coverage in unit or E2E suite.
-        """
+    async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
+        """Rejects entity_ids="" — invalid entity ID reaches HA WebSocket and fails with INTERNAL_ERROR."""
         result = await safe_call_tool(
             mcp_client,
             "ha_get_history",
             {"entity_ids": "", "start_time": "1h"},
         )
+        assert result["success"] is False
+        assert result["error"]["code"] == "INTERNAL_ERROR"
 
-        inner = result.get("data", result)
-
-        assert inner["success"] is False, (
-            f"Expected success=False for entity_ids='', got: {inner}"
-        )
-        assert inner["error"]["code"] == "INTERNAL_ERROR", (
-            f"Expected INTERNAL_ERROR (WS rejection via generic Exception), got: {inner}"
-        )
-
-    async def test_empty_list_entity_ids_rejected(self, mcp_client):
-        """ha_get_history with entity_ids=[] is caught by MCP pre-flight, no WS call.
-
-        Code path: tools_history.py — list branch sets entity_id_list=[].
-        if-not-entity_id_list guard is True → raise_tool_error(VALIDATION_MISSING_PARAMETER).
-        No WebSocket call is made.
-        No prior hard coverage in unit or E2E suite.
-        """
+    async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
+        """Rejects entity_ids=[] — caught by MCP pre-flight validation, no WebSocket call."""
         result = await safe_call_tool(
             mcp_client,
             "ha_get_history",
             {"entity_ids": [], "start_time": "1h"},
         )
-
-        inner = result.get("data", result)
-
-        assert inner["success"] is False, (
-            f"Expected success=False for entity_ids=[], got: {inner}"
-        )
-        assert inner["error"]["code"] == "VALIDATION_MISSING_PARAMETER", (
-            f"Expected VALIDATION_MISSING_PARAMETER (pre-flight), got: {inner}"
-        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
