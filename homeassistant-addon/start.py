@@ -126,6 +126,47 @@ def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> Non
         resp.read()
 
 
+def maybe_persist_secret_path(
+    config: dict[str, Any], secret_path: str, supervisor_token: str
+) -> None:
+    """Persist `secret_path` into the addon's stored options when needed.
+
+    Only calls `persist_addon_options` when all of these hold:
+    - `config` is non-empty. If `/data/options.json` was missing or failed
+      to parse, `config` is `{}` and the addon is running off hardcoded
+      defaults. Sending a bare `{"secret_path": ...}` in that state would
+      be rejected by Supervisor's schema validation (missing required
+      `backup_hint`), producing a second misleading error line on top of
+      the "Failed to read config" we already logged.
+    - The resolved `secret_path` differs from the stored one. Otherwise
+      the write is a pure no-op and we'd just add noise on every restart.
+
+    Errors from the POST are caught and logged with an actionable recovery
+    message — the addon keeps running, but the user is told exactly which
+    value to paste into the Configuration tab if they hit it.
+    """
+    if not config:
+        return
+    if secret_path == config.get("secret_path", ""):
+        return
+    try:
+        persist_addon_options({**config, "secret_path": secret_path}, supervisor_token)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        detail = (
+            f"HTTP {e.code}: {e.reason}"
+            if isinstance(e, urllib.error.HTTPError)
+            else str(e)
+        )
+        log_error(
+            f"Failed to persist secret_path to addon options ({detail}). "
+            f"This addon will still run with secret_path={secret_path!r}, "
+            "but other addons (e.g. the webhook proxy) cannot auto-discover "
+            "it via Supervisor. Workaround: open this addon's Configuration "
+            "tab and paste the secret_path above into the 'Secret path override' "
+            "field, then save."
+        )
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -170,31 +211,9 @@ def main() -> int:
 
     # Persist secret path back to addon options so other addons (e.g. the
     # webhook proxy) can read it via `GET /addons/{slug}/info → options`
-    # instead of scraping it from this addon's logs (#941). The webhook
-    # proxy's log-parsing fallback uses `(/private_\S+)` which breaks on
-    # any whitespace the Supervisor log API inserts into the URL.
-    #
-    # Only write when the stored path differs from the path we just
-    # resolved, so this is a one-time write per new path. The Supervisor
-    # endpoint is a full-replace validated against the addon schema, so we
-    # send the entire config dict with `secret_path` overwritten — a
-    # partial `{"secret_path": ...}` payload would fail validation (missing
-    # required fields) and persist nothing.
-    if secret_path != config.get("secret_path", ""):
-        try:
-            persist_addon_options(
-                {**config, "secret_path": secret_path}, supervisor_token
-            )
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-            detail = f"HTTP {e.code}: {e.reason}" if isinstance(e, urllib.error.HTTPError) else str(e)
-            log_error(
-                f"Failed to persist secret_path to addon options ({detail}). "
-                f"This addon will still run with secret_path={secret_path!r}, "
-                "but other addons (e.g. the webhook proxy) cannot auto-discover "
-                "it via Supervisor. Workaround: open this addon's Configuration "
-                "tab and paste the secret_path above into the 'Secret path override' "
-                "field, then save."
-            )
+    # instead of scraping it from this addon's logs (#941). Details and
+    # the skip/retry rules live in maybe_persist_secret_path().
+    maybe_persist_secret_path(config, secret_path, supervisor_token)
 
     log_info(f"Backup hint mode: {backup_hint}")
 
