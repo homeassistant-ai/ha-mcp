@@ -1,7 +1,7 @@
 """Shared HA container readiness checks for BAT and story tests.
 
-Mirrors the two-gate stabilization used by E2E tests (conftest.py):
-1. Components loaded (GET /api/config shows 50+ components)
+Mirrors the stabilization used by E2E tests (conftest.py):
+1. API reachable + components loaded (GET /api/config shows 50+ components)
 2. Entities registered (GET /api/states shows 50+ entities)
 """
 
@@ -41,11 +41,13 @@ def wait_for_ha_ready(
 
     # Gate 1: API reachable and components loaded
     log(f"Waiting for HA at {url} ...")
-    last_count = 0
+    api_responded = False
+    last_component_count = 0
     for attempt in range(API_TIMEOUT):
         try:
             r = requests.get(f"{url}/api/config", timeout=5, headers=headers)
             if r.status_code == 200:
+                api_responded = True
                 data = r.json()
                 component_count = len(data.get("components", []))
                 if component_count >= MIN_COMPONENTS:
@@ -55,16 +57,18 @@ def wait_for_ha_ready(
                         f"version {version} ({attempt + 1}s)"
                     )
                     break
-                if component_count != last_count:
+                if component_count != last_component_count:
                     log(f"  {component_count} components loaded, waiting for {MIN_COMPONENTS}+...")
-                    last_count = component_count
+                    last_component_count = component_count
         except (requests.RequestException, ValueError) as exc:
             logger.debug("Readiness check failed (retrying): %s", exc)
         time.sleep(1)
     else:
+        if not api_responded:
+            raise TimeoutError(f"HA API at {url} not reachable after {API_TIMEOUT}s")
         raise TimeoutError(
-            f"HA not ready after {API_TIMEOUT}s. "
-            f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS})."
+            f"HA component stabilization timed out after {API_TIMEOUT}s. "
+            f"Only {last_component_count} components loaded (minimum: {MIN_COMPONENTS})."
         )
 
     # Gate 2: Entities registered

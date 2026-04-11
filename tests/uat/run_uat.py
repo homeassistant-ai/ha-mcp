@@ -78,11 +78,6 @@ def setup_config_directory() -> Path:
     return config_dir
 
 
-def wait_for_ha(url: str, token: str) -> None:
-    """Poll HA until the API, components, and entities are ready."""
-    wait_for_ha_ready(url, token, log=log)
-
-
 class HAContainer:
     """Context manager for a disposable HA test container."""
 
@@ -106,7 +101,7 @@ class HAContainer:
             port = self.container.get_exposed_port(8123)
             self.url = f"http://localhost:{port}"
             log(f"HA container started on {self.url}")
-            wait_for_ha(self.url, self.token)
+            wait_for_ha_ready(self.url, self.token, log=log)
         except Exception:
             self.__exit__(None, None, None)
             raise

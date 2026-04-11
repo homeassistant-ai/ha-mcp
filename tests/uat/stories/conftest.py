@@ -84,11 +84,6 @@ def _setup_config_directory() -> Path:
     return config_dir
 
 
-def _wait_for_ha(url: str) -> None:
-    """Wait until HA is fully ready (API + components + entities)."""
-    wait_for_ha_ready(url, TEST_TOKEN, log=logger.info)
-
-
 @pytest.fixture(scope="session")
 def ha_container():
     """Session-scoped HA container for all story tests."""
@@ -111,7 +106,7 @@ def ha_container():
         os.environ["HOMEASSISTANT_URL"] = url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
 
-        _wait_for_ha(url)
+        wait_for_ha_ready(url, TEST_TOKEN, log=logger.info)
 
         yield {"url": url, "token": TEST_TOKEN, "port": port}
 
