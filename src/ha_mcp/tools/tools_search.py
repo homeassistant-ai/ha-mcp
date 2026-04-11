@@ -210,7 +210,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
-            limit = coerce_int_param(limit, "limit", default=10, min_value=1) or 10
+            limit = coerce_int_param(limit, "limit", default=10, min_value=1)
 
             # If area_filter is provided, use area-based search
             if area_filter:
