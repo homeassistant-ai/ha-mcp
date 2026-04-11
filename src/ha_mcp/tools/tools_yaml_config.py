@@ -48,7 +48,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
-            "title": "Set YAML Config",
+            "title": "Raw YAML Config Edit (Escape Hatch)",
         },
     )
     @log_tool_usage
@@ -57,8 +57,17 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str,
             Field(
                 description=(
-                    "Top-level YAML key to modify (e.g., 'template', 'sensor', "
-                    "'input_boolean'). Only whitelisted keys are allowed."
+                    "Top-level YAML key to modify. Only a narrow allowlist of "
+                    "YAML-only integration keys is accepted (e.g., 'command_line', "
+                    "'rest', 'shell_command', 'notify', 'utility_meter'). "
+                    "STOP before using this for 'template' — the Template "
+                    "config-flow helper (ha_set_config_entry_helper with "
+                    "domain='template') supports state AND trigger-based template "
+                    "sensors since HA 2024.x and is the correct path. Do NOT use "
+                    "this tool for automations, scripts, scenes, or input_* "
+                    "helpers — they have dedicated tools "
+                    "(ha_config_set_automation, ha_config_set_script, "
+                    "ha_config_set_scene, ha_config_set_helper)."
                 ),
             ),
         ],
@@ -72,6 +81,20 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ],
+        justification: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Required. Explain in one or two sentences why no dedicated "
+                    "tool (ha_set_config_entry_helper for templates, "
+                    "ha_config_set_automation, ha_config_set_script, "
+                    "ha_config_set_scene, ha_config_set_helper) can accomplish "
+                    "this task. Logged for auditing. If you cannot write a "
+                    "concrete justification, you probably want a different tool."
+                ),
+            ),
+        ] = None,
         content: Annotated[
             str | None,
             Field(
@@ -103,30 +126,48 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Add, replace, or remove a top-level key in configuration.yaml or package files.
+        """ESCAPE HATCH — raw YAML edit. Use only when NO dedicated tool fits.
 
-        IMPORTANT: Only use when NO UI or API alternative exists. Prefer:
-        - Template sensors -> ha_config_set_helper (Template Helper)
+        This tool is the WRONG answer for almost everything. Before calling it,
+        confirm that NONE of these apply:
+
+        - Template sensors (state-based OR trigger-based) ->
+          ha_set_config_entry_helper with domain='template'. The Template
+          config-flow helper supports triggers, availability, attributes, device
+          class, unit of measurement, and state templates since HA 2024.x. It is
+          the correct path even for complex trigger-based sensors. Do NOT edit
+          the 'template:' YAML block for this.
         - Automations -> ha_config_set_automation
         - Scripts -> ha_config_set_script
-        - Input helpers -> ha_config_set_helper
         - Scenes -> ha_config_set_scene
+        - Input helpers (input_boolean, input_number, input_text, input_select,
+          input_datetime, input_button, counter, timer, schedule) ->
+          ha_config_set_helper
+        - Groups, min/max, threshold, derivative, statistics, utility_meter
+          entities that can be created as helpers -> ha_config_set_helper
 
-        This tool is for YAML-only features with no UI/API path (e.g.,
-        command_line sensors, platform-based MQTT sensors in YAML, rest
-        sensors defined in packages).
+        This tool is intended for YAML-only integrations that have no config-flow
+        or API equivalent: command_line sensors, REST sensors defined in
+        packages, shell_command entries, platform-based notify services, and
+        similar edge cases. If you are reaching for this to edit 'template:',
+        'automation:', 'script:', 'scene:', or 'input_*:', stop and use the
+        dedicated tool instead.
 
-        Safeguards: file backup, YAML validation, top-level key whitelist,
+        A ``justification`` is REQUIRED on every call and is logged for auditing.
+        The justification must explain why no dedicated tool fits. If you cannot
+        write a concrete justification, you are using the wrong tool.
+
+        Safeguards: file backup, YAML validation, top-level key allowlist,
         path traversal blocking, post-edit config check.
 
-        IMPORTANT: Check 'post_action' in the response. Most keys require
-        a full HA restart ('restart_required'). Only template, mqtt, and
-        group support reload ('reload_available' with 'reload_service').
+        Check 'post_action' in the response. Most keys require a full HA restart
+        ('restart_required'). Only template, mqtt, and group support reload
+        ('reload_available' with 'reload_service').
 
-        Preserves YAML comments on sibling keys, file-level comments,
-        and Home Assistant tags (!include, !secret, etc.). The 'replace' action
-        substitutes the subtree as-is, so comments from the old subtree
-        do not carry over.
+        Preserves YAML comments on sibling keys, file-level comments, and Home
+        Assistant tags (!include, !secret, etc.). The 'replace' action
+        substitutes the subtree as-is, so comments from the old subtree do not
+        carry over.
         """
         try:
             # Validate action
@@ -144,6 +185,31 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+            # Require a non-empty justification. This is the primary friction
+            # that discourages reaching for this escape hatch — if the caller
+            # cannot articulate why no dedicated tool fits, they should use a
+            # dedicated tool instead. Mirrors the pattern from tools_code.py
+            # (ha_manage_custom_tool).
+            if not justification or not justification.strip():
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "justification is required for ha_config_set_yaml",
+                        suggestions=[
+                            "Explain why no dedicated tool can accomplish this "
+                            "task (Template sensors -> "
+                            "ha_set_config_entry_helper with "
+                            "domain='template'; automations -> "
+                            "ha_config_set_automation; scripts -> "
+                            "ha_config_set_script; helpers -> "
+                            "ha_config_set_helper)",
+                            "If yaml_path is 'template', 'automation', "
+                            "'script', 'scene', or 'input_*', use the "
+                            "dedicated tool instead of this escape hatch",
+                        ],
+                    )
+                )
+
             # Validate content is provided for add/replace
             if action in ("add", "replace") and not content:
                 raise_tool_error(
@@ -155,6 +221,14 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ],
                     )
                 )
+
+            logger.info(
+                "ha_config_set_yaml invoked (yaml_path=%s, action=%s, file=%s) — justification: %s",
+                yaml_path,
+                action,
+                file,
+                justification[:200],
+            )
 
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)
