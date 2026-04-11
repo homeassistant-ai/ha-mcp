@@ -3,13 +3,13 @@
 @tailwind utilities;
 
 :root {
-  --brand: #2FC1CF;
-  --brand-light: #5DD3DE;
-  --brand-dark: #1A9DAA;
-  --surface-0: #0B1120;
-  --surface-1: #111827;
-  --surface-2: #1A2235;
-  --surface-3: #232D3F;
+  --brand: 47 193 207;
+  --brand-light: 93 211 222;
+  --brand-dark: 26 157 170;
+  --surface-0: 11 17 32;
+  --surface-1: 17 24 39;
+  --surface-2: 26 34 53;
+  --surface-3: 35 45 63;
   --border: rgba(255, 255, 255, 0.06);
   --border-hover: rgba(255, 255, 255, 0.12);
   --text-primary: #F1F5F9;
@@ -19,16 +19,16 @@
 
 html {
   font-family: 'DM Sans', sans-serif;
-  background: var(--surface-0);
+  background: rgb(var(--surface-0));
   color: var(--text-primary);
   scroll-behavior: smooth;
 }
 
 .body-background {
-  background-color: var(--surface-0);
+  background-color: rgb(var(--surface-0));
   background-image:
-    radial-gradient(ellipse 60% 50% at 25% 0%, rgba(47,193,207,0.03), transparent),
-    radial-gradient(ellipse 50% 40% at 75% 100%, rgba(47,193,207,0.02), transparent);
+    radial-gradient(ellipse 60% 50% at 25% 0%, rgb(var(--brand) / 0.03), transparent),
+    radial-gradient(ellipse 50% 40% at 75% 100%, rgb(var(--brand) / 0.02), transparent);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -39,11 +39,6 @@ code {
   font-family: 'Fira Code', 'Menlo', 'Monaco', 'Lucida Console', monospace;
 }
 
-.code-block {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-}
-
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -52,6 +47,14 @@ code {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-up,
+  .fade-up-delay-1,
+  .fade-up-delay-2 {
+    animation: none;
   }
 }
 
@@ -75,7 +78,7 @@ code {
 }
 
 pre {
-  padding: 1.5rem;
+  padding: 1rem;
   border-radius: 0.5rem;
   overflow-x: auto;
 }
@@ -91,7 +94,7 @@ pre {
   z-index: 1;
   padding: 7px;
   border-radius: 6px;
-  background: var(--surface-2);
+  background: rgb(var(--surface-2));
   border: 1px solid var(--border-hover);
   color: var(--text-secondary);
   cursor: pointer;
@@ -101,9 +104,14 @@ pre {
 
 .copy-btn:hover {
   color: var(--text-primary);
-  background: var(--surface-3);
+  background: rgb(var(--surface-3));
+}
+
+.copy-btn:focus-visible {
+  outline: 2px solid rgb(var(--brand));
+  outline-offset: 2px;
 }
 
 .brand-glow {
-  box-shadow: 0 0 24px rgba(47, 193, 207, 0.15), 0 0 48px rgba(47, 193, 207, 0.05);
+  box-shadow: 0 0 24px rgb(var(--brand) / 0.15), 0 0 48px rgb(var(--brand) / 0.05);
 }

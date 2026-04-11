@@ -146,7 +146,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               class="option-card-large connection-option"
             >
               <div class="flex items-center gap-2 mb-2">
-                <PlatformIcon icon={conn.data.icon === 'network' ? 'computer' : conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
+                <PlatformIcon icon={conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
                 <span class="complexity-badge" data-complexity={conn.slug === 'local' ? 'quick' : conn.slug === 'network' ? 'complex' : 'advanced'}>
                   {conn.slug === 'local' && 'Quick'}
                   {conn.slug === 'network' && 'Complex'}
@@ -1028,7 +1028,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
                        state.platform?.id === 'windows' ? '/ha-mcp/guide-windows' : null;
       if (guideUrl) {
         instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
-          <h4 class="instruction-title text-blue-300">📘 Full Step-by-Step Guide Available</h4>
+          <h4 class="instruction-title text-blue-300">Full Step-by-Step Guide Available</h4>
           <p class="text-slate-300 mb-3">For a complete guided walkthrough with screenshots and troubleshooting tips:</p>
           <a href="${guideUrl}" class="inline-block px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg transition-colors">
             View ${state.platform?.id === 'macos' ? 'macOS' : 'Windows'} Setup Guide →
@@ -1088,7 +1088,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         if (platformId === 'windows') {
           const secretPathEnv = useSecretPath ? `$env:MCP_SECRET_PATH="/private_{{RANDOM_STRING}}"  # Keep this secret!\n` : '';
           deployInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🐍 Start HTTP Server (uvx) - PowerShell</h4>
+          <h4 class="instruction-title">Start HTTP Server (uvx) - PowerShell</h4>
           <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
 $env:HOMEASSISTANT_TOKEN="{{HOMEASSISTANT_TOKEN}}"
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
@@ -1097,7 +1097,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         } else {
           const secretPathEnv = useSecretPath ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
           deployInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🐍 Start HTTP Server (uvx)</h4>
+          <h4 class="instruction-title">Start HTTP Server (uvx)</h4>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
@@ -1166,7 +1166,7 @@ cloudflared tunnel route dns ha-mcp mcp.yourdomain.com
 cloudflared tunnel run ha-mcp</code></pre>
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
-            <p class="text-amber-300 text-sm font-medium">⚠️ Disable "Block AI Training Bots"</p>
+            <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
             <p class="text-amber-200/80 text-xs mt-1">This is the <strong>most common connection issue</strong> for Cloudflare users. If your LLM can't connect but the URL works in your browser, this setting is almost certainly the cause.</p>
             <ol class="text-amber-200/80 text-xs mt-2 space-y-1 list-decimal list-inside">
               <li>Log in to <a href="https://dash.cloudflare.com" target="_blank" class="text-blue-400 hover:underline">Cloudflare</a></li>
@@ -1222,7 +1222,7 @@ cloudflared tunnel run ha-mcp</code></pre>
     // Verify by visiting URL in browser (for all HTTP-based setups)
     if (!isLocal) {
       instructions.push(`<div class="instruction-block border-green-700/50 bg-green-900/10">
-        <h4 class="instruction-title text-green-300">✅ Verify Your Server</h4>
+        <h4 class="instruction-title text-green-300">Verify Your Server</h4>
         <p class="text-slate-300 text-sm">Visit your MCP server URL directly in your browser. If the server is running correctly, you'll see a message confirming <strong>"HA-MCP server is up and running"</strong> along with setup guidance. If you don't see this message, double-check your server URL, deployment, and proxy settings above.</p>
       </div>`);
     }
@@ -1230,7 +1230,7 @@ cloudflared tunnel run ha-mcp</code></pre>
     // mcp-proxy instructions for stdio-only clients
     if (needsMcpProxy) {
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
-        <h4 class="instruction-title text-yellow-300">⚠️ mcp-proxy Required</h4>
+        <h4 class="instruction-title text-yellow-300">mcp-proxy Required</h4>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
         <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
       </div>`;
@@ -1463,7 +1463,7 @@ mcpServers:
       let uiSteps = '';
       if (state.client.id === 'chatgpt') {
         uiSteps = `<div class="instruction-block">
-          <h4 class="instruction-title">⚙️ ChatGPT Configuration</h4>
+          <h4 class="instruction-title">ChatGPT Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Open ChatGPT → <strong>Settings</strong> → <strong>Connectors</strong></li>
             <li>Click <strong>Advanced settings</strong> → Enable <strong>Developer mode</strong></li>
@@ -1478,7 +1478,7 @@ mcpServers:
         </div>`;
       } else if (state.client.id === 'claude-ai') {
         uiSteps = `<div class="instruction-block">
-          <h4 class="instruction-title">⚙️ Claude.ai Configuration</h4>
+          <h4 class="instruction-title">Claude.ai Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Open Claude.ai → <strong>Settings</strong> → <strong>Connectors</strong></li>
             <li>Click <strong>Add Connector</strong></li>
@@ -1495,7 +1495,7 @@ mcpServers:
         </div>`;
       } else if (state.client.id === 'raycast') {
         uiSteps = `<div class="instruction-block">
-          <h4 class="instruction-title">⚙️ Raycast Configuration</h4>
+          <h4 class="instruction-title">Raycast Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Open Raycast → <strong>Settings</strong> → <strong>Extensions</strong> → <strong>AI</strong></li>
             <li>Scroll to <strong>Model Context Protocol</strong></li>
@@ -1516,7 +1516,7 @@ mcpServers:
         </div>`;
       } else if (state.client.id === 'open-webui') {
         uiSteps = `<div class="instruction-block">
-          <h4 class="instruction-title">⚙️ Open WebUI Configuration</h4>
+          <h4 class="instruction-title">Open WebUI Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Open <strong>Admin Settings</strong> → <strong>External Tools</strong></li>
             <li>Click <strong>+ (Add Server)</strong></li>
@@ -1533,7 +1533,7 @@ mcpServers:
       } else if (state.client.id === 'copilot-cli') {
         if (isStdio) {
           uiSteps = `<div class="instruction-block">
-            <h4 class="instruction-title">⚙️ Copilot CLI Configuration (STDIO)</h4>
+            <h4 class="instruction-title">Copilot CLI Configuration (STDIO)</h4>
             <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
               <li>Start Copilot CLI: <code class="bg-slate-800 px-1 rounded">copilot</code></li>
               <li>Run the <code class="bg-slate-800 px-1 rounded">/mcp add</code> slash command</li>
@@ -1550,7 +1550,7 @@ mcpServers:
           </div>`;
         } else {
           uiSteps = `<div class="instruction-block">
-            <h4 class="instruction-title">⚙️ Copilot CLI Configuration (HTTP)</h4>
+            <h4 class="instruction-title">Copilot CLI Configuration (HTTP)</h4>
             <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
               <li>Start Copilot CLI: <code class="bg-slate-800 px-1 rounded">copilot</code></li>
               <li>Run the <code class="bg-slate-800 px-1 rounded">/mcp add</code> slash command</li>
@@ -1571,6 +1571,7 @@ mcpServers:
 
     // Render all instructions (including UI client steps added during config generation)
     instructionsEl.innerHTML = instructions.join('');
+    if (window.initCopyButtons) window.initCopyButtons();
 
     // Show/hide config code box depending on whether it's a UI-based client
     const configSection = document.getElementById('config-section');

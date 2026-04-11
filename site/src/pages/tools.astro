@@ -383,14 +383,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
   });
 
   // Copy button
-  designCopyBtn.addEventListener('click', () => {
+  designCopyBtn.addEventListener('click', async () => {
     const text = designPrompt.value;
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
-      const original = designCopyBtn.textContent;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
       designCopyBtn.textContent = 'Copied!';
-      setTimeout(() => { designCopyBtn.textContent = original; }, 1500);
-    });
+      setTimeout(() => { designCopyBtn.textContent = 'Copy'; }, 1500);
+    } catch { /* clipboard write failed */ }
   });
 
   // Listen for textarea input on desc-edit

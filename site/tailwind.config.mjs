@@ -5,15 +5,15 @@ export default {
     extend: {
       colors: {
         brand: {
-          DEFAULT: 'var(--brand)',
-          light: 'var(--brand-light)',
-          dark: 'var(--brand-dark)',
+          DEFAULT: 'rgb(var(--brand) / <alpha-value>)',
+          light: 'rgb(var(--brand-light) / <alpha-value>)',
+          dark: 'rgb(var(--brand-dark) / <alpha-value>)',
         },
         surface: {
-          0: 'var(--surface-0)',
-          1: 'var(--surface-1)',
-          2: 'var(--surface-2)',
-          3: 'var(--surface-3)',
+          0: 'rgb(var(--surface-0) / <alpha-value>)',
+          1: 'rgb(var(--surface-1) / <alpha-value>)',
+          2: 'rgb(var(--surface-2) / <alpha-value>)',
+          3: 'rgb(var(--surface-3) / <alpha-value>)',
         },
       },
       fontFamily: {
