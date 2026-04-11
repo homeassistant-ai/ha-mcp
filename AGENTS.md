@@ -441,7 +441,8 @@ class DomainTools:
         # Add to the docstring above only when genuinely needed:
         # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # Constraints: use RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY)
+        # Constraints/warnings: use RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY)
+        #   e.g., destructive side-effects, non-obvious gotchas, tool routing
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
 
 def register_<domain>_tools(mcp, client, **kwargs):
