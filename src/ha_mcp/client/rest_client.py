@@ -367,6 +367,52 @@ class HomeAssistantClient:
         response = await self._request("GET", "/error_log")
         return response if isinstance(response, str) else str(response)
 
+    async def get_addon_logs(self, slug: str) -> str:
+        """Fetch an add-on's container logs via HA Core's Supervisor REST proxy.
+
+        Uses `/api/hassio/addons/{slug}/logs`, which HA Core proxies to
+        Supervisor and returns as `text/plain`. This avoids the
+        `supervisor/api` websocket path that tries to JSON-decode the text
+        body and always fails (see #950).
+
+        Raises:
+            HomeAssistantAuthError: 401 from HA Core.
+            HomeAssistantAPIError: Non-2xx response (e.g. 404 unknown slug,
+                400 addon not installed). `status_code` is set so callers
+                can map to specific suggestions.
+            HomeAssistantConnectionError: Network, timeout, or transport error.
+        """
+        logger.debug(f"Fetching addon logs for slug={slug}")
+        endpoint = f"/hassio/addons/{slug}/logs"
+        try:
+            response = await self.httpx_client.request(
+                "GET",
+                endpoint,
+                headers={"Accept": "text/plain"},
+            )
+
+            if response.status_code == 401:
+                raise HomeAssistantAuthError("Invalid authentication token")
+
+            if response.status_code >= 400:
+                body = response.text[:500] if response.text else ""
+                raise HomeAssistantAPIError(
+                    f"Addon log request failed: {response.status_code} - {body}",
+                    status_code=response.status_code,
+                    response_data={"message": body},
+                )
+
+            return response.text
+
+        except httpx.ConnectError as e:
+            raise HomeAssistantConnectionError(
+                f"Failed to connect to Home Assistant: {e}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
+        except httpx.HTTPError as e:
+            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+
     async def test_connection(self) -> tuple[bool, str | None]:
         """
         Test connection to Home Assistant.
