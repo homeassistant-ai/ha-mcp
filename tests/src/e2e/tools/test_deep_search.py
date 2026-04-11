@@ -358,3 +358,29 @@ async def test_deep_search_no_results(mcp_client):
     assert len(helpers) == 0, f"Should have no helper matches, but found: {helpers}"
 
     logger.info("✅ Correctly returned empty results for non-matching query")
+
+
+@pytest.mark.parametrize(
+    "limit,description",
+    [
+        pytest.param(-1, "negative limit"),
+        pytest.param(0, "zero limit"),
+    ],
+)
+async def test_deep_search_invalid_limit_returns_error(mcp_client, limit, description):
+    """Test that ha_deep_search rejects invalid limit values.
+
+    A negative or zero limit caused silent data corruption before the fix:
+    limit=-1 dropped the last result (tagged_results[0:-1]), limit=0 returned
+    an empty result with has_more=True, enabling an infinite pagination loop.
+    """
+    result = await safe_call_tool(
+        mcp_client,
+        "ha_deep_search",
+        {"query": "light", "limit": limit},
+    )
+    assert result["success"] is False, f"Expected failure for {description}, got success=True"
+    assert result["error"]["code"] == "VALIDATION_FAILED", (
+        f"Expected VALIDATION_FAILED for {description}, "
+        f"got {result.get('error', {}).get('code')}"
+    )
