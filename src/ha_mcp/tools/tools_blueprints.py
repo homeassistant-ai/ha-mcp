@@ -9,17 +9,27 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant blueprint management tools."""
+class BlueprintTools:
+    """Blueprint management tools for Home Assistant."""
 
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @staticmethod
     def _format_blueprint_list(blueprints_data: dict[str, Any], domain: str) -> dict[str, Any]:
         """Format blueprint data into list response structure.
 
@@ -56,9 +66,14 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "blueprints": blueprints,
         }
 
-    @mcp.tool(tags={"Blueprints"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Blueprint"})
+    @tool(
+        name="ha_get_blueprint",
+        tags={"Blueprints"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Blueprint"},
+    )
     @log_tool_usage
     async def ha_get_blueprint(
+        self,
         path: Annotated[
             str | None,
             Field(
@@ -107,7 +122,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ))
 
             # Get list of blueprints
-            list_response = await client.send_websocket_message(
+            list_response = await self._client.send_websocket_message(
                 {"type": "blueprint/list", "domain": domain}
             )
 
@@ -122,7 +137,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # If no path provided, return list of all blueprints
             if path is None:
-                return _format_blueprint_list(blueprints_data, domain)
+                return self._format_blueprint_list(blueprints_data, domain)
 
             # Path provided - get specific blueprint details
             if path not in blueprints_data:
@@ -183,9 +198,14 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Blueprints"}, annotations={"destructiveHint": True, "title": "Import Blueprint"})
+    @tool(
+        name="ha_import_blueprint",
+        tags={"Blueprints"},
+        annotations={"destructiveHint": True, "title": "Import Blueprint"},
+    )
     @log_tool_usage
     async def ha_import_blueprint(
+        self,
         url: Annotated[
             str,
             Field(
@@ -224,7 +244,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ))
 
             # Send WebSocket command to import blueprint
-            response = await client.send_websocket_message(
+            response = await self._client.send_websocket_message(
                 {"type": "blueprint/import", "url": url}
             )
 
@@ -272,7 +292,7 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggested_filename = suggested_filename + ".yaml"
 
             # Save the blueprint to disk (blueprint/import only validates)
-            save_response = await client.send_websocket_message(
+            save_response = await self._client.send_websocket_message(
                 {
                     "type": "blueprint/save",
                     "domain": domain,
@@ -333,3 +353,8 @@ def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Try importing from a different source (GitHub, Community, direct URL)",
                 ],
             )
+
+
+def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant blueprint management tools."""
+    register_tool_methods(mcp, BlueprintTools(client))

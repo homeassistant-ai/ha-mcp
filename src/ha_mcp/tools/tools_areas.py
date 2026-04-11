@@ -9,25 +9,130 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import parse_string_list_param
 
 logger = logging.getLogger(__name__)
 
 
-def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant area and floor management tools."""
+class AreaTools:
+    """Area and floor management tools for Home Assistant."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @staticmethod
+    def _build_area_update_message(
+        area_id: str,
+        name: str | None,
+        floor_id: str | None,
+        icon: str | None,
+        parsed_aliases: list[str] | None,
+        picture: str | None,
+    ) -> dict[str, Any]:
+        """Build a WebSocket message for updating an existing area."""
+        message: dict[str, Any] = {
+            "type": "config/area_registry/update",
+            "area_id": area_id,
+        }
+        if name is not None:
+            message["name"] = name
+        if floor_id is not None:
+            message["floor_id"] = floor_id if floor_id else None
+        if icon is not None:
+            message["icon"] = icon if icon else None
+        if parsed_aliases is not None:
+            message["aliases"] = parsed_aliases
+        if picture is not None:
+            message["picture"] = picture if picture else None
+        return message
+
+    @staticmethod
+    def _build_area_create_message(
+        name: str,
+        floor_id: str | None,
+        icon: str | None,
+        parsed_aliases: list[str] | None,
+        picture: str | None,
+    ) -> dict[str, Any]:
+        """Build a WebSocket message for creating a new area."""
+        message: dict[str, Any] = {
+            "type": "config/area_registry/create",
+            "name": name,
+        }
+        if floor_id:
+            message["floor_id"] = floor_id
+        if icon:
+            message["icon"] = icon
+        if parsed_aliases:
+            message["aliases"] = parsed_aliases
+        if picture:
+            message["picture"] = picture
+        return message
+
+    @staticmethod
+    def _build_floor_update_message(
+        floor_id: str,
+        name: str | None,
+        level: int | None,
+        icon: str | None,
+        parsed_aliases: list[str] | None,
+    ) -> dict[str, Any]:
+        """Build a WebSocket message for updating an existing floor."""
+        message: dict[str, Any] = {
+            "type": "config/floor_registry/update",
+            "floor_id": floor_id,
+        }
+        if name is not None:
+            message["name"] = name
+        if level is not None:
+            message["level"] = level
+        if icon is not None:
+            message["icon"] = icon if icon else None
+        if parsed_aliases is not None:
+            message["aliases"] = parsed_aliases
+        return message
+
+    @staticmethod
+    def _build_floor_create_message(
+        name: str,
+        level: int | None,
+        icon: str | None,
+        parsed_aliases: list[str] | None,
+    ) -> dict[str, Any]:
+        """Build a WebSocket message for creating a new floor."""
+        message: dict[str, Any] = {
+            "type": "config/floor_registry/create",
+            "name": name,
+        }
+        if level is not None:
+            message["level"] = level
+        if icon:
+            message["icon"] = icon
+        if parsed_aliases:
+            message["aliases"] = parsed_aliases
+        return message
 
     # ============================================================
     # AREA TOOLS
     # ============================================================
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"})
+    @tool(
+        name="ha_config_list_areas",
+        tags={"Areas & Floors"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"},
+    )
     @log_tool_usage
-    async def ha_config_list_areas() -> dict[str, Any]:
+    async def ha_config_list_areas(self) -> dict[str, Any]:
         """
         List all Home Assistant areas (rooms).
 
@@ -38,7 +143,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "config/area_registry/list",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 areas = result.get("result", [])
@@ -63,9 +168,14 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify WebSocket connection is active",
             ])
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "title": "Create or Update Area"})
+    @tool(
+        name="ha_config_set_area",
+        tags={"Areas & Floors"},
+        annotations={"destructiveHint": True, "title": "Create or Update Area"},
+    )
     @log_tool_usage
     async def ha_config_set_area(
+        self,
         name: Annotated[
             str | None,
             Field(
@@ -127,27 +237,11 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Determine if this is a create or update operation
             if area_id:
-                # UPDATE operation
-                message: dict[str, Any] = {
-                    "type": "config/area_registry/update",
-                    "area_id": area_id,
-                }
-
-                # Only add fields that were explicitly provided
-                if name is not None:
-                    message["name"] = name
-                if floor_id is not None:
-                    message["floor_id"] = floor_id if floor_id else None
-                if icon is not None:
-                    message["icon"] = icon if icon else None
-                if parsed_aliases is not None:
-                    message["aliases"] = parsed_aliases
-                if picture is not None:
-                    message["picture"] = picture if picture else None
-
+                message = self._build_area_update_message(
+                    area_id, name, floor_id, icon, parsed_aliases, picture,
+                )
                 operation = "update"
             else:
-                # CREATE operation - name is required
                 if not name:
                     raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_MISSING_PARAMETER,
@@ -155,24 +249,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"operation": "create_area"},
                         suggestions=["Provide a name for the new area"],
                     ))
-
-                message = {
-                    "type": "config/area_registry/create",
-                    "name": name,
-                }
-
-                if floor_id:
-                    message["floor_id"] = floor_id
-                if icon:
-                    message["icon"] = icon
-                if parsed_aliases:
-                    message["aliases"] = parsed_aliases
-                if picture:
-                    message["picture"] = picture
-
+                message = self._build_area_create_message(
+                    name, floor_id, icon, parsed_aliases, picture,
+                )
                 operation = "create"
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 area_data = result.get("result", {})
@@ -183,19 +265,19 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "area_id": area_data.get("area_id", area_id),
                     "message": f"Successfully {operation}d area: {area_name}",
                 }
-            else:
-                error = result.get("error", {})
-                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                ctx: dict[str, Any] = {"operation": operation}
-                if name:
-                    ctx["name"] = name
-                if area_id:
-                    ctx["area_id"] = area_id
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {operation} area: {error_msg}",
-                    context=ctx,
-                ))
+
+            error = result.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            ctx: dict[str, Any] = {"operation": operation}
+            if name:
+                ctx["name"] = name
+            if area_id:
+                ctx["area_id"] = area_id
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to {operation} area: {error_msg}",
+                context=ctx,
+            ))
 
         except ToolError:
             raise
@@ -208,9 +290,14 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "If assigning to a floor, verify floor_id exists",
             ])
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area"})
+    @tool(
+        name="ha_config_remove_area",
+        tags={"Areas & Floors"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area"},
+    )
     @log_tool_usage
     async def ha_config_remove_area(
+        self,
         area_id: Annotated[
             str,
             Field(description="Area ID to delete (use ha_config_list_areas to find IDs)"),
@@ -228,7 +315,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "area_id": area_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -258,9 +345,13 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     # FLOOR TOOLS
     # ============================================================
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors"})
+    @tool(
+        name="ha_config_list_floors",
+        tags={"Areas & Floors"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors"},
+    )
     @log_tool_usage
-    async def ha_config_list_floors() -> dict[str, Any]:
+    async def ha_config_list_floors(self) -> dict[str, Any]:
         """
         List all Home Assistant floors.
 
@@ -271,7 +362,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "type": "config/floor_registry/list",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 floors = result.get("result", [])
@@ -296,9 +387,14 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Verify WebSocket connection is active",
             ])
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "title": "Create or Update Floor"})
+    @tool(
+        name="ha_config_set_floor",
+        tags={"Areas & Floors"},
+        annotations={"destructiveHint": True, "title": "Create or Update Floor"},
+    )
     @log_tool_usage
     async def ha_config_set_floor(
+        self,
         name: Annotated[
             str | None,
             Field(
@@ -353,25 +449,11 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Determine if this is a create or update operation
             if floor_id:
-                # UPDATE operation
-                message: dict[str, Any] = {
-                    "type": "config/floor_registry/update",
-                    "floor_id": floor_id,
-                }
-
-                # Only add fields that were explicitly provided
-                if name is not None:
-                    message["name"] = name
-                if level is not None:
-                    message["level"] = level
-                if icon is not None:
-                    message["icon"] = icon if icon else None
-                if parsed_aliases is not None:
-                    message["aliases"] = parsed_aliases
-
+                message = self._build_floor_update_message(
+                    floor_id, name, level, icon, parsed_aliases,
+                )
                 operation = "update"
             else:
-                # CREATE operation - name is required
                 if not name:
                     raise_tool_error(create_error_response(
                         ErrorCode.VALIDATION_MISSING_PARAMETER,
@@ -379,22 +461,12 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"operation": "create_floor"},
                         suggestions=["Provide a name for the new floor"],
                     ))
-
-                message = {
-                    "type": "config/floor_registry/create",
-                    "name": name,
-                }
-
-                if level is not None:
-                    message["level"] = level
-                if icon:
-                    message["icon"] = icon
-                if parsed_aliases:
-                    message["aliases"] = parsed_aliases
-
+                message = self._build_floor_create_message(
+                    name, level, icon, parsed_aliases,
+                )
                 operation = "create"
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 floor_data = result.get("result", {})
@@ -405,19 +477,19 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "floor_id": floor_data.get("floor_id", floor_id),
                     "message": f"Successfully {operation}d floor: {floor_name}",
                 }
-            else:
-                error = result.get("error", {})
-                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                ctx: dict[str, Any] = {"operation": operation}
-                if name:
-                    ctx["name"] = name
-                if floor_id:
-                    ctx["floor_id"] = floor_id
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {operation} floor: {error_msg}",
-                    context=ctx,
-                ))
+
+            error = result.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            ctx: dict[str, Any] = {"operation": operation}
+            if name:
+                ctx["name"] = name
+            if floor_id:
+                ctx["floor_id"] = floor_id
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to {operation} floor: {error_msg}",
+                context=ctx,
+            ))
 
         except ToolError:
             raise
@@ -429,9 +501,14 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "For update: Verify the floor_id exists using ha_config_list_floors()",
             ])
 
-    @mcp.tool(tags={"Areas & Floors"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Floor"})
+    @tool(
+        name="ha_config_remove_floor",
+        tags={"Areas & Floors"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Floor"},
+    )
     @log_tool_usage
     async def ha_config_remove_floor(
+        self,
         floor_id: Annotated[
             str,
             Field(description="Floor ID to delete (use ha_config_list_floors to find IDs)"),
@@ -449,7 +526,7 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "floor_id": floor_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 return {
@@ -474,3 +551,8 @@ def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "Check Home Assistant connection",
                 "Verify the floor_id exists using ha_config_list_floors()",
             ])
+
+
+def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant area and floor management tools."""
+    register_tool_methods(mcp, AreaTools(client))

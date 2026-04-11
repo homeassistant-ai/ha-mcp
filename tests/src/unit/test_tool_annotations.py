@@ -16,34 +16,40 @@ def get_tools_dir() -> Path:
     return Path(__file__).parent.parent.parent.parent / "src" / "ha_mcp" / "tools"
 
 
+def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -> dict:
+    """Parse decorator arguments into a tool info dict."""
+    has_read_only = 'readOnlyHint' in decorator_args and 'True' in decorator_args.split('readOnlyHint')[1][:20]
+    has_destructive = 'destructiveHint' in decorator_args and 'True' in decorator_args.split('destructiveHint')[1][:20]
+    has_title = 'title' in decorator_args
+    has_tags = 'tags=' in decorator_args or 'tags =' in decorator_args
+
+    return {
+        'file': file_name,
+        'function': func_name,
+        'has_read_only_hint': has_read_only,
+        'has_destructive_hint': has_destructive,
+        'has_title': has_title,
+        'has_tags': has_tags,
+        'decorator_args': decorator_args.strip(),
+    }
+
+
 def extract_tool_decorators(file_path: Path) -> list[dict]:
-    """Extract @mcp.tool decorator information from a Python file."""
+    """Extract @mcp.tool and @tool decorator information from a Python file."""
     content = file_path.read_text(encoding="utf-8")
-    tools = []
-
-    # Find all @mcp.tool decorators with their annotations
-    # Pattern matches @mcp.tool(...) followed by async def function_name
+    # Pattern 1: @mcp.tool(...) — closure pattern
     pattern = r'@mcp\.tool\(([^)]*)\)\s*(?:@\w+\s*)*async def (\w+)'
+    tools = [
+        _parse_decorator_args(m.group(1), m.group(2), file_path.name)
+        for m in re.finditer(pattern, content, re.DOTALL)
+    ]
 
-    for match in re.finditer(pattern, content, re.DOTALL):
-        decorator_args = match.group(1)
-        func_name = match.group(2)
-
-        # Check for annotations
-        has_read_only = 'readOnlyHint' in decorator_args and 'True' in decorator_args.split('readOnlyHint')[1][:20]
-        has_destructive = 'destructiveHint' in decorator_args and 'True' in decorator_args.split('destructiveHint')[1][:20]
-        has_title = 'title' in decorator_args
-        has_tags = 'tags=' in decorator_args or 'tags =' in decorator_args
-
-        tools.append({
-            'file': file_path.name,
-            'function': func_name,
-            'has_read_only_hint': has_read_only,
-            'has_destructive_hint': has_destructive,
-            'has_title': has_title,
-            'has_tags': has_tags,
-            'decorator_args': decorator_args.strip(),
-        })
+    # Pattern 2: @tool(name="ha_*", ...) — class method pattern
+    class_pattern = r'@tool\(\s*\n?\s*name="(ha_\w+)"[,\s]*([^)]*)\)\s*(?:@\w+\s*)*async def \w+'
+    tools.extend(
+        _parse_decorator_args(f'name="{m.group(1)}", {m.group(2)}', m.group(1), file_path.name)
+        for m in re.finditer(class_pattern, content, re.DOTALL)
+    )
 
     # Also find bare @mcp.tool without arguments
     bare_pattern = r'@mcp\.tool\s*\n\s*(?:@\w+\s*)*async def (\w+)'
