@@ -441,7 +441,7 @@ class DomainTools:
         # Add to the docstring above only when genuinely needed:
         # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # NOTE / WARNING: non-obvious gotcha or destructive side-effect
+        # Constraints: use RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY)
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
 
 def register_<domain>_tools(mcp, client, **kwargs):
@@ -464,18 +464,17 @@ Example: `ha_search_entities` hints at `ha_get_state`.
 **Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
 Omit when a single required parameter makes the call self-evident.
 
-**Add `NOTE` or `WARNING` when** there is a non-obvious gotcha, a destructive side-effect,
-or a behavioral quirk that causes silent failures if ignored.
+**Use RFC 2119 terms** (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY) for constraints,
+restrictions, and warnings in tool docstrings and parameter descriptions. These terms
+are unambiguous and [well-understood by LLM agents](https://aws.amazon.com/blogs/opensource/introducing-strands-agent-sops-natural-language-workflows-for-ai-agents/).
+Avoid informal alternatives like "IMPORTANT:", "Prefer:", "Only use when", "STOP",
+"NOTE", "WARNING", or "escape hatch". Examples:
+- `MUST NOT be used for template sensors — use ha_set_config_entry_helper instead.`
+- `SHOULD be followed by ha_reload_core when modifying YAML-only integrations.`
+- `Callers MUST confirm with the user before deleting.`
 
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
-
-**Use RFC 2119 terms** (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY) for constraints and
-restrictions in tool docstrings and parameter descriptions. These terms are unambiguous
-and [well-understood by LLM agents](https://aws.amazon.com/blogs/opensource/introducing-strands-agent-sops-natural-language-workflows-for-ai-agents/).
-Avoid informal alternatives like "IMPORTANT:", "Prefer:", "Only use when", "STOP",
-or "escape hatch". Example: `MUST NOT be used for template sensors — use
-ha_set_config_entry_helper instead.`
 
 **What NOT to include:** full parameter documentation, type descriptions already in the
 signature, HA domain internals the model already knows, or motivational prose.

@@ -106,7 +106,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
-- Uses informal restriction language ("IMPORTANT:", "Prefer:", "Only use when", "STOP", "escape hatch") instead of RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY). RFC 2119 terms are unambiguous and well-understood by LLM agents. Example: `MUST NOT be used for template sensors — use ha_set_config_entry_helper instead.`
+- Uses informal restriction language ("IMPORTANT:", "Prefer:", "Only use when", "STOP", "NOTE", "WARNING", "escape hatch") instead of RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY). RFC 2119 terms are unambiguous and well-understood by LLM agents. Example: `MUST NOT be used for template sensors — use ha_set_config_entry_helper instead.`
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
