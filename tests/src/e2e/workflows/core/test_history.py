@@ -572,7 +572,6 @@ class TestGetHistoryStatisticsSource:
             logger.info("Properly returned error for entity without state_class")
 
 
-@pytest.mark.asyncio
 @pytest.mark.core
 async def test_get_history_query_params_in_response(mcp_client):
     """Test that query parameters are included in response."""
@@ -611,7 +610,7 @@ class TestGetHistoryNegativeInputs:
     """Negative-input tests for ha_get_history."""
 
     async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
-        """Rejects entity_ids="" — invalid entity ID reaches HA WebSocket and fails with INTERNAL_ERROR."""
+        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler."""
         result = await safe_call_tool(
             mcp_client,
             "ha_get_history",
@@ -621,7 +620,7 @@ class TestGetHistoryNegativeInputs:
         assert result["error"]["code"] == "INTERNAL_ERROR"
 
     async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
-        """Rejects entity_ids=[] — caught by MCP pre-flight validation, no WebSocket call."""
+        """Rejects an empty list before any network call is made."""
         result = await safe_call_tool(
             mcp_client,
             "ha_get_history",
