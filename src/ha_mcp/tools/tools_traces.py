@@ -10,6 +10,7 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -19,17 +20,30 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    register_tool_methods,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant trace debugging tools."""
+class TraceTools:
+    """Trace retrieval tools for Home Assistant."""
 
-    @mcp.tool(tags={"History & Statistics"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Automation Traces"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_automation_traces",
+        tags={"History & Statistics"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Automation Traces",
+        },
+    )
     @log_tool_usage
     async def ha_get_automation_traces(
+        self,
         automation_id: Annotated[
             str,
             Field(
@@ -153,7 +167,7 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
-                client.base_url, client.token
+                self._client.base_url, self._client.token
             )
             if error or ws_client is None:
                 raise_tool_error(error or create_error_response(
@@ -214,7 +228,7 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # If traces are empty, gather diagnostic information
                     if not traces_data:
                         diagnostics = await _gather_diagnostics(
-                            ws_client, client, automation_id, domain
+                            ws_client, self._client, automation_id, domain
                         )
                         return _format_trace_list(
                             automation_id, traces_data, limit, diagnostics
@@ -238,6 +252,11 @@ def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Ensure Home Assistant connection is working",
                 ],
             )
+
+
+def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant trace debugging tools."""
+    register_tool_methods(mcp, TraceTools(client))
 
 
 async def _resolve_trace_item_id(
@@ -504,97 +523,9 @@ def _format_detailed_trace(
     conditions.sort(key=sort_key)
     actions.sort(key=sort_key)
 
-    # Extract trigger information
-    if triggers:
-        trigger_step = triggers[0]
-        trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
-        # Sometimes variables are in 'variables' key, sometimes 'changed_variables'
-        if not trigger_vars:
-            trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
-
-        result["trigger"] = {
-            "platform": trigger_vars.get("platform"),
-            "description": trigger_vars.get("description"),
-        }
-        # Add state change details if present (use safe dictionary access)
-        if "to_state" in trigger_vars:
-            result["trigger"]["to_state"] = trigger_vars.get("to_state", {}).get("state")
-        if "from_state" in trigger_vars:
-            result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
-        if "entity_id" in trigger_vars:
-            result["trigger"]["entity_id"] = trigger_vars["entity_id"]
-
-    # If no trigger info found in traces, try to get it from the top-level trigger field if present
-    # (some HA versions might populate this)
-    if "trigger" not in result and "trigger" in trace:
-        result["trigger"] = {"description": trace["trigger"]}
-
-    # Extract condition results
-    if conditions:
-        condition_results = []
-        for cond in conditions:
-            cond_result = {
-                "result": cond.get("result", {}).get("result"),
-                "path": cond.get("path"),
-            }
-            if "timestamp" in cond:
-                cond_result["timestamp"] = cond["timestamp"]
-            condition_results.append(cond_result)
-        result["condition_results"] = condition_results
-
-    # Extract action trace with optional variable deduplication.
-    # Home Assistant includes the full variable context at every trace step,
-    # but variables rarely change between steps. For complex automations with
-    # hundreds of steps (e.g., blueprint choose actions), this can produce
-    # 100KB+ of duplicated data. When deduplicate=True (default), we only
-    # include variables at steps where they actually changed.
-    if actions:
-        action_results = []
-        last_vars_fingerprint: str | None = None
-        for action in actions:
-            action_info: dict[str, Any] = {
-                "path": action.get("path"),
-            }
-
-            # Add timing information
-            if "timestamp" in action:
-                action_info["timestamp"] = action["timestamp"]
-
-            # Extract action result
-            action_result = action.get("result", {})
-            if action_result:
-                action_info["result"] = action_result
-
-            # Check for errors
-            if "error" in action:
-                action_info["error"] = action["error"]
-
-            # Extract variables, optionally deduplicating across steps.
-            # Check both 'variables' and 'changed_variables'
-            variables = action.get("variables") or action.get("changed_variables", {})
-            if variables and "trigger" not in variables:  # Skip trigger vars (already shown)
-                useful_vars = {k: v for k, v in variables.items() if v is not None}
-                if useful_vars:
-                    if deduplicate:
-                        # Compare with previous step using JSON fingerprint
-                        try:
-                            fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
-                        except (TypeError, ValueError):
-                            fingerprint = str(useful_vars)
-
-                        if fingerprint != last_vars_fingerprint:
-                            action_info["variables"] = useful_vars
-                            last_vars_fingerprint = fingerprint
-                    else:
-                        action_info["variables"] = useful_vars
-
-            # Add child execution info (for nested scripts/automations)
-            if "child_id" in action:
-                action_info["child_id"] = action["child_id"]
-
-            action_results.append(action_info)
-
-        result["action_trace"] = action_results
+    _populate_trigger_info(result, triggers, trace)
+    _populate_condition_results(result, conditions)
+    _populate_action_trace(result, actions, deduplicate)
 
     # Add context with trigger variables for template debugging
     config = trace.get("config", {})
@@ -640,3 +571,98 @@ def _format_detailed_trace(
         result = {k: v for k, v in result.items() if k in keep_keys}
 
     return result
+
+
+def _populate_trigger_info(
+    result: dict[str, Any],
+    triggers: list[dict[str, Any]],
+    trace: dict[str, Any],
+) -> None:
+    """Extract trigger information and add to result dict."""
+    if triggers:
+        trigger_step = triggers[0]
+        trigger_vars = trigger_step.get("changed_variables", {}).get("trigger", {})
+        if not trigger_vars:
+            trigger_vars = trigger_step.get("variables", {}).get("trigger", {})
+
+        result["trigger"] = {
+            "platform": trigger_vars.get("platform"),
+            "description": trigger_vars.get("description"),
+        }
+        if "to_state" in trigger_vars:
+            result["trigger"]["to_state"] = trigger_vars.get("to_state", {}).get("state")
+        if "from_state" in trigger_vars:
+            result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
+        if "entity_id" in trigger_vars:
+            result["trigger"]["entity_id"] = trigger_vars["entity_id"]
+
+    if "trigger" not in result and "trigger" in trace:
+        result["trigger"] = {"description": trace["trigger"]}
+
+
+def _populate_condition_results(
+    result: dict[str, Any],
+    conditions: list[dict[str, Any]],
+) -> None:
+    """Extract condition results and add to result dict."""
+    if conditions:
+        condition_results = []
+        for cond in conditions:
+            cond_result = {
+                "result": cond.get("result", {}).get("result"),
+                "path": cond.get("path"),
+            }
+            if "timestamp" in cond:
+                cond_result["timestamp"] = cond["timestamp"]
+            condition_results.append(cond_result)
+        result["condition_results"] = condition_results
+
+
+def _populate_action_trace(
+    result: dict[str, Any],
+    actions: list[dict[str, Any]],
+    deduplicate: bool,
+) -> None:
+    """Extract action trace with optional variable deduplication."""
+    if not actions:
+        return
+
+    action_results = []
+    last_vars_fingerprint: str | None = None
+    for action in actions:
+        action_info: dict[str, Any] = {
+            "path": action.get("path"),
+        }
+
+        if "timestamp" in action:
+            action_info["timestamp"] = action["timestamp"]
+
+        action_result = action.get("result", {})
+        if action_result:
+            action_info["result"] = action_result
+
+        if "error" in action:
+            action_info["error"] = action["error"]
+
+        variables = action.get("variables") or action.get("changed_variables", {})
+        if variables and "trigger" not in variables:
+            useful_vars = {k: v for k, v in variables.items() if v is not None}
+            if useful_vars:
+                if deduplicate:
+                    try:
+                        fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
+                    except (TypeError, ValueError):
+                        fingerprint = str(useful_vars)
+
+                    if fingerprint != last_vars_fingerprint:
+                        action_info["variables"] = useful_vars
+                        last_vars_fingerprint = fingerprint
+                else:
+                    action_info["variables"] = useful_vars
+
+        if "child_id" in action:
+            action_info["child_id"] = action["child_id"]
+
+        action_results.append(action_info)
+
+    result["action_trace"] = action_results
