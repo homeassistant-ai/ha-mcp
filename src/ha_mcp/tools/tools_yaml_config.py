@@ -48,7 +48,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
-            "title": "Raw YAML Config Edit (Escape Hatch)",
+            "title": "Raw YAML Config Edit",
         },
     )
     @log_tool_usage
@@ -59,15 +59,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
                     "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify'). "
-                    "STOP before using this for 'template' — the Template "
-                    "config-flow helper (ha_set_config_entry_helper with "
-                    "helper_type='template') supports state AND trigger-based template "
-                    "sensors since HA 2024.x and is the correct path. Do NOT use "
-                    "this tool for automations, scripts, scenes, or input_* "
-                    "helpers — they have dedicated tools "
-                    "(ha_config_set_automation, ha_config_set_script, "
-                    "ha_config_set_scene, ha_config_set_helper)."
+                    "'rest', 'shell_command', 'notify'). Not for template sensors "
+                    "(use ha_set_config_entry_helper), automations, scripts, "
+                    "scenes, or input_* helpers — those have dedicated tools."
                 ),
             ),
         ],
@@ -81,20 +75,6 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ],
-        justification: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description=(
-                    "Required. Explain in one or two sentences why no dedicated "
-                    "tool (ha_set_config_entry_helper for templates, "
-                    "ha_config_set_automation, ha_config_set_script, "
-                    "ha_config_set_scene, ha_config_set_helper) can accomplish "
-                    "this task. Logged for auditing. If you cannot write a "
-                    "concrete justification, you probably want a different tool."
-                ),
-            ),
-        ] = None,
         content: Annotated[
             str | None,
             Field(
@@ -102,6 +82,16 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "YAML content for the value under yaml_path. Required for "
                     "'add' and 'replace' actions. Must be valid YAML."
+                ),
+            ),
+        ] = None,
+        justification: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Required. Briefly explain why no dedicated tool fits. "
+                    "Logged for auditing."
                 ),
             ),
         ] = None,
@@ -126,49 +116,29 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration (Escape Hatch) — use only when NO dedicated tool fits.
+        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 
-        This tool is the WRONG answer for almost everything. Before calling it,
-        confirm that NONE of these apply:
+        **WARNING:** Destructive, disabled by default. Dedicated tools exist for
+        almost every use case and should be preferred:
 
-        - Template sensors (state-based OR trigger-based) ->
-          ha_set_config_entry_helper with helper_type='template'. The Template
-          config-flow helper supports triggers, availability, attributes, device
-          class, unit of measurement, and state templates since HA 2024.x. It is
-          the correct path even for complex trigger-based sensors. Do NOT edit
-          the 'template:' YAML block for this.
+        - Template sensors (state-based or trigger-based) ->
+          ha_set_config_entry_helper(helper_type='template')
         - Automations -> ha_config_set_automation
         - Scripts -> ha_config_set_script
         - Scenes -> ha_config_set_scene
-        - Input helpers (input_boolean, input_number, input_text, input_select,
-          input_datetime, input_button, counter, timer, schedule) ->
-          ha_config_set_helper
+        - Input helpers -> ha_config_set_helper
         - Groups, min/max, threshold, derivative, statistics, utility_meter,
-          trend, filter, switch_as_x, and other config-flow helpers ->
-          ha_set_config_entry_helper
+          trend, filter, switch_as_x -> ha_set_config_entry_helper
 
-        This tool is intended for YAML-only integrations that have no config-flow
-        or API equivalent: command_line sensors, REST sensors defined in
-        packages, shell_command entries, platform-based notify services, and
-        similar edge cases. If you are reaching for this to edit 'template:',
-        'automation:', 'script:', 'scene:', or 'input_*:', stop and use the
-        dedicated tool instead.
+        Intended for YAML-only integrations with no config-flow or API
+        equivalent (command_line, rest, shell_command, notify platforms).
+        A non-empty ``justification`` is required and logged. Check
+        ``post_action`` in the response: most keys need a full HA restart;
+        template, mqtt, and group support reload. Preserves YAML comments and
+        HA tags (``!include``, ``!secret``) on round-trip; ``replace`` swaps
+        the subtree as-is.
 
-        A ``justification`` is REQUIRED on every call and is logged for auditing.
-        The justification must explain why no dedicated tool fits. If you cannot
-        write a concrete justification, you are using the wrong tool.
-
-        Safeguards: file backup, YAML validation, top-level key allowlist,
-        path traversal blocking, post-edit config check.
-
-        Check 'post_action' in the response. Most keys require a full HA restart
-        ('restart_required'). Only template, mqtt, and group support reload
-        ('reload_available' with 'reload_service').
-
-        Preserves YAML comments on sibling keys, file-level comments, and Home
-        Assistant tags (!include, !secret, etc.). The 'replace' action
-        substitutes the subtree as-is, so comments from the old subtree do not
-        carry over.
+        For detailed routing guidance, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Validate action
@@ -186,27 +156,20 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            # Require a non-empty justification. This is the primary friction
-            # that discourages reaching for this escape hatch — if the caller
-            # cannot articulate why no dedicated tool fits, they should use a
-            # dedicated tool instead. Mirrors the pattern from tools_code.py
-            # (ha_manage_custom_tool).
+            # Require a non-empty justification. Lightweight friction gate
+            # analogous to ha_restart's `confirm` parameter — forces the
+            # caller to pause and articulate intent before a destructive
+            # raw-YAML write. The justification is logged for auditing.
             if not justification or not justification.strip():
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "justification is required for ha_config_set_yaml",
                         suggestions=[
-                            "Explain why no dedicated tool can accomplish this "
-                            "task (Template sensors -> "
-                            "ha_set_config_entry_helper with "
-                            "helper_type='template'; automations -> "
-                            "ha_config_set_automation; scripts -> "
-                            "ha_config_set_script; helpers -> "
-                            "ha_config_set_helper)",
-                            "If yaml_path is 'template', 'automation', "
-                            "'script', 'scene', or 'input_*', use the "
-                            "dedicated tool instead of this escape hatch",
+                            "Briefly explain why no dedicated tool fits this task",
+                            "For template sensors, automations, scripts, scenes, "
+                            "or input helpers, use the dedicated tool instead "
+                            "(see ha_get_skill_home_assistant_best_practices)",
                         ],
                     )
                 )

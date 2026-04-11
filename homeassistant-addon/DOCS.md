@@ -442,7 +442,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_backup_create` — Create a fast Home Assistant backup (local only).
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
-- `ha_config_set_yaml` — Update raw YAML configuration (Escape Hatch) — use only when NO dedicated tool fits.
+- `ha_config_set_yaml` — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 - `ha_get_updates` — Get update information - list all updates or get details for a specific one.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.

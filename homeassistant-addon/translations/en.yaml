@@ -29,9 +29,12 @@ configuration:
   enable_yaml_config_editing:
     name: Enable YAML config editing
     description: >-
-      Allow AI assistants to add, replace, or remove top-level keys in
-      configuration.yaml and packages/*.yaml. Only whitelisted keys are
-      allowed (e.g., template, sensor, command_line, mqtt). Core keys
-      like homeassistant, http, and recorder are blocked. A backup is
-      created before every edit. Use for YAML-only features that have no
-      UI or API alternative. Requires restart to take effect.
+      WARNING, dangerous tool, use at your own risk. Allows AI assistants
+      to add, replace, or remove top-level keys in configuration.yaml and
+      packages/*.yaml. Only whitelisted keys are allowed (e.g., template,
+      sensor, command_line, mqtt); core keys like homeassistant, http,
+      and recorder are blocked. A backup is created before every edit.
+      Intended as a last resort for YAML-only features with no UI or API
+      alternative — dedicated tools exist for automations, scripts,
+      scenes, template sensors, and helpers and should be preferred.
+      Requires restart to take effect.
