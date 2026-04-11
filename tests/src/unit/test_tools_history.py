@@ -6,27 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_history import register_history_tools
+from ha_mcp.tools.tools_history import HistoryTools
 
 
 class TestHaGetHistoryExceptionSuggestions:
     """Test that except Exception provides source-specific error suggestions."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures registered tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -37,10 +21,10 @@ class TestHaGetHistoryExceptionSuggestions:
         return client
 
     @pytest.fixture
-    def history_tool(self, mock_mcp, mock_client):
-        """Register history tools and return ha_get_history."""
-        register_history_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_get_history"]
+    def history_tool(self, mock_client):
+        """Create HistoryTools instance and return ha_get_history."""
+        tools = HistoryTools(mock_client)
+        return tools.ha_get_history
 
     @pytest.mark.asyncio
     async def test_statistics_exception_includes_state_class_hint(self, history_tool):

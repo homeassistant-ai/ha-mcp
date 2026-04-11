@@ -9,6 +9,7 @@ import logging
 from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import (
@@ -22,7 +23,12 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     get_skill_prefix as _get_skill_prefix,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
@@ -48,7 +54,7 @@ def _normalize_automation_config(
     and plural ('triggers', 'actions', 'conditions') field names in YAML,
     but the API expects singular forms at the root level.
 
-    IMPORTANT: 'triggers' → 'trigger' and 'actions' → 'action' normalization
+    IMPORTANT: 'triggers' -> 'trigger' and 'actions' -> 'action' normalization
     is ONLY applied at the root level. Deeper in the tree these keys are either
     invalid or semantically different, and normalizing them can produce keys
     that Home Assistant rejects (e.g., 'action' inside a delay object).
@@ -67,8 +73,8 @@ def _normalize_automation_config(
         in_choose_or_if: Whether we're inside a choose/if option that requires
                          'conditions' (plural) to remain unchanged
         is_root: Whether this is the root-level automation config dict.
-                 Only root level gets 'triggers'→'trigger' and
-                 'actions'→'action' normalization.
+                 Only root level gets 'triggers'->'trigger' and
+                 'actions'->'action' normalization.
 
     Returns:
         Normalized configuration with singular field names at root level,
@@ -100,14 +106,14 @@ def _normalize_automation_config(
     # Build field mappings based on context
     field_mappings: dict[str, str] = {}
 
-    # 'triggers' → 'trigger' and 'actions' → 'action' ONLY at root level.
+    # 'triggers' -> 'trigger' and 'actions' -> 'action' ONLY at root level.
     # Deeper in the tree these keys are invalid and normalizing them produces
-    # keys HA rejects (e.g., 'action' inside a delay object — see issue #498).
+    # keys HA rejects (e.g., 'action' inside a delay object -- see issue #498).
     if is_root:
         field_mappings["triggers"] = "trigger"
         field_mappings["actions"] = "action"
 
-    # 'sequences' → 'sequence' is safe at any level (only meaningful in choose options)
+    # 'sequences' -> 'sequence' is safe at any level (only meaningful in choose options)
     field_mappings["sequences"] = "sequence"
 
     # Only add 'conditions' mapping if NOT inside a choose/if option
@@ -204,10 +210,13 @@ def _strip_empty_automation_fields(config: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant automation configuration tools."""
+class AutomationConfigTools:
+    """Configuration management tools for Home Assistant automations."""
 
-    async def _resolve_automation_entity_id(identifier: str) -> str | None:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def _resolve_automation_entity_id(self, identifier: str) -> str | None:
         """Resolve an automation identifier to its entity_id.
 
         If identifier is already an entity_id (starts with "automation."),
@@ -217,7 +226,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         if identifier.startswith("automation."):
             return identifier
         try:
-            states = await client.get_states()
+            states = await self._client.get_states()
             for state in states:
                 if (
                     state.get("entity_id", "").startswith("automation.")
@@ -228,16 +237,18 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
         return None
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_get_automation",
         tags={"Automations"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Automation Config"
-        }
+            "title": "Get Automation Config",
+        },
     )
     @log_tool_usage
     async def ha_config_get_automation(
+        self,
         identifier: Annotated[
             str,
             Field(
@@ -257,14 +268,14 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
-            config_result = await client.get_automation_config(identifier)
-            # Normalize config for round-trip compatibility (GET → SET)
+            config_result = await self._client.get_automation_config(identifier)
+            # Normalize config for round-trip compatibility (GET -> SET)
             normalized_config = _normalize_config_for_roundtrip(config_result)
 
             # Resolve entity_id and fetch category from entity registry
-            entity_id = await _resolve_automation_entity_id(identifier)
+            entity_id = await self._resolve_automation_entity_id(identifier)
             if entity_id:
-                cat_id = await fetch_entity_category(client, entity_id, "automation")
+                cat_id = await fetch_entity_category(self._client, entity_id, "automation")
                 if cat_id:
                     normalized_config["category"] = cat_id
 
@@ -305,15 +316,17 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_set_automation",
         tags={"Automations"},
         annotations={
             "destructiveHint": True,
-            "title": "Create or Update Automation"
-        }
+            "title": "Create or Update Automation",
+        },
     )
     @log_tool_usage
     async def ha_config_set_automation(
+        self,
         config: Annotated[
             str | dict[str, Any],
             Field(
@@ -437,7 +450,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     }
                 }
             }
-        })
+        )
 
         PREFER NATIVE SOLUTIONS OVER TEMPLATES:
         Before using template triggers/conditions/actions, check if a native option exists:
@@ -463,25 +476,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         bp_warnings: list[str] = []
         try:
-            # Parse JSON config if provided as string
-            try:
-                parsed_config = parse_json_param(config, "config")
-            except ValueError as e:
-                raise_tool_error(create_validation_error(
-                    f"Invalid config parameter: {e}",
-                    parameter="config",
-                    invalid_json=True,
-                ))
-
-            # Ensure config is a dict
-            if parsed_config is None or not isinstance(parsed_config, dict):
-                raise_tool_error(create_validation_error(
-                    "Config parameter must be a JSON object",
-                    parameter="config",
-                    details=f"Received type: {type(parsed_config).__name__}",
-                ))
-
-            config_dict = cast(dict[str, Any], parsed_config)
+            config_dict = self._parse_and_validate_config(config)
 
             # Extract category before sending to HA REST API (which rejects unknown keys).
             # Parameter takes precedence over config dict value.
@@ -492,48 +487,20 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             config_dict = _normalize_automation_config(config_dict)
 
             # Validate required fields based on automation type
-            # Blueprint automations only need alias, regular automations need trigger and action
-            if "use_blueprint" in config_dict:
-                required_fields = ["alias"]
-                # Strip empty trigger/action/condition arrays that would override blueprint
-                config_dict = _strip_empty_automation_fields(config_dict)
-            else:
-                required_fields = ["alias", "trigger", "action"]
+            self._validate_required_fields(config_dict, identifier)
 
-            missing_fields = [f for f in required_fields if f not in config_dict]
-            if missing_fields:
-                raise_tool_error(create_config_error(
-                    f"Missing required fields: {', '.join(missing_fields)}",
-                    identifier=identifier,
-                    missing_fields=missing_fields,
-                ))
-
-            # Prevent duplicate creation when config contains an existing automation id
-            if identifier is None and "id" in config_dict:
-                existing_id = config_dict["id"]
-                raise_tool_error(create_validation_error(
-                    f"Config contains 'id' field ('{existing_id}') but no identifier was provided. "
-                    "This would create a duplicate automation instead of updating the existing one.",
-                    parameter="identifier",
-                    details=f"To update, pass identifier='{existing_id}' (or the automation's entity_id). "
-                    "To create a genuinely new automation, remove the 'id' field from the config.",
-                ))
-
-            # Pre-check for best-practice issues (used for both success
-            # warnings and error enrichment if the API call fails).
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(
                 config_dict, skill_prefix=_get_skill_prefix()
             )
 
-            result = await client.upsert_automation_config(config_dict, identifier)
+            result = await self._client.upsert_automation_config(config_dict, identifier)
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
-            # The automation may have been created but not yet visible (slow hardware, reload needed).
             if result.get("entity_not_verified"):
                 result["warning"] = (
                     "Automation was submitted to Home Assistant but the entity was not found "
-                    "after polling. The automation may still have been created — check Home "
+                    "after polling. The automation may still have been created -- check Home "
                     "Assistant logs and try reloading automations. Common causes: "
                     "automations.yaml vs automation.yaml filename mismatch, invalid config "
                     "that HA accepted but failed to load, or slow hardware."
@@ -543,12 +510,12 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Wait for automation to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = result.get("entity_id")
-            # On updates, entity_id may not be in the result — derive from identifier
+            # On updates, entity_id may not be in the result -- derive from identifier
             if not entity_id and identifier and identifier.startswith("automation."):
                 entity_id = identifier
             if wait_bool and entity_id:
                 try:
-                    registered = await wait_for_entity_registered(client, entity_id)
+                    registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
                         result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
                 except Exception as e:
@@ -557,7 +524,7 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
             # Apply category to entity registry if provided
             if effective_category and entity_id:
                 await apply_entity_category(
-                    client, entity_id, effective_category, "automation", result, "automation"
+                    self._client, entity_id, effective_category, "automation", result, "automation"
                 )
 
             if bp_warnings:
@@ -590,16 +557,72 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                 suggestions=suggestions,
             )
 
-    @mcp.tool(
+    @staticmethod
+    def _parse_and_validate_config(config: str | dict[str, Any]) -> dict[str, Any]:
+        """Parse JSON config and validate it is a dict."""
+        try:
+            parsed_config = parse_json_param(config, "config")
+        except ValueError as e:
+            raise_tool_error(create_validation_error(
+                f"Invalid config parameter: {e}",
+                parameter="config",
+                invalid_json=True,
+            ))
+
+        if parsed_config is None or not isinstance(parsed_config, dict):
+            raise_tool_error(create_validation_error(
+                "Config parameter must be a JSON object",
+                parameter="config",
+                details=f"Received type: {type(parsed_config).__name__}",
+            ))
+
+        return cast(dict[str, Any], parsed_config)
+
+    @staticmethod
+    def _validate_required_fields(
+        config_dict: dict[str, Any], identifier: str | None
+    ) -> None:
+        """Validate required fields and prevent duplicate creation."""
+        if "use_blueprint" in config_dict:
+            required_fields = ["alias"]
+            # Strip empty trigger/action/condition arrays that would override blueprint
+            for field in ["trigger", "action", "condition"]:
+                if field in config_dict and config_dict[field] == []:
+                    del config_dict[field]
+        else:
+            required_fields = ["alias", "trigger", "action"]
+
+        missing_fields = [f for f in required_fields if f not in config_dict]
+        if missing_fields:
+            raise_tool_error(create_config_error(
+                f"Missing required fields: {', '.join(missing_fields)}",
+                identifier=identifier,
+                missing_fields=missing_fields,
+            ))
+
+        # Prevent duplicate creation when config contains an existing automation id
+        if identifier is None and "id" in config_dict:
+            existing_id = config_dict["id"]
+            raise_tool_error(create_validation_error(
+                f"Config contains 'id' field ('{existing_id}') but no identifier was provided. "
+                "This would create a duplicate automation instead of updating the existing one.",
+                parameter="identifier",
+                details=f"To update, pass identifier='{existing_id}' (or the automation's entity_id). "
+                "To create a genuinely new automation, remove the 'id' field from the config.",
+            ))
+
+    @tool(
+        name="ha_config_remove_automation",
         tags={"Automations"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "title": "Remove Automation"
-        }
+            "title": "Remove Automation",
+        },
     )
     @log_tool_usage
     async def ha_config_remove_automation(
+        self,
         identifier: Annotated[
             str,
             Field(
@@ -625,19 +648,19 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
         """
         try:
             # Resolve entity_id for wait verification (identifier may be a unique_id)
-            entity_id_for_wait = await _resolve_automation_entity_id(identifier)
+            entity_id_for_wait = await self._resolve_automation_entity_id(identifier)
             if not entity_id_for_wait:
                 logger.warning(
-                    f"Could not resolve unique_id '{identifier}' to entity_id — wait verification will be skipped"
+                    f"Could not resolve unique_id '{identifier}' to entity_id -- wait verification will be skipped"
                 )
 
-            result = await client.delete_automation_config(identifier)
+            result = await self._client.delete_automation_config(identifier)
 
             # Wait for entity to be removed
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             if wait_bool and entity_id_for_wait:
                 try:
-                    removed = await wait_for_entity_removed(client, entity_id_for_wait)
+                    removed = await wait_for_entity_removed(self._client, entity_id_for_wait)
                     if not removed:
                         result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
                 except Exception as e:
@@ -668,3 +691,8 @@ def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> No
                     "Check Home Assistant connection",
                 ]
             raise_tool_error(error_response)
+
+
+def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant automation configuration tools."""
+    register_tool_methods(mcp, AutomationConfigTools(client))

@@ -9,10 +9,16 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
@@ -83,10 +89,14 @@ async def _assert_hacs_available() -> None:
     )
 
 
-def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register HACS integration tools with the MCP server."""
+class HacsTools:
+    """HACS integration tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_hacs_search",
         tags={"HACS"},
         annotations={
             "idempotentHint": True,
@@ -96,6 +106,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_hacs_search(
+        self,
         query: str = "",
         category: Annotated[
             Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
@@ -200,77 +211,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             all_repositories = response.get("result", [])
-
-            query_lower = query.lower().strip()
-            matches = []
-
-            for repo in all_repositories:
-                # Filter to installed only when requested
-                if installed_only_bool and not repo.get("installed", False):
-                    continue
-
-                # Handle None values safely
-                name = (repo.get("name") or "").lower()
-                description = (repo.get("description") or "").lower()
-                full_name = (repo.get("full_name") or "").lower()
-                authors_list = repo.get("authors") or []
-                authors = " ".join(authors_list).lower()
-
-                # Calculate relevance score (all repos match when query is empty)
-                if query_lower:
-                    score = 0
-                    if query_lower in name:
-                        score += 100
-                    if query_lower in full_name:
-                        score += 50
-                    if query_lower in description:
-                        score += 30
-                    if query_lower in authors:
-                        score += 20
-                    if score == 0:
-                        continue
-                else:
-                    score = 0  # No scoring when listing all
-
-                # Map HACS internal category back to user-friendly name
-                repo_category = repo.get("category", "")
-                display_category = CATEGORY_DISPLAY.get(repo_category, repo_category)
-                entry: dict[str, Any] = {
-                    "name": repo.get("name"),
-                    "full_name": repo.get("full_name"),
-                    "description": repo.get("description"),
-                    "category": display_category,
-                    "id": repo.get("id"),
-                    "stars": repo.get("stars", 0),
-                    "downloads": repo.get("downloads", 0),
-                    "authors": authors_list,
-                    "installed": repo.get("installed", False),
-                    "installed_version": repo.get("installed_version")
-                    if repo.get("installed")
-                    else None,
-                    "available_version": repo.get("available_version"),
-                }
-                if query_lower:
-                    entry["score"] = score
-                if repo.get("installed"):
-                    entry["pending_update"] = repo.get("pending_upgrade", False)
-                    entry["domain"] = repo.get("domain")
-                matches.append(entry)
-
-            # Sort by score (descending) when searching, by name when listing
-            if query_lower:
-                matches.sort(key=lambda x: x.get("score", 0), reverse=True)
-            else:
-                matches.sort(key=lambda x: (x.get("name") or "").lower())
+            matches = _filter_and_score_repos(
+                all_repositories, query, installed_only_bool
+            )
 
             limited_matches = matches[offset_int : offset_int + max_results_int]
             has_more = (offset_int + len(limited_matches)) < len(matches)
 
             return await add_timezone_metadata(
-                client,
+                self._client,
                 {
                     "success": True,
-                    "query": query if query_lower else None,
+                    "query": query if query.strip() else None,
                     "category_filter": category,
                     "installed_only": installed_only_bool,
                     "total_matches": len(matches),
@@ -300,7 +252,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_hacs_repository_info",
         tags={"HACS"},
         annotations={
             "idempotentHint": True,
@@ -309,7 +262,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         },
     )
     @log_tool_usage
-    async def ha_hacs_repository_info(repository_id: str) -> dict[str, Any]:
+    async def ha_hacs_repository_info(self, repository_id: str) -> dict[str, Any]:
         """Get detailed repository information including README and documentation.
 
         Returns comprehensive information about a HACS repository:
@@ -343,28 +296,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ws_client = await get_websocket_client()
 
             # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
-            actual_id = repository_id
-            if "/" in repository_id:
-                # Look up the numeric ID from the repository list
-                list_response = await ws_client.send_command("hacs/repositories/list")
-                if list_response.get("success"):
-                    repos = list_response.get("result", [])
-                    for repo in repos:
-                        if repo.get("full_name", "").lower() == repository_id.lower():
-                            actual_id = str(repo.get("id"))
-                            break
-                    else:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.RESOURCE_NOT_FOUND,
-                                f"Repository '{repository_id}' not found in HACS",
-                                suggestions=[
-                                    "Use ha_hacs_search() to find the repository",
-                                    "Check the repository name is correct (case-insensitive)",
-                                    "The repository may need to be added to HACS first",
-                                ],
-                            )
-                        )
+            actual_id = await _resolve_hacs_repo_id(ws_client, repository_id)
 
             # Get repository info via WebSocket using numeric ID
             response = await ws_client.send_command(
@@ -385,7 +317,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Extract and structure the most useful information
             return await add_timezone_metadata(
-                client,
+                self._client,
                 {
                     "success": True,
                     "repository_id": repository_id,
@@ -425,12 +357,14 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_hacs_add_repository",
         tags={"HACS"},
         annotations={"destructiveHint": True, "title": "Add HACS Repository"},
     )
     @log_tool_usage
     async def ha_hacs_add_repository(
+        self,
         repository: str,
         category: Annotated[
             Literal["integration", "lovelace", "theme", "appdaemon", "python_script"],
@@ -517,7 +451,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = response.get("result", {})
 
             return await add_timezone_metadata(
-                client,
+                self._client,
                 {
                     "success": True,
                     "repository": repository,
@@ -547,7 +481,8 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_hacs_download",
         tags={"HACS"},
         annotations={
             "destructiveHint": True,
@@ -556,6 +491,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_hacs_download(
+        self,
         repository_id: str,
         version: Annotated[
             str | None,
@@ -604,31 +540,18 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             ws_client = await get_websocket_client()
 
-            # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
-            actual_id = repository_id
+            # Resolve GitHub path to numeric ID if needed
+            actual_id = await _resolve_hacs_repo_id(ws_client, repository_id)
             repo_name = repository_id
-            if "/" in repository_id:
-                # Look up the numeric ID from the repository list
+
+            # If we resolved from a path, try to get the name
+            if "/" in repository_id and actual_id != repository_id:
                 list_response = await ws_client.send_command("hacs/repositories/list")
                 if list_response.get("success"):
-                    repos = list_response.get("result", [])
-                    for repo in repos:
-                        if repo.get("full_name", "").lower() == repository_id.lower():
-                            actual_id = str(repo.get("id"))
+                    for repo in list_response.get("result", []):
+                        if str(repo.get("id")) == actual_id:
                             repo_name = repo.get("name") or repository_id
                             break
-                    else:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.RESOURCE_NOT_FOUND,
-                                f"Repository '{repository_id}' not found in HACS",
-                                suggestions=[
-                                    "Use ha_hacs_add_repository() to add the repository first",
-                                    "Use ha_hacs_search() to find available repositories",
-                                    "Check the repository name is correct (case-insensitive)",
-                                ],
-                            )
-                        )
 
             # Build download command parameters
             download_kwargs: dict[str, Any] = {"repository": actual_id}
@@ -654,7 +577,7 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = response.get("result", {})
 
             return await add_timezone_metadata(
-                client,
+                self._client,
                 {
                     "success": True,
                     "repository_id": actual_id,
@@ -684,3 +607,107 @@ def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check version format (e.g., 'v1.2.3' or '1.2.3')",
                 ],
             )
+
+
+def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register HACS integration tools with the MCP server."""
+    register_tool_methods(mcp, HacsTools(client))
+
+
+def _filter_and_score_repos(
+    all_repositories: list[dict[str, Any]],
+    query: str,
+    installed_only: bool | None,
+) -> list[dict[str, Any]]:
+    """Filter repositories and compute relevance scores."""
+    query_lower = query.lower().strip()
+    matches = []
+
+    for repo in all_repositories:
+        if installed_only and not repo.get("installed", False):
+            continue
+
+        # Handle None values safely
+        name = (repo.get("name") or "").lower()
+        description = (repo.get("description") or "").lower()
+        full_name = (repo.get("full_name") or "").lower()
+        authors_list = repo.get("authors") or []
+        authors = " ".join(authors_list).lower()
+
+        # Calculate relevance score (all repos match when query is empty)
+        if query_lower:
+            score = 0
+            if query_lower in name:
+                score += 100
+            if query_lower in full_name:
+                score += 50
+            if query_lower in description:
+                score += 30
+            if query_lower in authors:
+                score += 20
+            if score == 0:
+                continue
+        else:
+            score = 0
+
+        # Map HACS internal category back to user-friendly name
+        repo_category = repo.get("category", "")
+        display_category = CATEGORY_DISPLAY.get(repo_category, repo_category)
+        entry: dict[str, Any] = {
+            "name": repo.get("name"),
+            "full_name": repo.get("full_name"),
+            "description": repo.get("description"),
+            "category": display_category,
+            "id": repo.get("id"),
+            "stars": repo.get("stars", 0),
+            "downloads": repo.get("downloads", 0),
+            "authors": authors_list,
+            "installed": repo.get("installed", False),
+            "installed_version": repo.get("installed_version")
+            if repo.get("installed")
+            else None,
+            "available_version": repo.get("available_version"),
+        }
+        if query_lower:
+            entry["score"] = score
+        if repo.get("installed"):
+            entry["pending_update"] = repo.get("pending_upgrade", False)
+            entry["domain"] = repo.get("domain")
+        matches.append(entry)
+
+    # Sort by score (descending) when searching, by name when listing
+    if query_lower:
+        matches.sort(key=lambda x: x.get("score", 0), reverse=True)
+    else:
+        matches.sort(key=lambda x: (x.get("name") or "").lower())
+
+    return matches
+
+
+async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> str:
+    """Resolve a GitHub path (owner/repo) to a HACS numeric repository ID.
+
+    If repository_id is already numeric, returns it as-is.
+    """
+    if "/" not in repository_id:
+        return repository_id
+
+    list_response = await ws_client.send_command("hacs/repositories/list")
+    if list_response.get("success"):
+        repos = list_response.get("result", [])
+        for repo in repos:
+            if repo.get("full_name", "").lower() == repository_id.lower():
+                return str(repo.get("id"))
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"Repository '{repository_id}' not found in HACS",
+            suggestions=[
+                "Use ha_hacs_search() to find the repository",
+                "Check the repository name is correct (case-insensitive)",
+                "The repository may need to be added to HACS first",
+            ],
+        )
+    )
+    return repository_id  # unreachable, but satisfies type checker

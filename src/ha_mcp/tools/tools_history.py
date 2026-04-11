@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
@@ -23,6 +24,7 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    register_tool_methods,
 )
 from .util_helpers import (
     add_timezone_metadata,
@@ -105,15 +107,19 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
 # Source-dependent default look-back periods
 _DEFAULT_START_HOURS_BY_SOURCE: dict[str, int] = {"history": 24, "statistics": 30 * 24}
 
+# Default and maximum limits for history entries
+_DEFAULT_HISTORY_LIMIT = 100
+_MAX_HISTORY_LIMIT = 1000
 
-def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register historical data access tools with the MCP server."""
 
-    # Default and maximum limits for history entries
-    DEFAULT_HISTORY_LIMIT = 100
-    MAX_HISTORY_LIMIT = 1000
+class HistoryTools:
+    """Historical data access tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_history",
         tags={"History & Statistics"},
         annotations={
             "idempotentHint": True,
@@ -123,6 +129,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_history(
+        self,
         entity_ids: Annotated[
             str | list[str],
             Field(
@@ -214,13 +221,13 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Computing period averages ("Average living room temperature over 6 months?")
         - Entities must have state_class (measurement, total, total_increasing)
 
-        **Example — history (default):**
+        **Example -- history (default):**
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
         ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
         ```
 
-        **Example — statistics:**
+        **Example -- statistics:**
         ```python
         ha_get_history(source="statistics", entity_ids="sensor.total_energy_kwh", start_time="30d", period="day")
         ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature",
@@ -228,67 +235,18 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ```
         """
         try:
-            # Parse entity_ids - handle string, list, or comma-separated
-            if isinstance(entity_ids, str):
-                if entity_ids.startswith("["):
-                    # JSON array string
-                    parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
-                    if parsed_ids is None:
-                        raise_tool_error(create_error_response(
-                            ErrorCode.VALIDATION_MISSING_PARAMETER,
-                            "entity_ids is required",
-                            suggestions=["Provide at least one entity ID"],
-                        ))
-                    entity_id_list = parsed_ids
-                elif "," in entity_ids:
-                    # Comma-separated string
-                    entity_id_list = [e.strip() for e in entity_ids.split(",") if e.strip()]
-                else:
-                    # Single entity ID
-                    entity_id_list = [entity_ids.strip()]
-            else:
-                entity_id_list = entity_ids
-
-            if not entity_id_list:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "entity_ids is required",
-                    suggestions=["Provide at least one entity ID"],
-                ))
+            # Parse entity_ids
+            entity_id_list = _parse_entity_ids(entity_ids)
 
             # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
 
             # Parse time parameters
-            try:
-                start_dt = parse_relative_time(start_time, default_hours=default_hours)
-            except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    context={"parameter": "start_time"},
-                    suggestions=[
-                        "Use ISO format: '2025-01-25T00:00:00Z'",
-                        "Use relative format: '24h', '7d', '2w', '1m'",
-                    ],
-                ))
-
-            if end_time:
-                try:
-                    end_dt = parse_relative_time(end_time, default_hours=0)
-                except ValueError as e:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(e),
-                        context={"parameter": "end_time"},
-                        suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
-                    ))
-            else:
-                end_dt = datetime.now(UTC)
+            start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
 
             # Connect to WebSocket (shared by both sources)
             ws_client, error = await get_connected_ws_client(
-                client.base_url, client.token
+                self._client.base_url, self._client.token
             )
             if error or ws_client is None:
                 raise_tool_error(error or create_error_response(
@@ -299,15 +257,15 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 if source == "statistics":
                     return await _fetch_statistics(
-                        ws_client, client, entity_id_list,
+                        ws_client, self._client, entity_id_list,
                         start_dt, end_dt, period, statistic_types,
                     )
                 else:
                     return await _fetch_history(
-                        ws_client, client, entity_id_list,
+                        ws_client, self._client, entity_id_list,
                         start_dt, end_dt, minimal_response,
                         significant_changes_only, limit,
-                        DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
+                        _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
                     )
             finally:
                 if ws_client:
@@ -331,6 +289,72 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e, suggestions=suggestions)
 
 
+def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register historical data access tools with the MCP server."""
+    register_tool_methods(mcp, HistoryTools(client))
+
+
+def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
+    """Parse entity_ids parameter into a list of strings."""
+    if isinstance(entity_ids, str):
+        if entity_ids.startswith("["):
+            parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
+            if parsed_ids is None:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=["Provide at least one entity ID"],
+                ))
+            return parsed_ids
+        elif "," in entity_ids:
+            return [e.strip() for e in entity_ids.split(",") if e.strip()]
+        else:
+            return [entity_ids.strip()]
+    if not entity_ids:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_MISSING_PARAMETER,
+            "entity_ids is required",
+            suggestions=["Provide at least one entity ID"],
+        ))
+
+    return entity_ids
+
+
+def _parse_time_range(
+    start_time: str | None,
+    end_time: str | None,
+    default_hours: int,
+) -> tuple[datetime, datetime]:
+    """Parse start_time and end_time into datetime objects."""
+    try:
+        start_dt = parse_relative_time(start_time, default_hours=default_hours)
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "start_time"},
+            suggestions=[
+                "Use ISO format: '2025-01-25T00:00:00Z'",
+                "Use relative format: '24h', '7d', '2w', '1m'",
+            ],
+        ))
+
+    if end_time:
+        try:
+            end_dt = parse_relative_time(end_time, default_hours=0)
+        except ValueError as e:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "end_time"},
+                suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
+            ))
+    else:
+        end_dt = datetime.now(UTC)
+
+    return start_dt, end_dt
+
+
 async def _fetch_history(
     ws_client: Any,
     client: Any,
@@ -351,9 +375,7 @@ async def _fetch_history(
             default=default_limit,
             min_value=1,
             max_value=max_limit,
-        )
-        if effective_limit is None:
-            effective_limit = default_limit
+        ) or default_limit
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
