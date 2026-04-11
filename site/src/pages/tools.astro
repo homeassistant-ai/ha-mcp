@@ -286,18 +286,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
 </Layout>
 
 <script>
-  const searchInput = document.getElementById('search') as HTMLInputElement;
+  function getEl<T extends HTMLElement>(id: string): T {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`[tools] Missing element #${id}`);
+    return el as T;
+  }
+
+  const searchInput = getEl<HTMLInputElement>('search');
   const toolCards = document.querySelectorAll<HTMLElement>('.tool-card');
-  const container = document.getElementById('tools-container')!;
+  const container = getEl<HTMLElement>('tools-container');
   const filterBtns = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
   const sizeFilterBtns = document.querySelectorAll<HTMLButtonElement>('.size-filter-btn');
-  const resultsCount = document.getElementById('results-count')!;
-  const groupCategoryBtn = document.getElementById('group-category')!;
-  const groupFileBtn = document.getElementById('group-file')!;
-  const groupNoneBtn = document.getElementById('group-none')!;
-  const sortAlphaBtn = document.getElementById('sort-alpha')!;
-  const sortSizeBtn = document.getElementById('sort-size')!;
-  const expandAllBtn = document.getElementById('expand-all')!;
+  const resultsCount = getEl<HTMLElement>('results-count');
+  const groupCategoryBtn = getEl<HTMLElement>('group-category');
+  const groupFileBtn = getEl<HTMLElement>('group-file');
+  const groupNoneBtn = getEl<HTMLElement>('group-none');
+  const sortAlphaBtn = getEl<HTMLElement>('sort-alpha');
+  const sortSizeBtn = getEl<HTMLElement>('sort-size');
+  const expandAllBtn = getEl<HTMLElement>('expand-all');
 
   let activeFilter = 'all';
   let activeSizeFilter = 'all';
@@ -312,13 +318,13 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   // ── Design Mode ──────────────────────────────────────────────────────
 
-  const designToggleBtn = document.getElementById('design-mode-toggle') as HTMLButtonElement;
-  const designPanel = document.getElementById('design-panel')!;
-  const designPrompt = document.getElementById('design-prompt') as HTMLTextAreaElement;
-  const designCopyBtn = document.getElementById('design-copy-btn')!;
-  const designChangeCount = document.getElementById('design-change-count')!;
-  const designInstructionsToggle = document.getElementById('design-instructions-toggle')!;
-  const designInstructionsBody = document.getElementById('design-instructions-body')!;
+  const designToggleBtn = getEl<HTMLButtonElement>('design-mode-toggle');
+  const designPanel = getEl<HTMLElement>('design-panel');
+  const designPrompt = getEl<HTMLTextAreaElement>('design-prompt');
+  const designCopyBtn = getEl<HTMLElement>('design-copy-btn');
+  const designChangeCount = getEl<HTMLElement>('design-change-count');
+  const designInstructionsToggle = getEl<HTMLElement>('design-instructions-toggle');
+  const designInstructionsBody = getEl<HTMLElement>('design-instructions-body');
   const designOnlyEls = document.querySelectorAll<HTMLElement>('.design-only');
 
   let designMode = false;
