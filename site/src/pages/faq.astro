@@ -28,6 +28,7 @@ const withBase = (path: string) => {
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
@@ -246,6 +247,19 @@ source ~/.zshrc
             <li>If "Home Assistant" is not listed, check your config file syntax</li>
             <li>Try asking Claude: "Can you list your available tools?"</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="webhook-proxy">
+          <h3 class="text-lg font-medium text-white mb-2">Can't connect remotely? Try the Webhook Proxy add-on</h3>
+          <p class="text-slate-300 mb-3">If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the <strong>Webhook Proxy add-on</strong> may be a simpler alternative.</p>
+          <p class="text-slate-300 mb-3">Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have <strong>Nabu Casa</strong> or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.</p>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside mb-3">
+            <li>Install the <strong>MCP Server add-on</strong> and the <strong>Webhook Proxy add-on</strong> from the add-on store</li>
+            <li>Start the webhook proxy and restart Home Assistant when prompted</li>
+            <li>Copy the webhook URL from the add-on logs</li>
+            <li>Use that URL in your MCP client configuration</li>
+          </ol>
+          <p class="text-slate-400 text-sm">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/784" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#784</a> for an example where this resolved a TLS connection issue.</p>
         </div>
 
         <div class="faq-item">
