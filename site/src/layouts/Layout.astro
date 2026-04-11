@@ -57,7 +57,8 @@ const { title } = Astro.props;
             btn.setAttribute('aria-label', 'Copy to clipboard');
             btn.innerHTML = copyIcon;
             btn.addEventListener('click', async () => {
-              const text = (pre.querySelector('code') || pre).textContent?.trim() ?? '';
+              const raw = (pre.querySelector('code') || pre).textContent?.trim() ?? '';
+              const text = raw.replace(/^[\$>]\s/gm, '');
               try {
                 await copyText(text);
                 btn.innerHTML = checkIcon;
