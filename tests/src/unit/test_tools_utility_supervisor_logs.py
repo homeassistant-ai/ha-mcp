@@ -80,10 +80,16 @@ class TestGetAddonLogs:
 
     @pytest.mark.asyncio
     async def test_raises_api_error_on_404_with_slug_context(self, mock_client):
-        """404 (unknown slug) raises HomeAssistantAPIError with status 404 and body."""
+        """404 (unknown slug) raises HomeAssistantAPIError with status 404 and body.
+
+        The Supervisor-proxied endpoint returns `text/plain` error bodies, not
+        JSON, so `response.json()` raises and the error message falls back to
+        `response.text`. Mirror that here.
+        """
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_response.text = "Addon is not installed"
+        mock_response.json = MagicMock(side_effect=ValueError("not json"))
         mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:

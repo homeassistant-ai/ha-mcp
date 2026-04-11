@@ -97,9 +97,53 @@ class HomeAssistantClient:
         await self.httpx_client.aclose()
         logger.debug("Closed Home Assistant client")
 
+    async def _raw_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Authenticated request that returns the raw httpx.Response.
+
+        Handles auth, HTTP 4xx/5xx, and transport errors in one place.
+        Callers parse the body themselves (JSON via `_request`, text via
+        `get_addon_logs`, etc.).
+
+        Raises:
+            HomeAssistantAuthError: 401 response.
+            HomeAssistantAPIError: Non-2xx response (with status_code and
+                response_data set from JSON body when possible).
+            HomeAssistantConnectionError: Network, timeout, or transport error.
+        """
+        try:
+            response = await self.httpx_client.request(method, endpoint, **kwargs)
+
+            if response.status_code == 401:
+                raise HomeAssistantAuthError("Invalid authentication token")
+
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                except Exception:
+                    error_data = {"message": response.text}
+
+                raise HomeAssistantAPIError(
+                    f"API error: {response.status_code} - {error_data.get('message', 'Unknown error')}",
+                    status_code=response.status_code,
+                    response_data=error_data,
+                )
+
+            return response
+
+        except httpx.ConnectError as e:
+            raise HomeAssistantConnectionError(
+                f"Failed to connect to Home Assistant: {e}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
+        except httpx.HTTPError as e:
+            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+
     async def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
         """
-        Make authenticated request to Home Assistant API.
+        Make authenticated request to Home Assistant API and parse JSON body.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -114,42 +158,13 @@ class HomeAssistantClient:
             HomeAssistantAuthError: Authentication failed
             HomeAssistantAPIError: API error
         """
+        response = await self._raw_request(method, endpoint, **kwargs)
         try:
-            response = await self.httpx_client.request(method, endpoint, **kwargs)
-
-            # Handle authentication errors
-            if response.status_code == 401:
-                raise HomeAssistantAuthError("Invalid authentication token")
-
-            # Handle other HTTP errors
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                except Exception:
-                    error_data = {"message": response.text}
-
-                raise HomeAssistantAPIError(
-                    f"API error: {response.status_code} - {error_data.get('message', 'Unknown error')}",
-                    status_code=response.status_code,
-                    response_data=error_data,
-                )
-
-            # Parse JSON response
-            try:
-                result: dict[str, Any] = response.json()
-                return result
-            except json.JSONDecodeError:
-                # Some endpoints return empty responses
-                return {}
-
-        except httpx.ConnectError as e:
-            raise HomeAssistantConnectionError(
-                f"Failed to connect to Home Assistant: {e}"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
-        except httpx.HTTPError as e:
-            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+            result: dict[str, Any] = response.json()
+            return result
+        except json.JSONDecodeError:
+            # Some endpoints return empty responses
+            return {}
 
     async def get_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
@@ -383,35 +398,12 @@ class HomeAssistantClient:
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
         logger.debug(f"Fetching addon logs for slug={slug}")
-        endpoint = f"/hassio/addons/{slug}/logs"
-        try:
-            response = await self.httpx_client.request(
-                "GET",
-                endpoint,
-                headers={"Accept": "text/plain"},
-            )
-
-            if response.status_code == 401:
-                raise HomeAssistantAuthError("Invalid authentication token")
-
-            if response.status_code >= 400:
-                body = response.text[:500] if response.text else ""
-                raise HomeAssistantAPIError(
-                    f"Addon log request failed: {response.status_code} - {body}",
-                    status_code=response.status_code,
-                    response_data={"message": body},
-                )
-
-            return response.text
-
-        except httpx.ConnectError as e:
-            raise HomeAssistantConnectionError(
-                f"Failed to connect to Home Assistant: {e}"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
-        except httpx.HTTPError as e:
-            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+        response = await self._raw_request(
+            "GET",
+            f"/hassio/addons/{slug}/logs",
+            headers={"Accept": "text/plain"},
+        )
+        return response.text
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """
