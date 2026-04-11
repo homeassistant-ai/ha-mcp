@@ -272,8 +272,9 @@ class TestYamlConfigValidation:
         assert inner.get("success") is False, (
             f"Missing justification should fail: {data}"
         )
-        error_text = (inner.get("error") or "").lower()
-        assert "justification" in error_text, (
+        # create_error_response returns a nested dict under "error"; match
+        # against the stringified response instead of assuming a flat shape.
+        assert "justification" in str(data).lower(), (
             f"Error should mention justification: {data}"
         )
         logger.info("Correctly rejected missing justification")

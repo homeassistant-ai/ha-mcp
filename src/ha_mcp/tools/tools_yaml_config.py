@@ -59,10 +59,10 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
                     "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify', 'utility_meter'). "
+                    "'rest', 'shell_command', 'notify'). "
                     "STOP before using this for 'template' — the Template "
                     "config-flow helper (ha_set_config_entry_helper with "
-                    "domain='template') supports state AND trigger-based template "
+                    "helper_type='template') supports state AND trigger-based template "
                     "sensors since HA 2024.x and is the correct path. Do NOT use "
                     "this tool for automations, scripts, scenes, or input_* "
                     "helpers — they have dedicated tools "
@@ -126,13 +126,13 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """ESCAPE HATCH — raw YAML edit. Use only when NO dedicated tool fits.
+        """Update raw YAML configuration (Escape Hatch) — use only when NO dedicated tool fits.
 
         This tool is the WRONG answer for almost everything. Before calling it,
         confirm that NONE of these apply:
 
         - Template sensors (state-based OR trigger-based) ->
-          ha_set_config_entry_helper with domain='template'. The Template
+          ha_set_config_entry_helper with helper_type='template'. The Template
           config-flow helper supports triggers, availability, attributes, device
           class, unit of measurement, and state templates since HA 2024.x. It is
           the correct path even for complex trigger-based sensors. Do NOT edit
@@ -143,8 +143,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Input helpers (input_boolean, input_number, input_text, input_select,
           input_datetime, input_button, counter, timer, schedule) ->
           ha_config_set_helper
-        - Groups, min/max, threshold, derivative, statistics, utility_meter
-          entities that can be created as helpers -> ha_config_set_helper
+        - Groups, min/max, threshold, derivative, statistics, utility_meter,
+          trend, filter, switch_as_x, and other config-flow helpers ->
+          ha_set_config_entry_helper
 
         This tool is intended for YAML-only integrations that have no config-flow
         or API equivalent: command_line sensors, REST sensors defined in
@@ -199,7 +200,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "Explain why no dedicated tool can accomplish this "
                             "task (Template sensors -> "
                             "ha_set_config_entry_helper with "
-                            "domain='template'; automations -> "
+                            "helper_type='template'; automations -> "
                             "ha_config_set_automation; scripts -> "
                             "ha_config_set_script; helpers -> "
                             "ha_config_set_helper)",
