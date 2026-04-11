@@ -37,7 +37,9 @@ def generate_secret_path() -> str:
 
 
 _SECRET_PATH_RE = re.compile(r"^/(?!.*://)\S{7,}$")
-_SECRET_PATH_HINT = "Path must start with '/', contain no '://', and be at least 8 characters."
+_SECRET_PATH_HINT = (
+    "Path must start with '/', contain no '://', and be at least 8 characters."
+)
 
 
 def _is_valid_secret_path(path: str) -> bool:
@@ -63,7 +65,9 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         if not path.startswith("/"):
             path = "/" + path
         if not _is_valid_secret_path(path):
-            log_error(f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}")
+            log_error(
+                f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}"
+            )
         else:
             log_info("Using custom secret path from configuration")
             # Update stored path for consistency
@@ -78,7 +82,9 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
                 log_info("Using existing auto-generated secret path")
                 return stored_path
             elif stored_path:
-                log_error(f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}")
+                log_error(
+                    f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}"
+                )
             else:
                 log_error("Stored secret path is empty, regenerating")
         except Exception as e:
@@ -97,6 +103,61 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
+SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
+
+
+def migrate_skills_as_tools_default(
+    data_dir: Path,
+    config_file: Path,
+    stored_value: bool,
+) -> bool:
+    """One-time migration to force enable_skills_as_tools=true for existing users.
+
+    Commit 7e3f5c1 set enable_skills_as_tools=true by default, but a later
+    config refactor accidentally reverted it to false. This runs exactly once
+    per install (guarded by a marker file in /data) and forces the flag on for
+    users who still have false stored, then persists the new value to
+    options.json so the supervisor UI reflects it. On subsequent boots the
+    marker is present and the stored value is respected — users who
+    deliberately toggle it off will not be re-forced.
+    """
+    marker = data_dir / SKILLS_AS_TOOLS_MIGRATION_MARKER
+    if marker.exists():
+        return stored_value
+
+    # First run after this update. Create the marker unconditionally so the
+    # migration never loops, then force-on + persist only if the user is
+    # currently on false.
+    if not stored_value:
+        log_info(
+            "One-time migration: forcing enable_skills_as_tools=true. "
+            "Earlier add-on versions shipped this as the default but a "
+            "config refactor accidentally reverted it. Future user-initiated "
+            "changes to this setting will be respected."
+        )
+        if config_file.exists():
+            try:
+                with open(config_file) as f:
+                    opts = json.load(f)
+                opts["enable_skills_as_tools"] = True
+                with open(config_file, "w") as f:
+                    json.dump(opts, f, indent=2)
+                log_info("Persisted enable_skills_as_tools=true to options.json")
+            except Exception as e:
+                log_error(
+                    f"Failed to persist migration to options.json: {e}. "
+                    "Runtime override still applied for this session."
+                )
+        stored_value = True
+
+    try:
+        marker.touch()
+    except Exception as e:
+        log_error(f"Failed to create migration marker: {e}")
+
+    return stored_value
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -107,7 +168,7 @@ def main() -> int:
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
-    enable_skills_as_tools = False  # default
+    enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
 
@@ -119,14 +180,28 @@ def main() -> int:
             custom_secret_path = config.get("secret_path", "")
             raw_skills = config.get("enable_skills", True)
             enable_skills = raw_skills if isinstance(raw_skills, bool) else True
-            raw_skills_as_tools = config.get("enable_skills_as_tools", False)
-            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
+            raw_skills_as_tools = config.get("enable_skills_as_tools", True)
+            enable_skills_as_tools = (
+                raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
+            )
             raw_tool_search = config.get("enable_tool_search", False)
-            enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
+            enable_tool_search = (
+                raw_tool_search if isinstance(raw_tool_search, bool) else False
+            )
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
-            enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            enable_yaml_config_editing = (
+                raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            )
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
+
+    # One-time migration for existing users whose stored value is still
+    # False from the accidental refactor revert. See 7e3f5c1.
+    enable_skills_as_tools = migrate_skills_as_tools_default(
+        data_dir=data_dir,
+        config_file=config_file,
+        stored_value=enable_skills_as_tools,
+    )
 
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
@@ -168,6 +243,7 @@ def main() -> int:
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging
+
     logging.basicConfig(level=logging.INFO)
 
     # Import and register browser landing before server start
@@ -206,7 +282,9 @@ def main() -> int:
         cause = e.__cause__ or e.__context__
         if cause:
             log_error(f"Caused by: {cause}")
-            traceback.print_exception(type(cause), cause, cause.__traceback__, file=sys.stderr)
+            traceback.print_exception(
+                type(cause), cause, cause.__traceback__, file=sys.stderr
+            )
         if isinstance(e, SystemExit):
             return int(e.code) if isinstance(e.code, int) else 1
         return 1

@@ -76,13 +76,139 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
-        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False    # too short
+        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
+        assert (
+            self.addon._is_valid_secret_path("/custom") is False
+        )  # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False  # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
         assert self.addon._is_valid_secret_path("") is False
+
+
+class TestSkillsAsToolsMigration:
+    """Unit tests for one-time enable_skills_as_tools default migration.
+
+    Background: commit 7e3f5c1 set enable_skills_as_tools to True by default,
+    but a later config refactor accidentally reverted it to False. This
+    migration flips it back on once for existing users who have False stored,
+    then respects their choice on subsequent boots.
+    """
+
+    MARKER_NAME = ".skills_as_tools_default_migration_v1"
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def _make_options(self, tmp_path, value):
+        """Write an options.json with enable_skills_as_tools=value."""
+        config_file = tmp_path / "options.json"
+        with open(config_file, "w") as f:
+            json.dump({"enable_skills_as_tools": value}, f)
+        return config_file
+
+    def test_migration_flips_stored_false_and_persists(self, tmp_path):
+        """First boot after update: stored False gets forced to True and
+        persisted to options.json so the UI reflects the new value."""
+        config_file = self._make_options(tmp_path, False)
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+        )
+
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+        with open(config_file) as f:
+            assert json.load(f)["enable_skills_as_tools"] is True
+
+    def test_migration_respects_marker_when_exists(self, tmp_path):
+        """After migration has run, respect the user's stored value even if
+        it is False (user deliberately toggled it off)."""
+        config_file = self._make_options(tmp_path, False)
+        (tmp_path / self.MARKER_NAME).touch()
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+        )
+
+        assert result is False
+        # Marker should still exist; options.json untouched.
+        assert (tmp_path / self.MARKER_NAME).exists()
+        with open(config_file) as f:
+            assert json.load(f)["enable_skills_as_tools"] is False
+
+    def test_migration_creates_marker_when_stored_true(self, tmp_path):
+        """First boot, stored already True: no persistence needed, but the
+        marker must still be created so a future user-initiated False is
+        respected."""
+        config_file = self._make_options(tmp_path, True)
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=True,
+        )
+
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+
+    def test_migration_survives_missing_options_json(self, tmp_path):
+        """If options.json does not exist, the migration still applies the
+        runtime override and creates the marker — no crash."""
+        config_file = tmp_path / "options.json"  # Does not exist
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+        )
+
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+
+    def test_migration_survives_options_json_write_failure(self, tmp_path, monkeypatch):
+        """If persisting to options.json fails (e.g., read-only filesystem),
+        the runtime override is still applied and the marker is still
+        created so the migration does not loop forever."""
+        config_file = self._make_options(tmp_path, False)
+
+        real_open = open
+
+        def failing_open(path, mode="r", *args, **kwargs):
+            if str(path).endswith("options.json") and "w" in mode:
+                raise OSError("Simulated read-only filesystem")
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", failing_open)
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+        )
+
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+
+    def test_migration_respects_marker_with_stored_true(self, tmp_path):
+        """Marker exists, stored True: respect stored, no rewrite."""
+        config_file = self._make_options(tmp_path, True)
+        (tmp_path / self.MARKER_NAME).touch()
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=True,
+        )
+
+        assert result is True
+
 
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"
@@ -92,11 +218,16 @@ def _build_addon_image():
     """Build the addon test image via docker CLI (supports BuildKit)."""
     result = subprocess.run(
         [
-            "docker", "build",
-            "-t", IMAGE_TAG,
-            "-f", DOCKERFILE,
-            "--build-arg", "BUILD_VERSION=1.0.0-test",
-            "--build-arg", "BUILD_ARCH=amd64",
+            "docker",
+            "build",
+            "-t",
+            IMAGE_TAG,
+            "-f",
+            DOCKERFILE,
+            "--build-arg",
+            "BUILD_VERSION=1.0.0-test",
+            "--build-arg",
+            "BUILD_ARCH=amd64",
             ".",
         ],
         capture_output=True,
@@ -160,7 +291,10 @@ class TestAddonStartup:
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
             assert "Secret Path: /private_" in logs
-            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
+            assert (
+                "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!"
+                in logs
+            )
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -209,7 +343,10 @@ class TestAddonStartup:
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
-            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
+            assert (
+                "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
+                in logs
+            )
             assert "Secret Path: /my_custom_secret" in logs
 
         finally:
