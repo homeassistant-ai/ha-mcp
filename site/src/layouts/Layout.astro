@@ -67,7 +67,10 @@ const { title } = Astro.props;
                   btn.innerHTML = copyIcon;
                   btn.setAttribute('aria-label', 'Copy to clipboard');
                 }, 1500);
-              } catch { /* clipboard write failed, no feedback */ }
+              } catch {
+                btn.setAttribute('aria-label', 'Copy failed');
+                setTimeout(() => btn.setAttribute('aria-label', 'Copy to clipboard'), 2000);
+              }
             });
             wrapper.appendChild(btn);
           });

@@ -406,7 +406,10 @@ function getBadgeInfo(annotations: Record<string, any>) {
       }
       designCopyBtn.textContent = 'Copied!';
       setTimeout(() => { designCopyBtn.textContent = 'Copy'; }, 1500);
-    } catch { /* clipboard write failed */ }
+    } catch {
+      designCopyBtn.textContent = 'Copy failed';
+      setTimeout(() => { designCopyBtn.textContent = 'Copy'; }, 2000);
+    }
   });
 
   // Listen for textarea input on desc-edit

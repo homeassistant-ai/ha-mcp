@@ -392,8 +392,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </button>
           <button data-proxy="webhook-proxy" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-2xl">🏠</span>
-              <span class="complexity-badge" data-complexity="quick">⚡ Quick</span>
+              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">Nabu Casa / Webhook Proxy</h3>
             <p class="text-sm text-slate-400">Uses existing HA reverse proxy</p>
@@ -1181,7 +1181,7 @@ cloudflared tunnel run ha-mcp</code></pre>
         </div>`;
       } else if (state.proxy === 'webhook-proxy') {
         proxyInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">🏠 Webhook Proxy Add-on</h4>
+          <h4 class="instruction-title">Webhook Proxy Add-on</h4>
           <p class="text-slate-300 mb-3">The Webhook Proxy add-on routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li><strong>Install the MCP Server add-on</strong> first (if not already installed):
@@ -1197,7 +1197,7 @@ cloudflared tunnel run ha-mcp</code></pre>
             </li>
           </ol>
           <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
-            <p class="text-blue-300 text-sm font-medium">💡 When to use this method</p>
+            <p class="text-blue-300 text-sm font-medium">When to use this method</p>
             <p class="text-blue-200/80 text-xs mt-1">If you already have <strong>Nabu Casa</strong> or another reverse proxy pointing at your Home Assistant instance, the Webhook Proxy is the simplest remote setup — no Cloudflare account, no tunnel configuration, no extra ports.</p>
           </div>
           <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">

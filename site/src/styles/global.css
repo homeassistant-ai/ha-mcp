@@ -39,6 +39,10 @@ code {
   font-family: 'Fira Code', 'Menlo', 'Monaco', 'Lucida Console', monospace;
 }
 
+.code-block {
+  @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-brand;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
