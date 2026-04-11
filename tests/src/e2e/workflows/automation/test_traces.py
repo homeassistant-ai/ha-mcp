@@ -6,10 +6,9 @@ Verifies that ha_get_automation_traces returns non-empty traces after automation
 """
 
 import logging
+from typing import Any
 
 import pytest
-
-from typing import Any
 
 from ...utilities.assertions import (
     assert_mcp_success,
