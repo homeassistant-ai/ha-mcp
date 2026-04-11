@@ -592,7 +592,8 @@ def _check_ws_error(result: Any) -> str | None:
     if isinstance(result, dict) and not result.get("success", True):
         error = result.get("error", {})
         if isinstance(error, dict):
-            return error.get("message", str(error))
+            msg: str = error.get("message", str(error))
+            return msg
         return str(error)
     return None
 
