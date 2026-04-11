@@ -746,7 +746,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        limit: int = 5,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=5,
+                description="Maximum total results to return (default: 5)",
+            ),
+        ] = 5,
         offset: Annotated[
             int | str,
             Field(
