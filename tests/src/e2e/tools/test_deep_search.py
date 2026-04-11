@@ -360,6 +360,7 @@ async def test_deep_search_no_results(mcp_client):
     logger.info("✅ Correctly returned empty results for non-matching query")
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "limit,description",
     [
