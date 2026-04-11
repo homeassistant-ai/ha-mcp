@@ -112,7 +112,6 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
 - Missing examples on tools with obvious single-parameter calls
 - Multi-line docstrings that stay focused and on-topic
-- Pre-existing docstrings that use informal language (only flag if the docstring is being modified in the PR)
 
 1. **Async/await**: Use consistently for I/O operations
 2. **Type hints**: Required for all function signatures
