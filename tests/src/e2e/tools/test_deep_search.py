@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import assert_mcp_success, safe_call_tool
 from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
