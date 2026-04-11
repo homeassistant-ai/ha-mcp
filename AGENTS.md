@@ -441,8 +441,8 @@ class DomainTools:
         # Add to the docstring above only when genuinely needed:
         # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # Constraints/warnings: use RFC 2119 terms (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY)
-        #   e.g., destructive side-effects, non-obvious gotchas, tool routing
+        # When NOT to use: route to preferred alternatives
+        # Caveats: destructive side-effects, non-obvious gotchas
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
 
 def register_<domain>_tools(mcp, client, **kwargs):
@@ -465,14 +465,21 @@ Example: `ha_search_entities` hints at `ha_get_state`.
 **Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
 Omit when a single required parameter makes the call self-evident.
 
-**Use RFC 2119 terms** (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY) for constraints,
-restrictions, and warnings in tool docstrings and parameter descriptions. These terms
-are unambiguous and [well-understood by LLM agents](https://aws.amazon.com/blogs/opensource/introducing-strands-agent-sops-natural-language-workflows-for-ai-agents/).
-Avoid informal alternatives like "IMPORTANT:", "Prefer:", "Only use when", "STOP",
-"NOTE", "WARNING", or "escape hatch". Examples:
-- `MUST NOT be used for template sensors — use ha_set_config_entry_helper instead.`
-- `SHOULD be followed by ha_reload_core when modifying YAML-only integrations.`
-- `Callers MUST confirm with the user before deleting.`
+**For multi-line docstrings, follow this structure** (based on
+[Anthropic's tool design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents)):
+1. What the tool does (required first sentence, action verb)
+2. When NOT to use it — name the preferred alternatives
+3. When to use it — valid use cases
+4. Caveats — consequences, post-actions, destructive side-effects
+
+Consequence statements are plain prose: "This permanently deletes the dashboard.
+A backup is created before every edit." Route safety concerns through `annotations`
+(`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
+
+**Do not editorialize.** Tool descriptions describe behavior, not opinions about the
+tool. Avoid value judgments ("wrong answer", "escape hatch", "last resort", "dangerous",
+"bad idea"), imperative commands to the reader ("STOP", "DO NOT TOUCH", "THINK BEFORE"),
+and ad-hoc emphasis markers ("IMPORTANT:", "CRITICAL:", all-caps sentences).
 
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
