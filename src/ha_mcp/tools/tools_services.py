@@ -9,19 +9,29 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import build_pagination_metadata, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
 
-def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register service discovery tools with the MCP server."""
+class ServiceDiscoveryTools:
+    """Service discovery tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_list_services",
         tags={"Service & Device Control"},
         annotations={
             "idempotentHint": True,
@@ -31,6 +41,7 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_list_services(
+        self,
         domain: str | None = None,
         query: str | None = None,
         limit: Annotated[
@@ -92,10 +103,10 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
 
             # Get services from REST API (includes parameter definitions)
-            rest_services = await client.get_services()
+            rest_services = await self._client.get_services()
 
             # Get translations for service descriptions via WebSocket
-            translations = await _get_service_translations(client)
+            translations = await _get_service_translations(self._client)
 
             # Process and filter services
             result = _process_services(
@@ -122,6 +133,11 @@ def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Try with a specific domain filter",
                 ],
             )
+
+
+def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register service discovery tools with the MCP server."""
+    register_tool_methods(mcp, ServiceDiscoveryTools(client))
 
 
 async def _get_service_translations(client: Any) -> dict[str, Any]:
@@ -217,45 +233,12 @@ def _process_services(
 
         for service_name, service_def in domain_services.items():
             service_key = f"{domain}.{service_name}"
-
-            # Get translations for this service
-            translation_key = f"component.{domain}.services.{service_name}"
-            service_trans = translations.get(translation_key, {})
-
-            # Build service description
-            name = service_trans.get("name", service_name.replace("_", " ").title())
-            description = service_trans.get(
-                "description",
-                service_def.get("description", ""),
+            entry = _build_service_entry(
+                domain, service_name, service_def, translations,
+                query_lower, detail_level,
             )
-
-            # Apply query filter
-            if query_lower:
-                searchable = f"{service_key} {name} {description}".lower()
-                if query_lower not in searchable:
-                    continue
-
-            # Build service entry
-            entry: dict[str, Any] = {
-                "name": name,
-                "description": description,
-                "domain": domain,
-                "service": service_name,
-            }
-
-            # Include full field schemas only in 'full' detail mode
-            if detail_level == "full":
-                entry["fields"] = _process_service_fields(
-                    service_def.get("fields", {}),
-                    service_trans.get("fields", {}),
-                )
-
-            # Add target only if present
-            target = service_def.get("target")
-            if target is not None:
-                entry["target"] = target
-
-            services[service_key] = entry
+            if entry is not None:
+                services[service_key] = entry
 
     # Sort domains alphabetically
     sorted_domains = sorted(domains_seen)
@@ -279,6 +262,52 @@ def _process_services(
             "query": query_filter,
         },
     }
+
+
+def _build_service_entry(
+    domain: str,
+    service_name: str,
+    service_def: dict[str, Any],
+    translations: dict[str, Any],
+    query_lower: str | None,
+    detail_level: Literal["summary", "full"],
+) -> dict[str, Any] | None:
+    """Build a single service entry, returning None if it doesn't match the query."""
+    translation_key = f"component.{domain}.services.{service_name}"
+    service_trans = translations.get(translation_key, {})
+
+    name = service_trans.get("name", service_name.replace("_", " ").title())
+    description = service_trans.get(
+        "description",
+        service_def.get("description", ""),
+    )
+
+    # Apply query filter
+    if query_lower:
+        searchable = f"{domain}.{service_name} {name} {description}".lower()
+        if query_lower not in searchable:
+            return None
+
+    entry: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "domain": domain,
+        "service": service_name,
+    }
+
+    # Include full field schemas only in 'full' detail mode
+    if detail_level == "full":
+        entry["fields"] = _process_service_fields(
+            service_def.get("fields", {}),
+            service_trans.get("fields", {}),
+        )
+
+    # Add target only if present
+    target = service_def.get("target")
+    if target is not None:
+        entry["target"] = target
+
+    return entry
 
 
 def _process_service_fields(
@@ -326,6 +355,24 @@ def _process_service_fields(
     return processed
 
 
+_SIMPLE_SELECTOR_TYPES: dict[str, str] = {
+    "boolean": "boolean",
+    "text": "text",
+    "target": "target (entity/area/device)",
+    "time": "time",
+    "date": "date",
+    "datetime": "datetime",
+    "color_temp": "color_temp_kelvin",
+    "color_temp_kelvin": "color_temp_kelvin",
+    "color_rgb": "color_rgb",
+    "object": "object",
+    "template": "template",
+    "area": "area",
+    "device": "device",
+    "duration": "duration",
+}
+
+
 def _get_field_type(selector: dict[str, Any]) -> str:
     """
     Determine field type from selector definition.
@@ -339,73 +386,17 @@ def _get_field_type(selector: dict[str, Any]) -> str:
     if not selector:
         return "any"
 
-    # Check for common selector types
+    for key, type_name in _SIMPLE_SELECTOR_TYPES.items():
+        if key in selector:
+            return type_name
     if "number" in selector:
-        num_sel = selector["number"]
-        if isinstance(num_sel, dict) and "min" in num_sel and "max" in num_sel:
-            return f"number ({num_sel['min']}-{num_sel['max']})"
-        return "number"
-
-    if "boolean" in selector:
-        return "boolean"
-
-    if "text" in selector:
-        return "text"
+        return _get_number_type(selector["number"])
 
     if "select" in selector:
-        select_sel = selector["select"]
-        if isinstance(select_sel, dict):
-            options = select_sel.get("options", [])
-            if options and len(options) <= 5:
-                # Show options inline for small lists
-                option_values = [
-                    opt.get("value", opt) if isinstance(opt, dict) else opt
-                    for opt in options
-                ]
-                return f"select ({', '.join(str(v) for v in option_values)})"
-        return "select"
+        return _get_select_type(selector["select"])
 
     if "entity" in selector:
-        entity_sel = selector["entity"]
-        if isinstance(entity_sel, dict) and "domain" in entity_sel:
-            domains = entity_sel["domain"]
-            if isinstance(domains, list):
-                return f"entity ({', '.join(domains)})"
-            return f"entity ({domains})"
-        return "entity"
-
-    if "target" in selector:
-        return "target (entity/area/device)"
-
-    if "time" in selector:
-        return "time"
-
-    if "date" in selector:
-        return "date"
-
-    if "datetime" in selector:
-        return "datetime"
-
-    if "color_temp" in selector or "color_temp_kelvin" in selector:
-        return "color_temp_kelvin"
-
-    if "color_rgb" in selector:
-        return "color_rgb"
-
-    if "object" in selector:
-        return "object"
-
-    if "template" in selector:
-        return "template"
-
-    if "area" in selector:
-        return "area"
-
-    if "device" in selector:
-        return "device"
-
-    if "duration" in selector:
-        return "duration"
+        return _get_entity_type(selector["entity"])
 
     # Return the first key as type name
     selector_types = list(selector.keys())
@@ -413,3 +404,33 @@ def _get_field_type(selector: dict[str, Any]) -> str:
         return selector_types[0]
 
     return "any"
+
+
+def _get_number_type(num_sel: Any) -> str:
+    """Format number selector type with optional range."""
+    if isinstance(num_sel, dict) and "min" in num_sel and "max" in num_sel:
+        return f"number ({num_sel['min']}-{num_sel['max']})"
+    return "number"
+
+
+def _get_select_type(select_sel: Any) -> str:
+    """Format select selector type with inline options for small lists."""
+    if isinstance(select_sel, dict):
+        options = select_sel.get("options", [])
+        if options and len(options) <= 5:
+            option_values = [
+                opt.get("value", opt) if isinstance(opt, dict) else opt
+                for opt in options
+            ]
+            return f"select ({', '.join(str(v) for v in option_values)})"
+    return "select"
+
+
+def _get_entity_type(entity_sel: Any) -> str:
+    """Format entity selector type with domain constraint."""
+    if isinstance(entity_sel, dict) and "domain" in entity_sel:
+        domains = entity_sel["domain"]
+        if isinstance(domains, list):
+            return f"entity ({', '.join(domains)})"
+        return f"entity ({domains})"
+    return "entity"

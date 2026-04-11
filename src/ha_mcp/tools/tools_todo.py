@@ -12,23 +12,34 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant todo list management tools."""
+class TodoTools:
+    """Todo/Shopping List management tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_todo",
         tags={"Todo Lists"},
         annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Todo"},
     )
     @log_tool_usage
     async def ha_get_todo(
+        self,
         entity_id: Annotated[
             str | None,
             Field(
@@ -92,7 +103,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # List mode - no entity_id provided
             if entity_id is None:
                 # Get all states and filter by todo domain
-                states = await client.get_states()
+                states = await self._client.get_states()
 
                 todo_lists = []
                 for state in states:
@@ -139,7 +150,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 items = result.get("result", {}).get("items", [])
@@ -191,12 +202,14 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e, context=context or None, suggestions=suggestions
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_set_todo_item",
         tags={"Todo Lists"},
         annotations={"destructiveHint": True, "title": "Set Todo Item"},
     )
     @log_tool_usage
     async def ha_set_todo_item(
+        self,
         entity_id: Annotated[
             str,
             Field(description="Todo list entity ID (e.g., 'todo.shopping_list')"),
@@ -291,141 +304,194 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Route: create mode (no item) vs update mode (item provided)
         if item is None:
-            # --- Create mode ---
-            if rename is not None or status is not None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "rename and status are only valid when updating an existing item (provide 'item' parameter)",
-                        context={"entity_id": entity_id},
-                        suggestions=[
-                            "To create a new item, provide only 'summary' (and optionally 'due_date', 'description')",
-                            "To update an existing item, include the 'item' parameter with the item name",
-                        ],
-                    )
+            return await self._create_item(
+                entity_id, summary, description, due_date, due_datetime, rename, status
+            )
+        return await self._update_item(
+            entity_id, item, rename, status, description, due_date, due_datetime
+        )
+
+    async def _create_item(
+        self,
+        entity_id: str,
+        summary: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+        rename: str | None,
+        status: str | None,
+    ) -> dict[str, Any]:
+        """Create a new todo item after validating create-mode parameters."""
+        if rename is not None or status is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "rename and status are only valid when updating an existing item (provide 'item' parameter)",
+                    context={"entity_id": entity_id},
+                    suggestions=[
+                        "To create a new item, provide only 'summary' (and optionally 'due_date', 'description')",
+                        "To update an existing item, include the 'item' parameter with the item name",
+                    ],
                 )
-            if not summary:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "summary is required when creating a new item (no item parameter provided)",
-                        context={"entity_id": entity_id},
-                        suggestions=["Provide a summary for the new todo item"],
-                    )
+            )
+        if not summary:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "summary is required when creating a new item (no item parameter provided)",
+                    context={"entity_id": entity_id},
+                    suggestions=["Provide a summary for the new todo item"],
                 )
+            )
 
-            try:
-                service_data: dict[str, Any] = {
-                    "entity_id": entity_id,
-                    "item": summary,
-                }
+        try:
+            service_data: dict[str, Any] = {
+                "entity_id": entity_id,
+                "item": summary,
+            }
 
-                if description:
-                    service_data["description"] = description
-                if due_datetime:
-                    service_data["due_datetime"] = due_datetime
-                elif due_date:
-                    service_data["due_date"] = due_date
+            if description:
+                service_data["description"] = description
+            if due_datetime:
+                service_data["due_datetime"] = due_datetime
+            elif due_date:
+                service_data["due_date"] = due_date
 
-                result = await client.call_service("todo", "add_item", service_data)
+            result = await self._client.call_service("todo", "add_item", service_data)
 
-                return {
-                    "success": True,
-                    "entity_id": entity_id,
-                    "item": summary,
+            return {
+                "success": True,
+                "entity_id": entity_id,
+                "item": summary,
+                "description": description,
+                "due_date": due_date,
+                "due_datetime": due_datetime,
+                "result": result,
+                "message": f"Successfully added '{summary}' to {entity_id}",
+            }
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "item": summary},
+                suggestions=[
+                    "Verify the entity_id exists using ha_get_todo()",
+                    "Check if the todo list supports adding items",
+                    "Some todo lists may not support description or due dates",
+                ],
+            )
+
+    async def _update_item(
+        self,
+        entity_id: str,
+        item: str,
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+    ) -> dict[str, Any]:
+        """Update an existing todo item after validating update-mode parameters."""
+        if not any([rename, status, description, due_date, due_datetime]):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
+                    context={"entity_id": entity_id, "item": item},
+                    suggestions=[
+                        "Specify what to update, e.g., status='completed' to mark item done"
+                    ],
+                )
+            )
+
+        try:
+            service_data = self._build_update_service_data(
+                entity_id, item, rename, status, description, due_date, due_datetime
+            )
+            result = await self._client.call_service("todo", "update_item", service_data)
+            update_msg = self._build_update_message(
+                rename, status, description, due_date, due_datetime
+            )
+
+            return {
+                "success": True,
+                "entity_id": entity_id,
+                "item": item,
+                "updates": {
+                    "rename": rename,
+                    "status": status,
                     "description": description,
                     "due_date": due_date,
                     "due_datetime": due_datetime,
-                    "result": result,
-                    "message": f"Successfully added '{summary}' to {entity_id}",
-                }
+                },
+                "result": result,
+                "message": f"Successfully updated '{item}' in {entity_id}: {update_msg}",
+            }
 
-            except ToolError:
-                raise
-            except Exception as e:
-                exception_to_structured_error(
-                    e,
-                    context={"entity_id": entity_id, "item": summary},
-                    suggestions=[
-                        "Verify the entity_id exists using ha_get_todo()",
-                        "Check if the todo list supports adding items",
-                        "Some todo lists may not support description or due dates",
-                    ],
-                )
-        else:
-            # --- Update mode ---
-            if not any([rename, status, description, due_date, due_datetime]):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
-                        context={"entity_id": entity_id, "item": item},
-                        suggestions=[
-                            "Specify what to update, e.g., status='completed' to mark item done"
-                        ],
-                    )
-                )
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id, "item": item},
+                suggestions=[
+                    "Verify the item exists using ha_get_todo()",
+                    "Check if you're using the correct item name or UID",
+                    "Some todo lists may not support all update operations",
+                ],
+            )
 
-            try:
-                service_data = {
-                    "entity_id": entity_id,
-                    "item": item,
-                }
+    @staticmethod
+    def _build_update_service_data(
+        entity_id: str,
+        item: str,
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+    ) -> dict[str, Any]:
+        """Build the service_data dict for a todo update_item call."""
+        service_data: dict[str, Any] = {
+            "entity_id": entity_id,
+            "item": item,
+        }
+        if rename:
+            service_data["rename"] = rename
+        if status:
+            service_data["status"] = status
+        if description:
+            service_data["description"] = description
+        if due_datetime:
+            service_data["due_datetime"] = due_datetime
+        elif due_date:
+            service_data["due_date"] = due_date
+        return service_data
 
-                if rename:
-                    service_data["rename"] = rename
-                if status:
-                    service_data["status"] = status
-                if description:
-                    service_data["description"] = description
-                if due_datetime:
-                    service_data["due_datetime"] = due_datetime
-                elif due_date:
-                    service_data["due_date"] = due_date
+    @staticmethod
+    def _build_update_message(
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+    ) -> str:
+        """Build a human-readable summary of what was updated."""
+        updates: list[str] = []
+        if rename:
+            updates.append(f"renamed to '{rename}'")
+        if status:
+            updates.append(f"status set to '{status}'")
+        if description:
+            updates.append("description updated")
+        if due_date or due_datetime:
+            updates.append("due date updated")
+        return ", ".join(updates) if updates else "updated"
 
-                result = await client.call_service("todo", "update_item", service_data)
-
-                updates = []
-                if rename:
-                    updates.append(f"renamed to '{rename}'")
-                if status:
-                    updates.append(f"status set to '{status}'")
-                if description:
-                    updates.append("description updated")
-                if due_date or due_datetime:
-                    updates.append("due date updated")
-
-                update_msg = ", ".join(updates) if updates else "updated"
-
-                return {
-                    "success": True,
-                    "entity_id": entity_id,
-                    "item": item,
-                    "updates": {
-                        "rename": rename,
-                        "status": status,
-                        "description": description,
-                        "due_date": due_date,
-                        "due_datetime": due_datetime,
-                    },
-                    "result": result,
-                    "message": f"Successfully updated '{item}' in {entity_id}: {update_msg}",
-                }
-
-            except ToolError:
-                raise
-            except Exception as e:
-                exception_to_structured_error(
-                    e,
-                    context={"entity_id": entity_id, "item": item},
-                    suggestions=[
-                        "Verify the item exists using ha_get_todo()",
-                        "Check if you're using the correct item name or UID",
-                        "Some todo lists may not support all update operations",
-                    ],
-                )
-
-    @mcp.tool(
+    @tool(
+        name="ha_remove_todo_item",
         tags={"Todo Lists"},
         annotations={
             "destructiveHint": True,
@@ -435,6 +501,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_remove_todo_item(
+        self,
         entity_id: Annotated[
             str,
             Field(description="Todo list entity ID (e.g., 'todo.shopping_list')"),
@@ -488,7 +555,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
             # Call the service
-            result = await client.call_service("todo", "remove_item", service_data)
+            result = await self._client.call_service("todo", "remove_item", service_data)
 
             return {
                 "success": True,
@@ -510,3 +577,8 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Make sure the item hasn't already been removed",
                 ],
             )
+
+
+def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant todo list management tools."""
+    register_tool_methods(mcp, TodoTools(client))
