@@ -27,7 +27,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import requests
 from testcontainers.core.container import DockerContainer
 
 # Resolve paths relative to repo root
@@ -37,6 +36,7 @@ REPO_ROOT = TESTS_DIR.parent
 
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
 
@@ -78,27 +78,6 @@ def setup_config_directory() -> Path:
     return config_dir
 
 
-def wait_for_ha(url: str, token: str, timeout: int = 120) -> None:
-    """Poll HA until the API is ready."""
-    log(f"Waiting for HA at {url} ...")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            r = requests.get(
-                f"{url}/api/config",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=5,
-            )
-            if r.status_code == 200:
-                version = r.json().get("version", "unknown")
-                log(f"HA ready (version {version})")
-                return
-        except requests.RequestException:
-            pass
-        time.sleep(3)
-    raise TimeoutError(f"HA not ready after {timeout}s")
-
-
 class HAContainer:
     """Context manager for a disposable HA test container."""
 
@@ -122,9 +101,7 @@ class HAContainer:
             port = self.container.get_exposed_port(8123)
             self.url = f"http://localhost:{port}"
             log(f"HA container started on {self.url}")
-            time.sleep(5)  # initial stabilization
-            wait_for_ha(self.url, self.token)
-            time.sleep(10)  # component stabilization
+            wait_for_ha_ready(self.url, self.token, log=log)
         except Exception:
             self.__exit__(None, None, None)
             raise
