@@ -2073,11 +2073,11 @@
           "default": null
         },
         "limit": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=5, description='Maximum total results to return (default: 5)')]",
           "default": 5
         },
         "offset": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         },
         "include_config": {
