@@ -362,23 +362,25 @@ async def test_deep_search_no_results(mcp_client):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "limit,description",
+    "params,description",
     [
-        pytest.param(-1, "negative limit"),
-        pytest.param(0, "zero limit"),
+        pytest.param({"limit": -1}, "negative limit", id="limit_negative"),
+        pytest.param({"limit": 0}, "zero limit", id="limit_zero"),
+        pytest.param({"offset": -1}, "negative offset", id="offset_negative"),
     ],
 )
-async def test_deep_search_invalid_limit_returns_error(mcp_client, limit, description):
-    """Test that ha_deep_search rejects invalid limit values.
+async def test_deep_search_invalid_params_returns_error(mcp_client, params, description):
+    """Test that ha_deep_search rejects invalid limit and offset values.
 
-    A negative or zero limit caused silent data corruption before the fix:
+    Before the fix, invalid values caused silent data corruption:
     limit=-1 dropped the last result (tagged_results[0:-1]), limit=0 returned
-    an empty result with has_more=True, enabling an infinite pagination loop.
+    an empty result with has_more=True enabling an infinite pagination loop,
+    offset=-1 produced has_more=True with next_offset=4 (incorrect pagination state).
     """
     result = await safe_call_tool(
         mcp_client,
         "ha_deep_search",
-        {"query": "light", "limit": limit},
+        {"query": "light", **params},
     )
     assert result["success"] is False, f"Expected failure for {description}, got success=True"
     assert result["error"]["code"] == "VALIDATION_FAILED", (
