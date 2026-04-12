@@ -3,6 +3,7 @@ E2E tests for entity management tools.
 """
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -558,3 +559,56 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
+
+
+@pytest.mark.registry
+class TestSetEntityNegativeInputs:
+    """Negative-input tests for ha_set_entity.
+
+    All cases exercise MCP-layer pre-flight guards — no WebSocket call is made.
+    """
+
+    async def test_set_entity_empty_list_rejected(self, mcp_client: Any) -> None:
+        """Rejects an empty entity_id list before any registry call is made."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": [], "name": "Test"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_bulk_with_single_param_rejected(self, mcp_client: Any) -> None:
+        """Rejects bulk operation when a single-entity parameter is provided."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": ["light.a", "light.b"], "name": "Shared Name"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_automation_disable_rejected(self, mcp_client: Any) -> None:
+        """Rejects registry-disabling an automation entity.
+
+        Introduced in #796: automation and script entities cannot be registry-disabled
+        via ha_set_entity(enabled=False) because it removes them from the state machine.
+        Use ha_call_service('automation', 'turn_off', ...) instead.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "automation.test_automation", "enabled": False},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_invalid_assistant_rejected(self, mcp_client: Any) -> None:
+        """Rejects expose_to with an unrecognised assistant ID."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "light.test", "expose_to": {"unknown_assistant": True}},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
