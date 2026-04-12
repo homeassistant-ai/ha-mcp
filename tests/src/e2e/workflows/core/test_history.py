@@ -7,6 +7,7 @@ state change history and long-term statistics via ha_get_history.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -571,7 +572,6 @@ class TestGetHistoryStatisticsSource:
             logger.info("Properly returned error for entity without state_class")
 
 
-@pytest.mark.asyncio
 @pytest.mark.core
 async def test_get_history_query_params_in_response(mcp_client):
     """Test that query parameters are included in response."""
@@ -603,3 +603,28 @@ async def test_get_history_query_params_in_response(mcp_client):
         assert params.get("limit") == 10, f"limit mismatch: {params}"
     else:
         logger.info("query_params not in response (may be by design)")
+
+
+@pytest.mark.core
+class TestGetHistoryNegativeInputs:
+    """Negative-input tests for ha_get_history."""
+
+    async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
+        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "", "start_time": "1h"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+
+    async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
+        """Rejects an empty list before any network call is made."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": [], "start_time": "1h"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
