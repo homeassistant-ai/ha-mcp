@@ -66,7 +66,7 @@ class TestApplyToolVisibility:
         mcp = MagicMock()
         settings = MagicMock()
         settings.enable_yaml_config_editing = True
-        config = {"tools": {name: "disabled" for name in MANDATORY_TOOLS}}
+        config = {"tools": dict.fromkeys(MANDATORY_TOOLS, "disabled")}
         apply_tool_visibility(mcp, config, settings)
         if mcp.disable.called:
             disabled_names = mcp.disable.call_args[1]["names"]

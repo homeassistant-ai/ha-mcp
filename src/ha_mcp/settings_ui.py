@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from .transforms import DEFAULT_PINNED_TOOLS
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -29,19 +31,6 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",
-}
-
-DEFAULT_PINNED_TOOLS: set[str] = {
-    "ha_restart",
-    "ha_reload_core",
-    "ha_backup_create",
-    "ha_backup_restore",
-    "ha_get_overview",
-    "ha_report_issue",
-    "ha_search_entities",
-    "ha_config_get_automation",
-    "ha_config_set_automation",
-    "ha_config_set_yaml",
 }
 
 
@@ -60,8 +49,9 @@ def load_tool_config(settings: Any = None) -> dict[str, Any]:
     path = _get_config_path()
     if path.exists():
         try:
-            return json.loads(path.read_text())
-        except Exception:
+            result: dict[str, Any] = json.loads(path.read_text())
+            return result
+        except (OSError, json.JSONDecodeError):
             logger.warning("Failed to read tool config from %s", path)
 
     if settings is None:
@@ -96,23 +86,36 @@ def save_tool_config(config: dict[str, Any]) -> None:
     try:
         path.write_text(json.dumps(config, indent=2))
         logger.info("Saved tool config to %s", path)
-    except Exception:
+    except OSError:
         logger.exception("Failed to save tool config to %s", path)
+
+
+def _find_tools_json() -> Path | None:
+    """Locate tools.json, checking multiple paths for different install methods."""
+    candidates = [
+        Path(__file__).parent.parent.parent / "site" / "src" / "data" / "tools.json",
+        Path("/app/site/src/data/tools.json"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 
 def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server."""
-    tools_json_path = Path(__file__).parent.parent.parent / "site" / "src" / "data" / "tools.json"
-    if tools_json_path.exists():
+    tools_json = _find_tools_json()
+    if tools_json:
         try:
-            return json.loads(tools_json_path.read_text())
-        except Exception:
+            result: list[dict[str, Any]] = json.loads(tools_json.read_text())
+            return result
+        except (OSError, json.JSONDecodeError):
             pass
 
     tools: list[dict[str, Any]] = []
     for tool in server.mcp._tool_manager._tools.values():  # type: ignore[attr-defined]
         tags = list(tool.tags) if tool.tags else []
-        annotations = {}
+        annotations: dict[str, bool] = {}
         if tool.annotations:
             if hasattr(tool.annotations, "readOnlyHint"):
                 annotations["readOnlyHint"] = tool.annotations.readOnlyHint or False
@@ -430,8 +433,11 @@ def register_settings_routes(
     async def _save_tools(request: Request) -> JSONResponse:
         try:
             body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+        except (ValueError, TypeError):
+            return JSONResponse(
+                {"success": False, "error": {"code": "VALIDATION_ERROR", "message": "Invalid JSON body"}},
+                status_code=400,
+            )
 
         states = body.get("states", {})
         config = load_tool_config()
@@ -453,9 +459,7 @@ def register_settings_routes(
         disabled_names -= MANDATORY_TOOLS
 
         try:
-            mcp.enable(names=set(
-                t["name"] for t in _get_tool_metadata(server)
-            ))
+            mcp.enable(names={t["name"] for t in _get_tool_metadata(server)})
             if disabled_names:
                 mcp.disable(names=disabled_names)
             mcp.enable(names=MANDATORY_TOOLS)
@@ -465,6 +469,9 @@ def register_settings_routes(
             )
         except Exception:
             logger.exception("Failed to apply tool visibility")
-            return JSONResponse({"error": "Failed to apply"}, status_code=500)
+            return JSONResponse(
+                {"success": False, "error": {"code": "INTERNAL_ERROR", "message": "Failed to apply tool visibility"}},
+                status_code=500,
+            )
 
-        return JSONResponse({"status": "saved", "disabled": len(disabled_names), "pinned": len(pinned_names)})
+        return JSONResponse({"success": True, "disabled": len(disabled_names), "pinned": len(pinned_names)})
