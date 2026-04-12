@@ -166,16 +166,16 @@ class TestGetHistory:
         if inner_data.get("entities"):
             entity_history = inner_data["entities"][0]
             states = entity_history.get("states", [])
-            total_available = entity_history.get("total_available", len(states))
+            total_count = entity_history.get("total_count", len(states))
 
-            logger.info(f"Returned {len(states)} states (total available: {total_available})")
+            logger.info(f"Returned {len(states)} states (total available: {total_count})")
 
             # Should respect limit
             assert len(states) <= 5, f"Limit not respected: {len(states)} states"
 
-            # Check truncated flag if more data was available
-            if entity_history.get("truncated"):
-                logger.info("Response correctly marked as truncated")
+            # Check has_more flag if more data was available
+            if entity_history.get("has_more"):
+                logger.info("Response correctly marked as has_more")
 
     async def test_get_history_minimal_response(self, mcp_client):
         """Test history with minimal_response option."""
