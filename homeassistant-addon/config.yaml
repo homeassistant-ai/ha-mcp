@@ -13,7 +13,7 @@ startup: application
 boot: manual
 ingress: true
 ingress_port: 9583
-panel_icon: mdi:robot
+ingress_stream: true
 # Enable access to Supervisor API for auto-discovery
 hassio_api: true
 hassio_role: default

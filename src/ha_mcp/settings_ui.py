@@ -415,6 +415,10 @@ def register_settings_routes(
 ) -> None:
     """Register the /settings web UI and /api/settings/* endpoints."""
 
+    @mcp.custom_route("/", methods=["GET"])
+    async def _root_page(_: Request) -> HTMLResponse:
+        return HTMLResponse(_SETTINGS_HTML)
+
     @mcp.custom_route("/settings", methods=["GET"])
     async def _settings_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_SETTINGS_HTML)
