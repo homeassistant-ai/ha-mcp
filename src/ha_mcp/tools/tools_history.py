@@ -28,6 +28,7 @@ from .helpers import (
 )
 from .util_helpers import (
     add_timezone_metadata,
+    build_pagination_metadata,
     coerce_int_param,
     parse_string_list_param,
 )
@@ -178,10 +179,17 @@ class HistoryTools:
         limit: Annotated[
             int | str | None,
             Field(
-                description='Max state changes per entity. Default: 100, Max: 1000. Ignored when source="statistics"',
+                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows.',
                 default=None,
             ),
         ] = None,
+        offset: Annotated[
+            int | str,
+            Field(
+                description="Number of entries to skip per entity for pagination. Default: 0. Use with limit and has_more/next_offset in the response.",
+                default=0,
+            ),
+        ] = 0,
         # Statistics-specific (ignored when source="history")
         period: Annotated[
             str,
@@ -205,9 +213,9 @@ class HistoryTools:
         - "history" (default): Raw state changes, ~10 day retention, full resolution
         - "statistics": Pre-aggregated data, permanent retention, requires state_class
 
-        **Shared params:** entity_ids, start_time, end_time
-        **History params:** minimal_response, significant_changes_only, limit (ignored for statistics)
-        **Statistics params:** period, statistic_types (ignored for history)
+        **Shared params:** entity_ids, start_time, end_time, limit, offset
+        **History params:** minimal_response, significant_changes_only
+        **Statistics params:** period, statistic_types
 
         **Default time range:** 24h for history, 30 days for statistics
 
@@ -221,10 +229,15 @@ class HistoryTools:
         - Computing period averages ("Average living room temperature over 6 months?")
         - Entities must have state_class (measurement, total, total_increasing)
 
+        **NOTE:** limit and offset apply per entity (not globally across all entities).
+        All data is fetched from HA before slicing; limit/offset are client-side.
+        Use has_more and next_offset from the response to paginate.
+
         **Example -- history (default):**
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
         ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
+        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100)
         ```
 
         **Example -- statistics:**
@@ -232,6 +245,8 @@ class HistoryTools:
         ha_get_history(source="statistics", entity_ids="sensor.total_energy_kwh", start_time="30d", period="day")
         ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature",
                        start_time="6m", period="month", statistic_types=["mean", "min", "max"])
+        ha_get_history(source="statistics", entity_ids="sensor.energy_kwh",
+                       start_time="30d", period="5minute", limit=100, offset=200)
         ```
         """
         try:
@@ -259,12 +274,13 @@ class HistoryTools:
                     return await _fetch_statistics(
                         ws_client, self._client, entity_id_list,
                         start_dt, end_dt, period, statistic_types,
+                        limit, offset,
                     )
                 else:
                     return await _fetch_history(
                         ws_client, self._client, entity_id_list,
                         start_dt, end_dt, minimal_response,
-                        significant_changes_only, limit,
+                        significant_changes_only, limit, offset,
                         _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
                     )
             finally:
@@ -371,6 +387,7 @@ async def _fetch_history(
     minimal_response: bool,
     significant_changes_only: bool,
     limit: int | str | None,
+    offset: int | str,
     default_limit: int,
     max_limit: int,
 ) -> dict[str, Any]:
@@ -389,6 +406,23 @@ async def _fetch_history(
             str(e),
             context={"parameter": "limit"},
             suggestions=["Provide limit as an integer (e.g., 100)"],
+        ))
+
+    try:
+        effective_offset = coerce_int_param(
+            offset,
+            param_name="offset",
+            default=0,
+            min_value=0,
+        )
+        if effective_offset is None:
+            effective_offset = 0
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "offset"},
+            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
         ))
 
     command_params = {
@@ -422,10 +456,10 @@ async def _fetch_history(
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
-        limited_states = entity_states[:effective_limit]
+        paged_states = entity_states[effective_offset : effective_offset + effective_limit]
 
         formatted_states = []
-        for state in limited_states:
+        for state in paged_states:
             last_updated_raw = state.get("lu", state.get("last_updated"))
             last_changed_raw = state.get("lc", state.get("last_changed"))
             if last_changed_raw is None and last_updated_raw is not None:
@@ -440,6 +474,12 @@ async def _fetch_history(
                 state_entry["attributes"] = state.get("a", state.get("attributes", {}))
             formatted_states.append(state_entry)
 
+        pagination = build_pagination_metadata(
+            total_count=len(entity_states),
+            offset=effective_offset,
+            limit=effective_limit,
+            count=len(formatted_states),
+        )
         entities_history.append({
             "entity_id": entity_id,
             "period": {
@@ -447,9 +487,7 @@ async def _fetch_history(
                 "end": end_dt.isoformat(),
             },
             "states": formatted_states,
-            "count": len(formatted_states),
-            "total_available": len(entity_states),
-            "truncated": len(entity_states) > effective_limit,
+            **pagination,
         })
 
     history_data = {
@@ -478,8 +516,44 @@ async def _fetch_statistics(
     end_dt: datetime,
     period: str,
     statistic_types: str | list[str] | None,
+    limit: int | str | None,
+    offset: int | str,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call."""
+    # Coerce limit and offset
+    try:
+        effective_limit = coerce_int_param(
+            limit,
+            param_name="limit",
+            default=_DEFAULT_HISTORY_LIMIT,
+            min_value=1,
+            max_value=_MAX_HISTORY_LIMIT,
+        ) or _DEFAULT_HISTORY_LIMIT
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "limit"},
+            suggestions=["Provide limit as an integer (e.g., 100)"],
+        ))
+
+    try:
+        effective_offset = coerce_int_param(
+            offset,
+            param_name="offset",
+            default=0,
+            min_value=0,
+        )
+        if effective_offset is None:
+            effective_offset = 0
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "offset"},
+            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+        ))
+
     # Validate period
     valid_periods = ["5minute", "hour", "day", "week", "month"]
     if period not in valid_periods:
@@ -547,10 +621,11 @@ async def _fetch_statistics(
 
     for entity_id in entity_id_list:
         entity_stats = result_data.get(entity_id, [])
+        paged_stats = entity_stats[effective_offset : effective_offset + effective_limit]
         formatted_stats = []
         unit = None
 
-        for stat in entity_stats:
+        for stat in paged_stats:
             stat_entry: dict[str, Any] = {"start": stat.get("start")}
             for stat_type in all_stat_types:
                 if stat_type in stat:
@@ -559,12 +634,18 @@ async def _fetch_statistics(
                 unit = stat["unit_of_measurement"]
             formatted_stats.append(stat_entry)
 
+        pagination = build_pagination_metadata(
+            total_count=len(entity_stats),
+            offset=effective_offset,
+            limit=effective_limit,
+            count=len(formatted_stats),
+        )
         entities_statistics.append({
             "entity_id": entity_id,
             "period": period,
             "statistics": formatted_stats,
-            "count": len(formatted_stats),
             "unit_of_measurement": unit,
+            **pagination,
         })
 
     empty_entities: list[str] = [
