@@ -415,8 +415,6 @@ async def _fetch_history(
             default=0,
             min_value=0,
         )
-        if effective_offset is None:
-            effective_offset = 0
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -528,7 +526,7 @@ async def _fetch_statistics(
             default=_DEFAULT_HISTORY_LIMIT,
             min_value=1,
             max_value=_MAX_HISTORY_LIMIT,
-        ) or _DEFAULT_HISTORY_LIMIT
+        )
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -544,8 +542,6 @@ async def _fetch_statistics(
             default=0,
             min_value=0,
         )
-        if effective_offset is None:
-            effective_offset = 0
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
