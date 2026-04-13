@@ -5,6 +5,8 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant script configurations.
 """
 
+import hashlib
+import json
 import logging
 from typing import Annotated, Any, cast
 
@@ -13,6 +15,11 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from ..utils.python_sandbox import (
+    PythonSandboxError,
+    get_security_documentation,
+    safe_execute,
+)
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
@@ -35,6 +42,12 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_config_hash(config: dict[str, Any]) -> str:
+    """Compute a stable hash of script config for optimistic locking."""
+    config_str = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
 
 def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
@@ -107,6 +120,7 @@ class ConfigScriptTools:
                 "action": "get",
                 "script_id": script_id,
                 "config": config_result,
+                "config_hash": _compute_config_hash(config_result),
             }
         except ToolError:
             raise
@@ -187,11 +201,35 @@ class ConfigScriptTools:
             str, Field(description="Script identifier (e.g., 'morning_routine')")
         ],
         config: Annotated[
-            str | dict[str, Any],
+            str | dict[str, Any] | None,
             Field(
-                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'"
+                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). "
+                "Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. "
+                "Mutually exclusive with python_transform.",
+                default=None,
             ),
-        ],
+        ] = None,
+        python_transform: Annotated[
+            str | None,
+            Field(
+                description="Python expression to transform existing script config. "
+                "Mutually exclusive with config. "
+                "Requires config_hash for validation. "
+                "Examples: "
+                "Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" "
+                "Pattern: python_transform=\"for step in config['sequence']: "
+                "if step.get('alias') == 'My Step': step['data']['value'] = 100\" "
+                "\n\n" + get_security_documentation(),
+            ),
+        ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="Config hash from ha_config_get_script for optimistic locking. "
+                "REQUIRED for python_transform (validates script unchanged). "
+                "Optional for config updates (validates before full replacement if provided).",
+            ),
+        ] = None,
         category: Annotated[
             str | None,
             Field(
@@ -209,6 +247,19 @@ class ConfigScriptTools:
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant script.
+
+        Supports two modes: full config replacement OR Python transformation.
+
+        WHEN TO USE WHICH MODE:
+        - python_transform: RECOMMENDED for edits to existing scripts. Surgical updates.
+        - config: Use for creating new scripts or full restructures.
+
+        IMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().
+
+        PYTHON TRANSFORM EXAMPLES:
+        - Update step: python_transform="config['sequence'][0]['data']['message'] = 'Hello'"
+        - Add step: python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
+        - Remove step: python_transform="del config['sequence'][2]"
 
         Creates a new script or updates an existing one with the provided configuration.
         Supports both regular scripts (with sequence) and blueprint-based scripts.
@@ -319,9 +370,130 @@ class ConfigScriptTools:
         """
         bp_warnings: list[str] = []
         try:
+            # Validate mutual exclusivity of config and python_transform
+            if config is not None and python_transform is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Cannot use both config and python_transform simultaneously",
+                        suggestions=[
+                            "Use only ONE of: config or python_transform",
+                            "config: Full replacement",
+                            "python_transform: Python-based edits (recommended for existing scripts)",
+                        ],
+                        context={"action": "set", "script_id": script_id},
+                    )
+                )
+
+            # Handle python_transform mode
+            if python_transform is not None:
+                if config_hash is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "config_hash is required for python_transform",
+                            suggestions=[
+                                "Call ha_config_get_script() first",
+                                "Use the config_hash from that response",
+                            ],
+                            context={"action": "python_transform", "script_id": script_id},
+                        )
+                    )
+
+                # Fetch current config (ha_config_get_script returns a wrapper
+                # with "config" containing the REST client response, which itself
+                # has a "config" key with the actual script config)
+                current = await self.ha_config_get_script(script_id)
+                current_wrapper = current["config"]
+                # Extract actual script config from REST client wrapper
+                actual_config = current_wrapper.get("config", current_wrapper)
+
+                # Validate config_hash for optimistic locking
+                # Hash is computed on the wrapper (consistent with ha_config_get_script)
+                current_hash = _compute_config_hash(current_wrapper)
+                if current_hash != config_hash:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            "Script modified since last read (conflict)",
+                            suggestions=[
+                                "Call ha_config_get_script() again",
+                                "Use the fresh config_hash from that response",
+                            ],
+                            context={"action": "python_transform", "script_id": script_id},
+                        )
+                    )
+
+                # Apply Python transformation on the actual script config
+                try:
+                    transformed_config = safe_execute(python_transform, actual_config)
+                except PythonSandboxError as e:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            str(e),
+                            suggestions=[
+                                "Check expression syntax",
+                                "Ensure only allowed operations are used",
+                                "See tool description for allowed operations",
+                                f"Expression: {python_transform[:100]}...",
+                            ],
+                            context={"action": "python_transform", "script_id": script_id},
+                        )
+                    )
+
+                # Save transformed config
+                result = await self._client.upsert_script_config(
+                    transformed_config, script_id
+                )
+
+                # Compute new hash on wrapper (consistent with ha_config_get_script)
+                new_wrapper = {**current_wrapper, "config": transformed_config}
+                new_config_hash = _compute_config_hash(new_wrapper)
+
+                return {
+                    "success": True,
+                    "action": "python_transform",
+                    "script_id": script_id,
+                    "config_hash": new_config_hash,
+                    "python_expression": python_transform,
+                    "message": f"Script {script_id} updated via Python transform",
+                    **{k: v for k, v in result.items() if k not in ("success",)},
+                }
+
+            if config is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Either config or python_transform must be provided",
+                        suggestions=[
+                            "config: Full script configuration for create/replace",
+                            "python_transform: Python expression for surgical edits",
+                        ],
+                        context={"action": "set", "script_id": script_id},
+                    )
+                )
+
             config_dict, effective_category = self._validate_script_config(
                 config, script_id, category,
             )
+
+            # Optional hash check for full config updates
+            if config_hash:
+                current = await self.ha_config_get_script(script_id)
+                current_hash = _compute_config_hash(current["config"])
+                if current_hash != config_hash:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            "Script modified since last read (conflict)",
+                            suggestions=[
+                                "Call ha_config_get_script() again",
+                                "Use the fresh config_hash from that response",
+                            ],
+                            context={"action": "set", "script_id": script_id},
+                        )
+                    )
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(
