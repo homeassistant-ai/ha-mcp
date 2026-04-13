@@ -1,6 +1,6 @@
 """Unit tests for statistic_types parameter validation in _fetch_statistics."""
 
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,8 +25,7 @@ def _make_client() -> MagicMock:
     return client
 
 
-def _make_dt(days_ago: int = 7):
-    from datetime import datetime, timedelta
+def _make_dt(days_ago: int = 7) -> datetime:
     return datetime.now(UTC) - timedelta(days=days_ago)
 
 
@@ -45,7 +44,7 @@ class TestStatisticTypesValidation:
         start = _make_dt(7)
         end = _make_dt(0)
 
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await _fetch_statistics(
                 ws_client=ws,
                 client=client,
@@ -57,6 +56,7 @@ class TestStatisticTypesValidation:
                 limit=None,
                 offset=None,
             )
+        assert "statistic_types cannot be an empty list" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_none_does_not_set_types_in_command(self):
@@ -116,7 +116,7 @@ class TestStatisticTypesValidation:
         start = _make_dt(7)
         end = _make_dt(0)
 
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await _fetch_statistics(
                 ws_client=ws,
                 client=client,
@@ -128,6 +128,7 @@ class TestStatisticTypesValidation:
                 limit=None,
                 offset=None,
             )
+        assert "statistic_types cannot be an empty list" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_invalid_type_raises(self):

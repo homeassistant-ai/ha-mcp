@@ -611,7 +611,7 @@ async def _fetch_statistics(
                 "statistic_types cannot be an empty list. "
                 "Omit the parameter to retrieve all types, or specify at least one valid type.",
                 context={"parameter": "statistic_types"},
-                suggestions=["Use one or more of: mean, min, max, sum, state, change"],
+                suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
             ))
         invalid_types = [t for t in stat_types_list if t not in valid_types]
         if invalid_types:
