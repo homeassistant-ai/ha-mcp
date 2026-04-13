@@ -31,6 +31,7 @@ dependencies = [
     "truststore==0.10.4",
     "websockets==16.0",
     "cryptography==46.0.7",
+    "pydantic-monty==0.0.9",
 ]
 
 [project.urls]
@@ -75,6 +76,8 @@ explicit_package_bases = true
 module = [
     "fastmcp.*",
     "jq",
+    "pydantic_monty",
+    "pydantic_monty.*",
 ]
 ignore_missing_imports = true
 

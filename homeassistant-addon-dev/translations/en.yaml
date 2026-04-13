@@ -35,3 +35,12 @@ configuration:
       like homeassistant, http, and recorder are blocked. A backup is
       created before every edit. Use for YAML-only features that have no
       UI or API alternative. Requires restart to take effect.
+  enable_code_mode:
+    name: Enable custom tool sandbox
+    description: >-
+      Allow AI assistants to write and run custom Python code in a secure
+      sandbox when no built-in tool can handle the request. Code runs in
+      an isolated interpreter with no filesystem or network access.
+      Sandbox code can access the HA REST API directly (api_get/api_post)
+      or call existing MCP tools (call_tool). Includes save/reuse for
+      frequently-used custom tools. Requires restart to take effect.
