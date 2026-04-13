@@ -1021,6 +1021,16 @@ class TestManageAddon:
                 websocket=True,
             )
 
+    @pytest.mark.asyncio
+    async def test_proxy_params_wait_for_close_in_config_mode_raise(self, manage_addon_tool):
+        """wait_for_close=False combined with config params raises ToolError."""
+        with pytest.raises(ToolError):
+            await manage_addon_tool(
+                slug="test_addon",
+                auto_update=False,
+                wait_for_close=False,
+            )
+
     # --- Proxy mode (backward compat) ---
 
     @pytest.mark.asyncio

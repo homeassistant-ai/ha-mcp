@@ -1141,6 +1141,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 proxy_overrides.append(f"limit={limit}")
             if websocket:
                 proxy_overrides.append("websocket=True")
+            if not wait_for_close:
+                proxy_overrides.append("wait_for_close=False")
             if proxy_overrides:
                 raise_tool_error(
                     create_validation_error(
