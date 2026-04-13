@@ -1622,7 +1622,7 @@
           "default": true
         },
         "limit": {
-          "type": "Annotated[int | str | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0.', default=None)]",
+          "type": "Annotated[int | str | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).', default=None)]",
           "default": null
         },
         "offset": {

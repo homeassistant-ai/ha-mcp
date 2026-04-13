@@ -327,6 +327,25 @@ class TestMultiEntityOffsetGuard:
             assert entity["offset"] == 0
             assert entity["count"] == 3
 
+    @pytest.mark.asyncio
+    async def test_multi_entity_invalid_string_offset(self, history_tool):
+        """Invalid string offset with multiple entity_ids raises VALIDATION_INVALID_PARAMETER.
+
+        Verifies that coerce_int_param is used in the multi-entity guard so that
+        offset="garbage" produces a clean VALIDATION_INVALID_PARAMETER error
+        instead of a bare ValueError swallowed by the outer except handler.
+        """
+        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
+            await history_tool(
+                entity_ids=["sensor.a", "sensor.b"],
+                offset="garbage",
+                limit=10,
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert response["parameter"] == "offset"
+
 
 # ---------------------------------------------------------------------------
 # Tests: default limit (history source) + MAX boundary

@@ -179,7 +179,7 @@ class HistoryTools:
         limit: Annotated[
             int | str | None,
             Field(
-                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0.',
+                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).',
                 default=None,
             ),
         ] = None,
@@ -257,15 +257,30 @@ class HistoryTools:
             # Offset > 0 is only supported for single-entity requests.
             # build_pagination_metadata applies per entity — limit=100 across
             # 5 entities returns up to 500 rows with no top-level has_more signal.
-            if offset is not None and offset != 0:
-                _effective_offset_check = int(offset) if isinstance(offset, str) else offset
-                if _effective_offset_check > 0 and len(entity_id_list) > 1:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "offset > 0 requires a single entity_id",
-                        context={"offset": offset, "entity_count": len(entity_id_list)},
-                        suggestions=["Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."],
-                    ))
+            # Coerce and validate offset before the multi-entity guard so that
+            # invalid strings (e.g. "garbage") produce VALIDATION_INVALID_PARAMETER
+            # instead of a bare ValueError swallowed by the outer except.
+            try:
+                _effective_offset_check = coerce_int_param(
+                    offset,
+                    param_name="offset",
+                    default=0,
+                    min_value=0,
+                )
+            except ValueError as e:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "offset"},
+                    suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+                ))
+            if _effective_offset_check > 0 and len(entity_id_list) > 1:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "offset > 0 requires a single entity_id",
+                    context={"offset": offset, "entity_count": len(entity_id_list)},
+                    suggestions=["Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."],
+                ))
 
             # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
