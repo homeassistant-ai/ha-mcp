@@ -628,3 +628,51 @@ class TestGetHistoryNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+
+    async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
+        """Offset pagination works for a single entity and returns correct metadata."""
+        # First page: offset=0, limit=5
+        result_p1 = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 0},
+        )
+        if not result_p1.get("success"):
+            pytest.skip("No history data available for pagination test")
+
+        entities_p1 = result_p1.get("entities", [])
+        if not entities_p1:
+            pytest.skip("No entities returned")
+
+        entity_p1 = entities_p1[0]
+        assert entity_p1["offset"] == 0
+        assert entity_p1["limit"] == 5
+        assert "total_count" in entity_p1
+        assert "has_more" in entity_p1
+        assert "next_offset" in entity_p1
+
+        if not entity_p1["has_more"]:
+            pytest.skip("Not enough history rows to test offset pagination")
+
+        # Second page: offset=5
+        result_p2 = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 5},
+        )
+        assert result_p2.get("success")
+        entity_p2 = result_p2["entities"][0]
+        assert entity_p2["offset"] == 5
+        assert entity_p2["total_count"] == entity_p1["total_count"]
+
+    async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
+        """offset > 0 with multiple entity_ids is rejected before any network call."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": ["sensor.home_temperature", "sensor.home_humidity"],
+             "start_time": "1h", "offset": 1, "limit": 5},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "single entity_id" in result["error"]["message"]
