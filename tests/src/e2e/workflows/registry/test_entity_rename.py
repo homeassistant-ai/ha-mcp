@@ -226,10 +226,13 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Domain change should be rejected"
-        assert rename_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         error = rename_data.get("error", {})
+        actual_code = error.get("code") if isinstance(error, dict) else str(error)
+        assert actual_code == "VALIDATION_INVALID_PARAMETER"
         error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
-        assert "domain" in error_msg.lower(), "Error message should indicate domain mismatch"
+        assert "domain" in error_msg.lower(), (
+            f"Error message should indicate domain mismatch, got: {error_msg}"
+        )
         logger.info("Domain mismatch correctly rejected")
 
     async def test_rename_invalid_format_rejected(self, mcp_client):
