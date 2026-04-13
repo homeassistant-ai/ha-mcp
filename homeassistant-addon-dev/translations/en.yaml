@@ -39,12 +39,12 @@ configuration:
     name: Disabled tools (text fallback)
     description: >-
       Comma-separated tool names to disable. For a visual interface,
-      click "Open Web UI" above. This field seeds the initial config
+      click "Open Web UI" on the addon info page. This field seeds the initial config
       when the web UI hasn't been used yet. Requires restart.
   pinned_tools:
     name: Pinned tools (text fallback)
     description: >-
       Comma-separated tool names to pin (always visible in tool search).
-      For a visual interface, click "Open Web UI" above. This field
+      For a visual interface, click "Open Web UI" on the addon info page. This field
       seeds the initial config when the web UI hasn't been used yet.
       Requires restart.

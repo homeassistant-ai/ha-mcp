@@ -90,40 +90,28 @@ def save_tool_config(config: dict[str, Any]) -> None:
         logger.exception("Failed to save tool config to %s", path)
 
 
-def _find_tools_json() -> Path | None:
-    """Locate tools.json, checking multiple paths for different install methods."""
-    candidates = [
-        Path(__file__).parent.parent.parent / "site" / "src" / "data" / "tools.json",
-        Path("/app/site/src/data/tools.json"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
+async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
+    """Extract metadata for all registered tools from the server.
 
-
-def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
-    """Extract metadata for all registered tools from the server."""
-    tools_json = _find_tools_json()
-    if tools_json:
-        try:
-            result: list[dict[str, Any]] = json.loads(tools_json.read_text())
-            return result
-        except (OSError, json.JSONDecodeError):
-            pass
-
+    Reads live from FastMCP's list_tools() — always reflects the currently
+    registered tools, including any runtime enable/disable state.
+    """
     tools: list[dict[str, Any]] = []
-    for tool in server.mcp._tool_manager._tools.values():  # type: ignore[attr-defined]
+    registered = await server.mcp.list_tools()
+    for tool in registered:
         tags = list(tool.tags) if tool.tags else []
         annotations: dict[str, bool] = {}
         if tool.annotations:
-            if hasattr(tool.annotations, "readOnlyHint"):
-                annotations["readOnlyHint"] = tool.annotations.readOnlyHint or False
-            if hasattr(tool.annotations, "destructiveHint"):
-                annotations["destructiveHint"] = tool.annotations.destructiveHint or False
+            if getattr(tool.annotations, "readOnlyHint", None):
+                annotations["readOnlyHint"] = True
+            if getattr(tool.annotations, "destructiveHint", None):
+                annotations["destructiveHint"] = True
+        title = getattr(tool, "title", None) or tool.name
+        if tool.annotations and getattr(tool.annotations, "title", None):
+            title = tool.annotations.title
         tools.append({
             "name": tool.name,
-            "title": (tool.annotations.title if tool.annotations and hasattr(tool.annotations, "title") else "") or tool.name,
+            "title": title,
             "description": (tool.description or "")[:200],
             "tags": tags,
             "annotations": annotations,
@@ -252,7 +240,7 @@ let toolStates = {};
 let saveTimer = null;
 
 async function loadTools() {
-  const resp = await fetch('/api/settings/tools');
+  const resp = await fetch('./api/settings/tools');
   const data = await resp.json();
   toolData = data.tools;
   toolStates = data.states;
@@ -367,7 +355,7 @@ function scheduleSave() {
 
 async function saveConfig() {
   updateStatus('Saving...');
-  const resp = await fetch('/api/settings/tools', {
+  const resp = await fetch('./api/settings/tools', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({states: toolStates}),
@@ -425,7 +413,7 @@ def register_settings_routes(
 
     @mcp.custom_route("/api/settings/tools", methods=["GET"])
     async def _get_tools(_: Request) -> JSONResponse:
-        tools = _get_tool_metadata(server)
+        tools = await _get_tool_metadata(server)
         config = load_tool_config()
         states = config.get("tools", {})
         for name in DEFAULT_PINNED_TOOLS:
@@ -463,7 +451,8 @@ def register_settings_routes(
         disabled_names -= MANDATORY_TOOLS
 
         try:
-            mcp.enable(names={t["name"] for t in _get_tool_metadata(server)})
+            all_tools = await _get_tool_metadata(server)
+            mcp.enable(names={t["name"] for t in all_tools})
             if disabled_names:
                 mcp.disable(names=disabled_names)
             mcp.enable(names=MANDATORY_TOOLS)
