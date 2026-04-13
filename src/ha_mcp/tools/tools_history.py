@@ -401,7 +401,7 @@ async def _fetch_history(
     minimal_response: bool,
     significant_changes_only: bool,
     limit: int | str | None,
-    offset: int | str,
+    offset: int | str | None,
     default_limit: int,
     max_limit: int,
 ) -> dict[str, Any]:
@@ -530,7 +530,7 @@ async def _fetch_statistics(
     period: str,
     statistic_types: str | list[str] | None,
     limit: int | str | None,
-    offset: int | str,
+    offset: int | str | None,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call."""
     try:
