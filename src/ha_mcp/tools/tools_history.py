@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
@@ -23,9 +24,11 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    register_tool_methods,
 )
 from .util_helpers import (
     add_timezone_metadata,
+    build_pagination_metadata,
     coerce_int_param,
     parse_string_list_param,
 )
@@ -105,15 +108,19 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
 # Source-dependent default look-back periods
 _DEFAULT_START_HOURS_BY_SOURCE: dict[str, int] = {"history": 24, "statistics": 30 * 24}
 
+# Default and maximum limits for history entries
+_DEFAULT_HISTORY_LIMIT = 100
+_MAX_HISTORY_LIMIT = 1000
 
-def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register historical data access tools with the MCP server."""
 
-    # Default and maximum limits for history entries
-    DEFAULT_HISTORY_LIMIT = 100
-    MAX_HISTORY_LIMIT = 1000
+class HistoryTools:
+    """Historical data access tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_history",
         tags={"History & Statistics"},
         annotations={
             "idempotentHint": True,
@@ -123,6 +130,7 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_history(
+        self,
         entity_ids: Annotated[
             str | list[str],
             Field(
@@ -171,7 +179,14 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         limit: Annotated[
             int | str | None,
             Field(
-                description='Max state changes per entity. Default: 100, Max: 1000. Ignored when source="statistics"',
+                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).',
+                default=None,
+            ),
+        ] = None,
+        offset: Annotated[
+            int | str | None,
+            Field(
+                description="Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
                 default=None,
             ),
         ] = None,
@@ -198,9 +213,9 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "history" (default): Raw state changes, ~10 day retention, full resolution
         - "statistics": Pre-aggregated data, permanent retention, requires state_class
 
-        **Shared params:** entity_ids, start_time, end_time
-        **History params:** minimal_response, significant_changes_only, limit (ignored for statistics)
-        **Statistics params:** period, statistic_types (ignored for history)
+        **Shared params:** entity_ids, start_time, end_time, limit, offset
+        **History params:** minimal_response, significant_changes_only
+        **Statistics params:** period, statistic_types
 
         **Default time range:** 24h for history, 30 days for statistics
 
@@ -214,81 +229,68 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Computing period averages ("Average living room temperature over 6 months?")
         - Entities must have state_class (measurement, total, total_increasing)
 
-        **Example — history (default):**
+        **WARNING:** limit and offset apply per entity (not globally across all entities).
+        All data is fetched from HA before slicing; limit/offset are client-side.
+        With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
+        Use has_more and next_offset from the response to paginate.
+
+        **Example -- history (default):**
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
         ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
+        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100)
         ```
 
-        **Example — statistics:**
+        **Example -- statistics:**
         ```python
         ha_get_history(source="statistics", entity_ids="sensor.total_energy_kwh", start_time="30d", period="day")
         ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature",
                        start_time="6m", period="month", statistic_types=["mean", "min", "max"])
+        ha_get_history(source="statistics", entity_ids="sensor.energy_kwh",
+                       start_time="30d", period="5minute", limit=100, offset=200)
         ```
         """
         try:
-            # Parse entity_ids - handle string, list, or comma-separated
-            if isinstance(entity_ids, str):
-                if entity_ids.startswith("["):
-                    # JSON array string
-                    parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
-                    if parsed_ids is None:
-                        raise_tool_error(create_error_response(
-                            ErrorCode.VALIDATION_MISSING_PARAMETER,
-                            "entity_ids is required",
-                            suggestions=["Provide at least one entity ID"],
-                        ))
-                    entity_id_list = parsed_ids
-                elif "," in entity_ids:
-                    # Comma-separated string
-                    entity_id_list = [e.strip() for e in entity_ids.split(",") if e.strip()]
-                else:
-                    # Single entity ID
-                    entity_id_list = [entity_ids.strip()]
-            else:
-                entity_id_list = entity_ids
+            # Parse entity_ids
+            entity_id_list = _parse_entity_ids(entity_ids)
 
-            if not entity_id_list:
+            # Offset > 0 is only supported for single-entity requests.
+            # build_pagination_metadata applies per entity — limit=100 across
+            # 5 entities returns up to 500 rows with no top-level has_more signal.
+            # Coerce and validate offset before the multi-entity guard so that
+            # invalid strings (e.g. "garbage") produce VALIDATION_INVALID_PARAMETER
+            # instead of a bare ValueError swallowed by the outer except.
+            try:
+                _effective_offset_check = coerce_int_param(
+                    offset,
+                    param_name="offset",
+                    default=0,
+                    min_value=0,
+                )
+            except ValueError as e:
                 raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "entity_ids is required",
-                    suggestions=["Provide at least one entity ID"],
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "offset"},
+                    suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+                ))
+            if _effective_offset_check > 0 and len(entity_id_list) > 1:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "offset > 0 requires a single entity_id",
+                    context={"offset": offset, "entity_count": len(entity_id_list)},
+                    suggestions=["Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."],
                 ))
 
             # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
 
             # Parse time parameters
-            try:
-                start_dt = parse_relative_time(start_time, default_hours=default_hours)
-            except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    context={"parameter": "start_time"},
-                    suggestions=[
-                        "Use ISO format: '2025-01-25T00:00:00Z'",
-                        "Use relative format: '24h', '7d', '2w', '1m'",
-                    ],
-                ))
-
-            if end_time:
-                try:
-                    end_dt = parse_relative_time(end_time, default_hours=0)
-                except ValueError as e:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(e),
-                        context={"parameter": "end_time"},
-                        suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
-                    ))
-            else:
-                end_dt = datetime.now(UTC)
+            start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
 
             # Connect to WebSocket (shared by both sources)
             ws_client, error = await get_connected_ws_client(
-                client.base_url, client.token
+                self._client.base_url, self._client.token
             )
             if error or ws_client is None:
                 raise_tool_error(error or create_error_response(
@@ -299,15 +301,16 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 if source == "statistics":
                     return await _fetch_statistics(
-                        ws_client, client, entity_id_list,
+                        ws_client, self._client, entity_id_list,
                         start_dt, end_dt, period, statistic_types,
+                        limit, offset,
                     )
                 else:
                     return await _fetch_history(
-                        ws_client, client, entity_id_list,
+                        ws_client, self._client, entity_id_list,
                         start_dt, end_dt, minimal_response,
-                        significant_changes_only, limit,
-                        DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
+                        significant_changes_only, limit, offset,
+                        _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
                     )
             finally:
                 if ws_client:
@@ -331,6 +334,79 @@ def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exception_to_structured_error(e, suggestions=suggestions)
 
 
+def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register historical data access tools with the MCP server."""
+    register_tool_methods(mcp, HistoryTools(client))
+
+
+def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
+    """Parse entity_ids parameter into a list of strings."""
+    if isinstance(entity_ids, str):
+        if entity_ids.startswith("["):
+            parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
+            if parsed_ids is None:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=["Provide at least one entity ID"],
+                ))
+            return parsed_ids
+        elif "," in entity_ids:
+            result = [e.strip() for e in entity_ids.split(",") if e.strip()]
+            if not result:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "entity_ids is required",
+                    suggestions=["Provide at least one entity ID"],
+                ))
+            return result
+        else:
+            return [entity_ids.strip()]
+    if not entity_ids:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_MISSING_PARAMETER,
+            "entity_ids is required",
+            suggestions=["Provide at least one entity ID"],
+        ))
+
+    return entity_ids
+
+
+def _parse_time_range(
+    start_time: str | None,
+    end_time: str | None,
+    default_hours: int,
+) -> tuple[datetime, datetime]:
+    """Parse start_time and end_time into datetime objects."""
+    try:
+        start_dt = parse_relative_time(start_time, default_hours=default_hours)
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "start_time"},
+            suggestions=[
+                "Use ISO format: '2025-01-25T00:00:00Z'",
+                "Use relative format: '24h', '7d', '2w', '1m'",
+            ],
+        ))
+
+    if end_time:
+        try:
+            end_dt = parse_relative_time(end_time, default_hours=0)
+        except ValueError as e:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "end_time"},
+                suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
+            ))
+    else:
+        end_dt = datetime.now(UTC)
+
+    return start_dt, end_dt
+
+
 async def _fetch_history(
     ws_client: Any,
     client: Any,
@@ -340,6 +416,7 @@ async def _fetch_history(
     minimal_response: bool,
     significant_changes_only: bool,
     limit: int | str | None,
+    offset: int | str | None,
     default_limit: int,
     max_limit: int,
 ) -> dict[str, Any]:
@@ -352,14 +429,27 @@ async def _fetch_history(
             min_value=1,
             max_value=max_limit,
         )
-        if effective_limit is None:
-            effective_limit = default_limit
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             str(e),
             context={"parameter": "limit"},
             suggestions=["Provide limit as an integer (e.g., 100)"],
+        ))
+
+    try:
+        effective_offset = coerce_int_param(
+            offset,
+            param_name="offset",
+            default=0,
+            min_value=0,
+        )
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "offset"},
+            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
         ))
 
     command_params = {
@@ -393,10 +483,10 @@ async def _fetch_history(
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
-        limited_states = entity_states[:effective_limit]
+        paged_states = entity_states[effective_offset : effective_offset + effective_limit]
 
         formatted_states = []
-        for state in limited_states:
+        for state in paged_states:
             last_updated_raw = state.get("lu", state.get("last_updated"))
             last_changed_raw = state.get("lc", state.get("last_changed"))
             if last_changed_raw is None and last_updated_raw is not None:
@@ -411,6 +501,12 @@ async def _fetch_history(
                 state_entry["attributes"] = state.get("a", state.get("attributes", {}))
             formatted_states.append(state_entry)
 
+        pagination = build_pagination_metadata(
+            total_count=len(entity_states),
+            offset=effective_offset,
+            limit=effective_limit,
+            count=len(formatted_states),
+        )
         entities_history.append({
             "entity_id": entity_id,
             "period": {
@@ -418,9 +514,7 @@ async def _fetch_history(
                 "end": end_dt.isoformat(),
             },
             "states": formatted_states,
-            "count": len(formatted_states),
-            "total_available": len(entity_states),
-            "truncated": len(entity_states) > effective_limit,
+            **pagination,
         })
 
     history_data = {
@@ -435,6 +529,7 @@ async def _fetch_history(
             "minimal_response": minimal_response,
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
+            "offset": effective_offset,
         },
     }
 
@@ -449,8 +544,41 @@ async def _fetch_statistics(
     end_dt: datetime,
     period: str,
     statistic_types: str | list[str] | None,
+    limit: int | str | None,
+    offset: int | str | None,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call."""
+    try:
+        effective_limit = coerce_int_param(
+            limit,
+            param_name="limit",
+            default=_DEFAULT_HISTORY_LIMIT,
+            min_value=1,
+            max_value=_MAX_HISTORY_LIMIT,
+        )
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "limit"},
+            suggestions=["Provide limit as an integer (e.g., 100)"],
+        ))
+
+    try:
+        effective_offset = coerce_int_param(
+            offset,
+            param_name="offset",
+            default=0,
+            min_value=0,
+        )
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            str(e),
+            context={"parameter": "offset"},
+            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+        ))
+
     # Validate period
     valid_periods = ["5minute", "hour", "day", "week", "month"]
     if period not in valid_periods:
@@ -518,10 +646,11 @@ async def _fetch_statistics(
 
     for entity_id in entity_id_list:
         entity_stats = result_data.get(entity_id, [])
+        paged_stats = entity_stats[effective_offset : effective_offset + effective_limit]
         formatted_stats = []
         unit = None
 
-        for stat in entity_stats:
+        for stat in paged_stats:
             stat_entry: dict[str, Any] = {"start": stat.get("start")}
             for stat_type in all_stat_types:
                 if stat_type in stat:
@@ -530,12 +659,18 @@ async def _fetch_statistics(
                 unit = stat["unit_of_measurement"]
             formatted_stats.append(stat_entry)
 
+        pagination = build_pagination_metadata(
+            total_count=len(entity_stats),
+            offset=effective_offset,
+            limit=effective_limit,
+            count=len(formatted_stats),
+        )
         entities_statistics.append({
             "entity_id": entity_id,
             "period": period,
             "statistics": formatted_stats,
-            "count": len(formatted_stats),
             "unit_of_measurement": unit,
+            **pagination,
         })
 
     empty_entities: list[str] = [
