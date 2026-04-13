@@ -687,6 +687,9 @@ async def _fetch_statistics(
             "end": end_dt.isoformat(),
         },
         "statistic_types": all_stat_types,
+        "query_params": {
+            "statistic_types": statistic_types,
+        },
     }
 
     if empty_entities:
