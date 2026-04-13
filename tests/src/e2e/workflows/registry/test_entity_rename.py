@@ -226,12 +226,16 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Domain change should be rejected"
-        error = rename_data.get("error", {})
-        actual_code = error.get("code") if isinstance(error, dict) else str(error)
-        assert actual_code == "VALIDATION_INVALID_PARAMETER"
-        error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
-        assert "domain" in error_msg.lower(), (
-            f"Error message should indicate domain mismatch, got: {error_msg}"
+        # Contract: error must be a dict with code and message keys
+        error = rename_data.get("error")
+        assert isinstance(error, dict), (
+            f"error should be dict, got {type(error).__name__}: {error!r}"
+        )
+        assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+            f"Expected VALIDATION_INVALID_PARAMETER, got: {error}"
+        )
+        assert "domain" in error.get("message", "").lower(), (
+            f"Error message should indicate domain mismatch, got: {error}"
         )
         logger.info("Domain mismatch correctly rejected")
 
@@ -262,10 +266,17 @@ class TestEntityRename:
             assert not rename_data.get("success"), (
                 f"Invalid format should be rejected: {invalid_id}"
             )
-            error = rename_data.get("error", {})
-            actual_code = error.get("code") if isinstance(error, dict) else str(error)
-            assert actual_code == "VALIDATION_INVALID_PARAMETER", (
-                f"Expected VALIDATION_INVALID_PARAMETER for {invalid_id}, got: {actual_code}"
+            # Contract: error must be a dict with code and message keys
+            error = rename_data.get("error")
+            assert isinstance(error, dict), (
+                f"error should be dict, got {type(error).__name__}: {error!r}"
+            )
+            assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+                f"Expected VALIDATION_INVALID_PARAMETER for {invalid_id}, got: {error}"
+            )
+            error_msg = error.get("message", "")
+            assert invalid_id in error_msg, (
+                f"Error message should identify rejected input '{invalid_id}', got: {error_msg}"
             )
             logger.info(f"Invalid format correctly rejected: {invalid_id}")
 
