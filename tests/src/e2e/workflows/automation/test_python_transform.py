@@ -520,3 +520,60 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
     )
     error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_categorized_automation_transform_preserves_category(mcp_client, ha_client):
+    """Test that python_transform on a categorized automation preserves the category.
+
+    Regression test for blocker #1: category must be popped before upsert
+    (HA REST API rejects unknown keys) and re-applied afterwards.
+    """
+    mcp = MCPAssertions(mcp_client)
+
+    # Create a category
+    cat_result = await mcp.call_tool_success(
+        "ha_config_set_category",
+        {"name": "E2E Transform Category Test", "scope": "automation"},
+    )
+    category_id = cat_result["category_id"]
+
+    # Create automation with category
+    create_result = await mcp.call_tool_success(
+        "ha_config_set_automation",
+        {
+            "config": {
+                "alias": "Test Categorized Transform",
+                "trigger": [{"platform": "time", "at": "21:00:00"}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}, "data": {"brightness": 50}},
+                ],
+            },
+            "category": category_id,
+        },
+    )
+    entity_id = create_result["entity_id"]
+
+    # Get config_hash
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_automation", {"identifier": entity_id}
+    )
+    config_hash = get_result["config_hash"]
+    assert get_result["config"].get("category") == category_id
+
+    # Transform a property
+    await mcp.call_tool_success(
+        "ha_config_set_automation",
+        {
+            "identifier": entity_id,
+            "config_hash": config_hash,
+            "python_transform": "config['action'][0]['data']['brightness'] = 200",
+        },
+    )
+
+    # Verify category is preserved and transform applied
+    verify = await mcp.call_tool_success(
+        "ha_config_get_automation", {"identifier": entity_id}
+    )
+    assert verify["config"]["action"][0]["data"]["brightness"] == 200
+    assert verify["config"].get("category") == category_id
