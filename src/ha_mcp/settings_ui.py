@@ -380,11 +380,18 @@ async function restartAddon() {
     if (resp.ok) {
       btn.textContent = 'Restart initiated — reload page in ~30s';
     } else {
-      btn.textContent = 'Restart failed';
+      let msg = 'Restart failed';
+      try {
+        const err = await resp.json();
+        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
+      } catch (_e) {}
+      btn.textContent = msg;
       btn.disabled = false;
+      alert(msg);
     }
   } catch (_e) {
-    btn.textContent = 'Connection lost (expected during restart)';
+    // Connection lost mid-request is actually expected — the addon is restarting
+    btn.textContent = 'Restart initiated (connection dropped)';
   }
 }
 
@@ -672,22 +679,36 @@ def register_settings_routes(
                 {"success": False, "error": {"code": "NOT_IN_ADDON", "message": "Restart only available in add-on mode"}},
                 status_code=400,
             )
+        # Short timeout — the supervisor kills our process during restart so
+        # the connection will drop. A connection drop is actually success.
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
                     "http://supervisor/addons/self/restart",
                     headers={"Authorization": f"Bearer {token}"},
                 )
-            if resp.status_code >= 400:
-                logger.error("Supervisor restart failed: %d %s", resp.status_code, resp.text)
-                return JSONResponse(
-                    {"success": False, "error": {"code": "SUPERVISOR_ERROR", "message": f"Supervisor returned {resp.status_code}"}},
-                    status_code=502,
-                )
+        except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError):
+            # Connection dropped mid-request — restart is happening
+            logger.info("Restart request connection dropped (expected during restart)")
+            return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
             return JSONResponse(
                 {"success": False, "error": {"code": "SUPERVISOR_UNREACHABLE", "message": str(e)}},
+                status_code=502,
+            )
+
+        if resp.status_code >= 400:
+            body = resp.text
+            logger.error("Supervisor restart failed: %d %s", resp.status_code, body)
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SUPERVISOR_ERROR",
+                        "message": f"Supervisor returned {resp.status_code}: {body[:500]}",
+                    },
+                },
                 status_code=502,
             )
         return JSONResponse({"success": True, "message": "Restart initiated"})
