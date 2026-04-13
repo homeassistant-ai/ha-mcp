@@ -155,7 +155,7 @@ Spend less time configuring, more time enjoying your smart home.
 
 | Category | Tools |
 |----------|-------|
-| **Add-ons** | `ha_call_addon_api`, `ha_get_addon` |
+| **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
