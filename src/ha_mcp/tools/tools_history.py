@@ -179,17 +179,17 @@ class HistoryTools:
         limit: Annotated[
             int | str | None,
             Field(
-                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows.',
+                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0.',
                 default=None,
             ),
         ] = None,
         offset: Annotated[
-            int | str,
+            int | str | None,
             Field(
-                description="Number of entries to skip per entity for pagination. Default: 0. Use with limit and has_more/next_offset in the response.",
-                default=0,
+                description="Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
+                default=None,
             ),
-        ] = 0,
+        ] = None,
         # Statistics-specific (ignored when source="history")
         period: Annotated[
             str,
@@ -229,8 +229,9 @@ class HistoryTools:
         - Computing period averages ("Average living room temperature over 6 months?")
         - Entities must have state_class (measurement, total, total_increasing)
 
-        **NOTE:** limit and offset apply per entity (not globally across all entities).
+        **WARNING:** limit and offset apply per entity (not globally across all entities).
         All data is fetched from HA before slicing; limit/offset are client-side.
+        With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
         Use has_more and next_offset from the response to paginate.
 
         **Example -- history (default):**
@@ -252,6 +253,19 @@ class HistoryTools:
         try:
             # Parse entity_ids
             entity_id_list = _parse_entity_ids(entity_ids)
+
+            # Offset > 0 is only supported for single-entity requests.
+            # build_pagination_metadata applies per entity — limit=100 across
+            # 5 entities returns up to 500 rows with no top-level has_more signal.
+            if offset is not None and offset != 0:
+                _effective_offset_check = int(offset) if isinstance(offset, str) else offset
+                if _effective_offset_check > 0 and len(entity_id_list) > 1:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "offset > 0 requires a single entity_id",
+                        context={"offset": offset, "entity_count": len(entity_id_list)},
+                        suggestions=["Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."],
+                    ))
 
             # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
@@ -399,7 +413,7 @@ async def _fetch_history(
             default=default_limit,
             min_value=1,
             max_value=max_limit,
-        ) or default_limit
+        )
     except ValueError as e:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -500,6 +514,7 @@ async def _fetch_history(
             "minimal_response": minimal_response,
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
+            "offset": effective_offset,
         },
     }
 
@@ -518,7 +533,6 @@ async def _fetch_statistics(
     offset: int | str,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call."""
-    # Coerce limit and offset
     try:
         effective_limit = coerce_int_param(
             limit,
