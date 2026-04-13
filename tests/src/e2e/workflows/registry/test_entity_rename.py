@@ -226,7 +226,17 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Domain change should be rejected"
-        assert rename_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Contract: error must be a dict with code and message keys
+        error = rename_data.get("error")
+        assert isinstance(error, dict), (
+            f"error should be dict, got {type(error).__name__}: {error!r}"
+        )
+        assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+            f"Expected VALIDATION_INVALID_PARAMETER, got: {error}"
+        )
+        assert "domain" in error.get("message", "").lower(), (
+            f"Error message should indicate domain mismatch, got: {error}"
+        )
         logger.info("Domain mismatch correctly rejected")
 
     async def test_rename_invalid_format_rejected(self, mcp_client):
@@ -256,7 +266,18 @@ class TestEntityRename:
             assert not rename_data.get("success"), (
                 f"Invalid format should be rejected: {invalid_id}"
             )
-            assert rename_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+            # Contract: error must be a dict with code and message keys
+            error = rename_data.get("error")
+            assert isinstance(error, dict), (
+                f"error should be dict, got {type(error).__name__}: {error!r}"
+            )
+            assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+                f"Expected VALIDATION_INVALID_PARAMETER for {invalid_id}, got: {error}"
+            )
+            error_msg = error.get("message", "")
+            assert invalid_id in error_msg, (
+                f"Error message should identify rejected input '{invalid_id}', got: {error_msg}"
+            )
             logger.info(f"Invalid format correctly rejected: {invalid_id}")
 
     async def test_rename_nonexistent_entity(self, mcp_client):
