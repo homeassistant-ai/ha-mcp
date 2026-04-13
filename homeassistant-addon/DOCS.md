@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -102,13 +102,32 @@ Replace the URL with the one from your add-on logs.
 
 ### <details><summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-For secure remote access without port forwarding, use the **Cloudflared add-on**:
+For secure remote access, you have two options:
 
-#### Install Cloudflared Add-on
+#### Option A: Webhook Proxy Add-on (Simplest — if you have Nabu Casa or an existing reverse proxy)
+
+The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
+
+1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+3. Start it and **restart Home Assistant** when prompted
+4. Copy the URL from the webhook proxy add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+5. Use that URL in your MCP client
+
+Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
+
+#### Option B: Cloudflared Add-on (No existing reverse proxy needed)
+
+Use the **Cloudflared add-on** for a dedicated tunnel:
+
+##### Install Cloudflared Add-on
 
 [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
 
-#### Configure Cloudflared
+##### Configure Cloudflared
 
 **Note:** The Cloudflared add-on requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
 
@@ -127,7 +146,7 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
-#### Authenticate and Get Your Public URL
+##### Authenticate and Get Your Public URL
 
 When you first start Cloudflared:
 
@@ -143,7 +162,7 @@ When you first start Cloudflared:
    - Named tunnel: `https://ha-mcp-<random>.cfargotunnel.com`
    - Custom domain: `https://ha-mcp.yourdomain.com` (if DNS configured)
 
-#### Use Your MCP Server
+##### Use Your MCP Server
 
 Combine the Cloudflare tunnel URL with your secret path:
 ```
@@ -158,7 +177,7 @@ https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 
 **Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
 
-#### ⚠️ Disable "Block AI Training Bots"
+##### ⚠️ Disable "Block AI Training Bots"
 
 > **This is the most common connection issue for Cloudflare users.** If your LLM client can't connect but visiting the URL in your browser works, this setting is almost certainly the cause.
 
@@ -212,7 +231,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~87 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -275,7 +294,7 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 ### Network Exposure
 
 - **Local network only by default** - The add-on listens on port 9583
-- **Remote access** - Use the Cloudflared add-on for secure HTTPS tunnels
+- **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
 
 ---
@@ -334,7 +353,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 87+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
@@ -410,9 +429,8 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
-- `ha_get_history` — Retrieve raw state change history for entities (last ~10 days).
+- `ha_get_history` — Retrieve historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
-- `ha_get_statistics` — Retrieve pre-aggregated long-term statistics for trend analysis.
 
 ### Integrations
 - `ha_delete_config_entry` — Delete config entry permanently. Requires confirm=True.
@@ -450,7 +468,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_check_config` — Check Home Assistant configuration for errors.
 - `ha_config_set_yaml` — Add, replace, or remove a top-level key in configuration.yaml or package files.
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
-- `ha_get_updates` — Get update information - list all updates or get details for a specific one.
+- `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
 - `ha_restart` — Restart Home Assistant.
 

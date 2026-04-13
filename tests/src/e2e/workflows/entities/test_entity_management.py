@@ -175,6 +175,7 @@ class TestEntityManagement:
             {"entity_id": "sensor.nonexistent_entity_xyz", "name": "Test Name"},
         )
         assert not data.get("success", False), "Should fail for non-existent entity"
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
 
         logger.info("Non-existent entity error handling verified")
 
@@ -558,3 +559,70 @@ class TestEntityManagement:
 
         # Cleanup
         await cleaner.cleanup_all()
+
+
+@pytest.mark.registry
+class TestSetEntityNegativeInputs:
+    """Negative-input tests for ha_set_entity.
+
+    All cases exercise MCP-layer pre-flight guards — no WebSocket call is made.
+    """
+
+    async def test_set_entity_empty_list_rejected(self, mcp_client) -> None:
+        """Rejects an empty entity_id list before any registry call is made."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": [], "name": "Test"},
+        )
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_bulk_with_single_param_rejected(self, mcp_client) -> None:
+        """Rejects bulk operation when a single-entity parameter is provided."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": ["light.a", "light.b"], "name": "Shared Name"},
+        )
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_automation_disable_rejected(self, mcp_client) -> None:
+        """Rejects registry-disabling an automation entity.
+
+        Introduced in #796: automation and script entities cannot be registry-disabled
+        via ha_set_entity(enabled=False) because it removes them from the state machine.
+        Use ha_call_service('automation', 'turn_off', ...) instead.
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "automation.test_automation", "enabled": False},
+        )
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_invalid_assistant_rejected(self, mcp_client) -> None:
+        """Rejects expose_to with an unrecognised assistant ID."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "light.test", "expose_to": {"unknown_assistant": True}},
+        )
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_set_entity_script_disable_rejected(self, mcp_client) -> None:
+        """Rejects registry-disabling a script entity.
+
+        Introduced in #796: script entities cannot be registry-disabled via
+        ha_set_entity(enabled=False). Use ha_call_service('script', 'turn_off', ...) instead.
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "script.test_script", "enabled": False},
+        )
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

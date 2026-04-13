@@ -20,23 +20,23 @@ const links = [
 ] as const;
 ---
 
-<nav class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+<nav class="sticky top-0 z-50 border-b border-white/[0.06] bg-surface-0/95 backdrop-blur-md">
   <div class="container mx-auto px-4 max-w-6xl">
-    <div class="flex items-center justify-between h-14">
-      <a href={withBase('/')} class="flex items-center gap-2">
+    <div class="flex items-center justify-between h-16">
+      <a href={withBase('/')} class="flex items-center gap-2.5">
         <img src={withBase('/icon.svg')} alt="Home Assistant MCP" class="h-8 w-8" />
-        <span class="font-semibold text-white text-lg hidden sm:inline">Home Assistant MCP Server</span>
-        <span class="font-semibold text-white text-lg sm:hidden">ha-mcp</span>
+        <span class="font-display font-semibold text-white text-lg hidden sm:inline tracking-tight">ha-mcp</span>
       </a>
-      <div class="flex items-center gap-6">
+      <div class="flex items-center gap-1">
         {links.map(link => (
           <a
             href={withBase(link.href)}
-            class={`text-sm transition-colors ${
+            class:list={[
+              'px-3 py-1.5 rounded-lg text-sm transition-colors',
               active === link.id
-                ? 'text-blue-400 font-medium'
-                : 'text-slate-300 hover:text-white'
-            }`}
+                ? 'text-brand font-medium bg-brand/[0.08]'
+                : 'text-[var(--text-secondary)] hover:text-white hover:bg-white/[0.04]',
+            ]}
           >
             {link.label}
           </a>

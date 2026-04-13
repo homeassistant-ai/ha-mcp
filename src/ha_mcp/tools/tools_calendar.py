@@ -12,20 +12,34 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register calendar management tools with the MCP server."""
+class CalendarTools:
+    """Calendar event management tools for Home Assistant."""
 
-    @mcp.tool(tags={"Calendar"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Calendar Events"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_config_get_calendar_events",
+        tags={"Calendar"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Calendar Events"},
+    )
     @log_tool_usage
     async def ha_config_get_calendar_events(
+        self,
         entity_id: Annotated[
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
@@ -103,7 +117,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Use the REST client to fetch calendar events
             # The endpoint is /calendars/{entity_id} (note: without /api prefix as client adds it)
-            response = await client._request(
+            response = await self._client._request(
                 "GET", f"/calendars/{entity_id}", params=params
             )
 
@@ -144,9 +158,14 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
-    @mcp.tool(tags={"Calendar"}, annotations={"destructiveHint": True, "title": "Create or Update Calendar Event"})
+    @tool(
+        name="ha_config_set_calendar_event",
+        tags={"Calendar"},
+        annotations={"destructiveHint": True, "title": "Create or Update Calendar Event"},
+    )
     @log_tool_usage
     async def ha_config_set_calendar_event(
+        self,
         entity_id: Annotated[
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
@@ -227,7 +246,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 service_data["location"] = location
 
             # Call the calendar.create_event service
-            result = await client.call_service("calendar", "create_event", service_data)
+            result = await self._client.call_service("calendar", "create_event", service_data)
 
             return {
                 "success": True,
@@ -263,9 +282,14 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
 
-    @mcp.tool(tags={"Calendar"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Calendar Event"})
+    @tool(
+        name="ha_config_remove_calendar_event",
+        tags={"Calendar"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Calendar Event"},
+    )
     @log_tool_usage
     async def ha_config_remove_calendar_event(
+        self,
         entity_id: Annotated[
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
@@ -342,7 +366,7 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 service_data["recurrence_range"] = recurrence_range
 
             # Call the calendar.delete_event service
-            result = await client.call_service("calendar", "delete_event", service_data)
+            result = await self._client.call_service("calendar", "delete_event", service_data)
 
             return {
                 "success": True,
@@ -375,3 +399,8 @@ def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions.insert(0, "This calendar does not support event deletion")
 
             exception_to_structured_error(error, context={"entity_id": entity_id, "uid": uid}, suggestions=suggestions)
+
+
+def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register calendar management tools with the MCP server."""
+    register_tool_methods(mcp, CalendarTools(client))

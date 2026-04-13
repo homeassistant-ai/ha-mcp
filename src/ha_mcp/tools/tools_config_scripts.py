@@ -9,6 +9,7 @@ import logging
 from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
@@ -18,7 +19,12 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     get_skill_prefix as _get_skill_prefix,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
@@ -54,19 +60,24 @@ def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant script configuration tools."""
+class ConfigScriptTools:
+    """Script configuration management tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_config_get_script",
         tags={"Scripts"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Script Config"
-        }
+            "title": "Get Script Config",
+        },
     )
     @log_tool_usage
     async def ha_config_get_script(
+        self,
         script_id: Annotated[
             str, Field(description="Script identifier (e.g., 'morning_routine')")
         ],
@@ -83,11 +94,11 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
         """
         try:
-            config_result = await client.get_script_config(script_id)
+            config_result = await self._client.get_script_config(script_id)
 
             # Fetch category from entity registry (best-effort)
             entity_id = f"script.{script_id}"
-            cat_id = await fetch_entity_category(client, entity_id, "script")
+            cat_id = await fetch_entity_category(self._client, entity_id, "script")
             if cat_id:
                 config_result["category"] = cat_id
 
@@ -110,15 +121,68 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    @staticmethod
+    def _validate_script_config(
+        config: str | dict[str, Any],
+        script_id: str,
+        category: str | None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """Parse and validate script config, returning (config_dict, effective_category).
+
+        Parses JSON string config, validates it is a dict, checks for required
+        fields (sequence or use_blueprint), extracts category, and strips empty
+        blueprint fields.
+        """
+        # Parse JSON config if provided as string
+        try:
+            parsed_config = parse_json_param(config, "config")
+        except ValueError as e:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_JSON,
+                f"Invalid config parameter: {e}",
+                context={"script_id": script_id, "provided_config_type": type(config).__name__},
+            ))
+
+        # Ensure config is a dict
+        if parsed_config is None or not isinstance(parsed_config, dict):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Config parameter must be a JSON object",
+                context={"script_id": script_id, "provided_type": type(parsed_config).__name__},
+            ))
+
+        config_dict = cast(dict[str, Any], parsed_config)
+
+        # Extract category before sending to HA REST API (which rejects unknown keys).
+        # Parameter takes precedence over config dict value.
+        config_category = config_dict.pop("category", None)
+        effective_category = category if category is not None else config_category
+
+        # Validate required fields based on script type
+        # Blueprint scripts only need use_blueprint, regular scripts need sequence
+        if "use_blueprint" in config_dict:
+            # Strip empty sequence array that would override blueprint
+            config_dict = _strip_empty_script_fields(config_dict)
+        elif "sequence" not in config_dict:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
+                context={"script_id": script_id, "required_fields": ["sequence OR use_blueprint"]},
+            ))
+
+        return config_dict, effective_category
+
+    @tool(
+        name="ha_config_set_script",
         tags={"Scripts"},
         annotations={
             "destructiveHint": True,
-            "title": "Create or Update Script"
-        }
+            "title": "Create or Update Script",
+        },
     )
     @log_tool_usage
     async def ha_config_set_script(
+        self,
         script_id: Annotated[
             str, Field(description="Script identifier (e.g., 'morning_routine')")
         ],
@@ -255,56 +319,23 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         bp_warnings: list[str] = []
         try:
-            # Parse JSON config if provided as string
-            try:
-                parsed_config = parse_json_param(config, "config")
-            except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_JSON,
-                    f"Invalid config parameter: {e}",
-                    context={"script_id": script_id, "provided_config_type": type(config).__name__},
-                ))
-
-            # Ensure config is a dict
-            if parsed_config is None or not isinstance(parsed_config, dict):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Config parameter must be a JSON object",
-                    context={"script_id": script_id, "provided_type": type(parsed_config).__name__},
-                ))
-
-            config_dict = cast(dict[str, Any], parsed_config)
-
-            # Extract category before sending to HA REST API (which rejects unknown keys).
-            # Parameter takes precedence over config dict value.
-            config_category = config_dict.pop("category", None)
-            effective_category = category if category is not None else config_category
-
-            # Validate required fields based on script type
-            # Blueprint scripts only need use_blueprint, regular scripts need sequence
-            if "use_blueprint" in config_dict:
-                # Strip empty sequence array that would override blueprint
-                config_dict = _strip_empty_script_fields(config_dict)
-            elif "sequence" not in config_dict:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
-                    context={"script_id": script_id, "required_fields": ["sequence OR use_blueprint"]},
-                ))
+            config_dict, effective_category = self._validate_script_config(
+                config, script_id, category,
+            )
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(
                 config_dict, skill_prefix=_get_skill_prefix()
             )
 
-            result = await client.upsert_script_config(config_dict, script_id)
+            result = await self._client.upsert_script_config(config_dict, script_id)
 
             # Wait for script to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
             if wait_bool:
                 try:
-                    registered = await wait_for_entity_registered(client, entity_id)
+                    registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
                         result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
                 except Exception as e:
@@ -313,7 +344,7 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Apply category to entity registry if provided
             if effective_category and entity_id:
                 await apply_entity_category(
-                    client, entity_id, effective_category, "script", result, "script"
+                    self._client, entity_id, effective_category, "script", result, "script"
                 )
 
             if bp_warnings:
@@ -346,16 +377,18 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=suggestions,
             )
 
-    @mcp.tool(
+    @tool(
+        name="ha_config_remove_script",
         tags={"Scripts"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": True,
-            "title": "Remove Script"
-        }
+            "title": "Remove Script",
+        },
     )
     @log_tool_usage
     async def ha_config_remove_script(
+        self,
         script_id: Annotated[
             str, Field(description="Script identifier to delete (e.g., 'old_script')")
         ],
@@ -384,14 +417,14 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
-            result = await client.delete_script_config(script_id)
+            result = await self._client.delete_script_config(script_id)
 
             # Wait for script to be removed
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
             if wait_bool:
                 try:
-                    removed = await wait_for_entity_removed(client, entity_id)
+                    removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
                         result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
                 except Exception as e:
@@ -410,3 +443,8 @@ def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Use ha_get_skill_home_assistant_best_practices for help",
                 ],
             )
+
+
+def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant script configuration tools."""
+    register_tool_methods(mcp, ConfigScriptTools(client))

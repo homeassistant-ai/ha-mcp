@@ -30,7 +30,7 @@ jobs:
     steps:
       - name: Check if workflow should run
         id: check
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             let issue;
@@ -134,7 +134,7 @@ jobs:
 
       - name: Get issue number
         id: issue_number
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = context.payload.inputs?.issue_number || context.issue.number;
@@ -143,7 +143,7 @@ jobs:
 
       - name: Post initial "working" comment
         id: initial_comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = ${{ steps.issue_number.outputs.number }};
@@ -158,7 +158,7 @@ jobs:
 
       - name: Fetch full issue thread
         id: issue_data
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const issueNumber = ${{ steps.issue_number.outputs.number }};
@@ -207,7 +207,7 @@ jobs:
       - name: Build completeness check prompt
         id: build_prompt
         if: needs.should_run.outputs.skip_preanalysis != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
           ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
@@ -533,7 +533,7 @@ jobs:
 
       - name: Update comment and labels
         if: always() && steps.initial_comment.outputs.comment_id
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
           EVALUATE_ERROR: ${{ steps.evaluate.outputs.error }}

@@ -59,10 +59,15 @@ ha-mcp is exposed to the internet via a secure HTTPS tunnel or reverse proxy.
    - Free tier available
    - Works behind CGNAT
 
-2. **Caddy Reverse Proxy**
+2. **Webhook Proxy Add-on** (Easiest if you have Nabu Casa)
+   - Uses your existing HA reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx)
+   - No separate tunnel to port 9583 needed
+   - Proxies MCP traffic through HA's main port 8123
+
+3. **Caddy Reverse Proxy**
    - Automatic HTTPS via Let's Encrypt
    - Requires public IP or dynamic DNS
 
-3. **Nginx + Let's Encrypt**
+4. **Nginx + Let's Encrypt**
    - Traditional setup
    - Full control over configuration

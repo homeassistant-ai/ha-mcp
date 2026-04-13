@@ -4,32 +4,13 @@ Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
 ha_restart reports failure when a reverse proxy returns 504 during restart.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
-)
-from ha_mcp.tools.tools_system import register_system_tools
-
-
-def _register_and_capture_restart(mock_client):
-    """Register system tools with a mock MCP and return the ha_restart function."""
-    mock_mcp = MagicMock()
-    captured = {}
-
-    def fake_tool(**kwargs):
-        def decorator(fn):
-            captured[fn.__name__] = fn
-            return fn
-        return decorator
-
-    mock_mcp.tool = fake_tool
-    register_system_tools(mock_mcp, mock_client)
-    assert "ha_restart" in captured, "ha_restart was not registered"
-    return captured["ha_restart"]
+from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.tools.tools_system import SystemTools
 
 
 def _make_client_that_fails_on_restart(exception):
@@ -52,9 +33,9 @@ class TestHaRestartErrorHandling:
         """
         error = HomeAssistantAPIError("API error: 504 - ", status_code=504)
         client = _make_client_that_fails_on_restart(error)
-        ha_restart = _register_and_capture_restart(client)
+        tools = SystemTools(client)
 
-        result = await ha_restart(confirm=True)
+        result = await tools.ha_restart(confirm=True)
 
         assert result["success"] is True
 
@@ -63,7 +44,7 @@ class TestHaRestartErrorHandling:
         """Errors unrelated to restart should still report failure via ToolError."""
         error = Exception("Something completely unrelated went wrong")
         client = _make_client_that_fails_on_restart(error)
-        ha_restart = _register_and_capture_restart(client)
+        tools = SystemTools(client)
 
         with pytest.raises(ToolError):
-            await ha_restart(confirm=True)
+            await tools.ha_restart(confirm=True)

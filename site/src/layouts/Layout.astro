@@ -10,16 +10,75 @@ const { title } = Astro.props;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="description" content="Configure ha-mcp for your favorite AI assistant" />
+    <meta name="description" content="AI-powered smart home control through the Model Context Protocol" />
     <meta name="viewport" content="width=device-width" />
     <link rel="icon" type="image/svg+xml" href="/ha-mcp/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <!-- Cloudflare Web Analytics -->
     <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "65196c0f415f4f3690e13ad77fa44cb0"}'></script>
   </head>
-  <body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+  <body class="min-h-screen text-[var(--text-primary)] antialiased body-background">
     <slot />
+    <script>
+      (function() {
+        const svgAttrs = 'width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+        const copyIcon = `<svg ${svgAttrs}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
+        const checkIcon = `<svg ${svgAttrs}><path d="M20 6L9 17l-5-5"/></svg>`;
+
+        async function copyText(text) {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;opacity:0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+          }
+        }
+
+        // Exposed globally so pages with dynamic content can re-run it
+        window.initCopyButtons = function() {
+          document.querySelectorAll('pre').forEach(pre => {
+            if (pre.parentElement?.classList.contains('pre-wrapper')) return;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'pre-wrapper';
+            pre.parentNode.insertBefore(wrapper, pre);
+            wrapper.appendChild(pre);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'copy-btn';
+            btn.setAttribute('aria-label', 'Copy to clipboard');
+            btn.innerHTML = copyIcon;
+            btn.addEventListener('click', async () => {
+              const raw = (pre.querySelector('code') || pre).textContent?.trim() ?? '';
+              const text = raw.replace(/^[\$>]\s/gm, '');
+              try {
+                await copyText(text);
+                btn.innerHTML = checkIcon;
+                btn.setAttribute('aria-label', 'Copied');
+                setTimeout(() => {
+                  btn.innerHTML = copyIcon;
+                  btn.setAttribute('aria-label', 'Copy to clipboard');
+                }, 1500);
+              } catch {
+                btn.setAttribute('aria-label', 'Copy failed');
+                setTimeout(() => btn.setAttribute('aria-label', 'Copy to clipboard'), 2000);
+              }
+            });
+            wrapper.appendChild(btn);
+          });
+        };
+
+        document.addEventListener('DOMContentLoaded', window.initCopyButtons);
+      })();
+    </script>
   </body>
 </html>
 

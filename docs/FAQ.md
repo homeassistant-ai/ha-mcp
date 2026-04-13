@@ -161,6 +161,33 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
    }
    ```
 
+### Windows: pywin32 installation fails
+
+If you see `Failed to install: pywin32` or `os error 32` ("file is used by another process") when starting ha-mcp on Windows, this is caused by two upstream bugs:
+
+1. The MCP Python SDK requires `pywin32` on Windows even though server-only users don't need it ([python-sdk#2233](https://github.com/modelcontextprotocol/python-sdk/issues/2233))
+2. `uv` has a known issue installing `pywin32` on Windows ([uv#17679](https://github.com/astral-sh/uv/issues/17679))
+
+**Workaround — use Docker:**
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_token",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+See [#672](https://github.com/homeassistant-ai/ha-mcp/issues/672) for details.
+
 ### "uvx not found" error
 
 After installing uv, **restart your terminal** (or Claude Desktop) for the PATH changes to take effect.
@@ -205,6 +232,19 @@ source ~/.zshrc
 3. Check **Local MCP Servers** for any errors
 4. If "Home Assistant" is not listed, check your config file syntax
 5. Try asking Claude: "Can you list your available tools?"
+
+### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
+
+If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
+
+Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
+
+1. Install the **MCP Server add-on** and the **Webhook Proxy add-on** from the add-on store
+2. Start the webhook proxy and restart Home Assistant when prompted
+3. Copy the webhook URL from the add-on logs
+4. Use that URL in your MCP client configuration
+
+See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
 
 ### Server works but responses are slow
 
