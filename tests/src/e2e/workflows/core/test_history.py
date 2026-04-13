@@ -439,7 +439,7 @@ class TestGetHistoryStatisticsSource:
 
         test_sensor = sensors[0].get("entity_id")
 
-        periods = ["5minute", "hour", "day", "week", "month"]
+        periods = ["5minute", "hour", "day", "week", "month", "year"]
 
         for period in periods:
             result = await mcp_client.call_tool(
