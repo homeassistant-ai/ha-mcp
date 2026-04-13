@@ -1626,7 +1626,7 @@
           "default": null
         },
         "period": {
-          "type": "Annotated[str, Field(description='Aggregation period: \"5minute\", \"hour\", \"day\", \"week\", \"month\". Default: \"day\". Ignored when source=\"history\"', default='day')]",
+          "type": "Annotated[str, Field(description='Aggregation period: \"5minute\", \"hour\", \"day\", \"week\", \"month\", \"year\". Default: \"day\". Ignored when source=\"history\"', default='day')]",
           "default": "day"
         },
         "statistic_types": {
