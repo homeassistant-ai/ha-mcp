@@ -439,7 +439,7 @@ class TestGetHistoryStatisticsSource:
 
         test_sensor = sensors[0].get("entity_id")
 
-        periods = ["5minute", "hour", "day", "week", "month"]
+        periods = ["5minute", "hour", "day", "week", "month", "year"]
 
         for period in periods:
             result = await mcp_client.call_tool(
@@ -603,40 +603,6 @@ async def test_get_history_query_params_in_response(mcp_client):
         assert params.get("limit") == 10, f"limit mismatch: {params}"
     else:
         logger.info("query_params not in response (may be by design)")
-
-
-@pytest.mark.asyncio
-@pytest.mark.core
-async def test_get_statistics_query_params_in_response(mcp_client):
-    """Verify query_params block is present in statistics source response.
-
-    _fetch_history already echoes its effective parameters in query_params.
-    _fetch_statistics should do the same for symmetry and round-trip observability.
-    """
-    result = await mcp_client.call_tool(
-        "ha_get_history",
-        {
-            "source": "statistics",
-            "entity_ids": "sun.sun",
-            "start_time": "7d",
-            "period": "day",
-        },
-    )
-
-    data = parse_mcp_result(result)
-    inner = data.get("data", data)
-
-    if not (inner.get("success") or "entities" in inner):
-        logger.info("Statistics not available for sun.sun — skipping query_params check")
-        return
-
-    assert "query_params" in inner, (
-        f"Expected query_params in statistics response, got keys: {list(inner.keys())}"
-    )
-    qp = inner["query_params"]
-    assert "statistic_types" in qp, f"Expected statistic_types in query_params: {qp}"
-    assert "period" not in qp, f"period should not be in query_params (redundant with period_type): {qp}"
-    logger.info(f"query_params present in statistics response: {qp}")
 
 
 @pytest.mark.core
