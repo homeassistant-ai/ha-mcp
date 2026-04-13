@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # Seed values for tool visibility (comma-separated tool names).
+    # Used as initial config when no tool_config.json exists.
+    # The web settings UI (/settings) is the primary interface for managing these.
+    disabled_tools: str = Field("", alias="DISABLED_TOOLS")
+    pinned_tools: str = Field("", alias="PINNED_TOOLS")
+
+    # Max results returned by ha_search_tools (2-10).
+    tool_search_max_results: int = Field(5, alias="TOOL_SEARCH_MAX_RESULTS")
+
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
         """Auto-enable skills (resources) when skills-as-tools is on.

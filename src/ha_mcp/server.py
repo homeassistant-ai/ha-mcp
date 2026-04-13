@@ -70,6 +70,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
         self._skill_tool_names: list[str] = []
+        # Populated by _apply_settings_ui from tool_config.json on startup
+        self._user_pinned_tools: list[str] = []
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -142,6 +144,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Register bundled skills as MCP resources
         self._register_skills()
+
+        # Apply user-configured tool visibility (after all tools registered,
+        # before tool search transform wraps them)
+        self._apply_settings_ui()
 
         # Apply tool search transform (must come after all tools and
         # ResourcesAsTools are registered so it can wrap everything)
@@ -306,6 +312,23 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
+    def _apply_settings_ui(self) -> None:
+        """Register settings web UI and apply persisted tool visibility."""
+        from .settings_ui import (
+            apply_tool_visibility,
+            load_tool_config,
+            register_settings_routes,
+        )
+
+        register_settings_routes(self.mcp, self)
+
+        config = load_tool_config(self.settings)
+        if config:
+            pinned = apply_tool_visibility(self.mcp, config, self.settings)
+            if pinned:
+                self._user_pinned_tools = list(pinned)
+            logger.info("Applied persisted tool config (%d entries)", len(config.get("tools", {})))
+
     # Tools pinned outside the search transform for individual permission gating.
     # These are always visible in list_tools() regardless of search transform.
     _PINNED_TOOLS: ClassVar[list[str]] = list(DEFAULT_PINNED_TOOLS)
@@ -419,8 +442,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list
+        # Build the always_visible list: defaults + user-configured pins
         pinned = list(self._PINNED_TOOLS)
+        pinned.extend(self._user_pinned_tools)
 
         # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
