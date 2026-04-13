@@ -252,11 +252,10 @@ class AutomationConfigTools:
         For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
-            config_result = await self._client.get_automation_config(identifier)
-            # Normalize config for round-trip compatibility (GET -> SET)
-            normalized_config = _normalize_config_for_roundtrip(config_result)
+            normalized_config, config_hash = await self._get_automation_config_internal(identifier)
 
             # Resolve entity_id and fetch category from entity registry
+            # (injected after hash so transient registry failures don't affect the hash)
             entity_id = await self._resolve_automation_entity_id(identifier)
             if entity_id:
                 cat_id = await fetch_entity_category(self._client, entity_id, "automation")
@@ -268,7 +267,7 @@ class AutomationConfigTools:
                 "action": "get",
                 "identifier": identifier,
                 "config": normalized_config,
-                "config_hash": compute_config_hash(normalized_config),
+                "config_hash": config_hash,
             }
         except Exception as e:
             # Handle 404 errors gracefully (often used to verify deletion)
@@ -335,6 +334,7 @@ class AutomationConfigTools:
                 description="Python expression to transform existing automation config. "
                 "Mutually exclusive with config. "
                 "Requires identifier and config_hash for validation. "
+                "WARNING: Expressions with infinite loops will hang the server. "
                 "Examples: "
                 "Simple: python_transform=\"config['action'][0]['data']['brightness'] = 255\" "
                 "Pattern: python_transform=\"for a in config['action']: "
@@ -379,7 +379,7 @@ class AutomationConfigTools:
         PYTHON TRANSFORM EXAMPLES:
         - Update action: python_transform="config['action'][0]['data']['brightness'] = 255"
         - Add trigger: python_transform="config['trigger'].append({'platform': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
-        - Remove action: python_transform="del config['action'][2]"
+        - Remove last action: python_transform="config['action'].pop()"
 
         Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
 
@@ -558,28 +558,53 @@ class AutomationConfigTools:
                                 "Check expression syntax",
                                 "Ensure only allowed operations are used",
                                 "See tool description for allowed operations",
-                                f"Expression: {python_transform[:100]}...",
+                                f"Expression: {python_transform[:100]}{'...' if len(python_transform) > 100 else ''}",
                             ],
                             context={"action": "python_transform", "identifier": identifier},
                         )
                     )
+
+                # Pop category before sending to HA REST API (rejects unknown keys)
+                transform_category = transformed_config.pop("category", None)
+
+                # Normalize and validate the transformed config
+                transformed_config = _normalize_automation_config(transformed_config)
+                self._validate_required_fields(transformed_config, identifier)
+                bp_warnings = _check_best_practices(
+                    transformed_config, skill_prefix=_get_skill_prefix()
+                )
 
                 # Save transformed config
                 result = await self._client.upsert_automation_config(
                     transformed_config, identifier
                 )
 
-                new_config_hash = compute_config_hash(transformed_config)
+                # Re-fetch to get authoritative hash (HA may normalize after save)
+                refetched = await self._get_automation_config_internal(identifier)
+                new_config_hash = refetched[1]  # (config, hash) tuple
 
-                return {
+                # Re-apply category if present
+                entity_id = result.get("entity_id")
+                if not entity_id and identifier and identifier.startswith("automation."):
+                    entity_id = identifier
+                if transform_category and entity_id:
+                    await apply_entity_category(
+                        self._client, entity_id, transform_category, "automation", result, "automation"
+                    )
+
+                response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
                     "identifier": identifier,
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
-                    **{k: v for k, v in result.items() if k not in ("success",)},
+                    # Merge upsert result, excluding "success" (we set it ourselves)
+                    **{k: v for k, v in result.items() if k != "success"},
                 }
+                if bp_warnings:
+                    response["best_practice_warnings"] = bp_warnings
+                return response
 
             if config is None:
                 raise_tool_error(
@@ -679,6 +704,19 @@ class AutomationConfigTools:
                 suggestions=suggestions,
             )
 
+    async def _get_automation_config_internal(
+        self, identifier: str
+    ) -> tuple[dict[str, Any], str]:
+        """Fetch and normalize automation config without logging or category injection.
+
+        Returns (normalized_config, config_hash) tuple.
+        Used internally by _fetch_and_verify_hash and ha_config_get_automation.
+        """
+        config_result = await self._client.get_automation_config(identifier)
+        normalized_config = _normalize_config_for_roundtrip(config_result)
+        config_hash_value = compute_config_hash(normalized_config)
+        return normalized_config, config_hash_value
+
     async def _fetch_and_verify_hash(
         self, identifier: str, config_hash: str, action: str
     ) -> dict[str, Any]:
@@ -687,9 +725,7 @@ class AutomationConfigTools:
         Returns the current normalized config dict.
         Raises ToolError if the hash does not match (conflict).
         """
-        current = await self.ha_config_get_automation(identifier)
-        current_config = current["config"]
-        current_hash = compute_config_hash(current_config)
+        current_config, current_hash = await self._get_automation_config_internal(identifier)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(

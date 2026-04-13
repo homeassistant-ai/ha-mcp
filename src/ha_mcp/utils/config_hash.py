@@ -1,8 +1,6 @@
 """Shared config hash utility for optimistic locking.
 
-Used by automation and script tools to detect concurrent modifications.
-Dashboard tools (tools_config_dashboards.py) have their own copy — a future
-PR could migrate that to use this shared implementation as well.
+Used by automation, script, and dashboard tools to detect concurrent modifications.
 """
 
 import hashlib
