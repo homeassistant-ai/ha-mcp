@@ -548,24 +548,10 @@ class AutomationConfigTools:
                         )
                     )
 
-                # Fetch current config (already normalized by ha_config_get_automation)
-                current = await self.ha_config_get_automation(identifier)
-                current_config = current["config"]
-
-                # Validate config_hash for optimistic locking
-                current_hash = _compute_config_hash(current_config)
-                if current_hash != config_hash:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Automation modified since last read (conflict)",
-                            suggestions=[
-                                "Call ha_config_get_automation() again",
-                                "Use the fresh config_hash from that response",
-                            ],
-                            context={"action": "python_transform", "identifier": identifier},
-                        )
-                    )
+                # Fetch current config and verify hash
+                current_config = await self._fetch_and_verify_hash(
+                    identifier, config_hash, "python_transform"
+                )
 
                 # Apply Python transformation
                 try:
@@ -627,20 +613,7 @@ class AutomationConfigTools:
 
             # Optional hash check for full config updates
             if identifier and config_hash:
-                current = await self.ha_config_get_automation(identifier)
-                current_hash = _compute_config_hash(current["config"])
-                if current_hash != config_hash:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Automation modified since last read (conflict)",
-                            suggestions=[
-                                "Call ha_config_get_automation() again",
-                                "Use the fresh config_hash from that response",
-                            ],
-                            context={"action": "set", "identifier": identifier},
-                        )
-                    )
+                await self._fetch_and_verify_hash(identifier, config_hash, "set")
 
             # Validate required fields based on automation type
             self._validate_required_fields(config_dict, identifier)
@@ -712,6 +685,31 @@ class AutomationConfigTools:
                 context={"identifier": identifier},
                 suggestions=suggestions,
             )
+
+    async def _fetch_and_verify_hash(
+        self, identifier: str, config_hash: str, action: str
+    ) -> dict[str, Any]:
+        """Fetch current automation config and verify config_hash for optimistic locking.
+
+        Returns the current normalized config dict.
+        Raises ToolError if the hash does not match (conflict).
+        """
+        current = await self.ha_config_get_automation(identifier)
+        current_config = current["config"]
+        current_hash = _compute_config_hash(current_config)
+        if current_hash != config_hash:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Automation modified since last read (conflict)",
+                    suggestions=[
+                        "Call ha_config_get_automation() again",
+                        "Use the fresh config_hash from that response",
+                    ],
+                    context={"action": action, "identifier": identifier},
+                )
+            )
+        return current_config
 
     @staticmethod
     def _parse_and_validate_config(config: str | dict[str, Any]) -> dict[str, Any]:

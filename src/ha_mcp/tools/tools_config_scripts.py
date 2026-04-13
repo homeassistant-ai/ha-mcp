@@ -135,6 +135,34 @@ class ConfigScriptTools:
                 ],
             )
 
+    async def _fetch_and_verify_hash(
+        self, script_id: str, config_hash: str, action: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Fetch current script config and verify config_hash for optimistic locking.
+
+        Returns (wrapper, actual_config) tuple.
+        The wrapper is the REST client response (used for hash computation),
+        and actual_config is the inner script config (used for transforms).
+        Raises ToolError if the hash does not match (conflict).
+        """
+        current = await self.ha_config_get_script(script_id)
+        current_wrapper = current["config"]
+        actual_config = current_wrapper.get("config", current_wrapper)
+        current_hash = _compute_config_hash(current_wrapper)
+        if current_hash != config_hash:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Script modified since last read (conflict)",
+                    suggestions=[
+                        "Call ha_config_get_script() again",
+                        "Use the fresh config_hash from that response",
+                    ],
+                    context={"action": action, "script_id": script_id},
+                )
+            )
+        return current_wrapper, actual_config
+
     @staticmethod
     def _validate_script_config(
         config: str | dict[str, Any],
@@ -400,29 +428,10 @@ class ConfigScriptTools:
                         )
                     )
 
-                # Fetch current config (ha_config_get_script returns a wrapper
-                # with "config" containing the REST client response, which itself
-                # has a "config" key with the actual script config)
-                current = await self.ha_config_get_script(script_id)
-                current_wrapper = current["config"]
-                # Extract actual script config from REST client wrapper
-                actual_config = current_wrapper.get("config", current_wrapper)
-
-                # Validate config_hash for optimistic locking
-                # Hash is computed on the wrapper (consistent with ha_config_get_script)
-                current_hash = _compute_config_hash(current_wrapper)
-                if current_hash != config_hash:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Script modified since last read (conflict)",
-                            suggestions=[
-                                "Call ha_config_get_script() again",
-                                "Use the fresh config_hash from that response",
-                            ],
-                            context={"action": "python_transform", "script_id": script_id},
-                        )
-                    )
+                # Fetch current config and verify hash
+                current_wrapper, actual_config = await self._fetch_and_verify_hash(
+                    script_id, config_hash, "python_transform"
+                )
 
                 # Apply Python transformation on the actual script config
                 try:
@@ -480,20 +489,7 @@ class ConfigScriptTools:
 
             # Optional hash check for full config updates
             if config_hash:
-                current = await self.ha_config_get_script(script_id)
-                current_hash = _compute_config_hash(current["config"])
-                if current_hash != config_hash:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Script modified since last read (conflict)",
-                            suggestions=[
-                                "Call ha_config_get_script() again",
-                                "Use the fresh config_hash from that response",
-                            ],
-                            context={"action": "set", "script_id": script_id},
-                        )
-                    )
+                await self._fetch_and_verify_hash(script_id, config_hash, "set")
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(
