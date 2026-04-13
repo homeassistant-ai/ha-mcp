@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     disabled_tools: str = Field("", alias="DISABLED_TOOLS")
     pinned_tools: str = Field("", alias="PINNED_TOOLS")
 
+    # Max results returned by ha_search_tools (2-10).
+    tool_search_max_results: int = Field(5, alias="TOOL_SEARCH_MAX_RESULTS")
+
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
         """Auto-enable skills (resources) when skills-as-tools is on.

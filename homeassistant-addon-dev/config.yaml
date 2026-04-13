@@ -24,6 +24,7 @@ options:
   enable_skills_as_tools: false
   enable_tool_search: false
   enable_yaml_config_editing: false
+  tool_search_max_results: 5
   disabled_tools: ""
   pinned_tools: ""
 schema:
@@ -33,6 +34,7 @@ schema:
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
   enable_yaml_config_editing: bool?
+  tool_search_max_results: int?
   disabled_tools: str?
   pinned_tools: str?
 ports:

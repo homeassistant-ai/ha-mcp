@@ -33,6 +33,48 @@ MANDATORY_TOOLS: set[str] = {
     "ha_report_issue",
 }
 
+# Tools that exist in the codebase but are only registered when a
+# corresponding feature flag/env var is set. When the flag is off, these
+# won't appear in local_provider._list_tools(), so we inject stub entries
+# into the settings UI with a read-only "disabled by" note.
+FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
+    "ha_config_set_yaml": {
+        "title": "Set YAML Config",
+        "primary_tag": "System",
+        "description": "Add, replace, or remove top-level keys in configuration.yaml or package files.",
+        "disabled_by": "enable_yaml_config_editing",
+        "destructiveHint": "true",
+    },
+    "ha_list_files": {
+        "title": "List Files",
+        "primary_tag": "Files",
+        "description": "List files in a directory within the Home Assistant config.",
+        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "readOnlyHint": "true",
+    },
+    "ha_read_file": {
+        "title": "Read File",
+        "primary_tag": "Files",
+        "description": "Read a file from the Home Assistant config directory.",
+        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "readOnlyHint": "true",
+    },
+    "ha_write_file": {
+        "title": "Write File",
+        "primary_tag": "Files",
+        "description": "Write a file to allowed directories in the Home Assistant config.",
+        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "destructiveHint": "true",
+    },
+    "ha_delete_file": {
+        "title": "Delete File",
+        "primary_tag": "Files",
+        "description": "Delete a file from allowed directories.",
+        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "destructiveHint": "true",
+    },
+}
+
 
 def _get_config_path() -> Path:
     """Return the path to the tool config JSON file."""
@@ -93,13 +135,21 @@ def save_tool_config(config: dict[str, Any]) -> None:
 async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
-    Reads live from FastMCP's list_tools() — always reflects the currently
-    registered tools, including any runtime enable/disable state.
+    Reads from the local provider's unfiltered tool list so that disabled
+    tools are still shown in the settings UI (users need to be able to
+    re-enable them).
     """
     tools: list[dict[str, Any]] = []
-    registered = await server.mcp.list_tools()
+    # Groups not considered "primary" when choosing a tool's canonical group —
+    # these are cross-cutting tags (e.g. Z-Wave, Zigbee) that should not
+    # override the tool's real domain group.
+    secondary_tags = {"Z-Wave", "Zigbee"}
+
+    registered = await server.mcp.local_provider._list_tools()  # type: ignore[attr-defined]
     for tool in registered:
-        tags = list(tool.tags) if tool.tags else []
+        tags = sorted(tool.tags) if tool.tags else []
+        primary_tags = [t for t in tags if t not in secondary_tags]
+        primary = primary_tags[0] if primary_tags else (tags[0] if tags else "Other")
         annotations: dict[str, bool] = {}
         if tool.annotations:
             if getattr(tool.annotations, "readOnlyHint", None):
@@ -114,9 +164,31 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
             "title": title,
             "description": (tool.description or "")[:200],
             "tags": tags,
+            "primary_tag": primary,
             "annotations": annotations,
         })
-    tools.sort(key=lambda t: (t["tags"][0] if t["tags"] else "zzz", t["name"]))
+
+    # Inject stub entries for feature-gated tools that aren't registered
+    registered_names = {t["name"] for t in tools}
+    for name, meta in FEATURE_GATED_TOOLS.items():
+        if name in registered_names:
+            continue
+        stub_annotations: dict[str, bool] = {}
+        if meta.get("readOnlyHint") == "true":
+            stub_annotations["readOnlyHint"] = True
+        if meta.get("destructiveHint") == "true":
+            stub_annotations["destructiveHint"] = True
+        tools.append({
+            "name": name,
+            "title": meta["title"],
+            "description": meta["description"],
+            "tags": [meta["primary_tag"]],
+            "primary_tag": meta["primary_tag"],
+            "annotations": stub_annotations,
+            "disabled_by": meta["disabled_by"],
+        })
+
+    tools.sort(key=lambda t: (t["primary_tag"], t["name"]))
     return tools
 
 
@@ -212,14 +284,27 @@ _SETTINGS_HTML = """\
   .badge.readonly { background: #1a2a3a; color: #6cb4ff; }
   .badge.destructive { background: #3a1a1a; color: #ff6b6b; }
   .badge.mandatory { background: #1a3a1a; color: #6bff6b; }
-  .tool-select { min-width: 140px; padding: 6px 10px; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--surface); color: var(--text);
-    font-size: 0.85rem; cursor: pointer; }
-  .tool-select:disabled { opacity: 0.4; cursor: not-allowed; background: var(--disabled-bg); }
-  .tool-select option { background: var(--surface); }
+  .tool-toggles { display: flex; gap: 16px; align-items: center; }
+  .toggle-group { display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 0.7rem; color: var(--text-secondary); }
+  .toggle-group.disabled-toggle { opacity: 0.35; }
+  .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background: #555; border-radius: 10px; transition: background 0.2s; }
+  .slider::before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px;
+    top: 3px; background: var(--text); border-radius: 50%; transition: transform 0.2s; }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider::before { transform: translateX(16px); }
+  input:disabled + .slider { cursor: not-allowed; opacity: 0.4; }
+  .disabled-by-note { font-size: 0.7rem; color: var(--warning); margin-top: 2px;
+    font-style: italic; }
   .summary { display: flex; gap: 16px; padding: 8px 0; margin-bottom: 16px;
     font-size: 0.85rem; color: var(--text-secondary); flex-wrap: wrap; }
   .summary span { background: var(--surface); padding: 4px 12px; border-radius: 8px; }
+  .pin-notice { background: #3a2e1a; border: 1px solid #7a5a1a; border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 12px; font-size: 0.85rem; color: #ffd680; display: none; }
+  .pin-notice.show { display: block; }
 </style>
 </head>
 <body>
@@ -230,6 +315,11 @@ _SETTINGS_HTML = """\
 <div class="readonly-notice">
   Safety toggles (Enable Skills, Tool Search, YAML Config Editing) are managed in the
   add-on configuration page and require a restart to change.
+</div>
+<div class="pin-notice show" id="pinNotice">
+  Pin toggles only take effect when Tool Search is enabled in the add-on
+  configuration. Without Tool Search, all enabled tools are always visible
+  and pinning has no extra effect.
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -248,16 +338,18 @@ async function loadTools() {
   updateStatus('Loaded');
 }
 
+const DEFAULT_PINNED = """ + json.dumps(list(DEFAULT_PINNED_TOOLS)) + """;
+const MANDATORY = """ + json.dumps(list(MANDATORY_TOOLS)) + """;
+
 function getState(name) {
   if (toolStates[name]) return toolStates[name];
-  const defs = """ + json.dumps(list(DEFAULT_PINNED_TOOLS)) + """;
-  return defs.includes(name) ? 'pinned' : 'enabled';
+  return DEFAULT_PINNED.includes(name) ? 'pinned' : 'enabled';
 }
 
 function render() {
   const groups = {};
   toolData.forEach(t => {
-    const tag = (t.tags && t.tags[0]) || 'Other';
+    const tag = t.primary_tag || (t.tags && t.tags[0]) || 'Other';
     if (!groups[tag]) groups[tag] = [];
     groups[tag].push(t);
   });
@@ -265,7 +357,7 @@ function render() {
   const container = document.getElementById('groups');
   container.innerHTML = '';
 
-  let total = 0, enabled = 0, pinned = 0, disabled = 0;
+  let total = 0, enabledCount = 0, pinnedCount = 0, disabledCount = 0;
 
   Object.keys(groups).sort().forEach(tag => {
     const tools = groups[tag];
@@ -274,9 +366,9 @@ function render() {
 
     const header = document.createElement('div');
     header.className = 'group-header';
-    const enabledCount = tools.filter(t => getState(t.name) !== 'disabled').length;
+    const groupEnabled = tools.filter(t => getState(t.name) !== 'disabled').length;
     header.innerHTML = `<div><span class="group-name">${tag}</span>` +
-      `<span class="group-count">${enabledCount}/${tools.length} enabled</span></div>` +
+      `<span class="group-count">${groupEnabled}/${tools.length} enabled</span></div>` +
       `<span class="group-chevron">&#9654;</span>`;
     header.onclick = () => {
       const toolsDiv = group.querySelector('.group-tools');
@@ -290,15 +382,23 @@ function render() {
 
     tools.forEach(t => {
       const state = getState(t.name);
-      const isMandatory = """ + json.dumps(list(MANDATORY_TOOLS)) + """.includes(t.name);
+      const isMandatory = MANDATORY.includes(t.name);
+      const disabledBy = t.disabled_by || null;
+      const isFeatureGated = disabledBy !== null;
       const ann = t.annotations || {};
       const isReadOnly = ann.readOnlyHint === true;
       const isDestructive = ann.destructiveHint === true;
 
       total++;
-      if (state === 'disabled') disabled++;
-      else if (state === 'pinned') pinned++;
-      else enabled++;
+      if (isFeatureGated) disabledCount++;
+      else if (state === 'disabled') disabledCount++;
+      else if (state === 'pinned') { enabledCount++; pinnedCount++; }
+      else enabledCount++;
+
+      const isEnabled = isFeatureGated ? false : (isMandatory || state !== 'disabled');
+      const isPinned = isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name));
+      const lockEnabled = isMandatory || isFeatureGated;
+      const lockPinned = isMandatory || isFeatureGated || !isEnabled;
 
       const div = document.createElement('div');
       div.className = 'tool';
@@ -312,26 +412,47 @@ function render() {
 
       const title = t.title || t.name;
       const desc = (t.description || '').split('\\n')[0].slice(0, 120);
+      const gatedNote = disabledBy ? `<div class="disabled-by-note">Requires ${disabledBy} in add-on config</div>` : '';
 
       div.innerHTML = `<div class="tool-info">` +
         `<div class="tool-name">${title}${badges}</div>` +
         `<div class="tool-meta">${t.name}</div>` +
         (desc ? `<div class="tool-desc">${desc}</div>` : '') +
+        gatedNote +
         `</div>` +
-        `<select class="tool-select" data-tool="${t.name}" ${isMandatory ? 'disabled' : ''}>` +
-        `<option value="enabled" ${state === 'enabled' ? 'selected' : ''}>Enabled</option>` +
-        `<option value="pinned" ${state === 'pinned' ? 'selected' : ''}>Pinned</option>` +
-        `<option value="disabled" ${state === 'disabled' ? 'selected' : ''}>Disabled</option>` +
-        `</select>`;
+        `<div class="tool-toggles">` +
+          `<div class="toggle-group">` +
+            `<label class="switch"><input type="checkbox" data-tool="${t.name}" data-field="enabled" ` +
+              `${isEnabled ? 'checked' : ''} ${lockEnabled ? 'disabled' : ''}>` +
+              `<span class="slider"></span></label>` +
+            `<span>enabled</span>` +
+          `</div>` +
+          `<div class="toggle-group ${!isEnabled ? 'disabled-toggle' : ''}">` +
+            `<label class="switch"><input type="checkbox" data-tool="${t.name}" data-field="pinned" ` +
+              `${isPinned ? 'checked' : ''} ${lockPinned ? 'disabled' : ''}>` +
+              `<span class="slider"></span></label>` +
+            `<span>pinned</span>` +
+          `</div>` +
+        `</div>`;
 
-      const select = div.querySelector('select');
-      if (select && !isMandatory) {
-        select.addEventListener('change', (e) => {
-          toolStates[t.name] = e.target.value;
+      const inputs = div.querySelectorAll('input[type="checkbox"]');
+      inputs.forEach(input => {
+        if (input.disabled) return;
+        input.addEventListener('change', (e) => {
+          const field = e.target.dataset.field;
+          const currentState = getState(t.name);
+          let newState = currentState;
+          if (field === 'enabled') {
+            if (!e.target.checked) newState = 'disabled';
+            else newState = (currentState === 'pinned') ? 'pinned' : 'enabled';
+          } else if (field === 'pinned') {
+            newState = e.target.checked ? 'pinned' : 'enabled';
+          }
+          toolStates[t.name] = newState;
           scheduleSave();
           render();
         });
-      }
+      });
       toolsDiv.appendChild(div);
     });
 
@@ -342,9 +463,9 @@ function render() {
 
   document.getElementById('summary').innerHTML =
     `<span>${total} total</span>` +
-    `<span style="color:var(--success)">${enabled} enabled</span>` +
-    `<span style="color:var(--accent)">${pinned} pinned</span>` +
-    `<span style="color:var(--danger)">${disabled} disabled</span>`;
+    `<span style="color:var(--success)">${enabledCount} enabled</span>` +
+    `<span style="color:var(--accent)">${pinnedCount} pinned</span>` +
+    `<span style="color:var(--danger)">${disabledCount} disabled</span>`;
 }
 
 function scheduleSave() {
