@@ -186,7 +186,7 @@ class HistoryTools:
         period: Annotated[
             str,
             Field(
-                description='Aggregation period: "5minute", "hour", "day", "week", "month". Default: "day". Ignored when source="history"',
+                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year". Default: "day". Ignored when source="history"',
                 default="day",
             ),
         ] = "day",
@@ -481,7 +481,7 @@ async def _fetch_statistics(
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call."""
     # Validate period
-    valid_periods = ["5minute", "hour", "day", "week", "month"]
+    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
     if period not in valid_periods:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
