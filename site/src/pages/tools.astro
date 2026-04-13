@@ -37,8 +37,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
     <!-- Header -->
     <header class="mb-8 flex items-start justify-between">
       <div>
-        <h1 class="text-3xl font-bold text-white mb-2">Tool Explorer</h1>
-        <p class="text-slate-400">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
+        <h1 class="font-display text-3xl font-bold text-white mb-2 tracking-tight">Tool Explorer</h1>
+        <p class="text-[var(--text-secondary)]">Browse all <span class="text-white font-medium">{totalTools}</span> MCP tools across <span class="text-white font-medium">{sortedCategories.length}</span> categories.</p>
       </div>
       <button
         id="design-mode-toggle"
@@ -91,11 +91,11 @@ function getBadgeInfo(annotations: Record<string, any>) {
             type="text"
             id="search"
             placeholder="Search tools by name or description..."
-            class="w-full px-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25"
+            class="w-full px-4 py-2.5 bg-white/[0.03] border border-white/[0.06] rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/25"
           />
         </div>
         <div class="flex gap-2">
-          <button data-filter="all" class="filter-btn active px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+          <button data-filter="all" class="filter-btn active px-4 py-2 rounded-lg text-sm font-medium bg-brand/20 text-brand border border-brand/30 hover:bg-brand/30 transition-colors">
             All
           </button>
           <button data-filter="read" class="filter-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-800/50 text-slate-300 border border-slate-600/50 hover:bg-slate-700/50 transition-colors">
@@ -138,14 +138,14 @@ function getBadgeInfo(annotations: Record<string, any>) {
         <p id="results-count" class="text-sm text-slate-500"></p>
         <div class="flex items-center gap-3 ml-auto">
           <span class="text-sm text-slate-400">Group:</span>
-          <button id="group-category" class="group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">Category</button>
+          <button id="group-category" class="group-btn text-base text-brand font-medium hover:text-brand-light transition-colors">Category</button>
           <span class="design-only hidden text-slate-600">|</span>
           <button id="group-file" class="design-only hidden group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">File</button>
           <span class="text-slate-600">|</span>
           <button id="group-none" class="group-btn text-base text-slate-400 hover:text-slate-200 transition-colors">None</button>
           <span class="design-only hidden text-slate-600 mx-2">|</span>
           <span class="design-only hidden text-sm text-slate-400">Sort:</span>
-          <button id="sort-alpha" class="design-only hidden sort-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors">A-Z</button>
+          <button id="sort-alpha" class="design-only hidden sort-btn text-base text-brand font-medium hover:text-brand-light transition-colors">A-Z</button>
           <span class="design-only hidden text-slate-600">|</span>
           <button id="sort-size" class="design-only hidden sort-btn text-base text-slate-400 hover:text-slate-200 transition-colors">Size</button>
           <span class="text-slate-600 mx-2">|</span>
@@ -171,7 +171,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
             const totalChars = descChars + schemaChars;
             return (
               <div
-                class="tool-card bg-slate-800/30 rounded-lg border border-slate-700/50 hover:border-slate-600/50 transition-colors"
+                class="tool-card glass-card rounded-lg"
                 data-tool-name={tool.name}
                 data-tool-title={tool.title.toLowerCase()}
                 data-tool-desc={tool.description.toLowerCase()}
@@ -187,7 +187,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                   </svg>
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
-                      <code class="text-sm font-medium text-blue-400">{tool.name}</code>
+                      <code class="text-sm font-medium text-brand">{tool.name}</code>
                       {tool.title && <span class="text-sm text-slate-400">{tool.title}</span>}
                       <span class={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${badge.color}`}>
                         {badge.label}
@@ -270,7 +270,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                         <span>Source: <a
                           href={`https://github.com/homeassistant-ai/ha-mcp/blob/master/src/ha_mcp/tools/${tool.source_file}`}
                           target="_blank"
-                          class="text-slate-400 hover:text-blue-400 transition-colors"
+                          class="text-slate-400 hover:text-brand transition-colors"
                         >{tool.source_file}</a></span>
                       )}
                     </div>
@@ -286,18 +286,24 @@ function getBadgeInfo(annotations: Record<string, any>) {
 </Layout>
 
 <script>
-  const searchInput = document.getElementById('search') as HTMLInputElement;
+  function getEl<T extends HTMLElement>(id: string): T {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`[tools] Missing element #${id}`);
+    return el as T;
+  }
+
+  const searchInput = getEl<HTMLInputElement>('search');
   const toolCards = document.querySelectorAll<HTMLElement>('.tool-card');
-  const container = document.getElementById('tools-container')!;
+  const container = getEl<HTMLElement>('tools-container');
   const filterBtns = document.querySelectorAll<HTMLButtonElement>('.filter-btn');
   const sizeFilterBtns = document.querySelectorAll<HTMLButtonElement>('.size-filter-btn');
-  const resultsCount = document.getElementById('results-count')!;
-  const groupCategoryBtn = document.getElementById('group-category')!;
-  const groupFileBtn = document.getElementById('group-file')!;
-  const groupNoneBtn = document.getElementById('group-none')!;
-  const sortAlphaBtn = document.getElementById('sort-alpha')!;
-  const sortSizeBtn = document.getElementById('sort-size')!;
-  const expandAllBtn = document.getElementById('expand-all')!;
+  const resultsCount = getEl<HTMLElement>('results-count');
+  const groupCategoryBtn = getEl<HTMLElement>('group-category');
+  const groupFileBtn = getEl<HTMLElement>('group-file');
+  const groupNoneBtn = getEl<HTMLElement>('group-none');
+  const sortAlphaBtn = getEl<HTMLElement>('sort-alpha');
+  const sortSizeBtn = getEl<HTMLElement>('sort-size');
+  const expandAllBtn = getEl<HTMLElement>('expand-all');
 
   let activeFilter = 'all';
   let activeSizeFilter = 'all';
@@ -307,18 +313,18 @@ function getBadgeInfo(annotations: Record<string, any>) {
   let activeSort: 'alpha' | 'size' = 'alpha';
   let allExpanded = false;
 
-  const CHIP_ACTIVE = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+  const CHIP_ACTIVE = 'bg-brand/20 text-brand border-brand/30';
   const CHIP_INACTIVE = 'bg-slate-800/50 text-slate-400 border-slate-700/30';
 
   // ── Design Mode ──────────────────────────────────────────────────────
 
-  const designToggleBtn = document.getElementById('design-mode-toggle') as HTMLButtonElement;
-  const designPanel = document.getElementById('design-panel')!;
-  const designPrompt = document.getElementById('design-prompt') as HTMLTextAreaElement;
-  const designCopyBtn = document.getElementById('design-copy-btn')!;
-  const designChangeCount = document.getElementById('design-change-count')!;
-  const designInstructionsToggle = document.getElementById('design-instructions-toggle')!;
-  const designInstructionsBody = document.getElementById('design-instructions-body')!;
+  const designToggleBtn = getEl<HTMLButtonElement>('design-mode-toggle');
+  const designPanel = getEl<HTMLElement>('design-panel');
+  const designPrompt = getEl<HTMLTextAreaElement>('design-prompt');
+  const designCopyBtn = getEl<HTMLElement>('design-copy-btn');
+  const designChangeCount = getEl<HTMLElement>('design-change-count');
+  const designInstructionsToggle = getEl<HTMLElement>('design-instructions-toggle');
+  const designInstructionsBody = getEl<HTMLElement>('design-instructions-body');
   const designOnlyEls = document.querySelectorAll<HTMLElement>('.design-only');
 
   let designMode = false;
@@ -383,14 +389,27 @@ function getBadgeInfo(annotations: Record<string, any>) {
   });
 
   // Copy button
-  designCopyBtn.addEventListener('click', () => {
+  designCopyBtn.addEventListener('click', async () => {
     const text = designPrompt.value;
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
-      const original = designCopyBtn.textContent;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
       designCopyBtn.textContent = 'Copied!';
-      setTimeout(() => { designCopyBtn.textContent = original; }, 1500);
-    });
+      setTimeout(() => { designCopyBtn.textContent = 'Copy'; }, 1500);
+    } catch {
+      designCopyBtn.textContent = 'Copy failed';
+      setTimeout(() => { designCopyBtn.textContent = 'Copy'; }, 2000);
+    }
   });
 
   // Listen for textarea input on desc-edit
@@ -604,7 +623,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
     // Update group toggle style
     const inactiveStyle = 'group-btn text-base text-slate-400 hover:text-slate-200 transition-colors';
-    const activeStyle = 'group-btn text-base text-blue-400 font-medium hover:text-blue-300 transition-colors';
+    const activeStyle = 'group-btn text-base text-brand font-medium hover:text-brand-light transition-colors';
     const fileHide = designMode ? '' : 'design-only hidden';
     groupCategoryBtn.className = activeGroupBy === 'category' ? activeStyle : inactiveStyle;
     groupFileBtn.className = `${activeGroupBy === 'file' ? activeStyle : inactiveStyle} ${fileHide}`;
@@ -620,8 +639,8 @@ function getBadgeInfo(annotations: Record<string, any>) {
   // Sort toggle
   function updateSortStyle() {
     const sortHide = designMode ? '' : 'design-only hidden';
-    sortAlphaBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'alpha' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
-    sortSizeBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'size' ? 'text-blue-400 font-medium hover:text-blue-300' : 'text-slate-400 hover:text-slate-200'}`;
+    sortAlphaBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'alpha' ? 'text-brand font-medium hover:text-brand-light' : 'text-slate-400 hover:text-slate-200'}`;
+    sortSizeBtn.className = `sort-btn text-base transition-colors ${sortHide} ${activeSort === 'size' ? 'text-brand font-medium hover:text-brand-light' : 'text-slate-400 hover:text-slate-200'}`;
   }
   sortAlphaBtn.addEventListener('click', () => { activeSort = 'alpha'; updateSortStyle(); regroup(); });
   sortSizeBtn.addEventListener('click', () => { activeSort = 'size'; updateSortStyle(); regroup(); });
@@ -631,10 +650,10 @@ function getBadgeInfo(annotations: Record<string, any>) {
     btn.addEventListener('click', () => {
       activeFilter = btn.dataset.filter!;
       filterBtns.forEach(b => {
-        b.classList.remove('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+        b.classList.remove('active', 'bg-brand/20', 'text-brand', 'border-brand/30');
         b.classList.add('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
       });
-      btn.classList.add('active', 'bg-blue-500/20', 'text-blue-400', 'border-blue-500/30');
+      btn.classList.add('active', 'bg-brand/20', 'text-brand', 'border-brand/30');
       btn.classList.remove('bg-slate-800/50', 'text-slate-400', 'border-slate-700/50');
       applyFilters();
     });

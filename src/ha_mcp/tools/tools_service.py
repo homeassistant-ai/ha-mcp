@@ -9,13 +9,19 @@ from typing import Annotated, Any, cast
 
 import httpx
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import (
     create_validation_error,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
 
 logger = logging.getLogger(__name__)
@@ -80,15 +86,117 @@ def _build_service_suggestions(
     ]
 
 
-def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register service call and operation monitoring tools with the MCP server."""
-    device_tools = kwargs.get("device_tools")
-    if not device_tools:
-        raise ValueError("device_tools is required for service tools registration")
+class ServiceTools:
+    """Service call and device operation tools for Home Assistant."""
 
-    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
+    def __init__(self, client: Any, device_tools: Any) -> None:
+        self._client = client
+        self._device_tools = device_tools
+
+    @staticmethod
+    def _parse_service_data(
+        data: str | dict[str, Any] | None, entity_id: str | None,
+    ) -> dict[str, Any]:
+        """Parse and validate the data parameter into a service_data dict."""
+        try:
+            parsed_data = parse_json_param(data, "data")
+        except ValueError as e:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid data parameter: {e}",
+                    parameter="data",
+                    invalid_json=True,
+                )
+            )
+
+        service_data: dict[str, Any] = {}
+        if parsed_data is not None:
+            if isinstance(parsed_data, dict):
+                service_data = parsed_data
+            else:
+                raise_tool_error(
+                    create_validation_error(
+                        "Data parameter must be a JSON object",
+                        parameter="data",
+                        details=f"Received type: {type(parsed_data).__name__}",
+                    )
+                )
+
+        if entity_id:
+            service_data["entity_id"] = entity_id
+
+        return service_data
+
+    @staticmethod
+    def _build_timeout_response(
+        domain: str, service: str, entity_id: str | None, data: str | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build a partial-success response for service call timeouts."""
+        return {
+            "success": True,
+            "partial": True,
+            "domain": domain,
+            "service": service,
+            "entity_id": entity_id,
+            "parameters": data,
+            "message": (
+                f"Service {domain}.{service} was dispatched but Home Assistant "
+                f"did not respond within the timeout period. The operation is likely "
+                f"still running in the background."
+            ),
+            "warning": (
+                "Response timed out. This is normal for long-running services "
+                f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
+                "to check the current status."
+                if entity_id
+                else "Response timed out. This is normal for long-running services. "
+                "The service was dispatched and may still be executing."
+            ),
+        }
+
+    async def _capture_initial_state(self, entity_id: str | None) -> str | None:
+        """Capture the current state of an entity before a service call."""
+        try:
+            state_data = await self._client.get_entity_state(entity_id)
+            return state_data.get("state") if state_data else None
+        except Exception as e:
+            logger.debug(
+                f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
+            )
+            return None
+
+    async def _verify_state_change(
+        self,
+        entity_id: str,
+        service: str,
+        initial_state: str | None,
+        response: dict[str, Any],
+    ) -> None:
+        """Wait for and verify entity state change after a service call, updating response in place."""
+        try:
+            expected = _SERVICE_TO_STATE.get(service)
+            new_state = await wait_for_state_change(
+                self._client,
+                entity_id,
+                expected_state=expected,
+                initial_state=initial_state,
+                timeout=10.0,
+            )
+            if new_state:
+                response["verified_state"] = new_state.get("state")
+            else:
+                response["warning"] = (
+                    "Service executed but state change could not be verified within timeout."
+                )
+        except Exception as e:
+            response["warning"] = (
+                f"Service executed but state verification failed: {e}"
+            )
+
+    @tool(name="ha_call_service", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
     @log_tool_usage
     async def ha_call_service(
+        self,
         domain: str,
         service: str,
         entity_id: str | None = None,
@@ -134,34 +242,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use ha_search_entities() to find correct entity IDs.
         """
         try:
-            # Parse JSON data if provided as string
-            try:
-                parsed_data = parse_json_param(data, "data")
-            except ValueError as e:
-                raise_tool_error(
-                    create_validation_error(
-                        f"Invalid data parameter: {e}",
-                        parameter="data",
-                        invalid_json=True,
-                    )
-                )
-
-            # Ensure service_data is a dict
-            service_data: dict[str, Any] = {}
-            if parsed_data is not None:
-                if isinstance(parsed_data, dict):
-                    service_data = parsed_data
-                else:
-                    raise_tool_error(
-                        create_validation_error(
-                            "Data parameter must be a JSON object",
-                            parameter="data",
-                            details=f"Received type: {type(parsed_data).__name__}",
-                        )
-                    )
-
-            if entity_id:
-                service_data["entity_id"] = entity_id
+            service_data = self._parse_service_data(data, entity_id)
 
             # Coerce return_response boolean parameter
             return_response_bool = (
@@ -183,15 +264,9 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Capture initial state before the call
             initial_state = None
             if should_wait:
-                try:
-                    state_data = await client.get_entity_state(entity_id)
-                    initial_state = state_data.get("state") if state_data else None
-                except Exception as e:
-                    logger.debug(
-                        f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
-                    )
+                initial_state = await self._capture_initial_state(entity_id)
 
-            result = await client.call_service(
+            result = await self._client.call_service(
                 domain, service, service_data, return_response=return_response_bool
             )
 
@@ -211,25 +286,9 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:
-                try:
-                    expected = _SERVICE_TO_STATE.get(service)
-                    new_state = await wait_for_state_change(
-                        client,
-                        entity_id,
-                        expected_state=expected,
-                        initial_state=initial_state,
-                        timeout=10.0,
-                    )
-                    if new_state:
-                        response["verified_state"] = new_state.get("state")
-                    else:
-                        response["warning"] = (
-                            "Service executed but state change could not be verified within timeout."
-                        )
-                except Exception as e:
-                    response["warning"] = (
-                        f"Service executed but state verification failed: {e}"
-                    )
+                await self._verify_state_change(
+                    entity_id, service, initial_state, response,
+                )
 
             return response
         except HomeAssistantConnectionError as error:
@@ -237,27 +296,7 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # mean the service was dispatched but HA didn't respond in time.
             # The operation is likely still running (e.g., update.install, long automations).
             if isinstance(error.__cause__, httpx.TimeoutException):
-                return {
-                    "success": True,
-                    "partial": True,
-                    "domain": domain,
-                    "service": service,
-                    "entity_id": entity_id,
-                    "parameters": data,
-                    "message": (
-                        f"Service {domain}.{service} was dispatched but Home Assistant "
-                        f"did not respond within the timeout period. The operation is likely "
-                        f"still running in the background."
-                    ),
-                    "warning": (
-                        "Response timed out. This is normal for long-running services "
-                        f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
-                        "to check the current status."
-                        if entity_id
-                        else "Response timed out. This is normal for long-running services. "
-                        "The service was dispatched and may still be executing."
-                    ),
-                }
+                return self._build_timeout_response(domain, service, entity_id, data)
             # Non-timeout connection errors are real failures
             exception_to_structured_error(
                 error,
@@ -290,9 +329,10 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=suggestions,
             )
 
-    @mcp.tool(tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @tool(name="ha_get_operation_status", tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
     @log_tool_usage
     async def ha_get_operation_status(
+        self,
         operation_id: Annotated[
             str | list[str],
             Field(
@@ -328,11 +368,11 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     pass  # Plain string — treat as single operation ID
 
             if isinstance(resolved_id, list):
-                result = await device_tools.get_bulk_operation_status(
+                result = await self._device_tools.get_bulk_operation_status(
                     operation_ids=resolved_id
                 )
                 return cast(dict[str, Any], result)
-            result = await device_tools.get_device_operation_status(
+            result = await self._device_tools.get_device_operation_status(
                 operation_id=resolved_id, timeout_seconds=timeout_seconds
             )
             return cast(dict[str, Any], result)
@@ -349,9 +389,10 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
+    @tool(name="ha_bulk_control", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
     @log_tool_usage
     async def ha_bulk_control(
+        self,
         operations: str | list[dict[str, Any]], parallel: bool | str = True
     ) -> dict[str, Any]:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
@@ -382,7 +423,15 @@ def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
-        result = await device_tools.bulk_device_control(
+        result = await self._device_tools.bulk_device_control(
             operations=operations_list, parallel=parallel_bool
         )
         return cast(dict[str, Any], result)
+
+
+def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register service call and operation monitoring tools with the MCP server."""
+    device_tools = kwargs.get("device_tools")
+    if not device_tools:
+        raise ValueError("device_tools is required for service tools registration")
+    register_tool_methods(mcp, ServiceTools(client, device_tools))

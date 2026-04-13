@@ -299,3 +299,22 @@ def log_tool_usage(func: Any) -> Any:
             )
 
     return wrapper
+
+
+def register_tool_methods(mcp: Any, instance: Any) -> None:
+    """Register all @tool-decorated methods from a class instance with the MCP server.
+
+    Discovers methods bearing a ``__fastmcp__`` attribute (set by the outermost
+    ``@tool`` decorator — must be listed above ``@log_tool_usage``) and registers
+    them via ``mcp.add_tool()``.
+    """
+    count = 0
+    for attr in dir(instance):
+        method = getattr(instance, attr)
+        if callable(method) and hasattr(method, "__fastmcp__"):
+            mcp.add_tool(method)
+            count += 1
+    if count == 0:
+        logger.warning(
+            f"No @tool-decorated methods found on {type(instance).__name__}"
+        )

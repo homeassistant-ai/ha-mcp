@@ -4,9 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        'ha-blue': '#03a9f4',
-        'ha-dark': '#1c1c1c',
-        'primary': '#3b82f6',
+        brand: {
+          DEFAULT: 'rgb(var(--brand) / <alpha-value>)',
+          light: 'rgb(var(--brand-light) / <alpha-value>)',
+          dark: 'rgb(var(--brand-dark) / <alpha-value>)',
+        },
+        surface: {
+          0: 'rgb(var(--surface-0) / <alpha-value>)',
+          1: 'rgb(var(--surface-1) / <alpha-value>)',
+          2: 'rgb(var(--surface-2) / <alpha-value>)',
+          3: 'rgb(var(--surface-3) / <alpha-value>)',
+        },
+      },
+      fontFamily: {
+        display: ['"Plus Jakarta Sans"', 'sans-serif'],
       },
     },
   },

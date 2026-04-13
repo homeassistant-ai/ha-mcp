@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success, parse_mcp_result
+from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -443,3 +443,60 @@ async def test_search_entities_offset_pagination(mcp_client):
     assert data2["offset"] == 2
 
     logger.info(f"Offset pagination works: page1={ids1}, page2={ids2}")
+
+
+@pytest.mark.asyncio
+class TestSearchEntitiesLimitValidation:
+    """Negative-input tests for ha_search_entities limit parameter.
+
+    Covers two invalid-limit paths added by the fix in tools_search.py:
+    coerce_int_param(limit, "limit", default=10, min_value=1).
+    Both inputs raise ValueError → exception_to_structured_error → VALIDATION_FAILED.
+    No prior hard coverage in unit or E2E suite.
+    """
+
+    async def test_negative_limit_rejected(self, mcp_client) -> None:
+        """ha_search_entities with limit=-1 returns VALIDATION_FAILED.
+
+        Before fix: results[0:-1] silently drops the last entity, success=True.
+        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
+        Code path: tools_search.py — coerce_int_param(limit, "limit", default=10, min_value=1)
+        → ValueError("limit must be at least 1, got -1")
+        → outer except Exception → exception_to_structured_error → VALIDATION_FAILED.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_search_entities",
+            {"query": "", "domain_filter": "light", "limit": -1},
+        )
+
+        inner = result.get("data", result)
+
+        assert inner["success"] is False, (
+            f"Expected success=False for limit=-1, got: {inner}"
+        )
+        assert inner["error"]["code"] == "VALIDATION_FAILED", (
+            f"Expected VALIDATION_FAILED, got: {inner}"
+        )
+
+    async def test_zero_limit_rejected(self, mcp_client) -> None:
+        """ha_search_entities with limit=0 returns VALIDATION_FAILED.
+
+        Before fix: results[0:0] returns empty list, success=True, count=0.
+        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
+        Code path: identical to limit=-1 — same coerce_int_param branch.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_search_entities",
+            {"query": "", "domain_filter": "light", "limit": 0},
+        )
+
+        inner = result.get("data", result)
+
+        assert inner["success"] is False, (
+            f"Expected success=False for limit=0, got: {inner}"
+        )
+        assert inner["error"]["code"] == "VALIDATION_FAILED", (
+            f"Expected VALIDATION_FAILED, got: {inner}"
+        )

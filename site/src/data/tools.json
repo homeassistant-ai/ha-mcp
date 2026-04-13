@@ -299,7 +299,7 @@
   {
     "name": "ha_config_set_automation",
     "title": "Create or Update Automation",
-    "description": "Create or update a Home Assistant automation.\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n})\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
+    "description": "Create or update a Home Assistant automation.\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n)\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
     "inputSchema": {
       "properties": {
         "config": {
@@ -1594,15 +1594,19 @@
   },
   {
     "name": "ha_get_history",
-    "title": "Get Entity History",
-    "description": "Retrieve raw state change history for entities (last ~10 days).\n\nReturns the full-resolution state history from Home Assistant's recorder.\nThis data shows every individual state change for the specified entities.\n\n**Data Characteristics:**\n- Full resolution: Every state transition captured\n- Retention: ~10 days (configurable via recorder.purge_keep_days)\n- Best for: Troubleshooting, pattern analysis, specific event queries\n\n**Parameters:**\n- entity_ids: Entity ID(s) to query (required)\n- start_time: Start of period - ISO datetime or relative ('24h', '7d', '2w'). Default: 24h ago\n- end_time: End of period - ISO datetime. Default: now\n- minimal_response: Omit attributes for smaller response. Default: true\n- significant_changes_only: Filter to actual state changes. Default: true\n- limit: Max entries per entity. Default: 100, Max: 1000\n\n**Use Cases:**\n- \"Why was my bedroom cold last night?\" - Query temperature sensor history\n- \"Did my garage door open while I was away?\" - Check cover state changes\n- \"What time does motion usually trigger?\" - Analyze binary sensor patterns\n- \"Debug automation triggers\" - See exact state change sequence\n\n**Example:**\n```python\n# Get temperature history for the last 24 hours\nha_get_history(entity_ids=\"sensor.bedroom_temperature\")\n\n# Get multiple entity history for last 7 days\nha_get_history(\n    entity_ids=[\"sensor.temperature\", \"sensor.humidity\"],\n    start_time=\"7d\",\n    limit=500\n)\n\n# Get full attributes for debugging\nha_get_history(\n    entity_ids=\"light.living_room\",\n    start_time=\"2025-01-25T00:00:00Z\",\n    end_time=\"2025-01-26T00:00:00Z\",\n    minimal_response=False\n)\n```\n\n**Note:** For long-term trends (>10 days), use ha_get_statistics() instead.\n\n**Returns:**\n- List of entities with their state history\n- Each entity includes: entity_id, period, states array, count",
+    "title": "Get Entity History or Statistics",
+    "description": "Retrieve historical data from Home Assistant's recorder.\n\n**Sources:**\n- \"history\" (default): Raw state changes, ~10 day retention, full resolution\n- \"statistics\": Pre-aggregated data, permanent retention, requires state_class\n\n**Shared params:** entity_ids, start_time, end_time, limit, offset\n**History params:** minimal_response, significant_changes_only\n**Statistics params:** period, statistic_types\n\n**Default time range:** 24h for history, 30 days for statistics\n\n**Use ha_get_history (default) when:**\n- Troubleshooting why a value changed (\"Why was my bedroom cold last night?\")\n- Checking event sequences (\"Did my garage door open while I was away?\")\n- Analyzing recent patterns (\"What time does motion usually trigger?\")\n\n**Use ha_get_history(source=\"statistics\") when:**\n- Tracking long-term trends beyond 10 days (\"Energy use this month vs last month?\")\n- Computing period averages (\"Average living room temperature over 6 months?\")\n- Entities must have state_class (measurement, total, total_increasing)\n\n**WARNING:** limit and offset apply per entity (not globally across all entities).\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.\nUse has_more and next_offset from the response to paginate.\n\n**Example -- history (default):**\n```python\nha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\nha_get_history(entity_ids=[\"sensor.temperature\", \"sensor.humidity\"], start_time=\"7d\", limit=500)\nha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100)\n```\n\n**Example -- statistics:**\n```python\nha_get_history(source=\"statistics\", entity_ids=\"sensor.total_energy_kwh\", start_time=\"30d\", period=\"day\")\nha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\",\n               start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])\nha_get_history(source=\"statistics\", entity_ids=\"sensor.energy_kwh\",\n               start_time=\"30d\", period=\"5minute\", limit=100, offset=200)\n```",
     "inputSchema": {
       "properties": {
         "entity_ids": {
           "type": "Annotated[str | list[str], Field(description='Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array.')]"
         },
+        "source": {
+          "type": "Annotated[Literal['history', 'statistics'], Field(description='Data source: \"history\" (default) for raw state changes (~10 day retention), or \"statistics\" for pre-aggregated long-term data (permanent, requires state_class).', default='history')]",
+          "default": "history"
+        },
         "start_time": {
-          "type": "Annotated[str | None, Field(description=\"Start time: ISO datetime or relative (e.g., '24h', '7d', '2w'). Default: 24h ago\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Start time: ISO datetime or relative (e.g., '24h', '7d', '30d'). Default: 24h ago for history, 30d ago for statistics\", default=None)]",
           "default": null
         },
         "end_time": {
@@ -1610,15 +1614,27 @@
           "default": null
         },
         "minimal_response": {
-          "type": "Annotated[bool, Field(description='Return only states/timestamps without attributes. Default: true', default=True)]",
+          "type": "Annotated[bool, Field(description='Return only states/timestamps without attributes. Default: true. Ignored when source=\"statistics\"', default=True)]",
           "default": true
         },
         "significant_changes_only": {
-          "type": "Annotated[bool, Field(description='Filter to significant state changes only. Default: true', default=True)]",
+          "type": "Annotated[bool, Field(description='Filter to significant state changes only. Default: true. Ignored when source=\"statistics\"', default=True)]",
           "default": true
         },
         "limit": {
-          "type": "Annotated[int | str | None, Field(description='Max state changes per entity. Default: 100, Max: 1000', default=None)]",
+          "type": "Annotated[int | str | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).', default=None)]",
+          "default": null
+        },
+        "offset": {
+          "type": "Annotated[int | str | None, Field(description='Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.', default=None)]",
+          "default": null
+        },
+        "period": {
+          "type": "Annotated[str, Field(description='Aggregation period: \"5minute\", \"hour\", \"day\", \"week\", \"month\". Default: \"day\". Ignored when source=\"history\"', default='day')]",
+          "default": "day"
+        },
+        "statistic_types": {
+          "type": "Annotated[str | list[str] | None, Field(description='Statistics types: \"mean\", \"min\", \"max\", \"sum\", \"state\", \"change\". Default: all. Ignored when source=\"history\"', default=None)]",
           "default": null
         }
       },
@@ -1691,45 +1707,6 @@
       "History & Statistics"
     ],
     "source_file": "tools_utility.py"
-  },
-  {
-    "name": "ha_get_statistics",
-    "title": "Get Statistics",
-    "description": "Retrieve pre-aggregated long-term statistics for trend analysis.\n\nReturns aggregated statistical data from Home Assistant's long-term statistics\ntable. This data is pre-computed and stored permanently, allowing analysis\nof historical trends beyond the standard ~10 day recorder retention.\n\n**Data Characteristics:**\n- Pre-aggregated: Hourly/daily/monthly statistics\n- Retention: Permanent - never purged\n- Entities: Only those with state_class (measurement, total, total_increasing)\n- Best for: Long-term trends, energy consumption, period comparisons\n\n**Parameters:**\n- entity_ids: Entity ID(s) with state_class attribute (required)\n- start_time: Start of period - ISO datetime or relative ('30d', '6m', '12m'). Default: 30d ago\n- end_time: End of period - ISO datetime. Default: now\n- period: Aggregation: '5minute', 'hour', 'day', 'week', 'month'. Default: 'day'\n- statistic_types: Types to include: 'mean', 'min', 'max', 'sum', 'state', 'change'. Default: all\n\n**Statistic Types Explained:**\n- mean: Average value over the period\n- min: Minimum value during the period\n- max: Maximum value during the period\n- sum: Running total (for total_increasing entities like energy)\n- state: Last known state value\n- change: Change from previous period\n\n**Use Cases:**\n- \"How much electricity did I use this month vs last month?\" - Monthly sum\n- \"What's my average living room temperature?\" - Daily/monthly mean\n- \"Show daily energy consumption for the past 2 weeks\" - Daily sum\n- \"Has my solar production declined year over year?\" - Monthly comparison\n\n**Example:**\n```python\n# Get daily energy statistics for last 30 days\nha_get_statistics(entity_ids=\"sensor.total_energy_kwh\")\n\n# Get monthly temperature averages for 6 months\nha_get_statistics(\n    entity_ids=\"sensor.living_room_temperature\",\n    start_time=\"6m\",\n    period=\"month\",\n    statistic_types=[\"mean\", \"min\", \"max\"]\n)\n\n# Compare multiple sensors\nha_get_statistics(\n    entity_ids=[\"sensor.solar_production\", \"sensor.grid_consumption\"],\n    start_time=\"12m\",\n    period=\"month\",\n    statistic_types=[\"sum\"]\n)\n```\n\n**Note:** Only entities with state_class attribute support statistics.\nUse ha_search_entities() to find entities and check their state_class.\n\n**Returns:**\n- List of entities with their statistics\n- Each includes: entity_id, period type, statistics array, unit_of_measurement",
-    "inputSchema": {
-      "properties": {
-        "entity_ids": {
-          "type": "Annotated[str | list[str], Field(description='Entity ID(s) to query. Must have state_class attribute. Can be single ID, comma-separated, or JSON array.')]"
-        },
-        "start_time": {
-          "type": "Annotated[str | None, Field(description=\"Start time: ISO datetime or relative (e.g., '30d', '6m', '12m'). Default: 30d ago\", default=None)]",
-          "default": null
-        },
-        "end_time": {
-          "type": "Annotated[str | None, Field(description='End time: ISO datetime. Default: now', default=None)]",
-          "default": null
-        },
-        "period": {
-          "type": "Annotated[str, Field(description=\"Aggregation period: '5minute', 'hour', 'day', 'week', 'month'. Default: 'day'\", default='day')]",
-          "default": "day"
-        },
-        "statistic_types": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Statistics types: 'mean', 'min', 'max', 'sum', 'state', 'change'. Default: all\", default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "entity_ids"
-      ]
-    },
-    "annotations": {
-      "idempotentHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [
-      "History & Statistics"
-    ],
-    "source_file": "tools_history.py"
   },
   {
     "name": "ha_delete_config_entry",
@@ -2100,11 +2077,11 @@
           "default": null
         },
         "limit": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=5, description='Maximum total results to return (default: 5)')]",
           "default": 5
         },
         "offset": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         },
         "include_config": {
@@ -2504,7 +2481,7 @@
   {
     "name": "ha_get_updates",
     "title": "Get Updates",
-    "description": "Get update information - list all updates or get details for a specific one.\n\nWithout an entity_id: Lists all available updates across the system including\nHome Assistant Core, add-ons, device firmware, HACS, and OS updates.\n\nWith an entity_id: Returns detailed information about a specific update including\nversion info, category, and release notes (if available).\n\nWith include_release_notes=True (Core updates only): Also fetches HA release\nblog posts for every monthly version between installed and latest. Returns\nstructured breaking changes and installed integration domains for cross-referencing.\n\nEXAMPLES:\n- List all updates: ha_get_updates()\n- List including skipped: ha_get_updates(include_skipped=True)\n- Get specific update: ha_get_updates(entity_id=\"update.home_assistant_core_update\")\n- Pre-update analysis: ha_get_updates(entity_id=\"update.home_assistant_core_update\", include_release_notes=True)\n\nRETURNS (when listing):\n- updates_available: Count of available updates\n- updates: List of update entities with version info\n- categories: Updates grouped by category (core, addons, devices, hacs, os)\n\nRETURNS (when getting specific update):\n- Update details including installed/latest versions\n- Release notes (fetched from WebSocket API or GitHub)\n- Category and installation status\n\nRETURNS (with include_release_notes=True, Core only):\n- breaking_changes.entries[]: Each has integration, description, version\n- multi_version_release_notes[]: Full text per version {version, content, source_url}\n- installed_integrations: Your integration domains for cross-referencing",
+    "description": "Get update information -- list all updates or get details for a specific one.\n\nWithout an entity_id: Lists all available updates across the system including\nHome Assistant Core, add-ons, device firmware, HACS, and OS updates.\n\nWith an entity_id: Returns detailed information about a specific update including\nversion info, category, and release notes (if available).\n\nWith include_release_notes=True (Core updates only): Also fetches HA release\nblog posts for every monthly version between installed and latest. Returns\nstructured breaking changes and installed integration domains for cross-referencing.\n\nEXAMPLES:\n- List all updates: ha_get_updates()\n- List including skipped: ha_get_updates(include_skipped=True)\n- Get specific update: ha_get_updates(entity_id=\"update.home_assistant_core_update\")\n- Pre-update analysis: ha_get_updates(entity_id=\"update.home_assistant_core_update\", include_release_notes=True)\n\nRETURNS (when listing):\n- updates_available: Count of available updates\n- updates: List of update entities with version info\n- categories: Updates grouped by category (core, addons, devices, hacs, os)\n\nRETURNS (when getting specific update):\n- Update details including installed/latest versions\n- Release notes (fetched from WebSocket API or GitHub)\n- Category and installation status\n\nRETURNS (with include_release_notes=True, Core only):\n- breaking_changes.entries[]: Each has integration, description, version\n- multi_version_release_notes[]: Full text per version {version, content, source_url}\n- installed_integrations: Your integration domains for cross-referencing",
     "inputSchema": {
       "properties": {
         "entity_id": {
