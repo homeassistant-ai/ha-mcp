@@ -92,7 +92,7 @@ def _get_config_path() -> Path:
     return home_dir / "tool_config.json"
 
 
-def load_tool_config(settings: "Settings | None" = None) -> dict[str, Any]:
+def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
     if path.exists():
@@ -138,7 +138,7 @@ def save_tool_config(config: dict[str, Any]) -> None:
         logger.exception("Failed to save tool config to %s", path)
 
 
-async def _get_tool_metadata(server: "HomeAssistantSmartMCPServer") -> list[dict[str, Any]]:
+async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
     Uses FastMCP's internal ``local_provider._list_tools()`` because the
@@ -202,9 +202,9 @@ async def _get_tool_metadata(server: "HomeAssistantSmartMCPServer") -> list[dict
 
 
 def apply_tool_visibility(
-    mcp: "FastMCP",
+    mcp: FastMCP,
     config: dict[str, Any],
-    settings: "Settings",
+    settings: Settings,
 ) -> set[str]:
     """Apply tool visibility from config, respecting safety toggles.
 
