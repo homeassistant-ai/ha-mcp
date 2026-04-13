@@ -194,7 +194,7 @@ class HistoryTools:
         period: Annotated[
             str,
             Field(
-                description='Aggregation period: "5minute", "hour", "day", "week", "month". Default: "day". Ignored when source="history"',
+                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year". Default: "day". Ignored when source="history"',
                 default="day",
             ),
         ] = "day",
@@ -580,7 +580,7 @@ async def _fetch_statistics(
         ))
 
     # Validate period
-    valid_periods = ["5minute", "hour", "day", "week", "month"]
+    valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
     if period not in valid_periods:
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -689,6 +689,8 @@ async def _fetch_statistics(
         "statistic_types": all_stat_types,
         "query_params": {
             "statistic_types": statistic_types,
+            "limit": effective_limit,
+            "offset": effective_offset,
         },
     }
 
