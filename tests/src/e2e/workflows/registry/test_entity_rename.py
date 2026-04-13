@@ -226,13 +226,7 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Domain change should be rejected"
-        # Error might be in error.message or just error string
-        error_msg = rename_data.get("error", "")
-        if isinstance(error_msg, dict):
-            error_msg = error_msg.get("message", "")
-        assert "domain" in str(error_msg).lower(), (
-            f"Error should mention domain: {rename_data}"
-        )
+        assert rename_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         logger.info("Domain mismatch correctly rejected")
 
     async def test_rename_invalid_format_rejected(self, mcp_client):
@@ -262,6 +256,7 @@ class TestEntityRename:
             assert not rename_data.get("success"), (
                 f"Invalid format should be rejected: {invalid_id}"
             )
+            assert rename_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
             logger.info(f"Invalid format correctly rejected: {invalid_id}")
 
     async def test_rename_nonexistent_entity(self, mcp_client):
@@ -280,6 +275,7 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Non-existent entity rename should fail"
+        assert rename_data["error"]["code"] == "SERVICE_CALL_FAILED"
         logger.info(
             f"Non-existent entity correctly rejected: {rename_data.get('error')}"
         )
