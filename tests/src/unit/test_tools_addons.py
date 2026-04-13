@@ -980,9 +980,8 @@ class TestManageAddon:
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             return_value={"success": False, "error": "boot_config locked"},
-        ):
-            with pytest.raises(ToolError):
-                await manage_addon_tool(slug="test_addon", boot="auto")
+        ), pytest.raises(ToolError):
+            await manage_addon_tool(slug="test_addon", boot="auto")
 
     # --- Validation: mutual exclusion ---
 
@@ -1060,8 +1059,7 @@ class TestManageAddon:
         with patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             return_value=_RUNNING_ADDON_INFO,
-        ):
-            with pytest.raises(ToolError):
-                await manage_addon_tool(
-                    slug="test_addon", path="/flows", method="INVALID"
-                )
+        ), pytest.raises(ToolError):
+            await manage_addon_tool(
+                slug="test_addon", path="/flows", method="INVALID"
+            )

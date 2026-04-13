@@ -1168,6 +1168,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             }
 
         # Proxy mode: call add-on container API
+        # At this point path is guaranteed non-None (validated above)
+        assert path is not None
         # WebSocket
         if websocket:
             result = await _call_addon_ws(
