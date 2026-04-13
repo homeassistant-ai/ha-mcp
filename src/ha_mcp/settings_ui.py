@@ -19,12 +19,16 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+    from .config import Settings
     from .server import HomeAssistantSmartMCPServer
+
+_VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,7 @@ def _get_config_path() -> Path:
     return home_dir / "tool_config.json"
 
 
-def load_tool_config(settings: Any = None) -> dict[str, Any]:
+def load_tool_config(settings: "Settings | None" = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
     if path.exists():
@@ -134,12 +138,15 @@ def save_tool_config(config: dict[str, Any]) -> None:
         logger.exception("Failed to save tool config to %s", path)
 
 
-async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
+async def _get_tool_metadata(server: "HomeAssistantSmartMCPServer") -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
-    Reads from the local provider's unfiltered tool list so that disabled
-    tools are still shown in the settings UI (users need to be able to
-    re-enable them).
+    Uses FastMCP's internal ``local_provider._list_tools()`` because the
+    public ``mcp.list_tools()`` filters out tools marked as disabled via
+    ``mcp.disable()``. The settings UI specifically needs the UNFILTERED
+    list so that users can see and re-enable tools they previously
+    disabled. There is no public FastMCP API that returns the unfiltered
+    list as of v3.2.0.
     """
     tools: list[dict[str, Any]] = []
     # Groups not considered "primary" when choosing a tool's canonical group —
@@ -195,9 +202,9 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
 
 
 def apply_tool_visibility(
-    mcp: FastMCP,
+    mcp: "FastMCP",
     config: dict[str, Any],
-    settings: Any,
+    settings: "Settings",
 ) -> set[str]:
     """Apply tool visibility from config, respecting safety toggles.
 
@@ -648,11 +655,32 @@ def register_settings_routes(
             body = await request.json()
         except (ValueError, TypeError):
             return JSONResponse(
-                {"success": False, "error": {"code": "VALIDATION_ERROR", "message": "Invalid JSON body"}},
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "Invalid JSON body",
+                    suggestions=["Ensure the request body is valid JSON"],
+                ),
                 status_code=400,
             )
 
-        states = body.get("states", {})
+        raw_states = body.get("states", {})
+        if not isinstance(raw_states, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'states' must be an object mapping tool names to state values",
+                ),
+                status_code=400,
+            )
+        # Validate: keys must be strings, values must be one of the valid states
+        states: dict[str, str] = {}
+        for name, state in raw_states.items():
+            if not isinstance(name, str) or not isinstance(state, str):
+                continue
+            if state not in _VALID_STATES:
+                continue
+            states[name] = state
+
         config = load_tool_config()
         config["tools"] = states
         save_tool_config(config)
@@ -676,7 +704,11 @@ def register_settings_routes(
         token = os.environ.get("SUPERVISOR_TOKEN")
         if not token:
             return JSONResponse(
-                {"success": False, "error": {"code": "NOT_IN_ADDON", "message": "Restart only available in add-on mode"}},
+                create_error_response(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Restart only available when running as an add-on",
+                    details="SUPERVISOR_TOKEN environment variable is not set",
+                ),
                 status_code=400,
             )
         # Short timeout — the supervisor kills our process during restart so
@@ -694,7 +726,10 @@ def register_settings_routes(
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
             return JSONResponse(
-                {"success": False, "error": {"code": "SUPERVISOR_UNREACHABLE", "message": str(e)}},
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    f"Failed to reach Supervisor: {e}",
+                ),
                 status_code=502,
             )
 
@@ -702,13 +737,10 @@ def register_settings_routes(
             body = resp.text
             logger.error("Supervisor restart failed: %d %s", resp.status_code, body)
             return JSONResponse(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "SUPERVISOR_ERROR",
-                        "message": f"Supervisor returned {resp.status_code}: {body[:500]}",
-                    },
-                },
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Supervisor returned {resp.status_code}: {body[:500]}",
+                ),
                 status_code=502,
             )
         return JSONResponse({"success": True, "message": "Restart initiated"})

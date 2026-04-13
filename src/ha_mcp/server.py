@@ -70,6 +70,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
         self._skill_tool_names: list[str] = []
+        # Populated by _apply_settings_ui from tool_config.json on startup
+        self._user_pinned_tools: list[str] = []
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -442,7 +444,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Build the always_visible list: defaults + user-configured pins
         pinned = list(self._PINNED_TOOLS)
-        pinned.extend(getattr(self, "_user_pinned_tools", []))
+        pinned.extend(self._user_pinned_tools)
 
         # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
