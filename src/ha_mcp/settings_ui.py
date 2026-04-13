@@ -308,6 +308,10 @@ _SETTINGS_HTML = """\
   .pin-notice { background: #3a2e1a; border: 1px solid #7a5a1a; border-radius: 10px;
     padding: 10px 16px; margin-bottom: 12px; font-size: 0.85rem; color: #ffd680; display: none; }
   .pin-notice.show { display: block; }
+  .restart-notice { background: #3a1a1a; border: 1px solid #7a1a1a; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 12px; font-size: 0.9rem; color: #ff9090;
+    font-weight: 500; display: none; }
+  .restart-notice.show { display: block; }
 </style>
 </head>
 <body>
@@ -323,6 +327,10 @@ _SETTINGS_HTML = """\
   Pin toggles only take effect when Tool Search is enabled in the add-on
   configuration. Without Tool Search, all enabled tools are always visible
   and pinning has no extra effect.
+</div>
+<div class="restart-notice" id="restartNotice">
+  ⚠ Changes saved. Restart the add-on for them to take effect — disabled
+  tools will be fully removed from the MCP tool list on next startup.
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -527,7 +535,8 @@ async function saveConfig() {
     body: JSON.stringify({states: toolStates}),
   });
   if (resp.ok) {
-    updateStatus('Saved', true);
+    updateStatus('Saved — restart required', true);
+    document.getElementById('restartNotice').classList.add('show');
   } else {
     updateStatus('Save failed!');
   }
@@ -602,35 +611,16 @@ def register_settings_routes(
         config["tools"] = states
         save_tool_config(config)
 
-        disabled_names: set[str] = set()
-        pinned_names: set[str] = set()
+        disabled_count = sum(1 for s in states.values() if s == "disabled")
+        pinned_count = sum(1 for s in states.values() if s == "pinned")
+        logger.info(
+            "Saved tool config (restart required to apply): %d disabled, %d pinned",
+            disabled_count, pinned_count,
+        )
 
-        for name, state in states.items():
-            if state == "disabled":
-                disabled_names.add(name)
-            elif state == "pinned":
-                pinned_names.add(name)
-
-        if not server.settings.enable_yaml_config_editing:
-            disabled_names.add("ha_config_set_yaml")
-
-        disabled_names -= MANDATORY_TOOLS
-
-        try:
-            all_tools = await _get_tool_metadata(server)
-            mcp.enable(names={t["name"] for t in all_tools})
-            if disabled_names:
-                mcp.disable(names=disabled_names)
-            mcp.enable(names=MANDATORY_TOOLS)
-            logger.info(
-                "Applied tool visibility: %d disabled, %d pinned",
-                len(disabled_names), len(pinned_names),
-            )
-        except Exception:
-            logger.exception("Failed to apply tool visibility")
-            return JSONResponse(
-                {"success": False, "error": {"code": "INTERNAL_ERROR", "message": "Failed to apply tool visibility"}},
-                status_code=500,
-            )
-
-        return JSONResponse({"success": True, "disabled": len(disabled_names), "pinned": len(pinned_names)})
+        return JSONResponse({
+            "success": True,
+            "disabled": disabled_count,
+            "pinned": pinned_count,
+            "restart_required": True,
+        })
