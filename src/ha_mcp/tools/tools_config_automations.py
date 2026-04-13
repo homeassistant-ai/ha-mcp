@@ -5,8 +5,6 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant automation configurations.
 """
 
-import hashlib
-import json
 import logging
 from typing import Annotated, Any, cast
 
@@ -21,6 +19,7 @@ from ..errors import (
     create_resource_not_found_error,
     create_validation_error,
 )
+from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -48,12 +47,6 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _compute_config_hash(config: dict[str, Any]) -> str:
-    """Compute a stable hash of automation config for optimistic locking."""
-    config_str = json.dumps(config, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
 
 def _normalize_automation_config(
@@ -275,7 +268,7 @@ class AutomationConfigTools:
                 "action": "get",
                 "identifier": identifier,
                 "config": normalized_config,
-                "config_hash": _compute_config_hash(normalized_config),
+                "config_hash": compute_config_hash(normalized_config),
             }
         except Exception as e:
             # Handle 404 errors gracefully (often used to verify deletion)
@@ -576,7 +569,7 @@ class AutomationConfigTools:
                     transformed_config, identifier
                 )
 
-                new_config_hash = _compute_config_hash(transformed_config)
+                new_config_hash = compute_config_hash(transformed_config)
 
                 return {
                     "success": True,
@@ -696,7 +689,7 @@ class AutomationConfigTools:
         """
         current = await self.ha_config_get_automation(identifier)
         current_config = current["config"]
-        current_hash = _compute_config_hash(current_config)
+        current_hash = compute_config_hash(current_config)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(

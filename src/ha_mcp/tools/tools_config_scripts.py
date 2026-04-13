@@ -5,8 +5,6 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant script configurations.
 """
 
-import hashlib
-import json
 import logging
 from typing import Annotated, Any, cast
 
@@ -15,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -42,12 +41,6 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _compute_config_hash(config: dict[str, Any]) -> str:
-    """Compute a stable hash of script config for optimistic locking."""
-    config_str = json.dumps(config, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
 
 def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
@@ -120,7 +113,7 @@ class ConfigScriptTools:
                 "action": "get",
                 "script_id": script_id,
                 "config": config_result,
-                "config_hash": _compute_config_hash(config_result),
+                "config_hash": compute_config_hash(config_result),
             }
         except ToolError:
             raise
@@ -148,7 +141,7 @@ class ConfigScriptTools:
         current = await self.ha_config_get_script(script_id)
         current_wrapper = current["config"]
         actual_config = current_wrapper.get("config", current_wrapper)
-        current_hash = _compute_config_hash(current_wrapper)
+        current_hash = compute_config_hash(current_wrapper)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -458,7 +451,7 @@ class ConfigScriptTools:
 
                 # Compute new hash on wrapper (consistent with ha_config_get_script)
                 new_wrapper = {**current_wrapper, "config": transformed_config}
-                new_config_hash = _compute_config_hash(new_wrapper)
+                new_config_hash = compute_config_hash(new_wrapper)
 
                 return {
                     "success": True,

@@ -180,3 +180,40 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
     )
     error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
     assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_config_hash_stable_across_reads(mcp_client, ha_client):
+    """Test that two consecutive reads return the same config_hash.
+
+    Validates no roundtrip normalization jitter — if the hash changes
+    between reads without any modification, optimistic locking would
+    produce phantom conflicts.
+    """
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_script",
+        {
+            "script_id": "test_hash_stability",
+            "config": {
+                "alias": "Hash Stability Test",
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}},
+                    {"delay": {"seconds": 1}},
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}},
+                ],
+                "mode": "single",
+            },
+        },
+    )
+
+    # Two consecutive reads — hashes must be identical
+    read1 = await mcp.call_tool_success(
+        "ha_config_get_script", {"script_id": "test_hash_stability"}
+    )
+    read2 = await mcp.call_tool_success(
+        "ha_config_get_script", {"script_id": "test_hash_stability"}
+    )
+
+    assert read1["config_hash"] == read2["config_hash"]
