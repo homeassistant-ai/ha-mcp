@@ -366,15 +366,16 @@ class TestHistoryLimitBoundary:
         assert entity["next_offset"] == 100
 
     @pytest.mark.asyncio
-    async def test_limit_exceeds_max_raises_error(self, history_tool):
-        """limit > _MAX_HISTORY_LIMIT (1000) raises VALIDATION_INVALID_PARAMETER.
+    async def test_limit_exceeds_max_is_clamped(self, history_tool):
+        """limit > _MAX_HISTORY_LIMIT (1000) is silently clamped to 1000.
 
-        coerce_int_param(max_value=1000) raises ValueError → VALIDATION_INVALID_PARAMETER.
-        No silent capping — callers must request a valid limit.
+        coerce_int_param(max_value=1000) clamps rather than raises for
+        above-maximum values — soft cap for oversized requests (per util_helpers.py).
         """
         states = _make_history_states(5)
-        with self._patch_ws(states), pytest.raises(ToolError) as exc_info:
-            await history_tool(entity_ids="sensor.test", limit=1001)
+        with self._patch_ws(states),              patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d: d):
+            result = await history_tool(entity_ids="sensor.test", limit=1001)
 
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        entity = result["entities"][0]
+        assert entity["limit"] == 1000
+        assert entity["count"] == 5
