@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
@@ -310,8 +312,14 @@ _SETTINGS_HTML = """\
   .pin-notice.show { display: block; }
   .restart-notice { background: #3a1a1a; border: 1px solid #7a1a1a; border-radius: 10px;
     padding: 12px 16px; margin-bottom: 12px; font-size: 0.9rem; color: #ff9090;
-    font-weight: 500; display: none; }
-  .restart-notice.show { display: block; }
+    font-weight: 500; display: none; align-items: center; justify-content: space-between; gap: 12px; }
+  .restart-notice.show { display: flex; }
+  .restart-notice-text { flex: 1; }
+  .restart-btn { padding: 8px 16px; border-radius: 8px; border: none;
+    background: var(--accent); color: white; font-weight: 600; cursor: pointer;
+    font-size: 0.85rem; flex-shrink: 0; }
+  .restart-btn:hover { background: var(--accent-hover); }
+  .restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -329,8 +337,11 @@ _SETTINGS_HTML = """\
   and pinning has no extra effect.
 </div>
 <div class="restart-notice" id="restartNotice">
-  ⚠ Changes saved. Restart the add-on for them to take effect — disabled
-  tools will be fully removed from the MCP tool list on next startup.
+  <span class="restart-notice-text">
+    ⚠ Changes saved. Restart the add-on for them to take effect — disabled
+    tools will be fully removed from the MCP tool list on next startup.
+  </span>
+  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -348,6 +359,33 @@ async function loadTools() {
   toolStates = data.states;
   render();
   updateStatus('Loaded');
+
+  // Show restart button if running as add-on
+  try {
+    const infoResp = await fetch('./api/settings/info');
+    const info = await infoResp.json();
+    if (info.is_addon) {
+      document.getElementById('restartBtn').style.display = '';
+    }
+  } catch (_e) {}
+}
+
+async function restartAddon() {
+  const btn = document.getElementById('restartBtn');
+  if (!confirm('Restart the add-on now? The web UI will become unreachable for ~30 seconds.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
+  try {
+    const resp = await fetch('./api/settings/restart', {method: 'POST'});
+    if (resp.ok) {
+      btn.textContent = 'Restart initiated — reload page in ~30s';
+    } else {
+      btn.textContent = 'Restart failed';
+      btn.disabled = false;
+    }
+  } catch (_e) {
+    btn.textContent = 'Connection lost (expected during restart)';
+  }
 }
 
 const DEFAULT_PINNED = """ + json.dumps(list(DEFAULT_PINNED_TOOLS)) + """;
@@ -565,6 +603,7 @@ document.getElementById('search').addEventListener('input', (e) => {
   });
 });
 
+document.getElementById('restartBtn').addEventListener('click', restartAddon);
 loadTools();
 </script>
 </body>
@@ -623,4 +662,38 @@ def register_settings_routes(
             "disabled": disabled_count,
             "pinned": pinned_count,
             "restart_required": True,
+        })
+
+    @mcp.custom_route("/api/settings/restart", methods=["POST"])
+    async def _restart_addon(_: Request) -> JSONResponse:
+        token = os.environ.get("SUPERVISOR_TOKEN")
+        if not token:
+            return JSONResponse(
+                {"success": False, "error": {"code": "NOT_IN_ADDON", "message": "Restart only available in add-on mode"}},
+                status_code=400,
+            )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    "http://supervisor/addons/self/restart",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if resp.status_code >= 400:
+                logger.error("Supervisor restart failed: %d %s", resp.status_code, resp.text)
+                return JSONResponse(
+                    {"success": False, "error": {"code": "SUPERVISOR_ERROR", "message": f"Supervisor returned {resp.status_code}"}},
+                    status_code=502,
+                )
+        except httpx.HTTPError as e:
+            logger.exception("Failed to reach Supervisor for restart")
+            return JSONResponse(
+                {"success": False, "error": {"code": "SUPERVISOR_UNREACHABLE", "message": str(e)}},
+                status_code=502,
+            )
+        return JSONResponse({"success": True, "message": "Restart initiated"})
+
+    @mcp.custom_route("/api/settings/info", methods=["GET"])
+    async def _settings_info(_: Request) -> JSONResponse:
+        return JSONResponse({
+            "is_addon": bool(os.environ.get("SUPERVISOR_TOKEN")),
         })
