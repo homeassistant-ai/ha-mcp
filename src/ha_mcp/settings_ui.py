@@ -262,12 +262,15 @@ _SETTINGS_HTML = """\
   .group { background: var(--surface); border-radius: 12px; margin-bottom: 8px;
     overflow: hidden; border: 1px solid var(--border); }
   .group-header { display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; cursor: pointer; user-select: none; }
+    padding: 12px 16px; cursor: pointer; user-select: none; gap: 12px; }
   .group-header:hover { background: var(--surface-hover); }
+  .group-header-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
   .group-name { font-weight: 600; font-size: 0.95rem; }
-  .group-count { font-size: 0.8rem; color: var(--text-secondary); margin-left: 8px; }
-  .group-chevron { transition: transform 0.2s; color: var(--text-secondary); }
+  .group-count { font-size: 0.8rem; color: var(--text-secondary); }
+  .group-chevron { transition: transform 0.2s; color: var(--text-secondary);
+    display: inline-block; width: 12px; }
   .group-chevron.open { transform: rotate(90deg); }
+  .group-master { flex-shrink: 0; }
   .group-tools { display: none; border-top: 1px solid var(--border); }
   .group-tools.open { display: block; }
   .tool { display: flex; align-items: center; justify-content: space-between;
@@ -328,6 +331,7 @@ _SETTINGS_HTML = """\
 let toolData = [];
 let toolStates = {};
 let saveTimer = null;
+let openGroups = new Set();
 
 async function loadTools() {
   const resp = await fetch('./api/settings/tools');
@@ -364,21 +368,62 @@ function render() {
     const group = document.createElement('div');
     group.className = 'group';
 
+    // Per-group toggle state: enabled if ANY non-mandatory/non-gated tool is enabled
+    const toggleable = tools.filter(t => !MANDATORY.includes(t.name) && !t.disabled_by);
+    const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
+    const groupEnabled = tools.filter(t => {
+      const s = getState(t.name);
+      return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
+    }).length;
+
     const header = document.createElement('div');
     header.className = 'group-header';
-    const groupEnabled = tools.filter(t => getState(t.name) !== 'disabled').length;
-    header.innerHTML = `<div><span class="group-name">${tag}</span>` +
-      `<span class="group-count">${groupEnabled}/${tools.length} enabled</span></div>` +
-      `<span class="group-chevron">&#9654;</span>`;
-    header.onclick = () => {
+    header.innerHTML = `<div class="group-header-left">` +
+      `<span class="group-chevron">&#9654;</span>` +
+      `<span class="group-name">${tag}</span>` +
+      `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
+      `</div>` +
+      `<label class="switch group-master" title="Enable/disable all tools in this group">` +
+        `<input type="checkbox" ${anyEnabled ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
+        `<span class="slider"></span>` +
+      `</label>`;
+
+    const chevron = header.querySelector('.group-chevron');
+    const masterInput = header.querySelector('.group-master input');
+
+    header.addEventListener('click', (e) => {
+      // Ignore clicks on the master toggle itself
+      if (e.target.closest('.group-master')) return;
+      if (openGroups.has(tag)) openGroups.delete(tag);
+      else openGroups.add(tag);
       const toolsDiv = group.querySelector('.group-tools');
-      const chevron = header.querySelector('.group-chevron');
       toolsDiv.classList.toggle('open');
       chevron.classList.toggle('open');
-    };
+    });
+
+    if (masterInput) {
+      masterInput.addEventListener('click', (e) => e.stopPropagation());
+      masterInput.addEventListener('change', (e) => {
+        const target = e.target.checked ? 'enabled' : 'disabled';
+        toggleable.forEach(t => {
+          if (target === 'enabled') {
+            // Restore to pinned if it was pinned by default, else enabled
+            toolStates[t.name] = DEFAULT_PINNED.includes(t.name) ? 'pinned' : 'enabled';
+          } else {
+            toolStates[t.name] = 'disabled';
+          }
+        });
+        scheduleSave();
+        render();
+      });
+    }
 
     const toolsDiv = document.createElement('div');
     toolsDiv.className = 'group-tools';
+    if (openGroups.has(tag)) {
+      toolsDiv.classList.add('open');
+      chevron.classList.add('open');
+    }
 
     tools.forEach(t => {
       const state = getState(t.name);
