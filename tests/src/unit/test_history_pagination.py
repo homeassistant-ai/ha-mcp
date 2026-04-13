@@ -262,3 +262,119 @@ class TestStatisticsPagination:
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Option 1 — multi-entity offset guard
+# ---------------------------------------------------------------------------
+
+
+class TestMultiEntityOffsetGuard:
+    """Guard: offset > 0 with multiple entity_ids raises VALIDATION_INVALID_PARAMETER."""
+
+    @pytest.fixture
+    def mock_client(self):
+        return _make_mock_client()
+
+    @pytest.fixture
+    def history_tool(self, mock_client):
+        return HistoryTools(mock_client).ha_get_history
+
+    def _patch_ws(self):
+        ws = _make_ws_client_mock(history_result={})
+        return patch(
+            "ha_mcp.tools.tools_history.get_connected_ws_client",
+            return_value=(ws, None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_multi_entity_offset_rejected(self, history_tool):
+        """offset > 0 with multiple entity_ids raises VALIDATION_INVALID_PARAMETER.
+
+        Option 1 guard: build_pagination_metadata applies per entity, so
+        limit=100 across N entities returns up to 100*N rows with no top-level
+        has_more signal — a footgun for LLM token budgets.
+        """
+        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
+            await history_tool(
+                entity_ids=["sensor.a", "sensor.b"],
+                offset=1,
+                limit=10,
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "single entity_id" in error["message"]
+
+    @pytest.mark.asyncio
+    async def test_multi_entity_offset_zero_allowed(self, history_tool):
+        """offset=0 (default) with multiple entity_ids is allowed."""
+        states = _make_history_states(5)
+        ws = _make_ws_client_mock(history_result={
+            "sensor.a": states,
+            "sensor.b": states,
+        })
+        with patch("ha_mcp.tools.tools_history.get_connected_ws_client", return_value=(ws, None)), \
+             patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d: d):
+            result = await history_tool(
+                entity_ids=["sensor.a", "sensor.b"],
+                offset=0,
+                limit=3,
+            )
+
+        assert len(result["entities"]) == 2
+        for entity in result["entities"]:
+            assert entity["offset"] == 0
+            assert entity["count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: default limit (history source) + MAX boundary
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryLimitBoundary:
+    """Default-limit and _MAX_HISTORY_LIMIT boundary tests for history source."""
+
+    @pytest.fixture
+    def mock_client(self):
+        return _make_mock_client()
+
+    @pytest.fixture
+    def history_tool(self, mock_client):
+        return HistoryTools(mock_client).ha_get_history
+
+    def _patch_ws(self, states):
+        ws = _make_ws_client_mock(history_result={"sensor.test": states})
+        return patch(
+            "ha_mcp.tools.tools_history.get_connected_ws_client",
+            return_value=(ws, None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_default_limit_applied_history(self, history_tool):
+        """Without explicit limit, default (100) is applied for history source."""
+        states = _make_history_states(150)
+        with self._patch_ws(states), \
+             patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d: d):
+            result = await history_tool(entity_ids="sensor.test")
+
+        entity = result["entities"][0]
+        assert entity["count"] == 100
+        assert entity["total_count"] == 150
+        assert entity["has_more"] is True
+        assert entity["next_offset"] == 100
+
+    @pytest.mark.asyncio
+    async def test_limit_exceeds_max_raises_error(self, history_tool):
+        """limit > _MAX_HISTORY_LIMIT (1000) raises VALIDATION_INVALID_PARAMETER.
+
+        coerce_int_param(max_value=1000) raises ValueError → VALIDATION_INVALID_PARAMETER.
+        No silent capping — callers must request a valid limit.
+        """
+        states = _make_history_states(5)
+        with self._patch_ws(states), pytest.raises(ToolError) as exc_info:
+            await history_tool(entity_ids="sensor.test", limit=1001)
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
