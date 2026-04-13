@@ -145,7 +145,7 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
     # override the tool's real domain group.
     secondary_tags = {"Z-Wave", "Zigbee"}
 
-    registered = await server.mcp.local_provider._list_tools()  # type: ignore[attr-defined]
+    registered = await server.mcp.local_provider._list_tools()
     for tool in registered:
         tags = sorted(tool.tags) if tool.tags else []
         primary_tags = [t for t in tags if t not in secondary_tags]
