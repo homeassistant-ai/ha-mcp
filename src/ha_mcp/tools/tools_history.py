@@ -591,7 +591,7 @@ async def _fetch_statistics(
 
     # Parse statistic_types
     stat_types_list: list[str] | None = None
-    if statistic_types:
+    if statistic_types is not None:
         if isinstance(statistic_types, str):
             if statistic_types.startswith("["):
                 stat_types_list = parse_string_list_param(statistic_types, "statistic_types")
@@ -605,6 +605,14 @@ async def _fetch_statistics(
         valid_types = ["mean", "min", "max", "sum", "state", "change"]
         if stat_types_list is None:
             stat_types_list = []
+        if not stat_types_list:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "statistic_types cannot be an empty list. "
+                "Omit the parameter to retrieve all types, or specify at least one valid type.",
+                context={"parameter": "statistic_types"},
+                suggestions=["Use one or more of: mean, min, max, sum, state, change"],
+            ))
         invalid_types = [t for t in stat_types_list if t not in valid_types]
         if invalid_types:
             raise_tool_error(create_error_response(
