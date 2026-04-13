@@ -264,6 +264,58 @@ class TestStatisticsPagination:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
+    @pytest.mark.asyncio
+    async def test_statistics_query_params_default(self, history_tool):
+        """query_params echoes defaults: statistic_types=None, limit=_DEFAULT_HISTORY_LIMIT, offset=0.
+
+        Verifies that _fetch_statistics includes a query_params block in its response
+        matching _fetch_history symmetry. Default call: no statistic_types, no limit/offset.
+        """
+        rows = _make_stat_rows(5)
+        with self._patch_ws(rows), patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d: d,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.energy", source="statistics", start_time="30d"
+            )
+
+        assert "query_params" in result, (
+            f"Expected query_params in statistics response, got keys: {list(result.keys())}"
+        )
+        qp = result["query_params"]
+        assert qp["statistic_types"] is None
+        assert qp["limit"] == 100  # _DEFAULT_HISTORY_LIMIT
+        assert qp["offset"] == 0
+
+    @pytest.mark.asyncio
+    async def test_statistics_query_params_roundtrip(self, history_tool):
+        """query_params echoes explicit caller values: statistic_types, limit, offset.
+
+        A bug that assigns the wrong value to any param would fail the exact-equality
+        assertion — stronger than checking key presence only.
+        """
+        rows = _make_stat_rows(50)
+        with self._patch_ws(rows), patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d: d,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                statistic_types=["mean"],
+                limit=10,
+                offset=5,
+            )
+
+        assert "query_params" in result
+        qp = result["query_params"]
+        assert qp["statistic_types"] == ["mean"]
+        assert qp["limit"] == 10
+        assert qp["offset"] == 5
+
+
 # ---------------------------------------------------------------------------
 # Tests: Option 1 — multi-entity offset guard
 # ---------------------------------------------------------------------------
