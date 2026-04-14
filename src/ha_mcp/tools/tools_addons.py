@@ -1085,6 +1085,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Examples:**
         - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
+          Note: only the fields you provide are updated — current values are fetched first
+          and merged automatically. Fields not in the add-on's schema are ignored with a warning.
         - Disable auto-update: ha_manage_addon(slug="...", auto_update=False)
         - Change host port: ha_manage_addon(slug="...", network={"5800/tcp": 8082})
         - Set boot mode: ha_manage_addon(slug="...", boot="manual")
@@ -1096,7 +1098,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         config_data: dict[str, Any] = {}
         if options:
             config_data["options"] = options
-        if network is not None:
+        if network:
             config_data["network"] = network
         if boot is not None:
             config_data["boot"] = boot
@@ -1153,6 +1155,43 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         # Config mode: update Supervisor settings
         if config_data:
+            # For options updates: fetch current state first.
+            # GET /info provides both current options (for merge) and schema_ui
+            # (for pre-write unknown-field detection) in a single roundtrip.
+            if "options" in config_data:
+                info_result = await _supervisor_api_call(client, f"/addons/{slug}/info")
+                if not info_result.get("success"):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Add-on '{slug}' not found or Supervisor unavailable",
+                            details=str(info_result),
+                        )
+                    )
+                addon_info = info_result.get("result", {})
+
+                # Merge caller's options into current options (fixes partial-update rejection).
+                # Supervisor validates the full options dict against the add-on schema,
+                # so callers must always submit all required fields — merging makes that
+                # transparent.
+                current_options: dict = addon_info.get("options") or {}
+                merged_options = {**current_options, **config_data["options"]}
+
+                # Pre-write schema check: identify fields not in the add-on's schema.
+                # Supervisor silently drops unknown fields on write; surfacing them here
+                # lets the caller correct mistakes before any state is changed.
+                schema_ui: list | None = addon_info.get("schema")
+                ignored_fields: list[str] = []
+                if schema_ui is not None:
+                    allowed_keys = {item["name"] for item in schema_ui if "name" in item}
+                    ignored_fields = [k for k in config_data["options"] if k not in allowed_keys]
+                    # Remove unknown fields from the merged dict so Supervisor does not
+                    # silently strip them after the write succeeds.
+                    for k in ignored_fields:
+                        merged_options.pop(k, None)
+
+                config_data["options"] = merged_options
+
             result = await _supervisor_api_call(
                 client,
                 f"/addons/{slug}/options",
@@ -1160,10 +1199,24 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 data=config_data,
             )
             if not result.get("success"):
-                raise_tool_error(result)
+                # Surface Supervisor schema errors (e.g. missing required field) as
+                # VALIDATION_FAILED so the model receives an actionable error code.
+                error_detail = str(result)
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        f"Supervisor rejected configuration for add-on '{slug}'",
+                        details=error_detail,
+                        suggestions=[
+                            "Fetch current options via ha_get_addon(slug) to see required fields",
+                            "Re-submit all required option fields together",
+                        ],
+                    )
+                )
             submitted_fields = list(config_data.keys())
+            response: dict = {}
             if {"options", "network"} & config_data.keys():
-                return {
+                response = {
                     "status": "pending_restart",
                     "message": (
                         f"Configuration submitted for add-on '{slug}'. "
@@ -1171,11 +1224,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     ),
                     "submitted_fields": submitted_fields,
                 }
-            return {
-                "success": True,
-                "message": f"Configuration updated for add-on '{slug}'.",
-                "submitted_fields": submitted_fields,
-            }
+            else:
+                response = {
+                    "success": True,
+                    "message": f"Configuration updated for add-on '{slug}'.",
+                    "submitted_fields": submitted_fields,
+                }
+            if ignored_fields:
+                response["warning"] = (
+                    f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
+                    f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
+                    "declared schema."
+                )
+                response["ignored_fields"] = ignored_fields
+            return response
 
         # Proxy mode: call add-on container API
         # At this point path is guaranteed non-None (validated above)
