@@ -1510,7 +1510,7 @@ class TestTagCRUD:
         logger.info("Tag update test cleanup complete")
 
 
-@pytest.mark.helpers
+@pytest.mark.helper
 class TestSetHelperNegativeInputs:
     """Negative-input tests for ha_config_set_helper pre-flight guards."""
 
