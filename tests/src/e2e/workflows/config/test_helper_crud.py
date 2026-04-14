@@ -1529,3 +1529,43 @@ class TestSetHelperNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_input_number_invalid_range(self, mcp_client) -> None:
+        """Rejects input_number when min_value > max_value.
+
+        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        when min_value is greater than max_value.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_number",
+                "name": "Invalid Range",
+                "min_value": 100,
+                "max_value": 0,
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_input_datetime_both_date_and_time_false(
+        self, mcp_client
+    ) -> None:
+        """Rejects input_datetime when both has_date and has_time are False.
+
+        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        when both fields are explicitly False.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_datetime",
+                "name": "Invalid DateTime",
+                "has_date": False,
+                "has_time": False,
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
