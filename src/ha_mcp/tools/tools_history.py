@@ -603,14 +603,13 @@ async def _fetch_statistics(
             stat_types_list = list(statistic_types)
 
         valid_types = ["mean", "min", "max", "sum", "state", "change"]
-        if stat_types_list is None:
-            stat_types_list = []
+        assert stat_types_list is not None
         if not stat_types_list:
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "statistic_types cannot be an empty list. "
                 "Omit the parameter to retrieve all types, or specify at least one valid type.",
-                context={"parameter": "statistic_types"},
+                context={"parameter": "statistic_types", "value": statistic_types},
                 suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
             ))
         invalid_types = [t for t in stat_types_list if t not in valid_types]
