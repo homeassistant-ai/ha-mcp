@@ -331,6 +331,8 @@ If the add-on is slow or unresponsive:
 
 The add-on provides 86+ MCP tools for controlling Home Assistant:
 
+> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
+
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
 - `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
@@ -442,7 +444,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_backup_create` — Create a fast Home Assistant backup (local only).
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
-- `ha_config_set_yaml` — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.

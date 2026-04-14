@@ -44,7 +44,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     logger.info("YAML config editing tools enabled")
 
     @mcp.tool(
-        tags={"System"},
+        tags={"System", "beta"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
