@@ -1147,7 +1147,33 @@ class TestConfigHashMismatch:
     the hash of the automation's current stored configuration.
 
     All tests require a live automation (create → get → set → cleanup).
+    Entity references are dynamically discovered (consistent with file docstring).
     """
+
+    async def _find_test_light_entity(self, mcp_client) -> str:
+        """Find a suitable light entity for testing.
+
+        Prefers demo/test entities, falls back to first available light.
+        """
+        search_result = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"query": "light", "domain_filter": "light", "limit": 20},
+        )
+        search_data = parse_mcp_result(search_result)
+        if "data" in search_data:
+            results = search_data.get("data", {}).get("results", [])
+        else:
+            results = search_data.get("results", [])
+        if not results:
+            pytest.skip("No light entities available for testing")
+        for entity in results:
+            entity_id = entity.get("entity_id", "")
+            if "demo" in entity_id.lower() or "test" in entity_id.lower():
+                return entity_id
+        entity_id = results[0].get("entity_id", "")
+        if not entity_id:
+            pytest.skip("No valid light entity found for testing")
+        return entity_id
 
     async def test_config_hash_mismatch_rejected(
         self, mcp_client, cleanup_tracker, test_data_factory
@@ -1158,11 +1184,15 @@ class TestConfigHashMismatch:
         config_hash does not match the current hash. This prevents silent
         overwrites of automations that were modified since last read.
         """
-        # 1. CREATE a throwaway automation
+        # 1. DISCOVER: find a valid light entity for the automation action
+        test_light = await self._find_test_light_entity(mcp_client)
+        logger.info(f"Using light entity: {test_light}")
+
+        # 2. CREATE a throwaway automation
         config = test_data_factory.automation_config(
             "A6 Hash Mismatch Test",
             trigger=[{"platform": "time", "at": "03:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         create_data = await safe_call_tool(
             mcp_client, "ha_config_set_automation", {"config": config}
@@ -1191,7 +1221,7 @@ class TestConfigHashMismatch:
         update_config = test_data_factory.automation_config(
             "A6 Hash Mismatch Test Updated",
             trigger=[{"platform": "time", "at": "04:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         result = await safe_call_tool(
             mcp_client,
@@ -1217,10 +1247,11 @@ class TestConfigHashMismatch:
         guard fires only on actual mismatches, not on every update.
         """
         # 1. CREATE
+        test_light = await self._find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
             "A6 Hash Valid Test",
             trigger=[{"platform": "time", "at": "05:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         create_data = await safe_call_tool(
             mcp_client, "ha_config_set_automation", {"config": config}
@@ -1243,7 +1274,7 @@ class TestConfigHashMismatch:
         update_config = test_data_factory.automation_config(
             "A6 Hash Valid Test Updated",
             trigger=[{"platform": "time", "at": "06:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         result = await safe_call_tool(
             mcp_client,
@@ -1266,10 +1297,11 @@ class TestConfigHashMismatch:
         skips the optimistic-lock check entirely, enabling unconditional overwrites.
         """
         # 1. CREATE
+        test_light = await self._find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
             "A6 No Hash Test",
             trigger=[{"platform": "time", "at": "07:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         create_data = await safe_call_tool(
             mcp_client, "ha_config_set_automation", {"config": config}
@@ -1284,7 +1316,7 @@ class TestConfigHashMismatch:
         update_config = test_data_factory.automation_config(
             "A6 No Hash Test Updated",
             trigger=[{"platform": "time", "at": "08:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
         result = await safe_call_tool(
             mcp_client,
