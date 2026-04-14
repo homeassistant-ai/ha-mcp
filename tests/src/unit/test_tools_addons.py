@@ -911,23 +911,95 @@ class TestManageAddon:
 
     @pytest.mark.asyncio
     async def test_config_mode_options(self, manage_addon_tool):
-        """Config mode: options dict is POSTed to Supervisor API."""
+        """Config mode: options are merged with current values then POSTed."""
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {"FF_KIOSK": False, "FF_OPEN_URL": "https://old.example.com"},
+                        "schema": [
+                            {"name": "FF_KIOSK", "required": False, "type": "bool"},
+                            {"name": "FF_OPEN_URL", "required": False, "type": "str"},
+                        ],
+                    },
+                }
+            # POST /addons/test_addon/options
+            return {"success": True, "result": {}}
+
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
-            return_value={"success": True, "result": {}},
-        ) as mock_sup:
+            side_effect=mock_supervisor_api,
+        ):
             result = await manage_addon_tool(
                 slug="test_addon",
-                options={"FF_KIOSK": True, "FF_OPEN_URL": "https://example.com"},
+                options={"FF_OPEN_URL": "https://example.com"},
             )
 
         assert result["status"] == "pending_restart"
         assert result["submitted_fields"] == ["options"]
-        mock_sup.assert_called_once()
-        call_kwargs = mock_sup.call_args
-        assert call_kwargs[0][1] == "/addons/test_addon/options"
-        assert call_kwargs[1]["method"] == "POST"
-        assert call_kwargs[1]["data"]["options"] == {"FF_KIOSK": True, "FF_OPEN_URL": "https://example.com"}
+        # Caller only sent FF_OPEN_URL; FF_KIOSK is carried over from current options
+        assert "ignored_fields" not in result
+
+    @pytest.mark.asyncio
+    async def test_config_mode_options_merge_preserves_required_fields(self, manage_addon_tool):
+        """Merge ensures required fields are present even when caller omits them (Bug A fix)."""
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {"required_key": "existing_value", "log_level": "info"},
+                        "schema": [
+                            {"name": "required_key", "required": True, "type": "str"},
+                            {"name": "log_level", "required": False, "type": "str"},
+                        ],
+                    },
+                }
+            return {"success": True, "result": {}}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            side_effect=mock_supervisor_api,
+        ) as mock_sup:
+            result = await manage_addon_tool(slug="test_addon", options={"log_level": "debug"})
+
+        assert result["status"] == "pending_restart"
+        # POST call should have included required_key from current options
+        post_call = [c for c in mock_sup.call_args_list if "method" in c[1]][-1]
+        assert post_call[1]["data"]["options"]["required_key"] == "existing_value"
+        assert post_call[1]["data"]["options"]["log_level"] == "debug"
+
+    @pytest.mark.asyncio
+    async def test_config_mode_options_unknown_fields_warned(self, manage_addon_tool):
+        """Unknown option fields are removed pre-write and reported in ignored_fields (Bug B fix)."""
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {"log_level": "info"},
+                        "schema": [{"name": "log_level", "required": False, "type": "str"}],
+                    },
+                }
+            return {"success": True, "result": {}}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            side_effect=mock_supervisor_api,
+        ):
+            result = await manage_addon_tool(
+                slug="test_addon",
+                options={"log_level": "debug", "zombie_field": "ghost"},
+            )
+
+        assert result["status"] == "pending_restart"
+        assert "ignored_fields" in result
+        assert "zombie_field" in result["ignored_fields"]
+        assert "warning" in result
 
     @pytest.mark.asyncio
     async def test_config_mode_boot(self, manage_addon_tool):
@@ -976,7 +1048,7 @@ class TestManageAddon:
 
     @pytest.mark.asyncio
     async def test_config_mode_supervisor_error_raises(self, manage_addon_tool):
-        """Config mode: Supervisor error propagates as ToolError."""
+        """Config mode: Supervisor error maps to VALIDATION_FAILED with actionable suggestion."""
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             return_value={"success": False, "error": "boot_config locked"},
@@ -984,7 +1056,48 @@ class TestManageAddon:
             await manage_addon_tool(slug="test_addon", boot="auto")
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
-        assert "error" in payload
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert "rejected" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_config_mode_all_five_params(self, manage_addon_tool):
+        """Config mode: all five config params submitted in a single POST call."""
+        call_count = 0
+        calls = []
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            calls.append((endpoint, kwargs))
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {},
+                        "schema": [{"name": "log_level", "required": False, "type": "str"}],
+                    },
+                }
+            return {"success": True, "result": {}}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            side_effect=mock_supervisor_api,
+        ):
+            result = await manage_addon_tool(
+                slug="test_addon",
+                options={"log_level": "debug"},
+                boot="manual",
+                auto_update=False,
+                watchdog=True,
+                network={"8080/tcp": 9090},
+            )
+
+        # GET /info + single POST (not five separate calls)
+        assert call_count == 2
+        post_call = calls[-1]
+        data = post_call[1]["data"]
+        assert set(data.keys()) == {"options", "boot", "auto_update", "watchdog", "network"}
+        assert set(result["submitted_fields"]) == {"options", "boot", "auto_update", "watchdog", "network"}
 
     # --- Validation: mutual exclusion ---
 
