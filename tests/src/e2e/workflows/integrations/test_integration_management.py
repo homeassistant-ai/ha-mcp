@@ -188,3 +188,26 @@ class TestIntegrationManagement:
         )
         # Should fail - either through validation or API error
         assert not data.get("success", False)
+
+    async def test_delete_config_entry_nonexistent_confirmed(self, mcp_client):
+        """
+        Test: ha_delete_config_entry with a nonexistent entry_id and confirm=True
+        returns a structured error, not success=True.
+
+        Source path: confirm_bool=True bypasses the guard; delete_config_entry()
+        reaches the HA REST API with an unknown entry_id → Exception →
+        exception_to_structured_error(raise_error=True) → ToolError.
+
+        Existing tests cover confirm=False (guard path) and a valid entry_id
+        (CRUD cycle). This test covers the third structurally distinct path:
+        confirmed deletion of an entry that does not exist.
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_delete_config_entry",
+            {"entry_id": "nonexistent_entry_a7_e2e_xyz", "confirm": True},
+        )
+        assert not data.get("success", False), (
+            f"Expected failure for nonexistent entry_id with confirm=True, "
+            f"got success=True: {data}"
+        )
