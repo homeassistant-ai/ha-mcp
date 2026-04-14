@@ -186,4 +186,4 @@ class TestStatisticTypesValidation:
             )
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "invalid_type" in error["message"] or "invalid_types" in str(error)
+        assert "invalid_type" in error["message"]
