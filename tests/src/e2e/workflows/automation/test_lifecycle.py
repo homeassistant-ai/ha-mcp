@@ -1136,3 +1136,166 @@ async def test_automation_creation_returns_verified_entity(
     )
     assert_mcp_success(delete_result, "verified entity test cleanup")
     logger.info("Automation creation verified entity test passed")
+
+
+@pytest.mark.automation
+class TestConfigHashMismatch:
+    """Tests for ha_config_set_automation optimistic-locking guard (Guard 1).
+
+    Guard: tools_config_automations.py _fetch_and_verify_hash —
+    raises SERVICE_CALL_FAILED when the supplied config_hash does not match
+    the hash of the automation's current stored configuration.
+
+    All tests require a live automation (create → get → set → cleanup).
+    """
+
+    async def test_config_hash_mismatch_rejected(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Rejects an update when the caller supplies a stale config_hash.
+
+        Guard: _fetch_and_verify_hash raises SERVICE_CALL_FAILED when
+        config_hash does not match the current hash. This prevents silent
+        overwrites of automations that were modified since last read.
+        """
+        # 1. CREATE a throwaway automation
+        config = test_data_factory.automation_config(
+            "A6 Hash Mismatch Test",
+            trigger=[{"platform": "time", "at": "03:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id in response: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+        logger.info(f"Created automation: {automation_entity}")
+
+        # 2. GET the automation — extract the real config_hash
+        await wait_for_automation(mcp_client, automation_entity)
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_automation", {"identifier": automation_entity}
+        )
+        get_data = parse_mcp_result(get_result)
+        real_hash = get_data.get("config_hash")
+        assert real_hash, f"no config_hash in get response: {get_data}"
+        logger.info(f"Real config_hash: {real_hash[:12]}...")
+
+        # 3. Construct a stale hash — guarantee it differs from the real one
+        stale_hash = real_hash[:-4] + ("0000" if not real_hash.endswith("0000") else "ffff")
+        assert stale_hash != real_hash, "stale_hash must differ from real_hash"
+
+        # 4. Attempt update with the stale hash — guard must reject it
+        update_config = test_data_factory.automation_config(
+            "A6 Hash Mismatch Test Updated",
+            trigger=[{"platform": "time", "at": "04:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                "config_hash": stale_hash,
+            },
+        )
+        assert result["success"] is False, f"expected failure with stale hash: {result}"
+        assert result["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"expected SERVICE_CALL_FAILED, got: {result['error']['code']}"
+        )
+        logger.info("Stale hash correctly rejected")
+
+    async def test_update_with_correct_hash_succeeds(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Accepts an update when the caller supplies the current config_hash.
+
+        Complementary to test_config_hash_mismatch_rejected: verifies the
+        guard fires only on actual mismatches, not on every update.
+        """
+        # 1. CREATE
+        config = test_data_factory.automation_config(
+            "A6 Hash Valid Test",
+            trigger=[{"platform": "time", "at": "05:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+
+        # 2. GET — real hash
+        await wait_for_automation(mcp_client, automation_entity)
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_automation", {"identifier": automation_entity}
+        )
+        get_data = parse_mcp_result(get_result)
+        real_hash = get_data.get("config_hash")
+        assert real_hash, f"no config_hash: {get_data}"
+
+        # 3. UPDATE with correct hash — must succeed
+        update_config = test_data_factory.automation_config(
+            "A6 Hash Valid Test Updated",
+            trigger=[{"platform": "time", "at": "06:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                "config_hash": real_hash,
+            },
+        )
+        assert result.get("success") is True, f"expected success with correct hash: {result}"
+        logger.info("Correct hash accepted — update succeeded")
+
+    async def test_update_without_hash_succeeds(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Update without config_hash is allowed (hash check is opt-in).
+
+        Guard code: `if identifier and config_hash:` — omitting config_hash
+        skips the optimistic-lock check entirely, enabling unconditional overwrites.
+        """
+        # 1. CREATE
+        config = test_data_factory.automation_config(
+            "A6 No Hash Test",
+            trigger=[{"platform": "time", "at": "07:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+
+        # 2. UPDATE without config_hash — guard skipped, must succeed
+        await wait_for_automation(mcp_client, automation_entity)
+        update_config = test_data_factory.automation_config(
+            "A6 No Hash Test Updated",
+            trigger=[{"platform": "time", "at": "08:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.test"}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                # config_hash intentionally omitted — guard must not fire
+            },
+        )
+        assert result.get("success") is True, (
+            f"update without config_hash should succeed: {result}"
+        )
+        logger.info("Update without config_hash succeeded — guard correctly skipped")
