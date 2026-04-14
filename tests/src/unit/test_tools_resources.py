@@ -11,6 +11,7 @@ from ha_mcp.tools.tools_resources import (
     MAX_CONTENT_SIZE,
     MAX_ENCODED_LENGTH,
     WORKER_BASE_URL,
+    ResourceTools,
     _decode_inline_url,
     _encode_content,
     _is_inline_url,
@@ -58,22 +59,6 @@ class TestHaConfigListDashboardResources:
     """Test ha_config_list_dashboard_resources tool."""
 
     @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures all tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
@@ -81,10 +66,10 @@ class TestHaConfigListDashboardResources:
         return client
 
     @pytest.fixture
-    def list_tool(self, mock_mcp, mock_client):
-        """Register tools and return the list function."""
-        register_resources_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_list_dashboard_resources"]
+    def list_tool(self, mock_client):
+        """Create ResourceTools instance and return the list method."""
+        tools = ResourceTools(mock_client)
+        return tools.ha_config_list_dashboard_resources
 
     @pytest.mark.asyncio
     async def test_list_empty(self, list_tool, mock_client):
@@ -175,22 +160,6 @@ class TestHaConfigSetDashboardResource:
     """Test ha_config_set_dashboard_resource tool (inline and URL modes)."""
 
     @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures all tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
@@ -198,10 +167,10 @@ class TestHaConfigSetDashboardResource:
         return client
 
     @pytest.fixture
-    def set_tool(self, mock_mcp, mock_client):
-        """Register tools and return the set function."""
-        register_resources_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_set_dashboard_resource"]
+    def set_tool(self, mock_client):
+        """Create ResourceTools instance and return the set method."""
+        tools = ResourceTools(mock_client)
+        return tools.ha_config_set_dashboard_resource
 
     # ---- Input validation ----
 
@@ -385,22 +354,6 @@ class TestHaConfigDeleteDashboardResource:
     """Test ha_config_delete_dashboard_resource tool."""
 
     @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures all tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
@@ -408,10 +361,10 @@ class TestHaConfigDeleteDashboardResource:
         return client
 
     @pytest.fixture
-    def delete_tool(self, mock_mcp, mock_client):
-        """Register tools and return the delete function."""
-        register_resources_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_delete_dashboard_resource"]
+    def delete_tool(self, mock_client):
+        """Create ResourceTools instance and return the delete method."""
+        tools = ResourceTools(mock_client)
+        return tools.ha_config_delete_dashboard_resource
 
     @pytest.mark.asyncio
     async def test_delete_success(self, delete_tool, mock_client):
@@ -447,15 +400,8 @@ class TestToolRegistration:
         """Test that exactly three tools are registered (list, set, delete)."""
         mcp = MagicMock()
         registered = []
+        mcp.add_tool = lambda method: registered.append(method.__name__)
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                registered.append(func.__name__)
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
         register_resources_tools(mcp, MagicMock())
 
         assert "ha_config_list_dashboard_resources" in registered
@@ -466,22 +412,10 @@ class TestToolRegistration:
 
     def test_set_tool_has_destructive_hint(self):
         """Test set tool has destructiveHint."""
-        mcp = MagicMock()
-        captured: dict[str, dict] = {}
-
-        def tool_decorator(*args, **kwargs):
-            annotations = kwargs.get("annotations", {})
-
-            def wrapper(func):
-                captured[func.__name__] = annotations
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        register_resources_tools(mcp, MagicMock())
-
-        assert captured["ha_config_set_dashboard_resource"].get("destructiveHint") is True
+        tools = ResourceTools(MagicMock())
+        # Access the __fastmcp__ metadata set by @tool decorator
+        metadata = tools.ha_config_set_dashboard_resource.__fastmcp__
+        assert metadata.annotations.destructiveHint is True
 
 
 class TestConstants:
