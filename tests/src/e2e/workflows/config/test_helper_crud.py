@@ -1508,3 +1508,22 @@ class TestTagCRUD:
             {"helper_type": "tag", "helper_id": tag_id},
         )
         logger.info("Tag update test cleanup complete")
+
+
+@pytest.mark.helpers
+class TestSetHelperNegativeInputs:
+    """Negative-input tests for ha_config_set_helper pre-flight guards."""
+
+    async def test_create_requires_name(self, mcp_client) -> None:
+        """Rejects a create call when name is empty.
+
+        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when action is "create" and name is falsy.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_helper",
+            {"helper_type": "input_boolean", "name": ""},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
