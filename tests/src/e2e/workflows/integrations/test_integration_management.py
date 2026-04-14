@@ -211,3 +211,7 @@ class TestIntegrationManagement:
             f"Expected failure for nonexistent entry_id with confirm=True, "
             f"got success=True: {data}"
         )
+        # Verify a structured error is returned (not a silent pass-through)
+        assert data.get("error") is not None, (
+            f"Expected error details in failure response, got: {data}"
+        )
