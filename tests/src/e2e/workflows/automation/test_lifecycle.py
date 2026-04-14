@@ -1386,3 +1386,100 @@ class TestSetAutomationNegativeInputs:
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "either config or python_transform" in result["error"]["message"].lower()
+
+
+@pytest.mark.automation
+class TestAutomationDestructiveNegativeInputs:
+    """
+    A7 negative-input tests for ha_config_remove_automation.
+
+    Covers two structurally distinct failure paths not exercised by the
+    existing CRUD lifecycle tests:
+    - Removing a nonexistent automation (direct 404 path on the remove tool itself)
+    - Double-delete: second remove after successful deletion (same 404 path,
+      separate test because it validates idempotency behaviour)
+
+    Methodology: source-verified against tools_config_automations.py lines 854-876.
+    Both inputs reach create_resource_not_found_error → raise_tool_error (ToolError).
+    The existing lifecycle tests verify deletion via ha_config_get_automation, not
+    by calling ha_config_remove_automation on a nonexistent identifier directly.
+    """
+
+    async def test_remove_automation_nonexistent(self, mcp_client):
+        """
+        Test: ha_config_remove_automation with a nonexistent identifier returns a
+        structured error, not success=True.
+
+        Source path: Exception with "404"/"not found" in str →
+        create_resource_not_found_error → raise_tool_error.
+        """
+        logger.info("Testing ha_config_remove_automation with nonexistent identifier...")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": "automation.nonexistent_a7_e2e_xyz_404"},
+        )
+
+        assert not data.get("success"), (
+            f"Expected failure for nonexistent automation, got success=True: {data}"
+        )
+        error_msg = str(data.get("error", "")).lower()
+        assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
+            f"Expected 'not found'/'does not exist'/'404' in error, got: {data.get('error')}"
+        )
+        logger.info("\u2705 Nonexistent automation removal correctly returned structured error")
+
+    async def test_remove_automation_double_delete(
+        self, mcp_client, test_data_factory, cleanup_tracker
+    ):
+        """
+        Test: Second ha_config_remove_automation call on an already-deleted automation
+        returns a structured error, not success=True (idempotency failure behaviour).
+
+        Source path: first delete succeeds; second delete hits the same 404 branch
+        (create_resource_not_found_error → raise_tool_error) as the nonexistent test.
+        Tests a distinct scenario: the identifier was valid moments ago, so any
+        caching or stale-state issue would cause a silent false success here.
+        """
+        automation_name = "A7 Double Delete E2E Test"
+        config = test_data_factory.automation_config(
+            automation_name,
+            trigger=[{"platform": "time", "at": "06:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": "light.bed_light"}}],
+        )
+
+        logger.info("Creating automation for double-delete test...")
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_automation",
+            {"config": config},
+        )
+        create_data = assert_mcp_success(create_result, "automation creation for double-delete")
+        entity_id = create_data.get("entity_id")
+        assert entity_id, f"No entity_id returned: {create_data}"
+        cleanup_tracker.track("automation", entity_id)
+        logger.info(f"Created automation: {entity_id}")
+
+        # First delete — must succeed
+        first_delete = await mcp_client.call_tool(
+            "ha_config_remove_automation",
+            {"identifier": entity_id, "wait": True},
+        )
+        assert_mcp_success(first_delete, "first automation deletion")
+        logger.info("First delete succeeded")
+
+        # Second delete — must return a structured error, not success=True
+        second_delete = await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": entity_id},
+        )
+        assert not second_delete.get("success"), (
+            f"Second delete of {entity_id} returned success=True — "
+            f"expected structured error: {second_delete}"
+        )
+        error_msg = str(second_delete.get("error", "")).lower()
+        assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
+            f"Expected not-found error on second delete, got: {second_delete.get('error')}"
+        )
+        logger.info("\u2705 Double-delete correctly returned structured error on second call")
