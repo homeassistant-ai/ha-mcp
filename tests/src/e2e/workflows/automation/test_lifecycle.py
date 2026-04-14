@@ -1305,6 +1305,7 @@ class TestConfigHashMismatch:
         logger.info("Update without config_hash succeeded — guard correctly skipped")
 
 
+@pytest.mark.asyncio
 @pytest.mark.automation
 class TestSetAutomationNegativeInputs:
     """Negative-input tests for ha_config_set_automation pre-flight guards."""
@@ -1343,6 +1344,41 @@ class TestSetAutomationNegativeInputs:
                 "python_transform": "config['alias'] = 'Modified'",
                 "config_hash": "dummy_hash",
             },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_python_transform_requires_config_hash(
+        self, mcp_client
+    ) -> None:
+        """Rejects python_transform when config_hash is absent.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        when python_transform is set but config_hash is None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": "automation.test",
+                "python_transform": "config['alias'] = 'Modified'",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_requires_at_least_one_input(
+        self, mcp_client
+    ) -> None:
+        """Rejects a call that supplies neither config nor python_transform.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        when both parameters are None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {},
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
