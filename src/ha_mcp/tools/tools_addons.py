@@ -1155,6 +1155,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         # Config mode: update Supervisor settings
         if config_data:
+            ignored_fields: list[str] = []  # populated only when options are provided
             # For options updates: fetch current state first.
             # GET /info provides both current options (for merge) and schema_ui
             # (for pre-write unknown-field detection) in a single roundtrip.
@@ -1181,7 +1182,6 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 # Supervisor silently drops unknown fields on write; surfacing them here
                 # lets the caller correct mistakes before any state is changed.
                 schema_ui: list | None = addon_info.get("schema")
-                ignored_fields: list[str] = []
                 if schema_ui is not None:
                     allowed_keys = {item["name"] for item in schema_ui if "name" in item}
                     ignored_fields = [k for k in config_data["options"] if k not in allowed_keys]
