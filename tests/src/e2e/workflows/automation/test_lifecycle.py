@@ -94,7 +94,7 @@ class TestAutomationLifecycle:
         if not results:
             # If no binary sensors, use a light entity as fallback
             logger.warning("No binary_sensor entities found, using light as fallback")
-            test_light = await _find_test_light_entity(mcp_client)
+            test_light = await self._find_test_light_entity(mcp_client)
             return [
                 test_light,
                 test_light,
@@ -130,7 +130,7 @@ class TestAutomationLifecycle:
         logger.warning(
             "No suitable binary sensors found, using light entities as fallback"
         )
-        test_light = await _find_test_light_entity(mcp_client)
+        test_light = await self._find_test_light_entity(mcp_client)
         return [test_light, test_light]
 
     async def test_basic_automation_lifecycle(
@@ -144,7 +144,7 @@ class TestAutomationLifecycle:
         """
 
         # 1. DISCOVER: Find available test entities
-        test_light = await _find_test_light_entity(mcp_client)
+        test_light = await self._find_test_light_entity(mcp_client)
         logger.info(f"🔍 Using test light entity: {test_light}")
 
         # 2. CREATE: Basic time-based automation
@@ -340,7 +340,7 @@ class TestAutomationLifecycle:
         for users who want to temporarily disable automations.
         """
         # Find test entity
-        test_light = await _find_test_light_entity(mcp_client)
+        test_light = await self._find_test_light_entity(mcp_client)
 
         # Create automation in disabled state
         automation_name = "Toggle Test E2E"
@@ -434,7 +434,7 @@ class TestAutomationLifecycle:
         This test validates that automation configurations are properly validated
         and that invalid configurations are rejected appropriately.
         """
-        test_light = await _find_test_light_entity(mcp_client)
+        test_light = await self._find_test_light_entity(mcp_client)
 
         # Test valid configuration
         logger.info("🧪 Testing valid automation configuration...")
@@ -555,7 +555,7 @@ class TestAutomationLifecycle:
         automation_name = "Complex Security E2E"
 
         # Discover test entities for complex automation
-        test_light = await _find_test_light_entity(mcp_client)
+        test_light = await self._find_test_light_entity(mcp_client)
         test_binary_sensors = await self._find_test_binary_sensors(mcp_client)
 
         logger.info(
@@ -696,7 +696,7 @@ class TestAutomationLifecycle:
             logger.info(f"🧪 Testing automation mode: {mode}")
 
             # Use dynamic test entity
-            test_light = await _find_test_light_entity(mcp_client)
+            test_light = await self._find_test_light_entity(mcp_client)
 
             mode_config = test_data_factory.automation_config(
                 automation_name,
