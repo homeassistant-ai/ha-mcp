@@ -1303,3 +1303,46 @@ class TestConfigHashMismatch:
             f"update without config_hash should succeed: {result}"
         )
         logger.info("Update without config_hash succeeded — guard correctly skipped")
+
+
+@pytest.mark.automation
+class TestSetAutomationNegativeInputs:
+    """Negative-input tests for ha_config_set_automation pre-flight guards."""
+
+    async def test_config_and_python_transform_mutually_exclusive(
+        self, mcp_client
+    ) -> None:
+        """Rejects a call that supplies both config and python_transform simultaneously.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when both parameters are non-None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "config": {"alias": "Test", "trigger": [], "action": []},
+                "python_transform": "config['alias'] = 'Modified'",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_python_transform_requires_identifier(
+        self, mcp_client
+    ) -> None:
+        """Rejects python_transform when identifier is absent.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when python_transform is set but identifier is None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "python_transform": "config['alias'] = 'Modified'",
+                "config_hash": "dummy_hash",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
