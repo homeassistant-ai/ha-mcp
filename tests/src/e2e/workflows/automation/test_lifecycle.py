@@ -94,7 +94,7 @@ class TestAutomationLifecycle:
         if not results:
             # If no binary sensors, use a light entity as fallback
             logger.warning("No binary_sensor entities found, using light as fallback")
-            test_light = await self._find_test_light_entity(mcp_client)
+            test_light = await _find_test_light_entity(mcp_client)
             return [
                 test_light,
                 test_light,
@@ -130,7 +130,7 @@ class TestAutomationLifecycle:
         logger.warning(
             "No suitable binary sensors found, using light entities as fallback"
         )
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         return [test_light, test_light]
 
     async def test_basic_automation_lifecycle(
@@ -144,7 +144,7 @@ class TestAutomationLifecycle:
         """
 
         # 1. DISCOVER: Find available test entities
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         logger.info(f"🔍 Using test light entity: {test_light}")
 
         # 2. CREATE: Basic time-based automation
@@ -340,7 +340,7 @@ class TestAutomationLifecycle:
         for users who want to temporarily disable automations.
         """
         # Find test entity
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
 
         # Create automation in disabled state
         automation_name = "Toggle Test E2E"
@@ -434,7 +434,7 @@ class TestAutomationLifecycle:
         This test validates that automation configurations are properly validated
         and that invalid configurations are rejected appropriately.
         """
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
 
         # Test valid configuration
         logger.info("🧪 Testing valid automation configuration...")
@@ -555,7 +555,7 @@ class TestAutomationLifecycle:
         automation_name = "Complex Security E2E"
 
         # Discover test entities for complex automation
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         test_binary_sensors = await self._find_test_binary_sensors(mcp_client)
 
         logger.info(
@@ -696,7 +696,7 @@ class TestAutomationLifecycle:
             logger.info(f"🧪 Testing automation mode: {mode}")
 
             # Use dynamic test entity
-            test_light = await self._find_test_light_entity(mcp_client)
+            test_light = await _find_test_light_entity(mcp_client)
 
             mode_config = test_data_factory.automation_config(
                 automation_name,
@@ -1138,7 +1138,36 @@ async def test_automation_creation_returns_verified_entity(
     logger.info("Automation creation verified entity test passed")
 
 
+
+async def _find_test_light_entity(mcp_client) -> str:
+    """Find a suitable light entity for testing.
+
+    Prefers demo/test entities, falls back to first available light.
+    Shared helper used by multiple test classes in this module.
+    """
+    search_result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "domain_filter": "light", "limit": 20},
+    )
+    search_data = parse_mcp_result(search_result)
+    if "data" in search_data:
+        results = search_data.get("data", {}).get("results", [])
+    else:
+        results = search_data.get("results", [])
+    if not results:
+        pytest.skip("No light entities available for testing")
+    for entity in results:
+        entity_id = entity.get("entity_id", "")
+        if "demo" in entity_id.lower() or "test" in entity_id.lower():
+            return entity_id
+    entity_id = results[0].get("entity_id", "")
+    if not entity_id:
+        pytest.skip("No valid light entity found for testing")
+    return entity_id
+
+
 @pytest.mark.automation
+@pytest.mark.cleanup
 class TestConfigHashMismatch:
     """Tests for ha_config_set_automation optimistic-locking guard (Guard 1).
 
@@ -1150,31 +1179,6 @@ class TestConfigHashMismatch:
     Entity references are dynamically discovered (consistent with file docstring).
     """
 
-    async def _find_test_light_entity(self, mcp_client) -> str:
-        """Find a suitable light entity for testing.
-
-        Prefers demo/test entities, falls back to first available light.
-        """
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 20},
-        )
-        search_data = parse_mcp_result(search_result)
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-        if not results:
-            pytest.skip("No light entities available for testing")
-        for entity in results:
-            entity_id = entity.get("entity_id", "")
-            if "demo" in entity_id.lower() or "test" in entity_id.lower():
-                return entity_id
-        entity_id = results[0].get("entity_id", "")
-        if not entity_id:
-            pytest.skip("No valid light entity found for testing")
-        return entity_id
-
     async def test_config_hash_mismatch_rejected(
         self, mcp_client, cleanup_tracker, test_data_factory
     ) -> None:
@@ -1185,7 +1189,7 @@ class TestConfigHashMismatch:
         overwrites of automations that were modified since last read.
         """
         # 1. DISCOVER: find a valid light entity for the automation action
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         logger.info(f"Using light entity: {test_light}")
 
         # 2. CREATE a throwaway automation
@@ -1247,7 +1251,7 @@ class TestConfigHashMismatch:
         guard fires only on actual mismatches, not on every update.
         """
         # 1. CREATE
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
             "A6 Hash Valid Test",
             trigger=[{"platform": "time", "at": "05:00:00"}],
@@ -1297,7 +1301,7 @@ class TestConfigHashMismatch:
         skips the optimistic-lock check entirely, enabling unconditional overwrites.
         """
         # 1. CREATE
-        test_light = await self._find_test_light_entity(mcp_client)
+        test_light = await _find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
             "A6 No Hash Test",
             trigger=[{"platform": "time", "at": "07:00:00"}],
