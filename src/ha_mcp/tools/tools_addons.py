@@ -1047,8 +1047,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         boot: Annotated[
             str | None,
             Field(
-                description="Config mode: Boot strategy — 'auto' (start with HA) or 'manual'. "
-                "NOTE: some add-ons lock their boot mode and will return an error if changed.",
+                description="Config mode: Boot strategy — 'auto' (start with HA) or 'manual'.",
                 default=None,
             ),
         ] = None,
@@ -1079,13 +1078,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
         Use ha_get_addon(slug="...") to discover available ports and endpoints.
 
-        **WARNING:** Setting boot="auto"/"manual" will fail for add-ons with a fixed boot
-        mode (boot_config=MANUAL_ONLY). The Supervisor returns an error in this case.
+        **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
+        metadata locks the boot mode. The Supervisor returns an error in this case.
 
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
-        - Set kiosk URL option: ha_manage_addon(slug="...", options={"FF_OPEN_URL": "https://example.com", "FF_KIOSK": true})
+        - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
         - Disable auto-update: ha_manage_addon(slug="...", auto_update=False)
         - Change host port: ha_manage_addon(slug="...", network={"5800/tcp": 8082})
         - Set boot mode: ha_manage_addon(slug="...", boot="manual")
@@ -1095,7 +1094,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         """
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
-        if options is not None:
+        if options:
             config_data["options"] = options
         if network is not None:
             config_data["network"] = network
@@ -1115,7 +1114,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     parameter="path",
                 )
             )
-        if path is None and not config_data:
+        if not path and not config_data:
             raise_tool_error(
                 create_validation_error(
                     "Must provide either 'path' for proxy mode or at least one config parameter "
@@ -1126,29 +1125,29 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         # Validate that proxy-only params are not passed in config mode
         if config_data:
-            proxy_overrides = []
+            proxy_overrides: list[tuple[str, str]] = []
             if method != "GET":
-                proxy_overrides.append(f"method={method!r}")
+                proxy_overrides.append(("method", f"method={method!r}"))
             if body is not None:
-                proxy_overrides.append("body")
+                proxy_overrides.append(("body", "body"))
             if debug:
-                proxy_overrides.append("debug=True")
+                proxy_overrides.append(("debug", "debug=True"))
             if port is not None:
-                proxy_overrides.append(f"port={port}")
+                proxy_overrides.append(("port", f"port={port}"))
             if offset != 0:
-                proxy_overrides.append(f"offset={offset}")
+                proxy_overrides.append(("offset", f"offset={offset}"))
             if limit is not None:
-                proxy_overrides.append(f"limit={limit}")
+                proxy_overrides.append(("limit", f"limit={limit}"))
             if websocket:
-                proxy_overrides.append("websocket=True")
+                proxy_overrides.append(("websocket", "websocket=True"))
             if not wait_for_close:
-                proxy_overrides.append("wait_for_close=False")
+                proxy_overrides.append(("wait_for_close", "wait_for_close=False"))
             if proxy_overrides:
                 raise_tool_error(
                     create_validation_error(
-                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(proxy_overrides)}. "
+                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
                         "Remove these parameters or switch to proxy mode by providing 'path'.",
-                        parameter=proxy_overrides[0].split("=")[0],
+                        parameter=proxy_overrides[0][0],
                     )
                 )
 
@@ -1162,11 +1161,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             )
             if not result.get("success"):
                 raise_tool_error(result)
+            submitted_fields = list(config_data.keys())
+            if {"options", "network"} & config_data.keys():
+                return {
+                    "status": "pending_restart",
+                    "message": (
+                        f"Configuration submitted for add-on '{slug}'. "
+                        "Restart the add-on for options/network changes to take effect."
+                    ),
+                    "submitted_fields": submitted_fields,
+                }
             return {
                 "success": True,
                 "message": f"Configuration updated for add-on '{slug}'.",
-                "updated_fields": list(config_data.keys()),
-                "note": "Some changes (e.g., options, network) require an add-on restart to take effect.",
+                "submitted_fields": submitted_fields,
             }
 
         # Proxy mode: call add-on container API

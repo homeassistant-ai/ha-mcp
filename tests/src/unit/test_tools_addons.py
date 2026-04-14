@@ -921,8 +921,8 @@ class TestManageAddon:
                 options={"FF_KIOSK": True, "FF_OPEN_URL": "https://example.com"},
             )
 
-        assert result["success"] is True
-        assert "options" in result["updated_fields"]
+        assert result["status"] == "pending_restart"
+        assert result["submitted_fields"] == ["options"]
         mock_sup.assert_called_once()
         call_kwargs = mock_sup.call_args
         assert call_kwargs[0][1] == "/addons/test_addon/options"
@@ -939,7 +939,7 @@ class TestManageAddon:
             result = await manage_addon_tool(slug="test_addon", boot="manual")
 
         assert result["success"] is True
-        assert "boot" in result["updated_fields"]
+        assert result["submitted_fields"] == ["boot"]
         data = mock_sup.call_args[1]["data"]
         assert data == {"boot": "manual"}
 
@@ -955,7 +955,7 @@ class TestManageAddon:
             )
 
         assert result["success"] is True
-        assert set(result["updated_fields"]) == {"auto_update", "watchdog"}
+        assert set(result["submitted_fields"]) == {"auto_update", "watchdog"}
         data = mock_sup.call_args[1]["data"]
         assert data == {"auto_update": False, "watchdog": True}
 
@@ -970,8 +970,8 @@ class TestManageAddon:
                 slug="test_addon", network={"5800/tcp": 8082}
             )
 
-        assert result["success"] is True
-        assert "network" in result["updated_fields"]
+        assert result["status"] == "pending_restart"
+        assert result["submitted_fields"] == ["network"]
         assert mock_sup.call_args[1]["data"]["network"] == {"5800/tcp": 8082}
 
     @pytest.mark.asyncio
@@ -980,56 +980,74 @@ class TestManageAddon:
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             return_value={"success": False, "error": "boot_config locked"},
-        ), pytest.raises(ToolError):
+        ), pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(slug="test_addon", boot="auto")
+        payload = _parse_tool_error(exc_info)
+        assert payload["success"] is False
+        assert "error" in payload
 
     # --- Validation: mutual exclusion ---
 
     @pytest.mark.asyncio
     async def test_path_and_config_mutually_exclusive(self, manage_addon_tool):
         """Providing both path and config params raises ToolError."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
                 path="/api/events",
                 options={"key": "value"},
             )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "Cannot combine" in error["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_no_path_no_config_raises(self, manage_addon_tool):
         """Providing neither path nor config params raises ToolError."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(slug="test_addon")
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "path" in error["error"]["message"] or "config" in error["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_proxy_params_in_config_mode_raise(self, manage_addon_tool):
         """Proxy-only params (e.g. method) combined with config params raise ToolError."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
                 options={"key": "val"},
                 method="DELETE",
             )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "method" in error["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_proxy_params_websocket_in_config_mode_raise(self, manage_addon_tool):
         """websocket=True combined with config params raises ToolError."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
                 auto_update=False,
                 websocket=True,
             )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "websocket" in error["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_proxy_params_wait_for_close_in_config_mode_raise(self, manage_addon_tool):
         """wait_for_close=False combined with config params raises ToolError."""
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
                 auto_update=False,
                 wait_for_close=False,
             )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "wait_for_close" in error["error"]["message"]
 
     # --- Proxy mode (backward compat) ---
 
@@ -1069,7 +1087,10 @@ class TestManageAddon:
         with patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             return_value=_RUNNING_ADDON_INFO,
-        ), pytest.raises(ToolError):
+        ), pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon", path="/flows", method="INVALID"
             )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "method" in error["error"]["message"] or "INVALID" in error["error"]["message"]
