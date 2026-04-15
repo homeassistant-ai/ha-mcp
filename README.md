@@ -1,5 +1,3 @@
-> ⚠️ **Breaking change in OAuth mode (v7.0.0)** — Set `HOMEASSISTANT_URL` server-side. The consent form now accepts only the token. [Migration guide →](docs/OAUTH.md#migrating-from-v6x)
-
 <div align="center">
   <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
@@ -307,9 +305,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 - **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard.
-- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, docs sync automation, and file-read deduplication in check_sync.
+- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
+- **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
 
 ---
 
