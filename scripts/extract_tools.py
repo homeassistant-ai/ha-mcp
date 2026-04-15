@@ -70,67 +70,104 @@ def extract_tools() -> list[dict]:
         tree = ast.parse(f.read_text())
 
         for node in ast.walk(tree):
-            if not isinstance(node, ast.AsyncFunctionDef) or not node.name.startswith("ha_"):
+            if not isinstance(node, ast.AsyncFunctionDef):
                 continue
 
+            # Find the @tool or @mcp.tool decorator
+            tool_dec = None
+            tool_name = None
             for dec in node.decorator_list:
                 if not isinstance(dec, ast.Call):
                     continue
                 func = dec.func
-                if not (isinstance(func, ast.Attribute) and func.attr == "tool"):
+                # Pattern 1: @mcp.tool(...) — closure pattern, function named ha_*
+                if isinstance(func, ast.Attribute) and func.attr == "tool":
+                    if node.name.startswith("ha_"):
+                        tool_dec = dec
+                        tool_name = node.name
+                        break
+                # Pattern 2: @tool(name="ha_*") — class method pattern
+                if isinstance(func, ast.Name) and func.id == "tool":
+                    for kw in dec.keywords:
+                        if kw.arg == "name" and isinstance(kw.value, ast.Constant) and str(kw.value.value).startswith("ha_"):
+                            tool_dec = dec
+                            tool_name = str(kw.value.value)
+                            break
+                    # Fallback: @tool() without name= on ha_* function
+                    if tool_dec is None and node.name.startswith("ha_"):
+                        tool_dec = dec
+                        tool_name = node.name
+                    if tool_dec:
+                        break
+
+            if tool_dec is None or tool_name is None:
+                continue
+
+            dec = tool_dec
+            tags: set[str] = set()
+            title = ""
+            annotations: dict[str, bool] = {}
+
+            for kw in dec.keywords:
+                if kw.arg == "tags" and isinstance(kw.value, ast.Set):
+                    tags = {str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)}
+                elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
+                    for k, v in zip(kw.value.keys, kw.value.values, strict=True):
+                        if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
+                            key = str(k.value)
+                            if key == "title":
+                                title = str(v.value)
+                            elif key in ANNOTATION_KEYS:
+                                annotations[key] = bool(v.value)
+
+            # Extract params with types, descriptions, defaults
+            properties: dict[str, dict] = {}
+            required: list[str] = []
+            defaults_offset = len(node.args.args) - len(node.args.defaults)
+
+            for i, arg in enumerate(node.args.args):
+                if arg.arg in ("self", "ctx"):
                     continue
+                p = _extract_field_info(arg.annotation)
+                def_idx = i - defaults_offset
+                if def_idx >= 0 and def_idx < len(node.args.defaults):
+                    def_node = node.args.defaults[def_idx]
+                    if isinstance(def_node, ast.Constant):
+                        p.setdefault("default", def_node.value)
+                else:
+                    required.append(arg.arg)
+                if p:
+                    properties[arg.arg] = p
 
-                tags: set[str] = set()
-                title = ""
-                annotations: dict[str, bool] = {}
+            input_schema: dict = {}
+            if properties:
+                input_schema = {"properties": properties}
+                if required:
+                    input_schema["required"] = required
 
-                for kw in dec.keywords:
-                    if kw.arg == "tags" and isinstance(kw.value, ast.Set):
-                        tags = {str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)}
-                    elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
-                        for k, v in zip(kw.value.keys, kw.value.values, strict=True):
-                            if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
-                                key = str(k.value)
-                                if key == "title":
-                                    title = str(v.value)
-                                elif key in ANNOTATION_KEYS:
-                                    annotations[key] = bool(v.value)
+            tools.append({
+                "name": tool_name,
+                "title": title,
+                "description": ast.get_docstring(node) or "",
+                "inputSchema": input_schema,
+                "annotations": annotations,
+                "tags": sorted(tags),
+                "source_file": f.name,
+            })
 
-                # Extract params with types, descriptions, defaults
-                properties: dict[str, dict] = {}
-                required: list[str] = []
-                defaults_offset = len(node.args.args) - len(node.args.defaults)
-
-                for i, arg in enumerate(node.args.args):
-                    if arg.arg in ("self", "ctx"):
-                        continue
-                    p = _extract_field_info(arg.annotation)
-                    def_idx = i - defaults_offset
-                    if def_idx >= 0 and def_idx < len(node.args.defaults):
-                        def_node = node.args.defaults[def_idx]
-                        if isinstance(def_node, ast.Constant):
-                            p.setdefault("default", def_node.value)
-                    else:
-                        required.append(arg.arg)
-                    if p:
-                        properties[arg.arg] = p
-
-                input_schema: dict = {}
-                if properties:
-                    input_schema = {"properties": properties}
-                    if required:
-                        input_schema["required"] = required
-
-                tools.append({
-                    "name": node.name,
-                    "title": title,
-                    "description": ast.get_docstring(node) or "",
-                    "inputSchema": input_schema,
-                    "annotations": annotations,
-                    "tags": sorted(tags),
-                    "source_file": f.name,
-                })
-                break
+    # Detect duplicate tool names
+    seen: dict[str, str] = {}
+    for t in tools:
+        name = str(t["name"])
+        source = str(t["source_file"])
+        if name in seen:
+            print(
+                f"ERROR: Duplicate tool name '{name}' in {source} "
+                f"(first seen in {seen[name]})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        seen[name] = source
 
     tools.sort(key=lambda x: (next(iter(x["tags"]), "zzz"), x["name"]))
     return tools
@@ -149,11 +186,18 @@ def generate_docs_section(tools: list[dict]) -> str:
         f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
         "",
     ]
+    if any("beta" in t["tags"] for t in tools):
+        lines.extend([
+            "> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.",
+            "",
+        ])
     for cat in sorted(categories):
         lines.append(f"### {cat}")
         for tool in sorted(categories[cat], key=lambda t: t["name"]):
             desc = tool["description"].split("\n")[0].strip() if tool["description"] else ""
             entry = f"- `{tool['name']}`"
+            if "beta" in tool["tags"]:
+                entry += " **(beta — dev channel only)**"
             if desc:
                 entry += f" — {desc}"
             lines.append(entry)
@@ -162,9 +206,16 @@ def generate_docs_section(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def update_docs(tools: list[dict]) -> str:
-    """Replace the auto-generated section in DOCS.md between sync markers."""
-    docs = DOCS_PATH.read_text(encoding="utf-8")
+def update_docs(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the auto-generated section in DOCS.md between sync markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading DOCS_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads DOCS_PATH internally.
+    """
+    docs = content if content is not None else DOCS_PATH.read_text(encoding="utf-8")
     if DOCS_START_MARKER not in docs or DOCS_END_MARKER not in docs:
         print(
             f"ERROR: {DOCS_PATH} is missing sync markers.\n"
@@ -192,7 +243,10 @@ def generate_readme_table(tools: list[dict]) -> str:
     categories: dict[str, list[str]] = {}
     for tool in tools:
         cat = tool["tags"][0] if tool["tags"] else "Other"
-        categories.setdefault(cat, []).append(f"`{tool['name']}`")
+        name = f"`{tool['name']}`"
+        if "beta" in tool["tags"]:
+            name += " *(beta)*"
+        categories.setdefault(cat, []).append(name)
 
     lines = [
         README_START_MARKER,
@@ -210,8 +264,16 @@ def generate_readme_table(tools: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def update_readme(tools: list[dict]) -> str:
-    readme = README_PATH.read_text()
+def update_readme(tools: list[dict], *, content: str | None = None) -> str:
+    """Replace the tool table in README.md between markers.
+
+    Args:
+        tools: Extracted tool metadata.
+        content: File content to use instead of reading README_PATH from disk.
+            Pass this when the caller has already read the file (e.g. check_sync)
+            to avoid a redundant read. When None, reads README_PATH internally.
+    """
+    readme = content if content is not None else README_PATH.read_text(encoding="utf-8")
     table = generate_readme_table(tools)
     count = len(tools)
 
@@ -250,13 +312,16 @@ def check_sync(tools: list[dict]) -> bool:
         print("MISSING: site/src/data/tools.json", file=sys.stderr)
         in_sync = False
 
-    if README_PATH.read_text() != update_readme(tools):
+    readme_content = README_PATH.read_text(encoding="utf-8")
+    if readme_content != update_readme(tools, content=readme_content):
         print("OUT OF SYNC: README.md", file=sys.stderr)
         in_sync = False
 
-    if DOCS_PATH.exists() and DOCS_PATH.read_text(encoding="utf-8") != update_docs(tools):
-        print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
-        in_sync = False
+    if DOCS_PATH.exists():
+        docs_content = DOCS_PATH.read_text(encoding="utf-8")
+        if docs_content != update_docs(tools, content=docs_content):
+            print("OUT OF SYNC: homeassistant-addon/DOCS.md", file=sys.stderr)
+            in_sync = False
 
     return in_sync
 
@@ -281,7 +346,7 @@ def main() -> None:
         TOOLS_JSON_PATH.write_text(generate_tools_json(tools))
         print(f"Wrote {TOOLS_JSON_PATH.relative_to(REPO_ROOT)}")
 
-        README_PATH.write_text(update_readme(tools))
+        README_PATH.write_text(update_readme(tools), encoding="utf-8")
         print(f"Updated {README_PATH.relative_to(REPO_ROOT)}")
 
         DOCS_PATH.write_text(update_docs(tools), encoding="utf-8")

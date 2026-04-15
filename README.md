@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-93-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-86-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -17,6 +17,7 @@
     <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/Built%20with-FastMCP-purple" alt="Built with FastMCP"></a>
     <img src="https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fhomeassistant-ai%2Fha-mcp%2Fmaster%2Fpyproject.toml" alt="Python Version">
     <a href="https://github.com/sponsors/julienld"><img src="https://img.shields.io/badge/GitHub_Sponsors-☕-blueviolet" alt="GitHub Sponsors"></a>
+    <a href="https://homeassistant-ai.github.io/ha-mcp/"><img src="https://img.shields.io/badge/Website-docs-teal" alt="Website"></a>
   </p>
 
   <p align="center">
@@ -90,6 +91,25 @@ No token or credential setup needed — the add-on connects to Home Assistant au
 
 </details>
 
+<details>
+<summary><b>🌐 Remote Access (Nabu Casa / Webhook Proxy)</b></summary>
+
+Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
+
+1. Install the **MCP Server add-on** (see above) and the **Webhook Proxy** add-on from the same store
+2. Start the webhook proxy and **restart Home Assistant** when prompted
+3. Copy the webhook URL from the add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+4. Configure your AI client with that URL
+
+For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
+
+[Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
+
+</details>
+
 ### 🧙 Setup Wizard for 15+ clients
 
 **Claude Code, Gemini CLI, ChatGPT, Open WebUI, VSCode, Cursor, and more.**
@@ -131,7 +151,7 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (93 tools)</b></summary>
+<summary><b>Complete Tool List (86 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -141,21 +161,21 @@ Spend less time configuring, more time enjoying your smart home.
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |
-| **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard`, `ha_dashboard_find_card` |
-| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_rename_entity`, `ha_update_device` |
+| **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard` |
+| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_update_device` |
 | **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
 | **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
-| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_info`, `ha_hacs_list_installed`, `ha_hacs_repository_info`, `ha_hacs_search` |
+| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema`, `ha_set_config_entry_helper` |
-| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs`, `ha_get_statistics` |
+| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
 | **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
-| **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_get_states`, `ha_search_entities` |
+| **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_search_entities` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
-| **Todo Lists** | `ha_add_todo_item`, `ha_get_todo`, `ha_remove_todo_item`, `ha_update_todo_item` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
 
@@ -286,6 +306,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
+- **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard.
+- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, docs sync automation, and file-read deduplication in check_sync.
+- **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
+- **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 
 ---
 

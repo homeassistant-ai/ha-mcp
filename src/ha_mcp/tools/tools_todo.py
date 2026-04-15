@@ -4,8 +4,7 @@ Todo/Shopping List management tools for Home Assistant MCP server.
 This module provides tools for managing Home Assistant todo lists including:
 - Listing all todo list entities
 - Getting items from a todo list
-- Adding items to a todo list
-- Updating/completing todo items
+- Creating and updating todo items
 - Removing items from a todo list
 """
 
@@ -13,20 +12,34 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant todo list management tools."""
+class TodoTools:
+    """Todo/Shopping List management tools for Home Assistant."""
 
-    @mcp.tool(tags={"Todo Lists"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Todo"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_todo",
+        tags={"Todo Lists"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Todo"},
+    )
     @log_tool_usage
     async def ha_get_todo(
+        self,
         entity_id: Annotated[
             str | None,
             Field(
@@ -90,23 +103,25 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # List mode - no entity_id provided
             if entity_id is None:
                 # Get all states and filter by todo domain
-                states = await client.get_states()
+                states = await self._client.get_states()
 
                 todo_lists = []
                 for state in states:
                     eid = state.get("entity_id", "")
                     if eid.startswith("todo."):
-                        todo_lists.append({
-                            "entity_id": eid,
-                            "friendly_name": state.get("attributes", {}).get(
-                                "friendly_name", eid
-                            ),
-                            "state": state.get("state"),
-                            "icon": state.get("attributes", {}).get("icon"),
-                            "supported_features": state.get("attributes", {}).get(
-                                "supported_features"
-                            ),
-                        })
+                        todo_lists.append(
+                            {
+                                "entity_id": eid,
+                                "friendly_name": state.get("attributes", {}).get(
+                                    "friendly_name", eid
+                                ),
+                                "state": state.get("state"),
+                                "icon": state.get("attributes", {}).get("icon"),
+                                "supported_features": state.get("attributes", {}).get(
+                                    "supported_features"
+                                ),
+                            }
+                        )
 
                 return {
                     "success": True,
@@ -118,12 +133,16 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Get items mode - entity_id provided
             # Validate entity_id format
             if not entity_id.startswith("todo."):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                    context={"entity_id": entity_id},
-                    suggestions=["Use ha_get_todo() without entity_id to find valid todo list entity IDs"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_get_todo() without entity_id to find valid todo list entity IDs"
+                        ],
+                    )
+                )
 
             # Use WebSocket to get todo items
             message: dict[str, Any] = {
@@ -131,7 +150,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "entity_id": entity_id,
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
                 items = result.get("result", {}).get("items", [])
@@ -149,15 +168,17 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "message": f"Found {len(items)} item(s) in {entity_id}",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to get todo items"),
-                    context={"entity_id": entity_id},
-                    suggestions=[
-                        "Verify the entity_id exists using ha_get_todo()",
-                        "Check Home Assistant WebSocket connection",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to get todo items"),
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Verify the entity_id exists using ha_get_todo()",
+                            "Check Home Assistant WebSocket connection",
+                        ],
+                    )
+                )
 
         except ToolError:
             raise
@@ -177,85 +198,158 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify todo integration is enabled",
                 ]
             )
-            exception_to_structured_error(e, context=context or None, suggestions=suggestions)
+            exception_to_structured_error(
+                e, context=context or None, suggestions=suggestions
+            )
 
-    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "title": "Add Todo Item"})
+    @tool(
+        name="ha_set_todo_item",
+        tags={"Todo Lists"},
+        annotations={"destructiveHint": True, "title": "Set Todo Item"},
+    )
     @log_tool_usage
-    async def ha_add_todo_item(
+    async def ha_set_todo_item(
+        self,
         entity_id: Annotated[
             str,
-            Field(
-                description="Todo list entity ID (e.g., 'todo.shopping_list')"
-            ),
+            Field(description="Todo list entity ID (e.g., 'todo.shopping_list')"),
         ],
         summary: Annotated[
-            str,
-            Field(description="Item text/name to add (e.g., 'Buy milk')"),
-        ],
+            str | None,
+            Field(
+                description="Item text/name. Required when creating a new item. "
+                "Ignored in update mode — use 'rename' to change the item name.",
+                default=None,
+            ),
+        ] = None,
+        item: Annotated[
+            str | None,
+            Field(
+                description="Existing item to update - can be the item UID or the exact item summary/name. "
+                "When provided, operates in update mode. When omitted, creates a new item.",
+                default=None,
+            ),
+        ] = None,
+        status: Annotated[
+            Literal["needs_action", "completed"] | None,
+            Field(
+                description="Item status: 'completed' to mark done, 'needs_action' to mark incomplete. "
+                "Only used in update mode.",
+                default=None,
+            ),
+        ] = None,
         description: Annotated[
             str | None,
             Field(
-                description="Optional detailed description for the item",
+                description="Detailed description for the item",
                 default=None,
             ),
         ] = None,
         due_date: Annotated[
             str | None,
             Field(
-                description="Optional due date in YYYY-MM-DD format (e.g., '2024-12-25')",
+                description="Due date in YYYY-MM-DD format (e.g., '2024-12-25')",
                 default=None,
             ),
         ] = None,
         due_datetime: Annotated[
             str | None,
             Field(
-                description="Optional due datetime in ISO format (e.g., '2024-12-25T14:00:00')",
+                description="Due datetime in ISO format (e.g., '2024-12-25T14:00:00'). "
+                "Overrides due_date if both provided.",
+                default=None,
+            ),
+        ] = None,
+        rename: Annotated[
+            str | None,
+            Field(
+                description="New name/summary for an existing item. Only used in update mode.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Add an item to a Home Assistant todo list.
+        """Create or update a todo item in Home Assistant.
 
-        Creates a new item in the specified todo list with optional description and due date.
+        WITHOUT item parameter (create mode):
+        Creates a new item. summary is required.
 
-        PARAMETERS:
-        - entity_id: The todo list to add to (e.g., 'todo.shopping_list')
-        - summary: The item text (required)
-        - description: Optional detailed description
-        - due_date: Optional due date (YYYY-MM-DD format)
-        - due_datetime: Optional due datetime (ISO format, overrides due_date if both provided)
+        WITH item parameter (update mode):
+        Updates an existing item identified by UID or exact name.
+        At least one update field (rename, status, description, due_date, due_datetime) is required.
 
         EXAMPLES:
-        - Add simple item: ha_add_todo_item("todo.shopping_list", "Buy milk")
-        - Add with description: ha_add_todo_item("todo.shopping_list", "Buy milk", description="2% organic")
-        - Add with due date: ha_add_todo_item("todo.tasks", "Pay bills", due_date="2024-12-31")
-
-        USE CASES:
-        - "Add milk to my shopping list"
-        - "Add 'call mom' to my todo list"
-        - "Remind me to pay rent by the 1st"
+        - Add item: ha_set_todo_item("todo.shopping_list", summary="Buy milk")
+        - Add with description: ha_set_todo_item("todo.shopping_list", summary="Buy milk", description="2% organic")
+        - Add with due date: ha_set_todo_item("todo.tasks", summary="Pay bills", due_date="2024-12-31")
+        - Complete item: ha_set_todo_item("todo.shopping_list", item="Buy milk", status="completed")
+        - Rename item: ha_set_todo_item("todo.tasks", item="Old task", rename="New task name")
+        - Update due date: ha_set_todo_item("todo.tasks", item="Pay bills", due_date="2024-12-31")
+        - Reopen item: ha_set_todo_item("todo.tasks", item="Task to redo", status="needs_action")
 
         NOTE: Not all todo integrations support all features (description, due dates).
         The Shopping List integration only supports summary.
         """
         # Validate entity_id format
         if not entity_id.startswith("todo."):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                    context={"entity_id": entity_id},
+                    suggestions=[
+                        "Use ha_get_todo() to find valid todo list entity IDs"
+                    ],
+                )
+            )
+
+        # Route: create mode (no item) vs update mode (item provided)
+        if item is None:
+            return await self._create_item(
+                entity_id, summary, description, due_date, due_datetime, rename, status
+            )
+        return await self._update_item(
+            entity_id, item, rename, status, description, due_date, due_datetime
+        )
+
+    async def _create_item(
+        self,
+        entity_id: str,
+        summary: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+        rename: str | None,
+        status: str | None,
+    ) -> dict[str, Any]:
+        """Create a new todo item after validating create-mode parameters."""
+        if rename is not None or status is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "rename and status are only valid when updating an existing item (provide 'item' parameter)",
+                    context={"entity_id": entity_id},
+                    suggestions=[
+                        "To create a new item, provide only 'summary' (and optionally 'due_date', 'description')",
+                        "To update an existing item, include the 'item' parameter with the item name",
+                    ],
+                )
+            )
+        if not summary:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "summary is required when creating a new item (no item parameter provided)",
+                    context={"entity_id": entity_id},
+                    suggestions=["Provide a summary for the new todo item"],
+                )
+            )
 
         try:
-            # Build service data
             service_data: dict[str, Any] = {
                 "entity_id": entity_id,
                 "item": summary,
             }
 
-            # Add optional fields if provided
             if description:
                 service_data["description"] = description
             if due_datetime:
@@ -263,8 +357,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             elif due_date:
                 service_data["due_date"] = due_date
 
-            # Call the service
-            result = await client.call_service("todo", "add_item", service_data)
+            result = await self._client.call_service("todo", "add_item", service_data)
 
             return {
                 "success": True,
@@ -290,139 +383,37 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "title": "Update Todo Item"})
-    @log_tool_usage
-    async def ha_update_todo_item(
-        entity_id: Annotated[
-            str,
-            Field(
-                description="Todo list entity ID (e.g., 'todo.shopping_list')"
-            ),
-        ],
-        item: Annotated[
-            str,
-            Field(
-                description="Item to update - can be the item UID or the exact item summary/name"
-            ),
-        ],
-        rename: Annotated[
-            str | None,
-            Field(
-                description="New name/summary for the item",
-                default=None,
-            ),
-        ] = None,
-        status: Annotated[
-            Literal["needs_action", "completed"] | None,
-            Field(
-                description="New status: 'completed' to mark done, 'needs_action' to mark incomplete",
-                default=None,
-            ),
-        ] = None,
-        description: Annotated[
-            str | None,
-            Field(
-                description="New description for the item",
-                default=None,
-            ),
-        ] = None,
-        due_date: Annotated[
-            str | None,
-            Field(
-                description="New due date in YYYY-MM-DD format",
-                default=None,
-            ),
-        ] = None,
-        due_datetime: Annotated[
-            str | None,
-            Field(
-                description="New due datetime in ISO format",
-                default=None,
-            ),
-        ] = None,
+    async def _update_item(
+        self,
+        entity_id: str,
+        item: str,
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
     ) -> dict[str, Any]:
-        """
-        Update or complete a todo item in Home Assistant.
-
-        Modifies an existing item in the specified todo list. Can be used to:
-        - Mark items as completed or incomplete
-        - Rename items
-        - Update descriptions and due dates
-
-        IDENTIFYING ITEMS:
-        - Use the item's UID (from ha_get_todo)
-        - Or use the exact item summary/name text
-
-        STATUS VALUES:
-        - completed: Mark the item as done
-        - needs_action: Mark the item as not done (reopen)
-
-        EXAMPLES:
-        - Complete item: ha_update_todo_item("todo.shopping_list", "Buy milk", status="completed")
-        - Rename item: ha_update_todo_item("todo.tasks", "Old task", rename="New task name")
-        - Update due date: ha_update_todo_item("todo.tasks", "Pay bills", due_date="2024-12-31")
-        - Reopen item: ha_update_todo_item("todo.tasks", "Task to redo", status="needs_action")
-
-        USE CASES:
-        - "Mark milk as bought"
-        - "Complete the eggs on my shopping list"
-        - "Change the due date for my task"
-        - "Rename 'call mom' to 'video call with mom'"
-
-        NOTE: At least one update field (rename, status, description, due_date, due_datetime) must be provided.
-        """
-        # Validate entity_id format
-        if not entity_id.startswith("todo."):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
-            ))
-
-        # Validate at least one update field is provided
+        """Update an existing todo item after validating update-mode parameters."""
         if not any([rename, status, description, due_date, due_datetime]):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
-                context={"entity_id": entity_id, "item": item},
-                suggestions=["Specify what to update, e.g., status='completed' to mark item done"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "At least one update field must be provided (rename, status, description, due_date, or due_datetime)",
+                    context={"entity_id": entity_id, "item": item},
+                    suggestions=[
+                        "Specify what to update, e.g., status='completed' to mark item done"
+                    ],
+                )
+            )
 
         try:
-            # Build service data
-            service_data: dict[str, Any] = {
-                "entity_id": entity_id,
-                "item": item,
-            }
-
-            # Add update fields if provided
-            if rename:
-                service_data["rename"] = rename
-            if status:
-                service_data["status"] = status
-            if description:
-                service_data["description"] = description
-            if due_datetime:
-                service_data["due_datetime"] = due_datetime
-            elif due_date:
-                service_data["due_date"] = due_date
-
-            # Call the service
-            result = await client.call_service("todo", "update_item", service_data)
-
-            # Build response message
-            updates = []
-            if rename:
-                updates.append(f"renamed to '{rename}'")
-            if status:
-                updates.append(f"status set to '{status}'")
-            if description:
-                updates.append("description updated")
-            if due_date or due_datetime:
-                updates.append("due date updated")
-
-            update_msg = ", ".join(updates) if updates else "updated"
+            service_data = self._build_update_service_data(
+                entity_id, item, rename, status, description, due_date, due_datetime
+            )
+            result = await self._client.call_service("todo", "update_item", service_data)
+            update_msg = self._build_update_message(
+                rename, status, description, due_date, due_datetime
+            )
 
             return {
                 "success": True,
@@ -452,14 +443,68 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"Todo Lists"}, annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Todo Item"})
+    @staticmethod
+    def _build_update_service_data(
+        entity_id: str,
+        item: str,
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+    ) -> dict[str, Any]:
+        """Build the service_data dict for a todo update_item call."""
+        service_data: dict[str, Any] = {
+            "entity_id": entity_id,
+            "item": item,
+        }
+        if rename:
+            service_data["rename"] = rename
+        if status:
+            service_data["status"] = status
+        if description:
+            service_data["description"] = description
+        if due_datetime:
+            service_data["due_datetime"] = due_datetime
+        elif due_date:
+            service_data["due_date"] = due_date
+        return service_data
+
+    @staticmethod
+    def _build_update_message(
+        rename: str | None,
+        status: str | None,
+        description: str | None,
+        due_date: str | None,
+        due_datetime: str | None,
+    ) -> str:
+        """Build a human-readable summary of what was updated."""
+        updates: list[str] = []
+        if rename:
+            updates.append(f"renamed to '{rename}'")
+        if status:
+            updates.append(f"status set to '{status}'")
+        if description:
+            updates.append("description updated")
+        if due_date or due_datetime:
+            updates.append("due date updated")
+        return ", ".join(updates) if updates else "updated"
+
+    @tool(
+        name="ha_remove_todo_item",
+        tags={"Todo Lists"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Todo Item",
+        },
+    )
     @log_tool_usage
     async def ha_remove_todo_item(
+        self,
         entity_id: Annotated[
             str,
-            Field(
-                description="Todo list entity ID (e.g., 'todo.shopping_list')"
-            ),
+            Field(description="Todo list entity ID (e.g., 'todo.shopping_list')"),
         ],
         item: Annotated[
             str,
@@ -487,16 +532,20 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "Clear 'call mom' from my todo"
 
         WARNING: This permanently removes the item. To mark as completed instead,
-        use ha_update_todo_item() with status="completed".
+        use ha_set_todo_item() with status="completed".
         """
         # Validate entity_id format
         if not entity_id.startswith("todo."):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_get_todo() to find valid todo list entity IDs"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid entity_id: {entity_id}. Must start with 'todo.'",
+                    context={"entity_id": entity_id},
+                    suggestions=[
+                        "Use ha_get_todo() to find valid todo list entity IDs"
+                    ],
+                )
+            )
 
         try:
             # Build service data
@@ -506,7 +555,7 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
             # Call the service
-            result = await client.call_service("todo", "remove_item", service_data)
+            result = await self._client.call_service("todo", "remove_item", service_data)
 
             return {
                 "success": True,
@@ -528,3 +577,8 @@ def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Make sure the item hasn't already been removed",
                 ],
             )
+
+
+def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant todo list management tools."""
+    register_tool_methods(mcp, TodoTools(client))

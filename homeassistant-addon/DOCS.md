@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 93+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -102,13 +102,32 @@ Replace the URL with the one from your add-on logs.
 
 ### <details><summary><b>🌐 Web Clients (Claude.ai, ChatGPT, etc.)</b></summary>
 
-For secure remote access without port forwarding, use the **Cloudflared add-on**:
+For secure remote access, you have two options:
 
-#### Install Cloudflared Add-on
+#### Option A: Webhook Proxy Add-on (Simplest — if you have Nabu Casa or an existing reverse proxy)
+
+The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
+
+1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+3. Start it and **restart Home Assistant** when prompted
+4. Copy the URL from the webhook proxy add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+5. Use that URL in your MCP client
+
+Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
+
+#### Option B: Cloudflared Add-on (No existing reverse proxy needed)
+
+Use the **Cloudflared add-on** for a dedicated tunnel:
+
+##### Install Cloudflared Add-on
 
 [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
 
-#### Configure Cloudflared
+##### Configure Cloudflared
 
 **Note:** The Cloudflared add-on requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
 
@@ -127,7 +146,7 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
-#### Authenticate and Get Your Public URL
+##### Authenticate and Get Your Public URL
 
 When you first start Cloudflared:
 
@@ -143,7 +162,7 @@ When you first start Cloudflared:
    - Named tunnel: `https://ha-mcp-<random>.cfargotunnel.com`
    - Custom domain: `https://ha-mcp.yourdomain.com` (if DNS configured)
 
-#### Use Your MCP Server
+##### Use Your MCP Server
 
 Combine the Cloudflare tunnel URL with your secret path:
 ```
@@ -158,7 +177,7 @@ https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 
 **Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
 
-#### ⚠️ Disable "Block AI Training Bots"
+##### ⚠️ Disable "Block AI Training Bots"
 
 > **This is the most common connection issue for Cloudflare users.** If your LLM client can't connect but visiting the URL in your browser works, this setting is almost certainly the cause.
 
@@ -212,7 +231,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~93 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -251,7 +270,7 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 ### Network Exposure
 
 - **Local network only by default** - The add-on listens on port 9583
-- **Remote access** - Use the Cloudflared add-on for secure HTTPS tunnels
+- **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
 
 ---
@@ -310,7 +329,9 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 93+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
+
+> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
 ### Add-ons
 - `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
@@ -344,16 +365,14 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
-- `ha_config_get_dashboard` — Get dashboard info - list all dashboards or get config for a specific one.
+- `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
 - `ha_config_list_dashboard_resources` — List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
 - `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
-- `ha_dashboard_find_card` — Find cards, badges, and header cards in a dashboard by entity_id, type, or heading text.
 
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
-- `ha_rename_entity` — Rename a Home Assistant entity by changing its entity_id, optionally renaming its device too.
 - `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Entity Registry
@@ -376,10 +395,8 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 ### HACS
 - `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
 - `ha_hacs_download` — Download and install a HACS repository.
-- `ha_hacs_info` — Get HACS status, version, and enabled categories.
-- `ha_hacs_list_installed` — List installed HACS repositories with focused, small response.
 - `ha_hacs_repository_info` — Get detailed repository information including README and documentation.
-- `ha_hacs_search` — Search HACS store for repositories by keyword with pagination.
+- `ha_hacs_search` — Search HACS store for repositories, or list installed repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
@@ -390,9 +407,8 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
-- `ha_get_history` — Retrieve raw state change history for entities (last ~10 days).
+- `ha_get_history` — Retrieve historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
-- `ha_get_statistics` — Retrieve pre-aggregated long-term statistics for trend analysis.
 
 ### Integrations
 - `ha_delete_config_entry` — Delete config entry permanently. Requires confirm=True.
@@ -415,8 +431,7 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 ### Search & Discovery
 - `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
-- `ha_get_state` — Get current status, state, and attributes of any entity (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_get_states` — Get state information for multiple Home Assistant entities in a single call.
+- `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 - `ha_search_entities` — PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
 
 ### Service & Device Control
@@ -429,17 +444,16 @@ The add-on provides 93+ MCP tools for controlling Home Assistant:
 - `ha_backup_create` — Create a fast Home Assistant backup (local only).
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
-- `ha_config_set_yaml` — Add, replace, or remove a top-level key in configuration.yaml or package files.
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
-- `ha_get_updates` — Get update information - list all updates or get details for a specific one.
+- `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
 - `ha_restart` — Restart Home Assistant.
 
 ### Todo Lists
-- `ha_add_todo_item` — Add an item to a Home Assistant todo list.
 - `ha_get_todo` — Get todo lists or items - list all todo lists or get items from a specific list.
 - `ha_remove_todo_item` — Remove an item from a Home Assistant todo list.
-- `ha_update_todo_item` — Update or complete a todo item in Home Assistant.
+- `ha_set_todo_item` — Create or update a todo item in Home Assistant.
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.

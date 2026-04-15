@@ -82,6 +82,55 @@ To disable it:
 
 See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
 
+### macOS: "All connection attempts failed" to local Home Assistant
+
+If ha-mcp connects to the demo server but fails to reach your local Home Assistant (`192.168.x.x`, `10.x.x.x`, etc.) on macOS, the most common causes are listed below. See [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867) (Local Network Privacy), [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630) (env vars not reaching ha-mcp), and [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) (Python version/read-only filesystem) for related reports.
+
+**1. macOS Local Network Privacy (Sequoia 15+)**
+
+macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns `uvx` as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.
+
+- Check **System Settings → Privacy & Security → Local Network** for Claude Desktop
+- If Claude Desktop is not listed, try restarting it to trigger the permission prompt
+
+**Workaround — SSH tunnel to localhost:**
+
+Since macOS does not restrict connections to `localhost`, an SSH port forward bypasses the restriction:
+
+```bash
+ssh -N -L 8123:localhost:8123 user@your-ha-server-ip
+```
+
+Then set `HOMEASSISTANT_URL` to `http://localhost:8123` in your config.
+
+**2. Firewall software (Little Snitch, Lulu, etc.)**
+
+Third-party firewalls may block `python` or `node` processes spawned by Claude Desktop from making network connections. Check your firewall rules and allow connections for these processes. See [#780](https://github.com/homeassistant-ai/ha-mcp/issues/780) for an example resolution.
+
+**3. http:// vs https://**
+
+Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using `https://` causes a TLS handshake error. Use `http://` unless you have explicitly configured SSL/TLS or a reverse proxy.
+
+**4. Python version too old**
+
+ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, `uvx` installs an outdated version of ha-mcp that may have known bugs (including read-only filesystem errors). Upgrade Python:
+
+```bash
+brew install python@3.13
+```
+
+Then force a refresh:
+
+```bash
+uvx --refresh ha-mcp@latest
+```
+
+If `uvx` still uses the old Python after installing 3.13, explicitly pin it by adding `--python 3.13` to your config args:
+
+```json
+"args": ["--python", "3.13", "ha-mcp@latest"]
+```
+
 ### SSL certificate errors (self-signed certificates)
 
 If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, you may see SSL verification errors.
@@ -111,6 +160,33 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
      }
    }
    ```
+
+### Windows: pywin32 installation fails
+
+If you see `Failed to install: pywin32` or `os error 32` ("file is used by another process") when starting ha-mcp on Windows, this is caused by two upstream bugs:
+
+1. The MCP Python SDK requires `pywin32` on Windows even though server-only users don't need it ([python-sdk#2233](https://github.com/modelcontextprotocol/python-sdk/issues/2233))
+2. `uv` has a known issue installing `pywin32` on Windows ([uv#17679](https://github.com/astral-sh/uv/issues/17679))
+
+**Workaround — use Docker:**
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_token",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+See [#672](https://github.com/homeassistant-ai/ha-mcp/issues/672) for details.
 
 ### "uvx not found" error
 
@@ -156,6 +232,19 @@ source ~/.zshrc
 3. Check **Local MCP Servers** for any errors
 4. If "Home Assistant" is not listed, check your config file syntax
 5. Try asking Claude: "Can you list your available tools?"
+
+### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
+
+If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
+
+Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
+
+1. Install the **MCP Server add-on** and the **Webhook Proxy add-on** from the add-on store
+2. Start the webhook proxy and restart Home Assistant when prompted
+3. Copy the webhook URL from the add-on logs
+4. Use that URL in your MCP client configuration
+
+See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
 
 ### Server works but responses are slow
 

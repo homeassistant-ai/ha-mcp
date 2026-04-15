@@ -59,6 +59,7 @@ sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
 
 from scripts.verify_story import verify_ha_checks  # noqa: E402
+from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -89,15 +90,13 @@ def _start_container(*, keep_alive: bool = False) -> dict:
     import shutil
     import tempfile
 
-    import requests
-    from test_constants import TEST_TOKEN
+    from test_constants import HA_TEST_IMAGE, TEST_TOKEN
     from testcontainers.core.container import DockerContainer
 
     if keep_alive:
         os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
 
-    # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    HA_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.1.3"
+    HA_IMAGE = HA_TEST_IMAGE
 
     # Copy initial_test_state
     config_dir = Path(tempfile.mkdtemp(prefix="ha_story_"))
@@ -124,27 +123,8 @@ def _start_container(*, keep_alive: bool = False) -> dict:
         url = f"http://localhost:{port}"
         log(f"HA container started on {url}")
 
-        # Wait for HA to be ready
-        time.sleep(5)
-        start = time.time()
-        while time.time() - start < 120:
-            try:
-                r = requests.get(
-                    f"{url}/api/config",
-                    headers={"Authorization": f"Bearer {TEST_TOKEN}"},
-                    timeout=5,
-                )
-                if r.status_code == 200:
-                    version = r.json().get("version", "unknown")
-                    log(f"HA ready (version {version})")
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(3)
-        else:
-            raise TimeoutError("HA not ready after 120s")
-
-        time.sleep(10)  # component stabilization
+        # Wait for HA to be fully ready (API + components + entities)
+        wait_for_ha_ready(url, TEST_TOKEN, log=log)
     except Exception:
         container.stop()
         shutil.rmtree(config_dir, ignore_errors=True)

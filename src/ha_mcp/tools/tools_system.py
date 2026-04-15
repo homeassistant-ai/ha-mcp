@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
@@ -18,6 +19,7 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    register_tool_methods,
 )
 from .util_helpers import coerce_bool_param
 
@@ -46,12 +48,19 @@ RELOAD_TARGETS = {
 }
 
 
-def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Home Assistant system management tools."""
+class SystemTools:
+    """System management tools for Home Assistant."""
 
-    @mcp.tool(tags={"System"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Check Configuration"})
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_check_config",
+        tags={"System"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Check Configuration"},
+    )
     @log_tool_usage
-    async def ha_check_config() -> dict[str, Any]:
+    async def ha_check_config(self) -> dict[str, Any]:
         """
         Check Home Assistant configuration for errors.
 
@@ -59,7 +68,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Always run this before ha_restart() to ensure configuration is valid.
         """
         try:
-            config_result = await client.check_config()
+            config_result = await self._client.check_config()
 
             # The API returns {"result": "valid"} or {"result": "invalid", "errors": [...]}
             is_valid = config_result.get("result") == "valid"
@@ -86,9 +95,14 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Restart Home Assistant"})
+    @tool(
+        name="ha_restart",
+        tags={"System"},
+        annotations={"destructiveHint": True, "title": "Restart Home Assistant"},
+    )
     @log_tool_usage
     async def ha_restart(
+        self,
         confirm: bool | str = False,
     ) -> dict[str, Any]:
         """
@@ -140,7 +154,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         restart_initiated = False
         try:
             # Check configuration first as a safety measure
-            config_result = await client.check_config()
+            config_result = await self._client.check_config()
             if config_result.get("result") != "valid":
                 errors = config_result.get("errors") or []
                 raise_tool_error(create_error_response(
@@ -156,7 +170,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Call the restart service - mark as initiated before the call
             # as the connection may be closed before we get a response
             restart_initiated = True
-            await client.call_service("homeassistant", "restart", {})
+            await self._client.call_service("homeassistant", "restart", {})
 
             return {
                 "success": True,
@@ -191,9 +205,14 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             exception_to_structured_error(e)
 
-    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Reload Core Components"})
+    @tool(
+        name="ha_reload_core",
+        tags={"System"},
+        annotations={"destructiveHint": True, "title": "Reload Core Components"},
+    )
     @log_tool_usage
     async def ha_reload_core(
+        self,
         target: str = "all",
     ) -> dict[str, Any]:
         """
@@ -264,7 +283,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     domain, service = service_info
                     try:
-                        await client.call_service(domain, service, {})
+                        await self._client.call_service(domain, service, {})
                         results.append(reload_target)
                     except Exception as e:
                         # Some services might not be available in all installations
@@ -290,7 +309,7 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         context={"target": target},
                     ))
                 domain, service = service_info
-                await client.call_service(domain, service, {})
+                await self._client.call_service(domain, service, {})
 
                 return {
                     "success": True,
@@ -311,9 +330,14 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(tags={"System", "Zigbee", "Z-Wave"}, annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)"})
+    @tool(
+        name="ha_get_system_health",
+        tags={"System", "Zigbee", "Z-Wave"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)"},
+    )
     @log_tool_usage
     async def ha_get_system_health(
+        self,
         include: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -330,179 +354,32 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
           - Example: include="repairs,zha_network,zwave_network"
         """
-        # Parse include parameter into a set of requested sections
-        VALID_INCLUDES = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
-        includes: set[str] = set()
-        if include:
-            includes = {s.strip().lower() for s in include.split(",") if s.strip()}
+        includes = self._parse_includes(include)
 
         ws_client = None
 
         try:
-            # Connect to WebSocket for system_health/info
-            ws_client, error = await get_connected_ws_client(
-                client.base_url, client.token
-            )
-            if error or ws_client is None:
-                raise_tool_error(error or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket",
-                ))
-
-            # system_health/info returns a result + follow-up event
-            try:
-                _, event_response = await ws_client.send_command_with_event(
-                    "system_health/info", wait_timeout=10.0
-                )
-            except TimeoutError:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Timeout waiting for system health data",
-                ))
-            except Exception as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(e),
-                ))
-
-            health_info = event_response.get("event", {})
-            component_count = len(health_info) if isinstance(health_info, dict) else 0
-
-            result: dict[str, Any] = {
-                "success": True,
-                "health_info": health_info,
-                "component_count": component_count,
-                "message": f"Retrieved health info for {component_count} components",
-            }
+            ws_client, result = await self._fetch_health_info()
 
             # Warn about unrecognized include values
+            VALID_INCLUDES = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
             unknown = includes - VALID_INCLUDES
             if unknown:
                 result["warning"] = f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
 
-            # Fetch repairs if requested
+            # Fetch optional sections
             if "repairs" in includes:
-                result["repairs"] = {"issues": [], "count": 0}
-                try:
-                    repairs_result = await ws_client.send_command(
-                        "repairs/list_issues"
-                    )
-                    if repairs_result.get("success"):
-                        repairs_list = repairs_result.get("result", {}).get("issues", [])
-                        result["repairs"] = {
-                            "issues": repairs_list,
-                            "count": len(repairs_list),
-                        }
-                except Exception as e:
-                    logger.warning("Failed to fetch repairs: %s", e)
-                    result["repairs"]["error"] = f"Repairs data not available: {e}"
+                result["repairs"] = await self._fetch_repairs(ws_client)
 
-            # Fetch ZHA network data if requested
-            ZHA_SUMMARY_LIMIT = 50
-            ZHA_FULL_LIMIT = 25
             zha_full = "zha_network_full" in includes
             zha_summary = "zha_network" in includes
             if zha_full or zha_summary:
-                result["zha_network"] = {"devices": [], "count": 0, "total_count": 0}
-                try:
-                    zha_result = await ws_client.send_command(
-                        "zha/devices"
-                    )
-                    if zha_result.get("success"):
-                        raw_devices = zha_result.get("result", [])
-                        total = len(raw_devices)
-                        device_limit = ZHA_FULL_LIMIT if zha_full else ZHA_SUMMARY_LIMIT
-                        truncated = total > device_limit
-                        capped_devices = raw_devices[:device_limit]
-                        if zha_full:
-                            zha_devices = capped_devices
-                        else:
-                            zha_devices = [
-                                {
-                                    "ieee": d.get("ieee"),
-                                    "name": d.get("user_given_name") or d.get("name"),
-                                    "manufacturer": d.get("manufacturer"),
-                                    "model": d.get("model"),
-                                    "lqi": d.get("lqi"),
-                                    "rssi": d.get("rssi"),
-                                    "available": d.get("available"),
-                                }
-                                for d in capped_devices
-                            ]
-                        result["zha_network"] = {
-                            "devices": zha_devices,
-                            "count": len(zha_devices),
-                            "total_count": total,
-                        }
-                        if truncated:
-                            result["zha_network"]["truncated"] = True
-                            result["zha_network"]["hint"] = (
-                                f"Showing {device_limit} of {total} devices. "
-                                "Use ha_get_device(integration='zha') for full device list."
-                            )
-                except Exception as e:
-                    logger.warning("Failed to fetch ZHA network data: %s", e)
-                    result["zha_network"]["error"] = f"ZHA integration not available or error: {e}"
+                result["zha_network"] = await self._fetch_zha_network(
+                    ws_client, full=zha_full
+                )
 
-            # Fetch Z-Wave JS network data if requested
-            ZWAVE_NODE_LIMIT = 50
             if "zwave_network" in includes:
-                result["zwave_network"] = {"controller": {}, "nodes": [], "count": 0, "total_count": 0}
-                try:
-                    # Get all zwave_js config entries to find entry_id
-                    entries_result = await ws_client.send_command(
-                        "config/entries/get",
-                    )
-                    zwave_entry_id = None
-                    if entries_result.get("success"):
-                        for entry in entries_result.get("result", []):
-                            if entry.get("domain") == "zwave_js":
-                                zwave_entry_id = entry.get("entry_id")
-                                break
-
-                    if zwave_entry_id:
-                        # Get network status (controller info)
-                        network_result = await ws_client.send_command(
-                            "zwave_js/network_status",
-                            entry_id=zwave_entry_id,
-                        )
-                        if network_result.get("success"):
-                            net_data = network_result.get("result", {})
-                            result["zwave_network"]["controller"] = net_data.get(
-                                "controller", {}
-                            )
-                            nodes = net_data.get("controller", {}).get("nodes", [])
-                            total_nodes = len(nodes)
-                            capped_nodes = nodes[:ZWAVE_NODE_LIMIT]
-                            node_summaries = [
-                                {
-                                    "node_id": n.get("node_id"),
-                                    "status": n.get("status"),
-                                    "is_routing": n.get("is_routing"),
-                                    "is_secure": n.get("is_secure"),
-                                    "zwave_plus_version": n.get("zwave_plus_version"),
-                                    "is_controller_node": n.get("is_controller_node"),
-                                }
-                                for n in capped_nodes
-                            ]
-                            result["zwave_network"]["nodes"] = node_summaries
-                            result["zwave_network"]["count"] = len(node_summaries)
-                            result["zwave_network"]["total_count"] = total_nodes
-                            if total_nodes > ZWAVE_NODE_LIMIT:
-                                result["zwave_network"]["truncated"] = True
-                                result["zwave_network"]["hint"] = (
-                                    f"Showing {ZWAVE_NODE_LIMIT} of {total_nodes} nodes. "
-                                    "Use ha_get_device(integration='zwave_js') for full device list."
-                                )
-                    else:
-                        result["zwave_network"]["error"] = (
-                            "Z-Wave JS integration not found"
-                        )
-                except Exception as e:
-                    logger.warning("Failed to fetch Z-Wave network data: %s", e)
-                    result["zwave_network"]["error"] = (
-                        f"Z-Wave JS integration not available or error: {e}"
-                    )
+                result["zwave_network"] = await self._fetch_zwave_network(ws_client)
 
             return result
 
@@ -522,3 +399,185 @@ def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     await ws_client.disconnect()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _parse_includes(include: str | None) -> set[str]:
+        """Parse the comma-separated include parameter into a set of section names."""
+        if not include:
+            return set()
+        return {s.strip().lower() for s in include.split(",") if s.strip()}
+
+    async def _fetch_health_info(self) -> tuple[Any, dict[str, Any]]:
+        """Connect to WebSocket and retrieve system health info.
+
+        Returns:
+            A tuple of (ws_client, result_dict) where ws_client is needed
+            for subsequent optional fetches.
+        """
+        ws_client, error = await get_connected_ws_client(
+            self._client.base_url, self._client.token
+        )
+        if error or ws_client is None:
+            raise_tool_error(error or create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Failed to connect to Home Assistant WebSocket",
+            ))
+
+        try:
+            _, event_response = await ws_client.send_command_with_event(
+                "system_health/info", wait_timeout=10.0
+            )
+        except TimeoutError:
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Timeout waiting for system health data",
+            ))
+        except Exception as e:
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(e),
+            ))
+
+        health_info = event_response.get("event", {})
+        component_count = len(health_info) if isinstance(health_info, dict) else 0
+
+        result: dict[str, Any] = {
+            "success": True,
+            "health_info": health_info,
+            "component_count": component_count,
+            "message": f"Retrieved health info for {component_count} components",
+        }
+
+        return ws_client, result
+
+
+    @staticmethod
+    async def _fetch_repairs(ws_client: Any) -> dict[str, Any]:
+        """Fetch repair issues from Home Assistant."""
+        repairs: dict[str, Any] = {"issues": [], "count": 0}
+        try:
+            repairs_result = await ws_client.send_command("repairs/list_issues")
+            if repairs_result.get("success"):
+                repairs_list = repairs_result.get("result", {}).get("issues", [])
+                repairs = {
+                    "issues": repairs_list,
+                    "count": len(repairs_list),
+                }
+        except Exception as e:
+            logger.warning("Failed to fetch repairs: %s", e)
+            repairs["error"] = f"Repairs data not available: {e}"
+        return repairs
+
+    @staticmethod
+    async def _fetch_zha_network(
+        ws_client: Any, *, full: bool
+    ) -> dict[str, Any]:
+        """Fetch ZHA Zigbee network device data."""
+        ZHA_SUMMARY_LIMIT = 50
+        ZHA_FULL_LIMIT = 25
+        zha_network: dict[str, Any] = {"devices": [], "count": 0, "total_count": 0}
+        try:
+            zha_result = await ws_client.send_command("zha/devices")
+            if zha_result.get("success"):
+                raw_devices = zha_result.get("result", [])
+                total = len(raw_devices)
+                device_limit = ZHA_FULL_LIMIT if full else ZHA_SUMMARY_LIMIT
+                truncated = total > device_limit
+                capped_devices = raw_devices[:device_limit]
+                if full:
+                    zha_devices = capped_devices
+                else:
+                    zha_devices = [
+                        {
+                            "ieee": d.get("ieee"),
+                            "name": d.get("user_given_name") or d.get("name"),
+                            "manufacturer": d.get("manufacturer"),
+                            "model": d.get("model"),
+                            "lqi": d.get("lqi"),
+                            "rssi": d.get("rssi"),
+                            "available": d.get("available"),
+                        }
+                        for d in capped_devices
+                    ]
+                zha_network = {
+                    "devices": zha_devices,
+                    "count": len(zha_devices),
+                    "total_count": total,
+                }
+                if truncated:
+                    zha_network["truncated"] = True
+                    zha_network["hint"] = (
+                        f"Showing {device_limit} of {total} devices. "
+                        "Use ha_get_device(integration='zha') for full device list."
+                    )
+        except Exception as e:
+            logger.warning("Failed to fetch ZHA network data: %s", e)
+            zha_network["error"] = f"ZHA integration not available or error: {e}"
+        return zha_network
+
+    @staticmethod
+    async def _fetch_zwave_network(ws_client: Any) -> dict[str, Any]:
+        """Fetch Z-Wave JS network status and node summary."""
+        ZWAVE_NODE_LIMIT = 50
+        zwave_network: dict[str, Any] = {
+            "controller": {},
+            "nodes": [],
+            "count": 0,
+            "total_count": 0,
+        }
+        try:
+            # Get all zwave_js config entries to find entry_id
+            entries_result = await ws_client.send_command("config/entries/get")
+            zwave_entry_id = None
+            if entries_result.get("success"):
+                for entry in entries_result.get("result", []):
+                    if entry.get("domain") == "zwave_js":
+                        zwave_entry_id = entry.get("entry_id")
+                        break
+
+            if not zwave_entry_id:
+                zwave_network["error"] = "Z-Wave JS integration not found"
+                return zwave_network
+
+            # Get network status (controller info)
+            network_result = await ws_client.send_command(
+                "zwave_js/network_status",
+                entry_id=zwave_entry_id,
+            )
+            if network_result.get("success"):
+                net_data = network_result.get("result", {})
+                zwave_network["controller"] = net_data.get("controller", {})
+                nodes = net_data.get("controller", {}).get("nodes", [])
+                total_nodes = len(nodes)
+                capped_nodes = nodes[:ZWAVE_NODE_LIMIT]
+                node_summaries = [
+                    {
+                        "node_id": n.get("node_id"),
+                        "status": n.get("status"),
+                        "is_routing": n.get("is_routing"),
+                        "is_secure": n.get("is_secure"),
+                        "zwave_plus_version": n.get("zwave_plus_version"),
+                        "is_controller_node": n.get("is_controller_node"),
+                    }
+                    for n in capped_nodes
+                ]
+                zwave_network["nodes"] = node_summaries
+                zwave_network["count"] = len(node_summaries)
+                zwave_network["total_count"] = total_nodes
+                if total_nodes > ZWAVE_NODE_LIMIT:
+                    zwave_network["truncated"] = True
+                    zwave_network["hint"] = (
+                        f"Showing {ZWAVE_NODE_LIMIT} of {total_nodes} nodes. "
+                        "Use ha_get_device(integration='zwave_js') for full device list."
+                    )
+        except Exception as e:
+            logger.warning("Failed to fetch Z-Wave network data: %s", e)
+            zwave_network["error"] = (
+                f"Z-Wave JS integration not available or error: {e}"
+            )
+        return zwave_network
+
+
+def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant system management tools."""
+    register_tool_methods(mcp, SystemTools(client))

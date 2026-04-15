@@ -6,11 +6,12 @@ especially for blueprint-based scripts (issue #466).
 """
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
+
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 
 class TestScriptToolsValidation:
@@ -38,32 +39,16 @@ class TestScriptToolsValidation:
         return client
 
     @pytest.fixture
-    def register_tools(self, mock_client):
-        """Register script tools with mocks."""
-        from ha_mcp.tools.tools_config_scripts import register_config_script_tools
-
-        # Create a container to capture the registered functions
-        registered_tools: dict[str, Any] = {}
-
-        def capture_tool(**kwargs):
-            def decorator(fn):
-                registered_tools[fn.__name__] = fn
-                return fn
-
-            return decorator
-
-        mock_mcp = MagicMock()
-        mock_mcp.tool = capture_tool
-
-        register_config_script_tools(mock_mcp, mock_client)
-        return registered_tools
+    def tools(self, mock_client):
+        """Create ConfigScriptTools instance."""
+        return ConfigScriptTools(mock_client)
 
     async def test_set_script_missing_both_sequence_and_blueprint(
-        self, register_tools, mock_client
+        self, tools
     ):
         """Test that config without sequence or use_blueprint is rejected."""
         with pytest.raises(ToolError) as exc_info:
-            await register_tools["ha_config_set_script"](
+            await tools.ha_config_set_script(
                 script_id="test_script",
                 config={"alias": "Test Script"},  # Missing both sequence and use_blueprint
             )
@@ -73,9 +58,9 @@ class TestScriptToolsValidation:
         error_msg = error_data["error"]["message"]
         assert "sequence" in error_msg and "use_blueprint" in error_msg
 
-    async def test_set_script_with_sequence_success(self, register_tools, mock_client):
+    async def test_set_script_with_sequence_success(self, tools, mock_client):
         """Test that regular script with sequence is accepted."""
-        result = await register_tools["ha_config_set_script"](
+        result = await tools.ha_config_set_script(
             script_id="test_script",
             config={
                 "alias": "Test Script",
@@ -86,9 +71,9 @@ class TestScriptToolsValidation:
         assert result["success"] is True
         mock_client.upsert_script_config.assert_called_once()
 
-    async def test_set_script_with_blueprint_success(self, register_tools, mock_client):
+    async def test_set_script_with_blueprint_success(self, tools, mock_client):
         """Test that blueprint-based script is accepted."""
-        result = await register_tools["ha_config_set_script"](
+        result = await tools.ha_config_set_script(
             script_id="test_script",
             config={
                 "alias": "My Blueprint Script",
@@ -109,10 +94,10 @@ class TestScriptToolsValidation:
         assert "sequence" not in config_passed or config_passed["sequence"] != []
 
     async def test_set_script_blueprint_with_empty_sequence_strips_it(
-        self, register_tools, mock_client
+        self, tools, mock_client
     ):
         """Test that empty sequence is stripped from blueprint scripts."""
-        result = await register_tools["ha_config_set_script"](
+        result = await tools.ha_config_set_script(
             script_id="test_script",
             config={
                 "alias": "My Blueprint Script",
@@ -132,10 +117,10 @@ class TestScriptToolsValidation:
         assert "sequence" not in config_passed, "Empty sequence should be stripped"
 
     async def test_set_script_blueprint_with_non_empty_sequence_keeps_it(
-        self, register_tools, mock_client
+        self, tools, mock_client
     ):
         """Test that non-empty sequence is kept even with blueprint."""
-        result = await register_tools["ha_config_set_script"](
+        result = await tools.ha_config_set_script(
             script_id="test_script",
             config={
                 "alias": "My Blueprint Script",
@@ -155,10 +140,10 @@ class TestScriptToolsValidation:
         assert "sequence" in config_passed
         assert config_passed["sequence"] == [{"delay": {"seconds": 1}}]
 
-    async def test_set_script_invalid_json_config(self, register_tools, mock_client):
+    async def test_set_script_invalid_json_config(self, tools):
         """Test that invalid JSON config is rejected."""
         with pytest.raises(ToolError) as exc_info:
-            await register_tools["ha_config_set_script"](
+            await tools.ha_config_set_script(
                 script_id="test_script",
                 config='{"invalid": json}',  # Invalid JSON string
             )
@@ -167,10 +152,10 @@ class TestScriptToolsValidation:
         assert error_data["success"] is False
         assert "Invalid config parameter" in error_data["error"]["message"]
 
-    async def test_set_script_config_not_dict(self, register_tools, mock_client):
+    async def test_set_script_config_not_dict(self, tools):
         """Test that non-dict config is rejected."""
         with pytest.raises(ToolError) as exc_info:
-            await register_tools["ha_config_set_script"](
+            await tools.ha_config_set_script(
                 script_id="test_script",
                 config="not a dict",
             )

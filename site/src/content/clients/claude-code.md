@@ -1,7 +1,7 @@
 ---
 name: Claude Code
 company: Anthropic
-logo: /logos/anthropic.svg
+logo: /logos/claude-code.svg
 transports: ['stdio', 'sse', 'streamable-http']
 configFormat: cli
 accuracy: 5

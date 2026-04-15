@@ -7,6 +7,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 import functools
 import json
 import logging
+import sys
 import time
 from typing import Any, Literal, NoReturn, overload
 
@@ -230,6 +231,30 @@ def exception_to_structured_error(
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
         error_response["error"]["suggestions"] = suggestions
 
+    # Append macOS-specific hints for connection failures (after all other processing
+    # so hints survive regardless of whether caller provided explicit suggestions)
+    if (
+        sys.platform == "darwin"
+        and "error" in error_response
+        and isinstance(error_response["error"], dict)
+        and error_response["error"].get("code")
+        in (ErrorCode.CONNECTION_FAILED, ErrorCode.CONNECTION_TIMEOUT)
+    ):
+        macos_hints = [
+            "macOS may block local network access for Claude Desktop subprocesses "
+            "(System Settings > Privacy & Security > Local Network)",
+            "Try an SSH tunnel: ssh -N -L 8123:localhost:8123 user@ha-server, "
+            "then use http://localhost:8123",
+            "Ensure you are using http:// (not https://) unless SSL/TLS is configured",
+        ]
+        # Handle both "suggestions" (plural, 2+ items) and "suggestion" (singular, 1 item)
+        existing = error_response["error"].get("suggestions") or []
+        if not existing:
+            single = error_response["error"].get("suggestion")
+            if single:
+                existing = [single]
+        error_response["error"]["suggestions"] = existing + macos_hints
+
     if raise_error:
         raise_tool_error(error_response)
 
@@ -274,3 +299,22 @@ def log_tool_usage(func: Any) -> Any:
             )
 
     return wrapper
+
+
+def register_tool_methods(mcp: Any, instance: Any) -> None:
+    """Register all @tool-decorated methods from a class instance with the MCP server.
+
+    Discovers methods bearing a ``__fastmcp__`` attribute (set by the outermost
+    ``@tool`` decorator — must be listed above ``@log_tool_usage``) and registers
+    them via ``mcp.add_tool()``.
+    """
+    count = 0
+    for attr in dir(instance):
+        method = getattr(instance, attr)
+        if callable(method) and hasattr(method, "__fastmcp__"):
+            mcp.add_tool(method)
+            count += 1
+    if count == 0:
+        logger.warning(
+            f"No @tool-decorated methods found on {type(instance).__name__}"
+        )

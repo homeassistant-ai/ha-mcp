@@ -27,6 +27,8 @@ const withBase = (path: string) => {
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
+        <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
@@ -64,27 +66,27 @@ const withBase = (path: string) => {
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Tools</td>
                   <td class="py-2">~15 basic tools</td>
-                  <td class="py-2 text-green-400">80+ comprehensive tools</td>
+                  <td class="py-2 text-brand">80+ comprehensive tools</td>
                 </tr>
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Focus</td>
                   <td class="py-2">Device control</td>
-                  <td class="py-2 text-green-400">Full system administration</td>
+                  <td class="py-2 text-brand">Full system administration</td>
                 </tr>
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Automations</td>
                   <td class="py-2">Limited</td>
-                  <td class="py-2 text-green-400">Create, edit, debug, trace</td>
+                  <td class="py-2 text-brand">Create, edit, debug, trace</td>
                 </tr>
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Dashboards</td>
                   <td class="py-2">No</td>
-                  <td class="py-2 text-green-400">Full dashboard management</td>
+                  <td class="py-2 text-brand">Full dashboard management</td>
                 </tr>
                 <tr>
                   <td class="py-2">Cameras</td>
                   <td class="py-2">No</td>
-                  <td class="py-2 text-green-400">Screenshot and analysis</td>
+                  <td class="py-2 text-brand">Screenshot and analysis</td>
                 </tr>
               </tbody>
             </table>
@@ -103,11 +105,11 @@ const withBase = (path: string) => {
         <div class="space-y-3">
           <div class="flex justify-between items-center">
             <span class="text-slate-400">URL</span>
-            <code class="bg-slate-900 px-2 py-1 rounded text-green-400">https://ha-mcp-demo-server.qc-h.net</code>
+            <code class="bg-slate-900 px-2 py-1 rounded text-brand">https://ha-mcp-demo-server.qc-h.net</code>
           </div>
           <div class="flex justify-between items-center">
             <span class="text-slate-400">Token</span>
-            <code class="bg-slate-900 px-2 py-1 rounded text-green-400">demo</code>
+            <code class="bg-slate-900 px-2 py-1 rounded text-brand">demo</code>
           </div>
           <div class="flex justify-between items-center">
             <span class="text-slate-400">Web UI</span>
@@ -137,6 +139,36 @@ HOMEASSISTANT_URL=https://your-ha-instance.example.com \
 MCP_BASE_URL=https://your-mcp-server.example.com \
 uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">full migration guide</a> for details.</p>
+        </div>
+
+        <div class="faq-item" id="macos-connection">
+          <h3 class="text-lg font-medium text-white mb-2">macOS: "All connection attempts failed" to local Home Assistant</h3>
+          <p class="text-slate-300 mb-4">If ha-mcp connects to the demo server but fails to reach your local Home Assistant (<code class="bg-slate-800 px-1 rounded">192.168.x.x</code>, <code class="bg-slate-800 px-1 rounded">10.x.x.x</code>, etc.) on macOS, check the following. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/867" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#867</a> (Local Network Privacy), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/630" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#630</a> (env vars), <a href="https://github.com/homeassistant-ai/ha-mcp/issues/773" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#773</a> (Python version) for related reports.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">1. macOS Local Network Privacy (Sequoia 15+)</h4>
+          <p class="text-slate-300 mb-3">macOS Sequoia silently blocks subprocess connections to local network IPs. Claude Desktop spawns <code class="bg-slate-800 px-1 rounded">uvx</code> as a child process, and macOS may block its outbound LAN connections without showing a permission dialog.</p>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
+            <li>Check <strong>System Settings &rarr; Privacy &amp; Security &rarr; Local Network</strong> for Claude Desktop</li>
+            <li>If Claude Desktop is not listed, try restarting it to trigger the permission prompt</li>
+          </ul>
+          <p class="text-slate-400 mb-2">Workaround &mdash; SSH tunnel to localhost:</p>
+          <p class="text-slate-300 mb-3">macOS does not restrict connections to <code class="bg-slate-800 px-1 rounded">localhost</code>, so an SSH port forward bypasses the restriction:</p>
+          <pre class="code-block"><code>ssh -N -L 8123:localhost:8123 user@your-ha-server-ip</code></pre>
+          <p class="text-slate-400 text-sm mt-2 mb-4">Then set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> to <code class="bg-slate-800 px-1 rounded">http://localhost:8123</code> in your config.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">2. Firewall software (Little Snitch, Lulu, etc.)</h4>
+          <p class="text-slate-300 mb-3">Third-party firewalls may block <code class="bg-slate-800 px-1 rounded">python</code> or <code class="bg-slate-800 px-1 rounded">node</code> processes spawned by Claude Desktop. Check your firewall rules and allow connections for these processes. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/780" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#780</a> for an example resolution.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">3. http:// vs https://</h4>
+          <p class="text-slate-300 mb-3">Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using <code class="bg-slate-800 px-1 rounded">https://</code> causes a TLS handshake error. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you have explicitly configured SSL/TLS or a reverse proxy.</p>
+
+          <h4 class="font-medium text-white mt-4 mb-2">4. Python version too old</h4>
+          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
+          <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
+          <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
+          <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.13, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.13</code> to your config args:</p>
+          <pre class="code-block mt-2"><code>"args": ["--python", "3.13", "ha-mcp@latest"]</code></pre>
         </div>
 
         <div class="faq-item" id="ssl-certificates">
@@ -215,6 +247,19 @@ source ~/.zshrc
             <li>If "Home Assistant" is not listed, check your config file syntax</li>
             <li>Try asking Claude: "Can you list your available tools?"</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="webhook-proxy">
+          <h3 class="text-lg font-medium text-white mb-2">Can't connect remotely? Try the Webhook Proxy add-on</h3>
+          <p class="text-slate-300 mb-3">If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the <strong>Webhook Proxy add-on</strong> may be a simpler alternative.</p>
+          <p class="text-slate-300 mb-3">Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have <strong>Nabu Casa</strong> or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.</p>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside mb-3">
+            <li>Install the <strong>MCP Server add-on</strong> and the <strong>Webhook Proxy add-on</strong> from the add-on store</li>
+            <li>Start the webhook proxy and restart Home Assistant when prompted</li>
+            <li>Copy the webhook URL from the add-on logs</li>
+            <li>Use that URL in your MCP client configuration</li>
+          </ol>
+          <p class="text-slate-400 text-sm">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/784" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#784</a> for an example where this resolved a TLS connection issue.</p>
         </div>
 
         <div class="faq-item">
@@ -394,8 +439,5 @@ source ~/.zshrc
 <style>
   .faq-item {
     @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-6;
-  }
-  .code-block {
-    @apply bg-slate-900 p-4 rounded-lg overflow-x-auto text-sm text-green-400;
   }
 </style>

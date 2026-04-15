@@ -30,6 +30,9 @@ ENV/
 env/
 .ENV
 
+# uv build lock files (created in worktrees)
+uv-*.lock
+
 # IDE
 .vscode/
 .idea/

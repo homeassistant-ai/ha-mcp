@@ -9,19 +9,29 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
 
 
-def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register integration management tools with the MCP server."""
+class IntegrationTools:
+    """Integration management tools for Home Assistant."""
 
-    @mcp.tool(
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_get_integration",
         tags={"Integrations"},
         annotations={
             "idempotentHint": True,
@@ -31,6 +41,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_integration(
+        self,
         entry_id: Annotated[
             str | None,
             Field(
@@ -134,165 +145,12 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
-                try:
-                    result = await client.get_config_entry(entry_id)
-                    resp: dict[str, Any] = {
-                        "success": True,
-                        "entry_id": entry_id,
-                        "entry": result,
-                    }
-
-                    # Optionally fetch options flow schema (logically read-only: start+abort)
-                    if include_schema_bool and result.get("supports_options"):
-                        flow_id = None
-                        try:
-                            flow_result = await client.start_options_flow(entry_id)
-                            flow_id = flow_result.get("flow_id")
-                            flow_type = flow_result.get("type")
-                            if flow_type == "form":
-                                resp["options_schema"] = {
-                                    "flow_type": "form",
-                                    "step_id": flow_result.get("step_id"),
-                                    "data_schema": flow_result.get("data_schema", []),
-                                }
-                            elif flow_type == "menu":
-                                resp["options_schema"] = {
-                                    "flow_type": "menu",
-                                    "step_id": flow_result.get("step_id"),
-                                    "menu_options": flow_result.get("menu_options", []),
-                                }
-                        except Exception as schema_err:
-                            logger.debug(
-                                f"Failed to fetch options schema for {entry_id}: {schema_err}"
-                            )
-                        finally:
-                            if flow_id:
-                                try:
-                                    await client.abort_options_flow(flow_id)
-                                except Exception as abort_err:
-                                    logger.debug(
-                                        f"Failed to abort options flow {flow_id}: {abort_err}"
-                                    )
-
-                    return resp
-                except ToolError:
-                    raise
-                except Exception as e:
-                    error_msg = str(e)
-                    if "404" in error_msg or "not found" in error_msg.lower():
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.RESOURCE_NOT_FOUND,
-                                f"Config entry not found: {entry_id}",
-                                context={"entry_id": entry_id},
-                                suggestions=[
-                                    "Use ha_get_integration() without entry_id to see all config entries",
-                                ],
-                            )
-                        )
-                    raise
+                return await self._get_single_entry(entry_id, include_schema_bool)
 
             # List mode - get all config entries
-            # Use REST API endpoint for config entries
-            response = await client._request("GET", "/config/config_entries/entry")
-
-            if not isinstance(response, list):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Unexpected response format from Home Assistant",
-                        context={"response_type": type(response).__name__},
-                    )
-                )
-
-            entries = response
-
-            # Apply domain filter before formatting
-            if domain:
-                domain_lower = domain.strip().lower()
-                entries = [
-                    e for e in entries if e.get("domain", "").lower() == domain_lower
-                ]
-
-            # Format entries for response
-            formatted_entries = []
-            for entry in entries:
-                formatted_entry = {
-                    "entry_id": entry.get("entry_id"),
-                    "domain": entry.get("domain"),
-                    "title": entry.get("title"),
-                    "state": entry.get("state"),
-                    "source": entry.get("source"),
-                    "supports_options": entry.get("supports_options", False),
-                    "supports_unload": entry.get("supports_unload", False),
-                    "disabled_by": entry.get("disabled_by"),
-                }
-
-                # Include options when requested (for auditing template definitions, etc.)
-                if include_opts:
-                    formatted_entry["options"] = entry.get("options", {})
-
-                # Include pref_disable_new_entities and pref_disable_polling if present
-                if "pref_disable_new_entities" in entry:
-                    formatted_entry["pref_disable_new_entities"] = entry[
-                        "pref_disable_new_entities"
-                    ]
-                if "pref_disable_polling" in entry:
-                    formatted_entry["pref_disable_polling"] = entry[
-                        "pref_disable_polling"
-                    ]
-
-                formatted_entries.append(formatted_entry)
-
-            # Apply search filter if query provided
-            if query and query.strip():
-                matches = []
-                query_lower = query.strip().lower()
-
-                for entry in formatted_entries:
-                    domain_lower = (entry.get("domain") or "").lower()
-                    title_lower = (entry.get("title") or "").lower()
-
-                    # Check for exact substring matches first (highest priority)
-                    if query_lower in domain_lower or query_lower in title_lower:
-                        matches.append((100, entry))
-                    elif not exact_match_bool:
-                        # Fuzzy matching only when exact_match is disabled
-                        from ..utils.fuzzy_search import calculate_ratio
-
-                        domain_score = calculate_ratio(query_lower, domain_lower)
-                        title_score = calculate_ratio(query_lower, title_lower)
-                        best_score = max(domain_score, title_score)
-
-                        if best_score >= 70:  # threshold for fuzzy matches
-                            matches.append((best_score, entry))
-
-                # Sort by score descending
-                matches.sort(key=lambda x: x[0], reverse=True)
-                formatted_entries = [match[1] for match in matches]
-
-            # Group by state for summary (computed before pagination for full picture)
-            state_summary: dict[str, int] = {}
-            for entry in formatted_entries:
-                state = entry.get("state", "unknown")
-                state_summary[state] = state_summary.get(state, 0) + 1
-
-            # Apply pagination
-            total_entries = len(formatted_entries)
-            paginated_entries = formatted_entries[offset_int : offset_int + limit_int]
-
-            result_data: dict[str, Any] = {
-                "success": True,
-                **build_pagination_metadata(
-                    total_entries, offset_int, limit_int, len(paginated_entries)
-                ),
-                "entries": paginated_entries,
-                "state_summary": state_summary,
-                "query": query if query else None,
-            }
-            if domain:
-                result_data["domain_filter"] = domain.strip().lower()
-            return result_data
+            return await self._list_entries(
+                domain, query, include_opts, exact_match_bool, limit_int, offset_int
+            )
 
         except ToolError:
             raise
@@ -307,12 +165,207 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
 
-    @mcp.tool(
+    async def _get_single_entry(
+        self, entry_id: str, include_schema: bool | None
+    ) -> dict[str, Any]:
+        """Fetch a single config entry by ID, optionally including its options schema."""
+        try:
+            result = await self._client.get_config_entry(entry_id)
+            resp: dict[str, Any] = {
+                "success": True,
+                "entry_id": entry_id,
+                "entry": result,
+            }
+
+            # Optionally fetch options flow schema (logically read-only: start+abort)
+            if include_schema and result.get("supports_options"):
+                await self._fetch_options_schema(entry_id, resp)
+
+            return resp
+        except ToolError:
+            raise
+        except Exception as e:
+            error_msg = str(e)
+            if "404" in error_msg or "not found" in error_msg.lower():
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Config entry not found: {entry_id}",
+                        context={"entry_id": entry_id},
+                        suggestions=[
+                            "Use ha_get_integration() without entry_id to see all config entries",
+                        ],
+                    )
+                )
+            raise
+
+    async def _fetch_options_schema(
+        self, entry_id: str, resp: dict[str, Any]
+    ) -> None:
+        """Start an options flow to read the schema, then abort it."""
+        flow_id = None
+        try:
+            flow_result = await self._client.start_options_flow(entry_id)
+            flow_id = flow_result.get("flow_id")
+            flow_type = flow_result.get("type")
+            if flow_type == "form":
+                resp["options_schema"] = {
+                    "flow_type": "form",
+                    "step_id": flow_result.get("step_id"),
+                    "data_schema": flow_result.get("data_schema", []),
+                }
+            elif flow_type == "menu":
+                resp["options_schema"] = {
+                    "flow_type": "menu",
+                    "step_id": flow_result.get("step_id"),
+                    "menu_options": flow_result.get("menu_options", []),
+                }
+        except Exception as schema_err:
+            logger.debug(
+                f"Failed to fetch options schema for {entry_id}: {schema_err}"
+            )
+        finally:
+            if flow_id:
+                try:
+                    await self._client.abort_options_flow(flow_id)
+                except Exception as abort_err:
+                    logger.debug(
+                        f"Failed to abort options flow {flow_id}: {abort_err}"
+                    )
+
+    async def _list_entries(
+        self,
+        domain: str | None,
+        query: str | None,
+        include_opts: bool | None,
+        exact_match: bool | None,
+        limit_int: int,
+        offset_int: int,
+    ) -> dict[str, Any]:
+        """List config entries with optional domain/query filtering and pagination."""
+        # Use REST API endpoint for config entries
+        response = await self._client._request("GET", "/config/config_entries/entry")
+
+        if not isinstance(response, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected response format from Home Assistant",
+                    context={"response_type": type(response).__name__},
+                )
+            )
+
+        entries = response
+
+        # Apply domain filter before formatting
+        if domain:
+            domain_lower = domain.strip().lower()
+            entries = [
+                e for e in entries if e.get("domain", "").lower() == domain_lower
+            ]
+
+        # Format entries for response
+        formatted_entries = [
+            self._format_entry(entry, include_opts) for entry in entries
+        ]
+
+        # Apply search filter if query provided
+        if query and query.strip():
+            formatted_entries = self._filter_by_query(
+                formatted_entries, query, exact_match
+            )
+
+        # Group by state for summary (computed before pagination for full picture)
+        state_summary: dict[str, int] = {}
+        for entry in formatted_entries:
+            state = entry.get("state", "unknown")
+            state_summary[state] = state_summary.get(state, 0) + 1
+
+        # Apply pagination
+        total_entries = len(formatted_entries)
+        paginated_entries = formatted_entries[offset_int : offset_int + limit_int]
+
+        result_data: dict[str, Any] = {
+            "success": True,
+            **build_pagination_metadata(
+                total_entries, offset_int, limit_int, len(paginated_entries)
+            ),
+            "entries": paginated_entries,
+            "state_summary": state_summary,
+            "query": query if query else None,
+        }
+        if domain:
+            result_data["domain_filter"] = domain.strip().lower()
+        return result_data
+
+    @staticmethod
+    def _format_entry(entry: dict[str, Any], include_opts: bool | None) -> dict[str, Any]:
+        """Format a raw config entry into the response shape."""
+        formatted_entry: dict[str, Any] = {
+            "entry_id": entry.get("entry_id"),
+            "domain": entry.get("domain"),
+            "title": entry.get("title"),
+            "state": entry.get("state"),
+            "source": entry.get("source"),
+            "supports_options": entry.get("supports_options", False),
+            "supports_unload": entry.get("supports_unload", False),
+            "disabled_by": entry.get("disabled_by"),
+        }
+
+        # Include options when requested (for auditing template definitions, etc.)
+        if include_opts:
+            formatted_entry["options"] = entry.get("options", {})
+
+        # Include pref_disable_new_entities and pref_disable_polling if present
+        if "pref_disable_new_entities" in entry:
+            formatted_entry["pref_disable_new_entities"] = entry[
+                "pref_disable_new_entities"
+            ]
+        if "pref_disable_polling" in entry:
+            formatted_entry["pref_disable_polling"] = entry[
+                "pref_disable_polling"
+            ]
+
+        return formatted_entry
+
+    @staticmethod
+    def _filter_by_query(
+        entries: list[dict[str, Any]], query: str, exact_match: bool | None
+    ) -> list[dict[str, Any]]:
+        """Filter formatted entries by query string with exact or fuzzy matching."""
+        matches: list[tuple[int, dict[str, Any]]] = []
+        query_lower = query.strip().lower()
+
+        for entry in entries:
+            domain_lower = (entry.get("domain") or "").lower()
+            title_lower = (entry.get("title") or "").lower()
+
+            # Check for exact substring matches first (highest priority)
+            if query_lower in domain_lower or query_lower in title_lower:
+                matches.append((100, entry))
+            elif not exact_match:
+                # Fuzzy matching only when exact_match is disabled
+                from ..utils.fuzzy_search import calculate_ratio
+
+                domain_score = calculate_ratio(query_lower, domain_lower)
+                title_score = calculate_ratio(query_lower, title_lower)
+                best_score = max(domain_score, title_score)
+
+                if best_score >= 70:  # threshold for fuzzy matches
+                    matches.append((best_score, entry))
+
+        # Sort by score descending
+        matches.sort(key=lambda x: x[0], reverse=True)
+        return [match[1] for match in matches]
+
+    @tool(
+        name="ha_set_integration_enabled",
         tags={"Integrations"},
         annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
     )
     @log_tool_usage
     async def ha_set_integration_enabled(
+        self,
         entry_id: Annotated[str, Field(description="Config entry ID")],
         enabled: Annotated[
             bool | str, Field(description="True to enable, False to disable")
@@ -331,7 +384,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "disabled_by": None if enabled_bool else "user",
             }
 
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 error_msg = result.get("error", {})
@@ -371,12 +424,14 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.error(f"Failed to set integration enabled: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
-    @mcp.tool(
+    @tool(
+        name="ha_delete_config_entry",
         tags={"Integrations"},
         annotations={"destructiveHint": True, "title": "Delete Config Entry"},
     )
     @log_tool_usage
     async def ha_delete_config_entry(
+        self,
         entry_id: Annotated[str, Field(description="Config entry ID")],
         confirm: Annotated[
             bool | str, Field(description="Must be True to confirm deletion")
@@ -401,7 +456,7 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            result = await client.delete_config_entry(entry_id)
+            result = await self._client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)
 
             return {
@@ -421,3 +476,8 @@ def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except Exception as e:
             logger.error(f"Failed to delete config entry: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})
+
+
+def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register integration management tools with the MCP server."""
+    register_tool_methods(mcp, IntegrationTools(client))
