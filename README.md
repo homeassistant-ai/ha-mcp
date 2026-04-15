@@ -174,7 +174,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_search_entities` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |

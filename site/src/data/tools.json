@@ -2432,12 +2432,12 @@
   },
   {
     "name": "ha_config_set_yaml",
-    "title": "Set YAML Config",
-    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nPreserves YAML comments on sibling keys, file-level comments,\nand Home Assistant tags (!include, !secret, etc.). The 'replace' action\nsubstitutes the subtree as-is, so comments from the old subtree\ndo not carry over.",
+    "title": "Raw YAML Config Edit",
+    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_set_config_entry_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- Input helpers -> ha_config_set_helper\n- Groups, min/max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x -> ha_set_config_entry_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nCheck ``post_action`` in the response: most keys need a full HA\nrestart; template, mqtt, and group support reload. Preserves YAML\ncomments and HA tags (``!include``, ``!secret``) on round-trip;\n``replace`` swaps the subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
-          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify (e.g., 'template', 'sensor', 'input_boolean'). Only whitelisted keys are allowed.\")]"
+          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify. Only a narrow allowlist of YAML-only integration keys is accepted (e.g., 'command_line', 'rest', 'shell_command', 'notify'). Not for template sensors (use ha_set_config_entry_helper), automations, scripts, scenes, or input_* helpers — those have dedicated tools.\")]"
         },
         "action": {
           "type": "Annotated[str, Field(description=\"Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely).\")]"
@@ -2465,7 +2465,8 @@
       "idempotentHint": false
     },
     "tags": [
-      "System"
+      "System",
+      "beta"
     ],
     "source_file": "tools_yaml_config.py"
   },
