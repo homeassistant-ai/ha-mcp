@@ -136,7 +136,7 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
-        return response
+        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
     return {"success": True, "addon": response["result"]}
 
 
@@ -154,7 +154,7 @@ async def list_addons(
     """
     response = await _supervisor_api_call(client, "/addons")
     if not response.get("success"):
-        return response
+        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
 
     data = response["result"]
     addons = data.get("addons", [])
@@ -1108,6 +1108,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             config_data["watchdog"] = watchdog
 
         # Validate mode selection
+        if path is not None and path == "":
+            raise_tool_error(
+                create_validation_error(
+                    "'path' must not be empty. Provide a non-empty path for proxy mode "
+                    "(e.g., '/api/events') or omit it to use config mode.",
+                    parameter="path",
+                )
+            )
         if path is not None and config_data:
             raise_tool_error(
                 create_validation_error(
