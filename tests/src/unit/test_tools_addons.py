@@ -973,6 +973,41 @@ class TestManageAddon:
         assert post_call[1]["data"]["options"]["log_level"] == "debug"
 
     @pytest.mark.asyncio
+    async def test_config_mode_options_nested_deep_merge(self, manage_addon_tool):
+        """Deep merge preserves sibling fields in nested option dicts (Bug C fix)."""
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {
+                            "ssh": {"sftp": False, "authorized_keys": ["key1"]},
+                            "log_level": "info",
+                        },
+                        "schema": [
+                            {"name": "ssh", "type": "schema"},
+                            {"name": "log_level", "required": False, "type": "str"},
+                        ],
+                    },
+                }
+            return {"success": True, "result": {}}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            side_effect=mock_supervisor_api,
+        ) as mock_sup:
+            result = await manage_addon_tool(slug="test_addon", options={"ssh": {"sftp": True}})
+
+        assert result["status"] == "pending_restart"
+        post_call = [c for c in mock_sup.call_args_list if "method" in c[1]][-1]
+        merged = post_call[1]["data"]["options"]
+        # sftp overridden, authorized_keys preserved, top-level log_level preserved
+        assert merged["ssh"]["sftp"] is True
+        assert merged["ssh"]["authorized_keys"] == ["key1"]
+        assert merged["log_level"] == "info"
+
+    @pytest.mark.asyncio
     async def test_config_mode_options_unknown_fields_warned(self, manage_addon_tool):
         """Unknown option fields are removed pre-write and reported in ignored_fields (Bug B fix)."""
 
