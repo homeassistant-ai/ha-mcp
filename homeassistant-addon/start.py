@@ -6,9 +6,11 @@ import os
 import re
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
@@ -97,6 +99,74 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
+def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> None:
+    """POST the full addon options dict to the Supervisor.
+
+    The endpoint is a full-replace validated against the addon schema, so
+    callers must pass the complete options dict (not a partial patch).
+
+    Used after auto-generating the secret path so other addons (the
+    webhook proxy) can read it from `GET /addons/{slug}/info → options`
+    instead of scraping it from addon logs (#941).
+
+    Raises the underlying `urllib.error.HTTPError` / `URLError` / `OSError`
+    on failure — callers decide how loudly to surface the problem.
+    """
+    payload = json.dumps({"options": options}).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {supervisor_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def maybe_persist_secret_path(
+    config: dict[str, Any], secret_path: str, supervisor_token: str
+) -> None:
+    """Persist `secret_path` into the addon's stored options when needed.
+
+    Only calls `persist_addon_options` when all of these hold:
+    - `config` is non-empty. If `/data/options.json` was missing or failed
+      to parse, `config` is `{}` and the addon is running off hardcoded
+      defaults. Sending a bare `{"secret_path": ...}` in that state would
+      be rejected by Supervisor's schema validation (missing required
+      `backup_hint`), producing a second misleading error line on top of
+      the "Failed to read config" we already logged.
+    - The resolved `secret_path` differs from the stored one. Otherwise
+      the write is a pure no-op and we'd just add noise on every restart.
+
+    Errors from the POST are caught and logged with an actionable recovery
+    message — the addon keeps running, but the user is told exactly which
+    value to paste into the Configuration tab if they hit it.
+    """
+    if not config:
+        return
+    if secret_path == config.get("secret_path", ""):
+        return
+    try:
+        persist_addon_options({**config, "secret_path": secret_path}, supervisor_token)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        detail = (
+            f"HTTP {e.code}: {e.reason}"
+            if isinstance(e, urllib.error.HTTPError)
+            else str(e)
+        )
+        log_error(
+            f"Failed to persist secret_path to addon options ({detail}). "
+            f"This addon will still run with secret_path={secret_path!r}, "
+            "but other addons (e.g. the webhook proxy) cannot auto-discover "
+            "it via Supervisor. Workaround: open this addon's Configuration "
+            "tab and paste the secret_path above into the 'Secret path override' "
+            "field, then save."
+        )
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -104,6 +174,7 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
@@ -128,8 +199,21 @@ def main() -> int:
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
+    # Validate Supervisor token (needed for both ha-mcp auth below and the
+    # options-persist call right after secret path resolution)
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
+        return 1
+
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
+
+    # Persist secret path back to addon options so other addons (e.g. the
+    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
+    # instead of scraping it from this addon's logs (#941). Details and
+    # the skip/retry rules live in maybe_persist_secret_path().
+    maybe_persist_secret_path(config, secret_path, supervisor_token)
 
     log_info(f"Backup hint mode: {backup_hint}")
 
@@ -140,12 +224,6 @@ def main() -> int:
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
-
-    # Validate Supervisor token
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
-        return 1
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 

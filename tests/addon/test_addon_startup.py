@@ -84,6 +84,191 @@ class TestSecretPathValidation:
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
         assert self.addon._is_valid_secret_path("") is False
 
+
+class TestPersistAddonOptions:
+    """Unit tests for persisting addon options to Supervisor (#941)."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_sends_full_options_dict_as_post(self, monkeypatch):
+        """Sends POST /addons/self/options with body {"options": <full dict>}."""
+        captured: dict = {}
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b""
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["headers"] = dict(req.header_items())
+            captured["body"] = req.data
+            return FakeResp()
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+
+        options = {
+            "backup_hint": "normal",
+            "enable_skills": True,
+            "secret_path": "/private_abc12345",
+        }
+        # Returns None on success — helper communicates failure via exceptions.
+        assert self.addon.persist_addon_options(options, "test-token") is None
+        assert captured["url"] == "http://supervisor/addons/self/options"
+        assert captured["method"] == "POST"
+        assert captured["headers"]["Authorization"] == "Bearer test-token"
+        assert captured["headers"]["Content-type"] == "application/json"
+        assert json.loads(captured["body"]) == {"options": options}
+
+    def test_http_error_propagates(self, monkeypatch):
+        """Validation failures from Supervisor propagate to the caller.
+
+        Silent suppression here would hide the exact failure this PR exists
+        to fix: the webhook proxy unable to discover the secret path. Main()
+        must see the exception so it can log an actionable recovery message.
+        """
+        import io
+        import urllib.error
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                400,
+                "Bad Request",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=io.BytesIO(b'{"result":"error","message":"invalid options"}'),
+            )
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+        with pytest.raises(urllib.error.HTTPError):
+            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+
+    def test_connection_error_propagates(self, monkeypatch):
+        """Network failures propagate to the caller — no silent swallowing."""
+        import urllib.error
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
+        with pytest.raises(urllib.error.URLError):
+            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+
+
+class TestMaybePersistSecretPath:
+    """Tests for the gate-and-recover wrapper called from main() (#941)."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_skips_when_config_is_empty(self, monkeypatch):
+        """If /data/options.json was missing/corrupt, don't try to persist.
+
+        Sending a bare `{"secret_path": ...}` without required fields would
+        trip schema validation on the Supervisor side and produce a second,
+        misleading error line on top of the "Failed to read config" we
+        already logged upstream.
+        """
+        calls: list = []
+        monkeypatch.setattr(
+            self.addon,
+            "persist_addon_options",
+            lambda *args, **kwargs: calls.append(args),
+        )
+        self.addon.maybe_persist_secret_path({}, "/private_new", "test-token")
+        assert calls == []
+
+    def test_skips_when_stored_path_matches(self, monkeypatch):
+        """No-op when Supervisor already has the right value — avoids noise on every restart."""
+        calls: list = []
+        monkeypatch.setattr(
+            self.addon,
+            "persist_addon_options",
+            lambda *args, **kwargs: calls.append(args),
+        )
+        config = {"backup_hint": "normal", "secret_path": "/private_same"}
+        self.addon.maybe_persist_secret_path(config, "/private_same", "test-token")
+        assert calls == []
+
+    def test_persists_with_full_config_merged(self, monkeypatch):
+        """When the path changes, POSTs `{**config, "secret_path": new}`."""
+        captured: list = []
+
+        def fake_persist(options, token):
+            captured.append((options, token))
+
+        monkeypatch.setattr(self.addon, "persist_addon_options", fake_persist)
+        config = {
+            "backup_hint": "normal",
+            "enable_skills": True,
+            "secret_path": "/private_old",
+        }
+        self.addon.maybe_persist_secret_path(config, "/private_new", "test-token")
+        assert captured == [
+            (
+                {
+                    "backup_hint": "normal",
+                    "enable_skills": True,
+                    "secret_path": "/private_new",
+                },
+                "test-token",
+            )
+        ]
+
+    def test_catches_http_error_and_logs_actionable_message(self, monkeypatch, capfd):
+        """HTTPError from Supervisor must not escape — the addon must keep starting — but the log line must name the path so the user can recover manually."""
+        import urllib.error
+
+        def raising_persist(options, token):
+            raise urllib.error.HTTPError(
+                "http://supervisor/addons/self/options",
+                400,
+                "Bad Request",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=None,
+            )
+
+        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
+        # Should not raise.
+        self.addon.maybe_persist_secret_path(
+            {"backup_hint": "normal", "secret_path": "/private_old"},
+            "/private_new",
+            "test-token",
+        )
+        err = capfd.readouterr().err
+        assert "Failed to persist secret_path" in err
+        assert "HTTP 400" in err
+        assert "/private_new" in err  # user-facing recovery value
+        assert "Secret path override" in err  # points at the config field
+
+    def test_catches_network_error_and_logs(self, monkeypatch, capfd):
+        """URLError / timeout / OSError all caught the same way."""
+        import urllib.error
+
+        def raising_persist(options, token):
+            raise urllib.error.URLError("supervisor unreachable")
+
+        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
+        self.addon.maybe_persist_secret_path(
+            {"backup_hint": "normal", "secret_path": "/private_old"},
+            "/private_new",
+            "test-token",
+        )
+        err = capfd.readouterr().err
+        assert "Failed to persist secret_path" in err
+        assert "supervisor unreachable" in err
+        assert "/private_new" in err
+
+
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"
 
