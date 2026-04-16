@@ -141,3 +141,43 @@ class TestGetAddonLog:
         assert exc_info.value.status_code == 404
         assert "404" in str(exc_info.value)
         assert "not found" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_traversal_slug(self, mock_client):
+        """Slugs with path separators must be rejected before any HTTP call."""
+        mock_client._request_text = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_log("../../config")
+
+        assert exc_info.value.status_code == 400
+        assert "Invalid add-on slug" in str(exc_info.value)
+        mock_client._request_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_slug(self, mock_client):
+        """Empty slug must be rejected; empty f-string would yield /hassio/addons//logs."""
+        mock_client._request_text = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_log("")
+
+        assert exc_info.value.status_code == 400
+        assert "Invalid add-on slug" in str(exc_info.value)
+        mock_client._request_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "slug",
+        ["core_mosquitto", "81f33d0f_ha_mcp_dev", "a0d7b954_ssh", "some-addon-123"],
+    )
+    async def test_accepts_realistic_slugs(self, mock_client, slug):
+        """Realistic Supervisor slugs (lowercase alnum + _ / -) must pass validation."""
+        mock_client._request_text = AsyncMock(return_value="ok\n")
+
+        result = await mock_client.get_addon_log(slug)
+
+        assert result == "ok\n"
+        mock_client._request_text.assert_called_once_with(
+            "GET", f"/hassio/addons/{slug}/logs"
+        )

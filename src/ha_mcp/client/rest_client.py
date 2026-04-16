@@ -13,6 +13,10 @@ from ..config import get_global_settings
 
 logger = logging.getLogger(__name__)
 
+# Home Assistant add-on slugs are lowercase alphanumerics plus ``_`` and ``-``.
+# Validated on input to prevent path traversal via Supervisor proxy endpoints.
+_ALLOWED_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -422,7 +426,16 @@ class HomeAssistantClient:
 
         Uses ``/hassio/addons/{slug}/logs`` which returns ``text/plain`` and
         therefore cannot be retrieved via ``_request`` (which assumes JSON).
+
+        The ``slug`` is validated against Home Assistant's add-on slug format
+        (lowercase alphanumerics plus ``_`` / ``-``) to prevent path traversal
+        into the Supervisor proxy (e.g. ``slug="../../config"``).
         """
+        if not slug or not all(c in _ALLOWED_SLUG_CHARS for c in slug):
+            raise HomeAssistantAPIError(
+                f"Invalid add-on slug: {slug!r}",
+                status_code=400,
+            )
         logger.debug("Fetching supervisor log for add-on: %s", slug)
         return await self._request_text("GET", f"/hassio/addons/{slug}/logs")
 
