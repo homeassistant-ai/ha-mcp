@@ -143,12 +143,23 @@ class TestGetAddonLog:
         assert "not found" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_rejects_path_traversal_slug(self, mock_client):
-        """Slugs with path separators must be rejected before any HTTP call."""
+    @pytest.mark.parametrize(
+        "bad_slug",
+        [
+            "../../config",
+            "my/addon",
+            "foo\\bar",
+            "slug with space",
+            "UPPER_case",
+            "has.dot",
+        ],
+    )
+    async def test_rejects_invalid_slug(self, mock_client, bad_slug):
+        """Slugs outside the allowed charset must be rejected before any HTTP call."""
         mock_client._request_text = AsyncMock()
 
         with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.get_addon_log("../../config")
+            await mock_client.get_addon_log(bad_slug)
 
         assert exc_info.value.status_code == 400
         assert "Invalid add-on slug" in str(exc_info.value)
