@@ -1124,6 +1124,15 @@ class TestManageAddon:
         assert "path" in error["error"]["message"] or "config" in error["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_path_empty_string_raises(self, manage_addon_tool):
+        """Empty string path is explicitly rejected with VALIDATION_FAILED."""
+        with pytest.raises(ToolError) as exc_info:
+            await manage_addon_tool(slug="test_addon", path="")
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "path" in error["error"]["message"]
+
+    @pytest.mark.asyncio
     async def test_proxy_params_in_config_mode_raise(self, manage_addon_tool):
         """Proxy-only params (e.g. method) combined with config params raise ToolError."""
         with pytest.raises(ToolError) as exc_info:
