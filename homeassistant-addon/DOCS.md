@@ -334,8 +334,8 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
 ### Add-ons
-- `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
 - `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
+- `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
 
 ### Areas & Floors
 - `ha_config_list_areas` — List all Home Assistant areas (rooms).

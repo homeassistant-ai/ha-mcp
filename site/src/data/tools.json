@@ -1,68 +1,8 @@
 [
   {
-    "name": "ha_call_addon_api",
-    "title": "Call Add-on API",
-    "description": "Call an add-on's HTTP or WebSocket API.\n\nSends requests directly to add-on containers. Use `websocket=true` for\nstreaming endpoints (e.g., ESPHome compile/validate). Use `port` to bypass\nNginx IP restrictions on community add-ons. Use ha_get_addon(slug=\"...\")\nto discover available ports and endpoints.\n\n**Examples:**\n- HTTP: ha_call_addon_api(slug=\"...\", path=\"/api/events\")\n- Direct port: ha_call_addon_api(slug=\"...\", path=\"/flows\", port=1880)\n- WebSocket: ha_call_addon_api(slug=\"...\", path=\"/validate\", port=6052, websocket=true, body={\"type\": \"spawn\", \"configuration\": \"device.yaml\"})",
-    "inputSchema": {
-      "properties": {
-        "slug": {
-          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). Use ha_get_addon() to find installed add-on slugs.\")]"
-        },
-        "path": {
-          "type": "Annotated[str, Field(description=\"API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats').\")]"
-        },
-        "method": {
-          "type": "Annotated[str, Field(description='HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.', default='GET')]",
-          "default": "GET"
-        },
-        "body": {
-          "type": "Annotated[dict[str, Any] | str | None, Field(description='Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.', default=None)]",
-          "default": null
-        },
-        "debug": {
-          "type": "Annotated[bool, Field(description='Include diagnostic info (request URL, headers sent, response headers). Default: false.', default=False)]",
-          "default": false
-        },
-        "port": {
-          "type": "Annotated[int | None, Field(description=\"Connect to this port instead of the Ingress port. Use ha_get_addon(slug='...') to find available ports.\", default=None)]",
-          "default": null
-        },
-        "offset": {
-          "type": "Annotated[int, Field(description='HTTP only. Skip this many items in a JSON array response. Default: 0.', default=0)]",
-          "default": 0
-        },
-        "limit": {
-          "type": "Annotated[int | None, Field(description='HTTP only. Return at most this many items from a JSON array response (e.g., limit=20).', default=None)]",
-          "default": null
-        },
-        "websocket": {
-          "type": "Annotated[bool, Field(description=\"Use WebSocket instead of HTTP. For streaming endpoints (e.g., ESPHome /compile, /validate). Sends 'body' as initial message, collects responses. Default: false.\", default=False)]",
-          "default": false
-        },
-        "wait_for_close": {
-          "type": "Annotated[bool, Field(description='WebSocket only. True: wait for server to close (for compile/validate). False: return after first response batch (for quick commands). Default: true.', default=True)]",
-          "default": true
-        }
-      },
-      "required": [
-        "slug",
-        "path"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "readOnlyHint": false
-    },
-    "tags": [
-      "Add-ons"
-    ],
-    "source_file": "tools_addons.py"
-  },
-  {
     "name": "ha_get_addon",
     "title": "Get Add-ons",
-    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, and state.\nUseful for discovering what APIs an add-on exposes before calling ha_call_addon_api.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"a0d7b954_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
+    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, and state.\nUseful for discovering what APIs an add-on exposes before calling ha_manage_addon.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"a0d7b954_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
     "inputSchema": {
       "properties": {
         "source": {
@@ -90,6 +30,86 @@
     "annotations": {
       "idempotentHint": true,
       "readOnlyHint": true
+    },
+    "tags": [
+      "Add-ons"
+    ],
+    "source_file": "tools_addons.py"
+  },
+  {
+    "name": "ha_manage_addon",
+    "title": "Manage Add-on",
+    "description": "Manage a Home Assistant add-on — update its configuration or call its internal API.\n\nTwo mutually exclusive operating modes:\n\n**Config mode** (when any of options/network/boot/auto_update/watchdog is provided):\nUpdates the add-on's Supervisor configuration via POST /addons/{slug}/options.\nAll config parameters are optional; only provided fields are updated (partial update).\n\n**Proxy mode** (when path is provided):\nSends requests directly to the add-on container's own web API via HTTP or WebSocket.\nUse ha_get_addon(slug=\"...\") to discover available ports and endpoints.\n\n**WARNING:** Setting boot=\"auto\"/\"manual\" will fail for add-ons with a fixed boot\nmode (boot_config=MANUAL_ONLY). The Supervisor returns an error in this case.\n\n**NOTE:** This tool only works with Home Assistant OS or Supervised installations.\n\n**Examples:**\n- Set kiosk URL option: ha_manage_addon(slug=\"...\", options={\"FF_OPEN_URL\": \"https://example.com\", \"FF_KIOSK\": true})\n- Disable auto-update: ha_manage_addon(slug=\"...\", auto_update=False)\n- Change host port: ha_manage_addon(slug=\"...\", network={\"5800/tcp\": 8082})\n- Set boot mode: ha_manage_addon(slug=\"...\", boot=\"manual\")\n- Call HTTP API: ha_manage_addon(slug=\"...\", path=\"/api/events\")\n- Direct port: ha_manage_addon(slug=\"...\", path=\"/flows\", port=1880)\n- WebSocket: ha_manage_addon(slug=\"...\", path=\"/validate\", port=6052, websocket=True, body={\"type\": \"spawn\", \"configuration\": \"device.yaml\"})",
+    "inputSchema": {
+      "properties": {
+        "slug": {
+          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). Use ha_get_addon() to find installed add-on slugs.\")]"
+        },
+        "path": {
+          "type": "Annotated[str | None, Field(description=\"Proxy mode: API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats'). Required for proxy mode; mutually exclusive with config parameters.\", default=None)]",
+          "default": null
+        },
+        "method": {
+          "type": "Annotated[str, Field(description='Proxy mode only. HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.', default='GET')]",
+          "default": "GET"
+        },
+        "body": {
+          "type": "Annotated[dict[str, Any] | str | None, Field(description='Proxy mode only. Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.', default=None)]",
+          "default": null
+        },
+        "debug": {
+          "type": "Annotated[bool, Field(description='Proxy mode only. Include diagnostic info (request URL, headers sent, response headers). Default: false.', default=False)]",
+          "default": false
+        },
+        "port": {
+          "type": "Annotated[int | None, Field(description=\"Proxy mode only. Connect to this port instead of the Ingress port. Use ha_get_addon(slug='...') to find available ports.\", default=None)]",
+          "default": null
+        },
+        "offset": {
+          "type": "Annotated[int, Field(description='Proxy mode only. HTTP: skip this many items in a JSON array response. Default: 0.', default=0)]",
+          "default": 0
+        },
+        "limit": {
+          "type": "Annotated[int | None, Field(description='Proxy mode only. HTTP: return at most this many items from a JSON array response.', default=None)]",
+          "default": null
+        },
+        "websocket": {
+          "type": "Annotated[bool, Field(description=\"Proxy mode only. Use WebSocket instead of HTTP. For streaming endpoints (e.g., ESPHome /compile, /validate). Sends 'body' as initial message, collects responses. Default: false.\", default=False)]",
+          "default": false
+        },
+        "wait_for_close": {
+          "type": "Annotated[bool, Field(description='Proxy mode only. WebSocket: True: wait for server to close (for compile/validate). False: return after first response batch (for quick commands). Default: true.', default=True)]",
+          "default": true
+        },
+        "options": {
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Add-on configuration values (the 'Configuration' tab in the UI).\", default=None)]",
+          "default": null
+        },
+        "network": {
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).\", default=None)]",
+          "default": null
+        },
+        "boot": {
+          "type": "Annotated[str | None, Field(description=\"Config mode: Boot strategy — 'auto' (start with HA) or 'manual'. NOTE: some add-ons lock their boot mode and will return an error if changed.\", default=None)]",
+          "default": null
+        },
+        "auto_update": {
+          "type": "Annotated[bool | None, Field(description='Config mode: Enable or disable automatic updates for this add-on.', default=None)]",
+          "default": null
+        },
+        "watchdog": {
+          "type": "Annotated[bool | None, Field(description='Config mode: Enable or disable Supervisor watchdog (auto-restart on crash).', default=None)]",
+          "default": null
+        }
+      },
+      "required": [
+        "slug"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false
     },
     "tags": [
       "Add-ons"
