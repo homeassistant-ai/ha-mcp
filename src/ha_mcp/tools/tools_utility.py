@@ -182,7 +182,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "The 'slug' parameter is required for source='supervisor'",
                     suggestions=[
                         "Provide the add-on slug, e.g. slug='core_mosquitto'",
-                        "Use ha_list_addons() to find available add-on slugs",
+                        "Use ha_get_addon() to find available add-on slugs",
                     ],
                 )
             )
@@ -519,49 +519,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
 
         try:
-            result = await client.send_websocket_message(
-                {
-                    "type": "supervisor/api",
-                    "endpoint": f"/addons/{slug}/logs",
-                    "method": "get",
-                }
-            )
-
-            if not result.get("success"):
-                error_msg = str(result.get("error", ""))
-                suggestions = [
-                    f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_list_addons() to find available add-on slugs",
-                ]
-                if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                    suggestions.insert(
-                        0,
-                        "Supervisor API not available - requires HA OS or Supervised install",
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get(
-                            "error", f"Failed to retrieve logs for add-on '{slug}'"
-                        ),
-                        context={"slug": slug},
-                        suggestions=suggestions,
-                    )
-                )
-
-            # Result may be a string (log text) or dict with result key
-            log_text = result.get("result", "")
-            if isinstance(log_text, dict):
-                if "data" in log_text:
-                    log_text = log_text["data"]
-                else:
-                    logger.warning(
-                        "Supervisor log for '%s' returned unexpected dict structure",
-                        slug,
-                    )
-                    log_text = ""
-            if not isinstance(log_text, str):
-                log_text = str(log_text)
+            # The Supervisor ``/addons/{slug}/logs`` endpoint returns ``text/plain``
+            # and must therefore be fetched over the REST proxy, not the
+            # ``supervisor/api`` WebSocket command (which forces JSON parsing in
+            # the HA Core proxy and fails with an empty error message).
+            log_text = await client.get_addon_log(slug)
 
             lines = log_text.splitlines() if log_text else []
 
@@ -600,14 +562,20 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             TimeoutError,
             OSError,
         ) as e:
+            suggestions = [
+                f"Verify add-on slug '{slug}' is correct",
+                "Use ha_get_addon() to find available add-on slugs",
+                "Ensure Supervisor is available (HA OS or Supervised install)",
+            ]
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                suggestions.insert(
+                    0,
+                    "Add-on not found or Supervisor API not available - requires HA OS or Supervised install",
+                )
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
-                suggestions=[
-                    f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_list_addons() to find available add-on slugs",
-                    "Ensure Supervisor is available (HA OS or Supervised install)",
-                ],
+                suggestions=suggestions,
             )
 
     @mcp.tool(
