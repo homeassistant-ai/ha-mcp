@@ -562,16 +562,18 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             TimeoutError,
             OSError,
         ) as e:
-            suggestions = [
-                f"Verify add-on slug '{slug}' is correct",
-                "Use ha_get_addon() to find available add-on slugs",
-                "Ensure Supervisor is available (HA OS or Supervised install)",
-            ]
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
-                suggestions.insert(
-                    0,
+                suggestions = [
                     "Add-on not found or Supervisor API not available - requires HA OS or Supervised install",
-                )
+                    f"Verify add-on slug '{slug}' is correct",
+                    "Use ha_get_addon() to find available add-on slugs",
+                ]
+            else:
+                suggestions = [
+                    f"Verify add-on slug '{slug}' is correct",
+                    "Use ha_get_addon() to find available add-on slugs",
+                    "Ensure Supervisor is available (HA OS or Supervised install)",
+                ]
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
