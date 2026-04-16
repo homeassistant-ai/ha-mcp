@@ -47,6 +47,22 @@ _MAX_WS_MESSAGES = 1000
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
+def _merge_options(base: dict, override: dict) -> dict:
+    """Merge caller options into current options with one-level deep merge.
+
+    Top-level scalar values are replaced. Top-level dict values are merged
+    one level deep so callers can update a single nested field (e.g.
+    ``{"ssh": {"sftp": True}}``) without losing sibling fields.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -1072,7 +1088,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
         Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
-        All config parameters are optional; only provided fields are updated (partial update).
+        All config parameters are optional; only provided fields are updated — current values
+        are fetched and merged automatically (including one level of nested dicts).
 
         **Proxy mode** (when path is provided):
         Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
@@ -1184,7 +1201,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 # so callers must always submit all required fields — merging makes that
                 # transparent.
                 current_options: dict = addon_info.get("options") or {}
-                merged_options = {**current_options, **config_data["options"]}
+                merged_options = _merge_options(current_options, config_data["options"])
 
                 # Pre-write schema check: identify fields not in the add-on's schema.
                 # Supervisor silently drops unknown fields on write; surfacing them here
