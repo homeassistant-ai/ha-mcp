@@ -134,27 +134,58 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
 
 # Check inline review comments (specific to code lines)
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, author: .author.login, created_at: .created_at}'
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {id, path, line, author: .user.login, created_at}'
 
 # Check for unresolved review threads
 gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
 ```
 
 **Resolve threads:**
-After addressing a comment, **ALWAYS post a comment explaining the resolution, then mark the thread as resolved**:
+After addressing a comment, **ALWAYS post a comment explaining the resolution, then mark the thread as resolved**.
+
+When there are inline review comments, do **both**: reply on each inline thread *and* post a PR-level review comment summarising the changes. The inline replies document the per-thread resolution where future readers expect it; the PR-level comment gives a single summary for anyone scanning the PR timeline.
+
+**Always resolve the inline thread after replying**, unless the reply is asking the reviewer for further clarification (in which case leave the thread open so they can respond). An unresolved thread signals "still needs attention"; don't leave resolved work in that state. Unresolved threads also **block the PR from merging even after a maintainer has approved it** — the merge button stays disabled until every thread is marked resolved.
 
 ```bash
-# 1. FIRST: Post comment explaining what was done
-gh pr review <PR> --comment --body "✅ Fixed in [commit]. [Explanation]"
+# 1a. Reply on each inline thread via the /replies sub-endpoint.
+#     <comment-id> is the numeric ID from:
+#       gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[].id'
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<comment-id>/replies \
+  -f body="✅ Fixed in [commit]. [Explanation]"
 # OR for dismissed suggestions:
-gh pr review <PR> --comment --body "📝 Not addressing because [reason]."
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<comment-id>/replies \
+  -f body="📝 Not addressing because [reason]."
 
-# 2. THEN: Resolve the thread
+# 1b. Also post a PR-level review comment summarising the batch of changes:
+gh pr review <PR> --comment --body "✅ Addressed review feedback in [commit]. [Summary]"
+
+# If there are no inline comments (just a general review), the PR-level
+# review comment alone is sufficient.
+
+# 2. THEN: Resolve each thread. The GraphQL input field is `threadId` — NOT
+#    `pullRequestReviewThreadId`, which GitHub rejects. The thread node ID
+#    (PRRT_...) comes from a reviewThreads query; match databaseId against
+#    the inline-comment numeric ID to pick the right one:
+gh api graphql -f query='
+query {
+  repository(owner: "homeassistant-ai", name: "ha-mcp") {
+    pullRequest(number: <PR>) {
+      reviewThreads(first: 100) {
+        nodes {
+          id isResolved path line
+          comments(first: 1) { nodes { databaseId } }
+        }
+      }
+    }
+  }
+}'
+
 gh api graphql -f query='mutation($threadId: ID!) {
-  resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+  resolveReviewThread(input: {threadId: $threadId}) {
     thread { id isResolved }
   }
-}' -f threadId=<thread_id>
+}' -f threadId=<PRRT_...>
 ```
 
 **Why comment first:**
