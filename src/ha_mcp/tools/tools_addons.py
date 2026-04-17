@@ -47,6 +47,22 @@ _MAX_WS_MESSAGES = 1000
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
+def _merge_options(base: dict, override: dict) -> dict:
+    """Merge caller options into current options with one-level deep merge.
+
+    Top-level scalar values are replaced. Top-level dict values are merged
+    one level deep so callers can update a single nested field (e.g.
+    ``{"ssh": {"sftp": True}}``) without losing sibling fields.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -136,7 +152,7 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
-        return response
+        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
     return {"success": True, "addon": response["result"]}
 
 
@@ -154,7 +170,7 @@ async def list_addons(
     """
     response = await _supervisor_api_call(client, "/addons")
     if not response.get("success"):
-        return response
+        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
 
     data = response["result"]
     addons = data.get("addons", [])
@@ -822,7 +838,7 @@ async def _call_addon_api(
                 "This add-on is blocking direct connections (likely Nginx IP restriction). "
                 "Try using the 'port' parameter to connect to the add-on's direct access port "
                 "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
-                "Example: ha_call_addon_api(slug='...', path='...', port=<direct_port>). "
+                "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
                 "The user may need to change add-on settings in the HA UI and restart the add-on."
             )
 
@@ -898,7 +914,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **SINGLE ADD-ON (slug provided):**
         Returns comprehensive details including ingress entry, ports, options, and state.
-        Useful for discovering what APIs an add-on exposes before calling ha_call_addon_api.
+        Useful for discovering what APIs an add-on exposes before calling ha_manage_addon.
 
         **INSTALLED ADD-ONS (source='installed'):**
         Returns add-ons with version, state (started/stopped), and update availability.
@@ -949,11 +965,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
-            "title": "Call Add-on API",
+            "title": "Manage Add-on",
         },
     )
     @log_tool_usage
-    async def ha_call_addon_api(
+    async def ha_manage_addon(
         slug: Annotated[
             str,
             Field(
@@ -962,36 +978,39 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ],
         path: Annotated[
-            str,
+            str | None,
             Field(
-                description="API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats').",
+                description="Proxy mode: API path relative to the add-on root "
+                "(e.g., '/flows', '/api/events', '/api/stats'). "
+                "Required for proxy mode; mutually exclusive with config parameters.",
+                default=None,
             ),
-        ],
+        ] = None,
         method: Annotated[
             str,
             Field(
-                description="HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.",
+                description="Proxy mode only. HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.",
                 default="GET",
             ),
         ] = "GET",
         body: Annotated[
             dict[str, Any] | str | None,
             Field(
-                description="Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.",
+                description="Proxy mode only. Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.",
                 default=None,
             ),
         ] = None,
         debug: Annotated[
             bool,
             Field(
-                description="Include diagnostic info (request URL, headers sent, response headers). Default: false.",
+                description="Proxy mode only. Include diagnostic info (request URL, headers sent, response headers). Default: false.",
                 default=False,
             ),
         ] = False,
         port: Annotated[
             int | None,
             Field(
-                description="Connect to this port instead of the Ingress port. "
+                description="Proxy mode only. Connect to this port instead of the Ingress port. "
                 "Use ha_get_addon(slug='...') to find available ports.",
                 default=None,
             ),
@@ -999,21 +1018,21 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         offset: Annotated[
             int,
             Field(
-                description="HTTP only. Skip this many items in a JSON array response. Default: 0.",
+                description="Proxy mode only. HTTP: skip this many items in a JSON array response. Default: 0.",
                 default=0,
             ),
         ] = 0,
         limit: Annotated[
             int | None,
             Field(
-                description="HTTP only. Return at most this many items from a JSON array response (e.g., limit=20).",
+                description="Proxy mode only. HTTP: return at most this many items from a JSON array response.",
                 default=None,
             ),
         ] = None,
         websocket: Annotated[
             bool,
             Field(
-                description="Use WebSocket instead of HTTP. For streaming endpoints "
+                description="Proxy mode only. Use WebSocket instead of HTTP. For streaming endpoints "
                 "(e.g., ESPHome /compile, /validate). Sends 'body' as initial message, "
                 "collects responses. Default: false.",
                 default=False,
@@ -1022,25 +1041,233 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         wait_for_close: Annotated[
             bool,
             Field(
-                description="WebSocket only. True: wait for server to close (for compile/validate). "
+                description="Proxy mode only. WebSocket: True: wait for server to close (for compile/validate). "
                 "False: return after first response batch (for quick commands). Default: true.",
                 default=True,
             ),
         ] = True,
+        options: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description="Config mode: Add-on configuration values (the 'Configuration' tab in the UI).",
+                default=None,
+            ),
+        ] = None,
+        network: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description="Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).",
+                default=None,
+            ),
+        ] = None,
+        boot: Annotated[
+            str | None,
+            Field(
+                description="Config mode: Boot strategy — 'auto' (start with HA) or 'manual'.",
+                default=None,
+            ),
+        ] = None,
+        auto_update: Annotated[
+            bool | None,
+            Field(
+                description="Config mode: Enable or disable automatic updates for this add-on.",
+                default=None,
+            ),
+        ] = None,
+        watchdog: Annotated[
+            bool | None,
+            Field(
+                description="Config mode: Enable or disable Supervisor watchdog (auto-restart on crash).",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Call an add-on's HTTP or WebSocket API.
+        """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
-        Sends requests directly to add-on containers. Use `websocket=true` for
-        streaming endpoints (e.g., ESPHome compile/validate). Use `port` to bypass
-        Nginx IP restrictions on community add-ons. Use ha_get_addon(slug="...")
-        to discover available ports and endpoints.
+        Two mutually exclusive operating modes:
+
+        **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
+        Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
+        All config parameters are optional; only provided fields are updated — current values
+        are fetched and merged automatically (including one level of nested dicts).
+
+        **Proxy mode** (when path is provided):
+        Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
+        Use ha_get_addon(slug="...") to discover available ports and endpoints.
+
+        **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
+        metadata locks the boot mode. The Supervisor returns an error in this case.
+
+        **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
-        - HTTP: ha_call_addon_api(slug="...", path="/api/events")
-        - Direct port: ha_call_addon_api(slug="...", path="/flows", port=1880)
-        - WebSocket: ha_call_addon_api(slug="...", path="/validate", port=6052, websocket=true, body={"type": "spawn", "configuration": "device.yaml"})
+        - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
+          Note: only the fields you provide are updated — current values are fetched first
+          and merged automatically. Fields not in the add-on's schema are ignored with a warning.
+        - Disable auto-update: ha_manage_addon(slug="...", auto_update=False)
+        - Change host port: ha_manage_addon(slug="...", network={"5800/tcp": 8082})
+        - Set boot mode: ha_manage_addon(slug="...", boot="manual")
+        - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
+        - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
+        - WebSocket: ha_manage_addon(slug="...", path="/validate", port=6052, websocket=True, body={"type": "spawn", "configuration": "device.yaml"})
         """
-        # WebSocket mode
+        # Build config payload from provided config parameters
+        config_data: dict[str, Any] = {}
+        if options:
+            config_data["options"] = options
+        if network:
+            config_data["network"] = network
+        if boot is not None:
+            config_data["boot"] = boot
+        if auto_update is not None:
+            config_data["auto_update"] = auto_update
+        if watchdog is not None:
+            config_data["watchdog"] = watchdog
+
+        # Validate mode selection
+        if path is not None and path == "":
+            raise_tool_error(
+                create_validation_error(
+                    "'path' must not be empty. Provide a non-empty path for proxy mode "
+                    "(e.g., '/api/events') or omit it to use config mode.",
+                    parameter="path",
+                )
+            )
+        if path is not None and config_data:
+            raise_tool_error(
+                create_validation_error(
+                    "Cannot combine 'path' (proxy mode) with config parameters "
+                    "(options/network/boot/auto_update/watchdog). Use one mode at a time.",
+                    parameter="path",
+                )
+            )
+        if not path and not config_data:
+            raise_tool_error(
+                create_validation_error(
+                    "Must provide either 'path' for proxy mode or at least one config parameter "
+                    "(options/network/boot/auto_update/watchdog) for config mode.",
+                    parameter="path",
+                )
+            )
+
+        # Validate that proxy-only params are not passed in config mode
+        if config_data:
+            proxy_overrides: list[tuple[str, str]] = []
+            if method != "GET":
+                proxy_overrides.append(("method", f"method={method!r}"))
+            if body is not None:
+                proxy_overrides.append(("body", "body"))
+            if debug:
+                proxy_overrides.append(("debug", "debug=True"))
+            if port is not None:
+                proxy_overrides.append(("port", f"port={port}"))
+            if offset != 0:
+                proxy_overrides.append(("offset", f"offset={offset}"))
+            if limit is not None:
+                proxy_overrides.append(("limit", f"limit={limit}"))
+            if websocket:
+                proxy_overrides.append(("websocket", "websocket=True"))
+            if not wait_for_close:
+                proxy_overrides.append(("wait_for_close", "wait_for_close=False"))
+            if proxy_overrides:
+                raise_tool_error(
+                    create_validation_error(
+                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
+                        "Remove these parameters or switch to proxy mode by providing 'path'.",
+                        parameter=proxy_overrides[0][0],
+                    )
+                )
+
+        # Config mode: update Supervisor settings
+        if config_data:
+            ignored_fields: list[str] = []  # populated only when options are provided
+            # For options updates: fetch current state first.
+            # GET /info provides both current options (for merge) and schema_ui
+            # (for pre-write unknown-field detection) in a single roundtrip.
+            if "options" in config_data:
+                info_result = await _supervisor_api_call(client, f"/addons/{slug}/info")
+                if not info_result.get("success"):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Add-on '{slug}' not found or Supervisor unavailable",
+                            details=str(info_result),
+                        )
+                    )
+                addon_info = info_result.get("result", {})
+
+                # Merge caller's options into current options (fixes partial-update rejection).
+                # Supervisor validates the full options dict against the add-on schema,
+                # so callers must always submit all required fields — merging makes that
+                # transparent.
+                current_options: dict = addon_info.get("options") or {}
+                merged_options = _merge_options(current_options, config_data["options"])
+
+                # Pre-write schema check: identify fields not in the add-on's schema.
+                # Supervisor silently drops unknown fields on write; surfacing them here
+                # lets the caller correct mistakes before any state is changed.
+                schema_ui: list | None = addon_info.get("schema")
+                if schema_ui is not None:
+                    allowed_keys = {item["name"] for item in schema_ui if "name" in item}
+                    ignored_fields = [k for k in config_data["options"] if k not in allowed_keys]
+                    # Remove unknown fields from the merged dict so Supervisor does not
+                    # silently strip them after the write succeeds.
+                    for k in ignored_fields:
+                        merged_options.pop(k, None)
+
+                config_data["options"] = merged_options
+
+            result = await _supervisor_api_call(
+                client,
+                f"/addons/{slug}/options",
+                method="POST",
+                data=config_data,
+            )
+            if not result.get("success"):
+                # Surface Supervisor schema errors (e.g. missing required field) as
+                # VALIDATION_FAILED so the model receives an actionable error code.
+                error_detail = str(result)
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        f"Supervisor rejected configuration for add-on '{slug}'",
+                        details=error_detail,
+                        suggestions=[
+                            "Fetch current options via ha_get_addon(slug) to see required fields",
+                            "Re-submit all required option fields together",
+                        ],
+                    )
+                )
+            submitted_fields = list(config_data.keys())
+            response: dict = {}
+            if {"options", "network"} & config_data.keys():
+                response = {
+                    "status": "pending_restart",
+                    "message": (
+                        f"Configuration submitted for add-on '{slug}'. "
+                        "Restart the add-on for options/network changes to take effect."
+                    ),
+                    "submitted_fields": submitted_fields,
+                }
+            else:
+                response = {
+                    "success": True,
+                    "message": f"Configuration updated for add-on '{slug}'.",
+                    "submitted_fields": submitted_fields,
+                }
+            if ignored_fields:
+                response["warning"] = (
+                    f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
+                    f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
+                    "declared schema."
+                )
+                response["ignored_fields"] = ignored_fields
+            return response
+
+        # Proxy mode: call add-on container API
+        # At this point path is guaranteed non-None (validated above)
+        assert path is not None
+        # WebSocket
         if websocket:
             result = await _call_addon_ws(
                 client=client,
@@ -1056,7 +1283,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 raise_tool_error(result)
             return result
 
-        # HTTP mode
+        # HTTP
         valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
         if method.upper() not in valid_methods:
             raise_tool_error(

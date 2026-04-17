@@ -33,43 +33,8 @@ class TestAutomationLifecycle:
     """Test complete automation management workflows."""
 
     async def _find_test_light_entity(self, mcp_client) -> str:
-        """
-        Find a suitable light entity for testing.
-
-        Prefers demo entities, falls back to any available light.
-        Returns entity_id of a suitable light for testing.
-        """
-        # Search for light entities
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 20},
-        )
-
-        search_data = parse_mcp_result(search_result)
-
-        # Handle nested data structure
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        # Prefer demo entities
-        for entity in results:
-            entity_id = entity.get("entity_id", "")
-            if "demo" in entity_id.lower() or "test" in entity_id.lower():
-                logger.info(f"🔍 Using demo/test light: {entity_id}")
-                return entity_id
-
-        # Fall back to first available light
-        entity_id = results[0].get("entity_id", "")
-        if not entity_id:
-            pytest.skip("No valid light entity found for testing")
-
-        logger.info(f"🔍 Using first available light: {entity_id}")
-        return entity_id
+        """Delegates to the module-level helper (kept for existing call sites)."""
+        return await _find_test_light_entity(mcp_client)
 
     async def _find_test_binary_sensors(self, mcp_client) -> list[str]:
         """
@@ -1136,3 +1101,288 @@ async def test_automation_creation_returns_verified_entity(
     )
     assert_mcp_success(delete_result, "verified entity test cleanup")
     logger.info("Automation creation verified entity test passed")
+
+
+
+async def _find_test_light_entity(mcp_client) -> str:
+    """Find a suitable light entity for testing.
+
+    Prefers demo/test entities, falls back to first available light.
+    Shared helper used by multiple test classes in this module.
+    """
+    search_result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "light", "domain_filter": "light", "limit": 20},
+    )
+    search_data = parse_mcp_result(search_result)
+    if "data" in search_data:
+        results = search_data.get("data", {}).get("results", [])
+    else:
+        results = search_data.get("results", [])
+    if not results:
+        pytest.skip("No light entities available for testing")
+    for entity in results:
+        entity_id = entity.get("entity_id", "")
+        if "demo" in entity_id.lower() or "test" in entity_id.lower():
+            return entity_id
+    entity_id = results[0].get("entity_id", "")
+    if not entity_id:
+        pytest.skip("No valid light entity found for testing")
+    return entity_id
+
+
+@pytest.mark.automation
+@pytest.mark.cleanup
+class TestConfigHashMismatch:
+    """Tests for ha_config_set_automation optimistic-locking guard (Guard 1).
+
+    Guard: tools_config_automations.py _fetch_and_verify_hash —
+    raises SERVICE_CALL_FAILED when the supplied config_hash does not match
+    the hash of the automation's current stored configuration.
+
+    All tests require a live automation (create → get → set → cleanup).
+    Entity references are dynamically discovered (consistent with file docstring).
+    """
+
+    async def test_config_hash_mismatch_rejected(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Rejects an update when the caller supplies a stale config_hash.
+
+        Guard: _fetch_and_verify_hash raises SERVICE_CALL_FAILED when
+        config_hash does not match the current hash. This prevents silent
+        overwrites of automations that were modified since last read.
+        """
+        # 1. DISCOVER: find a valid light entity for the automation action
+        test_light = await _find_test_light_entity(mcp_client)
+        logger.info(f"Using light entity: {test_light}")
+
+        # 2. CREATE a throwaway automation
+        config = test_data_factory.automation_config(
+            "A6 Hash Mismatch Test",
+            trigger=[{"platform": "time", "at": "03:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id in response: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+        logger.info(f"Created automation: {automation_entity}")
+
+        # 2. GET the automation — extract the real config_hash
+        await wait_for_automation(mcp_client, automation_entity)
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_automation", {"identifier": automation_entity}
+        )
+        get_data = parse_mcp_result(get_result)
+        real_hash = get_data.get("config_hash")
+        assert real_hash, f"no config_hash in get response: {get_data}"
+        logger.info(f"Real config_hash: {real_hash[:12]}...")
+
+        # 3. Construct a stale hash — guarantee it differs from the real one
+        stale_hash = real_hash[:-4] + ("0000" if not real_hash.endswith("0000") else "ffff")
+        assert stale_hash != real_hash, "stale_hash must differ from real_hash"
+
+        # 4. Attempt update with the stale hash — guard must reject it
+        update_config = test_data_factory.automation_config(
+            "A6 Hash Mismatch Test Updated",
+            trigger=[{"platform": "time", "at": "04:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                "config_hash": stale_hash,
+            },
+        )
+        assert result["success"] is False, f"expected failure with stale hash: {result}"
+        assert result["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"expected SERVICE_CALL_FAILED, got: {result['error']['code']}"
+        )
+        assert "modified since last read" in result["error"]["message"], (
+            f"expected guard message pin, got: {result['error']['message']}"
+        )
+        logger.info("Stale hash correctly rejected")
+
+    async def test_update_with_correct_hash_succeeds(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Accepts an update when the caller supplies the current config_hash.
+
+        Complementary to test_config_hash_mismatch_rejected: verifies the
+        guard fires only on actual mismatches, not on every update.
+        """
+        # 1. CREATE
+        test_light = await _find_test_light_entity(mcp_client)
+        config = test_data_factory.automation_config(
+            "A6 Hash Valid Test",
+            trigger=[{"platform": "time", "at": "05:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+
+        # 2. GET — real hash
+        await wait_for_automation(mcp_client, automation_entity)
+        get_result = await mcp_client.call_tool(
+            "ha_config_get_automation", {"identifier": automation_entity}
+        )
+        get_data = parse_mcp_result(get_result)
+        real_hash = get_data.get("config_hash")
+        assert real_hash, f"no config_hash: {get_data}"
+
+        # 3. UPDATE with correct hash — must succeed
+        update_config = test_data_factory.automation_config(
+            "A6 Hash Valid Test Updated",
+            trigger=[{"platform": "time", "at": "06:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                "config_hash": real_hash,
+            },
+        )
+        assert result.get("success") is True, f"expected success with correct hash: {result}"
+        logger.info("Correct hash accepted — update succeeded")
+
+    async def test_update_without_hash_succeeds(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ) -> None:
+        """Update without config_hash is allowed (hash check is opt-in).
+
+        Guard code: `if identifier and config_hash:` — omitting config_hash
+        skips the optimistic-lock check entirely, enabling unconditional overwrites.
+        """
+        # 1. CREATE
+        test_light = await _find_test_light_entity(mcp_client)
+        config = test_data_factory.automation_config(
+            "A6 No Hash Test",
+            trigger=[{"platform": "time", "at": "07:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        create_data = await safe_call_tool(
+            mcp_client, "ha_config_set_automation", {"config": config}
+        )
+        assert create_data.get("success"), f"create failed: {create_data}"
+        automation_entity = create_data.get("entity_id")
+        assert automation_entity, f"no entity_id: {create_data}"
+        cleanup_tracker.track("automation", automation_entity)
+
+        # 2. UPDATE without config_hash — guard skipped, must succeed
+        await wait_for_automation(mcp_client, automation_entity)
+        update_config = test_data_factory.automation_config(
+            "A6 No Hash Test Updated",
+            trigger=[{"platform": "time", "at": "08:00:00"}],
+            action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                # config_hash intentionally omitted — guard must not fire
+            },
+        )
+        assert result.get("success") is True, (
+            f"update without config_hash should succeed: {result}"
+        )
+        logger.info("Update without config_hash succeeded — guard correctly skipped")
+
+
+@pytest.mark.asyncio
+@pytest.mark.automation
+class TestSetAutomationNegativeInputs:
+    """Negative-input tests for ha_config_set_automation pre-flight guards."""
+
+    async def test_config_and_python_transform_mutually_exclusive(
+        self, mcp_client
+    ) -> None:
+        """Rejects a call that supplies both config and python_transform simultaneously.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when both parameters are non-None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "config": {"alias": "Test", "trigger": [], "action": []},
+                "python_transform": "config['alias'] = 'Modified'",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "both config and python_transform" in result["error"]["message"].lower()
+
+    async def test_python_transform_requires_identifier(
+        self, mcp_client
+    ) -> None:
+        """Rejects python_transform when identifier is absent.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when python_transform is set but identifier is None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "python_transform": "config['alias'] = 'Modified'",
+                "config_hash": "dummy_hash",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "identifier is required" in result["error"]["message"].lower()
+
+    async def test_python_transform_requires_config_hash(
+        self, mcp_client
+    ) -> None:
+        """Rejects python_transform when config_hash is absent.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        when python_transform is set but config_hash is None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "identifier": "automation.test",
+                "python_transform": "config['alias'] = 'Modified'",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "config_hash is required" in result["error"]["message"].lower()
+
+    async def test_requires_at_least_one_input(
+        self, mcp_client
+    ) -> None:
+        """Rejects a call that supplies neither config nor python_transform.
+
+        Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
+        when both parameters are None.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "either config or python_transform" in result["error"]["message"].lower()
