@@ -458,17 +458,35 @@ class TestIntegrationLogLevel:
             ), f"Unexpected log_level value: {entry['log_level']}"
 
     async def test_single_entry_reflects_logger_set_level(self, mcp_client):
-        """After logger.set_level, the single-entry response should show the new level."""
-        # Pick an integration to flip (homeassistant is always loaded in testcontainers)
+        """After logger.set_level, the single-entry response should show the new level.
+
+        Picks a config entry whose domain is also present in ``logger/log_info`` —
+        ``logger.set_level`` only treats a domain as an integration (and thus sets
+        ``homeassistant.components.<domain>``) when HA considers it a loaded
+        integration, which is what ``logger/log_info`` lists.
+        """
         list_result = await mcp_client.call_tool("ha_get_integration", {})
         list_data = assert_mcp_success(list_result, "find target integration")
         if list_data["total_count"] == 0:
             pytest.skip("No integrations available")
 
-        target = next(
-            (e for e in list_data["entries"] if e.get("domain") == "homeassistant"),
-            list_data["entries"][0],
+        logs_result = await mcp_client.call_tool(
+            "ha_get_logs", {"source": "logger", "limit": 500}
         )
+        logs_raw = assert_mcp_success(logs_result, "fetch logger info for intersection")
+        logs_data = (
+            logs_raw["data"] if "data" in logs_raw and isinstance(logs_raw["data"], dict)
+            else logs_raw
+        )
+        loaded_domains = {entry["domain"] for entry in logs_data.get("loggers", [])}
+
+        target = next(
+            (e for e in list_data["entries"] if e.get("domain") in loaded_domains),
+            None,
+        )
+        if target is None:
+            pytest.skip("No overlap between config entries and loaded integrations")
+
         entry_id = target["entry_id"]
         target_domain = target["domain"]
         original_level = target.get("log_level", "DEFAULT")
@@ -490,7 +508,7 @@ class TestIntegrationLogLevel:
             )
             single_data = assert_mcp_success(single_result, "single entry w/ log_level")
             assert single_data.get("log_level") == "DEBUG", (
-                f"Expected DEBUG, got {single_data.get('log_level')}"
+                f"Expected DEBUG for domain={target_domain}, got {single_data.get('log_level')}"
             )
         finally:
             # Best-effort restore (INFO is HA's baseline)
