@@ -126,6 +126,34 @@ async def _supervisor_api_call(
     except ToolError:
         raise
     except Exception as e:
+        # Pre-classify Supervisor schema validation errors.
+        # Schema errors from POST /addons/{slug}/options arrive here as plain
+        # Exception (raised by ws_client.send_command when Supervisor rejects
+        # the payload with a vol.Invalid). The generic classifier in
+        # exception_to_structured_error routes these by greedy substring match
+        # and misclassifies messages like "Missing option 'authorized_keys'
+        # in ssh" as AUTH_INVALID_TOKEN (due to "auth" in "authorized_keys").
+        # Endpoint-gating is used instead of string heuristics because
+        # vol.Invalid messages across Supervisor are heterogeneous, but only
+        # POST on /options triggers schema validation. Plain Exception filter
+        # keeps typed exceptions (connection, auth, timeout) on their own path.
+        if (
+            method == "POST"
+            and "/addons/" in endpoint
+            and endpoint.endswith("/options")
+            and type(e) is Exception
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Supervisor rejected configuration: schema validation failed",
+                    details=str(e),
+                    suggestions=[
+                        "Fetch current options via ha_get_addon(slug) to see the schema",
+                        "Re-submit all required option fields together",
+                    ],
+                )
+            )
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
         exception_to_structured_error(
             e,
