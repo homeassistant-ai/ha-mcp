@@ -1328,6 +1328,7 @@ class TestSetAutomationNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "both config and python_transform" in result["error"]["message"].lower()
 
     async def test_python_transform_requires_identifier(
         self, mcp_client
@@ -1347,6 +1348,7 @@ class TestSetAutomationNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "identifier is required" in result["error"]["message"].lower()
 
     async def test_python_transform_requires_config_hash(
         self, mcp_client
@@ -1366,6 +1368,7 @@ class TestSetAutomationNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "config_hash is required" in result["error"]["message"].lower()
 
     async def test_requires_at_least_one_input(
         self, mcp_client
@@ -1382,3 +1385,4 @@ class TestSetAutomationNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "either config or python_transform" in result["error"]["message"].lower()
