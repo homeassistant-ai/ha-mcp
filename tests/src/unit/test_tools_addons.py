@@ -1111,7 +1111,7 @@ class TestManageAddon:
         ), pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
-                config={"options": {"ssh": {"sftp": True}}},
+                options={"ssh": {"sftp": True}},
             )
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
