@@ -19,7 +19,12 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_bool_param,
+    coerce_int_param,
+    get_logger_levels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,11 +176,18 @@ class IntegrationTools:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
             result = await self._client.get_config_entry(entry_id)
+            entry_domain = result.get("domain") if isinstance(result, dict) else None
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
                 "entry": result,
             }
+
+            # Surface the effective Python logger level for this integration
+            # so users can confirm logger.set_level changes took effect.
+            if isinstance(entry_domain, str) and entry_domain:
+                logger_levels = await get_logger_levels(self._client)
+                resp["log_level"] = logger_levels.get(entry_domain, "DEFAULT")
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):
@@ -264,9 +276,12 @@ class IntegrationTools:
                 e for e in entries if e.get("domain", "").lower() == domain_lower
             ]
 
+        # Fetch current logger levels once; enrich each entry with its effective level.
+        logger_levels = await get_logger_levels(self._client)
+
         # Format entries for response
         formatted_entries = [
-            self._format_entry(entry, include_opts) for entry in entries
+            self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
 
         # Apply search filter if query provided
@@ -299,7 +314,11 @@ class IntegrationTools:
         return result_data
 
     @staticmethod
-    def _format_entry(entry: dict[str, Any], include_opts: bool | None) -> dict[str, Any]:
+    def _format_entry(
+        entry: dict[str, Any],
+        include_opts: bool | None,
+        logger_levels: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Format a raw config entry into the response shape."""
         formatted_entry: dict[str, Any] = {
             "entry_id": entry.get("entry_id"),
@@ -311,6 +330,12 @@ class IntegrationTools:
             "supports_unload": entry.get("supports_unload", False),
             "disabled_by": entry.get("disabled_by"),
         }
+
+        # Surface the effective Python logger level for this integration
+        # ("DEFAULT" = no override; falls back to the root logger level).
+        if logger_levels is not None:
+            domain = entry.get("domain") or ""
+            formatted_entry["log_level"] = logger_levels.get(domain, "DEFAULT")
 
         # Include options when requested (for auditing template definitions, etc.)
         if include_opts:

@@ -9,6 +9,7 @@ The actual integrations available will vary based on the test setup.
 """
 
 import logging
+from typing import ClassVar
 
 import pytest
 
@@ -421,3 +422,83 @@ async def test_integration_discovery(mcp_client):
     logger.info(
         f"Integration discovery test passed: found {data['total_count']} integrations"
     )
+
+
+@pytest.mark.integrations
+class TestIntegrationLogLevel:
+    """Verify ha_get_integration surfaces per-integration log levels (#956)."""
+
+    _ACCEPTED: ClassVar[set[str]] = {
+        "DEFAULT",
+        "NOTSET",
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    }
+
+    async def test_list_entries_include_log_level(self, mcp_client):
+        """Every listed entry should expose a log_level field (DEFAULT when unset)."""
+        result = await mcp_client.call_tool("ha_get_integration", {})
+        data = assert_mcp_success(result, "list with log_level")
+
+        if data["total_count"] == 0:
+            pytest.skip("No integrations available to check log_level")
+
+        for entry in data["entries"]:
+            assert "log_level" in entry, (
+                f"Entry {entry.get('domain')} missing log_level field"
+            )
+            assert isinstance(entry["log_level"], str), "log_level must be a string"
+            # Accept canonical names, "DEFAULT", or "LEVEL_<n>" for non-standard ints
+            assert (
+                entry["log_level"] in self._ACCEPTED
+                or entry["log_level"].startswith("LEVEL_")
+            ), f"Unexpected log_level value: {entry['log_level']}"
+
+    async def test_single_entry_reflects_logger_set_level(self, mcp_client):
+        """After logger.set_level, the single-entry response should show the new level."""
+        # Pick an integration to flip (homeassistant is always loaded in testcontainers)
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = assert_mcp_success(list_result, "find target integration")
+        if list_data["total_count"] == 0:
+            pytest.skip("No integrations available")
+
+        target = next(
+            (e for e in list_data["entries"] if e.get("domain") == "homeassistant"),
+            list_data["entries"][0],
+        )
+        entry_id = target["entry_id"]
+        target_domain = target["domain"]
+        original_level = target.get("log_level", "DEFAULT")
+
+        # Flip the level to DEBUG via logger.set_level
+        await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "logger",
+                "service": "set_level",
+                "service_data": {target_domain: "debug"},
+            },
+        )
+
+        try:
+            single_result = await mcp_client.call_tool(
+                "ha_get_integration", {"entry_id": entry_id}
+            )
+            single_data = assert_mcp_success(single_result, "single entry w/ log_level")
+            assert single_data.get("log_level") == "DEBUG", (
+                f"Expected DEBUG, got {single_data.get('log_level')}"
+            )
+        finally:
+            # Best-effort restore (INFO is HA's baseline)
+            restore_level = original_level if original_level != "DEFAULT" else "info"
+            await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "logger",
+                    "service": "set_level",
+                    "service_data": {target_domain: restore_level.lower()},
+                },
+            )

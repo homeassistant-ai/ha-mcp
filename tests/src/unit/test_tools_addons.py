@@ -8,7 +8,13 @@ import pytest
 import websockets.exceptions
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws, list_addons
+from ha_mcp.tools.tools_addons import (
+    _call_addon_api,
+    _call_addon_ws,
+    _extract_addon_log_level,
+    get_addon_info,
+    list_addons,
+)
 
 # Standard mock return for a running addon with Ingress support
 _RUNNING_ADDON_INFO = {
@@ -1251,3 +1257,100 @@ class TestManageAddon:
         error = _parse_tool_error(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "method" in error["error"]["message"] or "INVALID" in error["error"]["message"]
+
+
+class TestExtractAddonLogLevel:
+    """Tests for _extract_addon_log_level — surfaces add-on options.log_level."""
+
+    def test_user_configured_log_level_wins(self):
+        """A user-set options.log_level is returned verbatim."""
+        assert _extract_addon_log_level({"options": {"log_level": "debug"}}) == "debug"
+
+    def test_empty_user_value_falls_back_to_schema_default(self):
+        """An empty string in options falls through to the schema default marker."""
+        addon = {
+            "options": {"log_level": ""},
+            "schema": {"log_level": "list(info|debug|...)"},
+        }
+        assert _extract_addon_log_level(addon) == "default"
+
+    def test_schema_only_returns_default_marker(self):
+        """Add-on with log_level in schema but no option set reports 'default'."""
+        addon = {"options": {}, "schema": {"log_level": "list(info|debug|...)"}}
+        assert _extract_addon_log_level(addon) == "default"
+
+    def test_no_log_level_returns_none(self):
+        """Add-on with no log_level anywhere returns None (field omitted in response)."""
+        assert _extract_addon_log_level({"options": {"port": 8080}, "schema": {}}) is None
+
+    def test_malformed_options_ignored(self):
+        """Non-dict options don't crash the extractor."""
+        assert _extract_addon_log_level({"options": "not a dict"}) is None
+
+    def test_non_string_log_level_ignored(self):
+        """A non-string log_level is not surfaced (avoids leaking junk to users)."""
+        addon = {"options": {"log_level": 42}, "schema": {"log_level": "..."}}
+        # Falls through past options (non-string) and then uses schema → "default"
+        assert _extract_addon_log_level(addon) == "default"
+
+
+class TestGetAddonInfoLogLevel:
+    """Tests for get_addon_info — verifies top-level log_level enrichment."""
+
+    @pytest.mark.asyncio
+    async def test_includes_log_level_when_option_set(self):
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {
+                    "name": "Example",
+                    "slug": "example",
+                    "options": {"log_level": "debug"},
+                },
+            },
+        ):
+            result = await get_addon_info(client, "example")
+
+        assert result["success"] is True
+        assert result["log_level"] == "debug"
+        assert result["addon"]["slug"] == "example"
+
+    @pytest.mark.asyncio
+    async def test_omits_log_level_when_addon_has_none(self):
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {
+                    "name": "NoLogLevel",
+                    "slug": "nll",
+                    "options": {"port": 1883},
+                },
+            },
+        ):
+            result = await get_addon_info(client, "nll")
+
+        assert result["success"] is True
+        assert "log_level" not in result
+
+    @pytest.mark.asyncio
+    async def test_passes_through_supervisor_error(self):
+        """Error responses shouldn't gain a synthetic log_level field."""
+        client = _make_mock_client()
+        error_response = {
+            "success": False,
+            "error": {"code": "RESOURCE_NOT_FOUND", "message": "no supervisor"},
+        }
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=error_response,
+        ):
+            result = await get_addon_info(client, "whatever")
+
+        assert result == error_response
