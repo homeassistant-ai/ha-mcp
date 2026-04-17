@@ -139,7 +139,7 @@ async def _supervisor_api_call(
         # keeps typed exceptions (connection, auth, timeout) on their own path.
         if (
             method == "POST"
-            and "/addons/" in endpoint
+            and endpoint.startswith("/addons/")
             and endpoint.endswith("/options")
             and type(e) is Exception
         ):
