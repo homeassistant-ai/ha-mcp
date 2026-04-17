@@ -163,8 +163,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
                 description=(
                     "Entity name to search for (fuzzy or exact match). "
-                    "Omit (or leave empty) to list entities — in that mode, "
-                    "`domain_filter` or `area_filter` must be set."
+                    "Omit to list entities; `domain_filter` or `area_filter` "
+                    "must be set in that mode."
                 ),
             ),
         ] = None,
@@ -209,7 +209,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         *configurations* (e.g. which automations call a service or reference an entity),
         use `ha_deep_search`.
 
-        To enumerate all entities of a domain, omit `query` and pass `domain_filter` — for
+        To enumerate all entities of a domain, omit `query` and pass `domain_filter`. For
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
