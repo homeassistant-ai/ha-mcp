@@ -473,7 +473,8 @@ class DomainTools:
         # Add to the docstring above only when genuinely needed:
         # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # NOTE / WARNING: non-obvious gotcha or destructive side-effect
+        # When NOT to use: route to preferred alternatives
+        # Caveats: destructive side-effects, non-obvious gotchas
         # For complex schemas: use ha_get_skill_home_assistant_best_practices
 
 def register_<domain>_tools(mcp, client, **kwargs):
@@ -496,8 +497,16 @@ Example: `ha_search_entities` hints at `ha_get_state`.
 **Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
 Omit when a single required parameter makes the call self-evident.
 
-**Add `NOTE` or `WARNING` when** there is a non-obvious gotcha, a destructive side-effect,
-or a behavioral quirk that causes silent failures if ignored.
+**For multi-line docstrings, follow this structure** (based on
+[Anthropic's tool design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents)):
+1. What the tool does (required first sentence, action verb)
+2. When NOT to use it — name the preferred alternatives
+3. When to use it — valid use cases
+4. Caveats — consequences, post-actions, destructive side-effects
+
+Consequence statements are plain prose: "This permanently deletes the dashboard.
+A backup is created before every edit." Route safety concerns through `annotations`
+(`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
 
 **Defer complex schemas** instead of embedding them:
 `# For complex schemas: use ha_get_skill_home_assistant_best_practices`
