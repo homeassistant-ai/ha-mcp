@@ -144,7 +144,7 @@ async def _supervisor_api_call(
             and type(e) is Exception
             and str(e).startswith("Command failed:")
         ):
-            slug = endpoint.split("/")[2] if endpoint.startswith("/addons/") else ""
+            slug = endpoint.split("/")[2]
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_FAILED,
