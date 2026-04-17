@@ -315,6 +315,52 @@ class TestStatisticsPagination:
         assert qp["limit"] == 10
         assert qp["offset"] == 5
 
+    @pytest.mark.asyncio
+    async def test_statistics_query_params_string_comma_normalized(self, history_tool):
+        """query_params.statistic_types reflects the normalized list when caller passes a comma-separated string.
+
+        Regression test for #990: prior to the fix, query_params echoed the raw caller input,
+        so a caller passing "mean,max" (string) would see the string in query_params while the
+        top-level statistic_types key contained the parsed list. Both must now be a list.
+        """
+        rows = _make_stat_rows(5)
+        with self._patch_ws(rows), patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d: d,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                statistic_types="mean,max",
+            )
+
+        qp = result["query_params"]
+        assert qp["statistic_types"] == ["mean", "max"]
+        assert result["statistic_types"] == ["mean", "max"]
+
+    @pytest.mark.asyncio
+    async def test_statistics_query_params_string_bracketed_normalized(self, history_tool):
+        """query_params.statistic_types reflects the normalized list when caller passes a bracketed string.
+
+        Regression test for #990: covers the parse_string_list_param branch (e.g. '["mean","max"]').
+        """
+        rows = _make_stat_rows(5)
+        with self._patch_ws(rows), patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _c, d: d,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                statistic_types='["mean","max"]',
+            )
+
+        qp = result["query_params"]
+        assert qp["statistic_types"] == ["mean", "max"]
+        assert result["statistic_types"] == ["mean", "max"]
+
 
 # ---------------------------------------------------------------------------
 # Tests: Option 1 — multi-entity offset guard
