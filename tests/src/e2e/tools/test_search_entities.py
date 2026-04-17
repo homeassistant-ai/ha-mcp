@@ -94,6 +94,23 @@ async def test_search_entities_whitespace_query_with_domain_filter(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_search_entities_all_filters_empty_rejected(mcp_client):
+    """Calling with no query and no filters returns a validation error."""
+    logger.info("Testing validation: all filter params empty/omitted")
+
+    data = await safe_call_tool(mcp_client, "ha_search_entities", {})
+    inner = data.get("data", data)
+
+    assert inner.get("success") is False, f"Should fail validation: {inner}"
+    error = inner.get("error", {})
+    assert isinstance(error, dict) and error.get("code") == "VALIDATION_FAILED", (
+        f"Should be VALIDATION_FAILED: {inner}"
+    )
+
+    logger.info("Validation correctly rejects empty-filters call")
+
+
+@pytest.mark.asyncio
 async def test_search_entities_domain_filter_with_query(mcp_client):
     """Test domain_filter combined with a non-empty query."""
     logger.info("Testing domain_filter with query")

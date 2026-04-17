@@ -215,6 +215,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
+        if not query.strip() and not domain_filter and not area_filter:
+            raise_tool_error(
+                create_validation_error(
+                    "At least one of 'query', 'domain_filter', or 'area_filter' must be set.",
+                    parameter="query",
+                )
+            )
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = (
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
