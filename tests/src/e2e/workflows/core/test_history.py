@@ -7,6 +7,7 @@ state change history and long-term statistics via ha_get_history.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -165,16 +166,16 @@ class TestGetHistory:
         if inner_data.get("entities"):
             entity_history = inner_data["entities"][0]
             states = entity_history.get("states", [])
-            total_available = entity_history.get("total_available", len(states))
+            total_count = entity_history.get("total_count", len(states))
 
-            logger.info(f"Returned {len(states)} states (total available: {total_available})")
+            logger.info(f"Returned {len(states)} states (total available: {total_count})")
 
             # Should respect limit
             assert len(states) <= 5, f"Limit not respected: {len(states)} states"
 
-            # Check truncated flag if more data was available
-            if entity_history.get("truncated"):
-                logger.info("Response correctly marked as truncated")
+            # Check has_more flag if more data was available
+            if entity_history.get("has_more"):
+                logger.info("Response correctly marked as has_more")
 
     async def test_get_history_minimal_response(self, mcp_client):
         """Test history with minimal_response option."""
@@ -438,7 +439,7 @@ class TestGetHistoryStatisticsSource:
 
         test_sensor = sensors[0].get("entity_id")
 
-        periods = ["5minute", "hour", "day", "week", "month"]
+        periods = ["5minute", "hour", "day", "week", "month", "year"]
 
         for period in periods:
             result = await mcp_client.call_tool(
@@ -571,7 +572,6 @@ class TestGetHistoryStatisticsSource:
             logger.info("Properly returned error for entity without state_class")
 
 
-@pytest.mark.asyncio
 @pytest.mark.core
 async def test_get_history_query_params_in_response(mcp_client):
     """Test that query parameters are included in response."""
@@ -603,3 +603,76 @@ async def test_get_history_query_params_in_response(mcp_client):
         assert params.get("limit") == 10, f"limit mismatch: {params}"
     else:
         logger.info("query_params not in response (may be by design)")
+
+
+@pytest.mark.core
+class TestGetHistoryNegativeInputs:
+    """Negative-input tests for ha_get_history."""
+
+    async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
+        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "", "start_time": "1h"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+
+    async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
+        """Rejects an empty list before any network call is made."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": [], "start_time": "1h"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+
+    async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
+        """Offset pagination works for a single entity and returns correct metadata."""
+        # First page: offset=0, limit=5
+        result_p1 = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 0},
+        )
+        if not result_p1.get("success"):
+            pytest.skip("No history data available for pagination test")
+
+        entities_p1 = result_p1.get("entities", [])
+        if not entities_p1:
+            pytest.skip("No entities returned")
+
+        entity_p1 = entities_p1[0]
+        assert entity_p1["offset"] == 0
+        assert entity_p1["limit"] == 5
+        assert "total_count" in entity_p1
+        assert "has_more" in entity_p1
+        assert "next_offset" in entity_p1
+
+        if not entity_p1["has_more"]:
+            pytest.skip("Not enough history rows to test offset pagination")
+
+        # Second page: offset=5
+        result_p2 = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 5},
+        )
+        assert result_p2.get("success")
+        entity_p2 = result_p2["entities"][0]
+        assert entity_p2["offset"] == 5
+        assert entity_p2["total_count"] == entity_p1["total_count"]
+
+    async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
+        """offset > 0 with multiple entity_ids is rejected before any network call."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_history",
+            {"entity_ids": ["sensor.home_temperature", "sensor.home_humidity"],
+             "start_time": "1h", "offset": 1, "limit": 5},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "single entity_id" in result["error"]["message"]

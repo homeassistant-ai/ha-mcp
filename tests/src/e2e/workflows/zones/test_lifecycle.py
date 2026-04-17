@@ -451,6 +451,17 @@ class TestZoneLifecycle:
             logger.info("All zone deletions verified")
 
 
+    async def test_zone_get_nonexistent(self, mcp_client):
+        """Test ha_get_zone returns ENTITY_NOT_FOUND for unknown zone_id."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_failure(
+                "ha_get_zone",
+                {"zone_id": "nonexistent_zone_e2e_xyz_404"},
+                expected_error="Zone not found",
+            )
+
+        assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+
 async def test_zone_search_discovery(mcp_client):
     """
     Test: Zone search and discovery capabilities
