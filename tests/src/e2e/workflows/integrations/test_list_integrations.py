@@ -473,13 +473,14 @@ class TestIntegrationLogLevel:
         target_domain = target["domain"]
         original_level = target.get("log_level", "DEFAULT")
 
-        # Flip the level to DEBUG via logger.set_level
+        # Flip the level to DEBUG via logger.set_level (not state-changing, skip wait)
         await mcp_client.call_tool(
             "ha_call_service",
             {
                 "domain": "logger",
                 "service": "set_level",
-                "service_data": {target_domain: "debug"},
+                "data": {target_domain: "debug"},
+                "wait": False,
             },
         )
 
@@ -499,6 +500,7 @@ class TestIntegrationLogLevel:
                 {
                     "domain": "logger",
                     "service": "set_level",
-                    "service_data": {target_domain: restore_level.lower()},
+                    "data": {target_domain: restore_level.lower()},
+                    "wait": False,
                 },
             )

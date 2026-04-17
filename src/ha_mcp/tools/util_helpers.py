@@ -298,12 +298,20 @@ async def get_logger_levels(client: Any) -> dict[str, str]:
 
     Returns a mapping of integration domain (e.g. ``"mqtt"``) to canonical level
     name (``"DEBUG"``, ``"INFO"``, ``"WARNING"``, ``"ERROR"``, ``"CRITICAL"``, etc.).
-    Returns an empty dict on failure so callers can treat it as "no custom levels".
+
+    Best-effort enrichment: returns an empty dict on connection/IO failures so
+    callers can treat it as "no custom levels". Programming errors are not
+    suppressed — they surface as bugs during development/CI.
     """
     try:
         result = await client.send_websocket_message({"type": "logger/log_info"})
-    except Exception as exc:
-        # Best-effort enrichment — callers treat a missing map as "no custom levels".
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as exc:
         logger.debug("logger/log_info fetch failed: %s", exc)
         return {}
 

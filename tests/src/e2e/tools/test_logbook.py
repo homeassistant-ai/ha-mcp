@@ -556,7 +556,8 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
         {
             "domain": "logger",
             "service": "set_level",
-            "service_data": {target_domain: "debug"},
+            "data": {target_domain: "debug"},
+            "wait": False,
         },
     )
 
@@ -582,7 +583,8 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
             {
                 "domain": "logger",
                 "service": "set_level",
-                "service_data": {target_domain: "info"},
+                "data": {target_domain: "info"},
+                "wait": False,
             },
         )
 

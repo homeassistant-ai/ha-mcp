@@ -317,13 +317,22 @@ class TestGetLoggerLevels:
         assert await get_logger_levels(client) == {}
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_exception(self):
-        """Network/WS errors should degrade to an empty map, not propagate."""
+    async def test_returns_empty_on_io_exception(self):
+        """Connection/IO errors should degrade to an empty map, not propagate."""
         client = MagicMock()
+        # ConnectionError is a subclass of OSError — the narrowed catch handles it.
         client.send_websocket_message = AsyncMock(
             side_effect=ConnectionError("websocket gone")
         )
         assert await get_logger_levels(client) == {}
+
+    @pytest.mark.asyncio
+    async def test_programming_errors_propagate(self):
+        """TypeError/KeyError (bugs in this helper) should surface, not be swallowed."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(side_effect=TypeError("bad call"))
+        with pytest.raises(TypeError):
+            await get_logger_levels(client)
 
     @pytest.mark.asyncio
     async def test_skips_malformed_entries(self):
