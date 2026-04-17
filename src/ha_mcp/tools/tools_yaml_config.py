@@ -44,11 +44,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     logger.info("YAML config editing tools enabled")
 
     @mcp.tool(
-        tags={"System"},
+        tags={"System", "beta"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
-            "title": "Set YAML Config",
+            "title": "Raw YAML Config Edit",
         },
     )
     @log_tool_usage
@@ -57,8 +57,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str,
             Field(
                 description=(
-                    "Top-level YAML key to modify (e.g., 'template', 'sensor', "
-                    "'input_boolean'). Only whitelisted keys are allowed."
+                    "Top-level YAML key to modify. Only a narrow allowlist of "
+                    "YAML-only integration keys is accepted (e.g., 'command_line', "
+                    "'rest', 'shell_command', 'notify'). Not for template sensors "
+                    "(use ha_set_config_entry_helper), automations, scripts, "
+                    "scenes, or input_* helpers — those have dedicated tools."
                 ),
             ),
         ],
@@ -103,30 +106,28 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Add, replace, or remove a top-level key in configuration.yaml or package files.
+        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 
-        IMPORTANT: Only use when NO UI or API alternative exists. Prefer:
-        - Template sensors -> ha_config_set_helper (Template Helper)
+        **WARNING:** Destructive, disabled by default. Dedicated tools exist for
+        almost every use case and should be preferred:
+
+        - Template sensors (state-based or trigger-based) ->
+          ha_set_config_entry_helper(helper_type='template')
         - Automations -> ha_config_set_automation
         - Scripts -> ha_config_set_script
-        - Input helpers -> ha_config_set_helper
         - Scenes -> ha_config_set_scene
+        - Input helpers -> ha_config_set_helper
+        - Groups, min/max, threshold, derivative, statistics, utility_meter,
+          trend, filter, switch_as_x -> ha_set_config_entry_helper
 
-        This tool is for YAML-only features with no UI/API path (e.g.,
-        command_line sensors, platform-based MQTT sensors in YAML, rest
-        sensors defined in packages).
+        Intended for YAML-only integrations with no config-flow or API
+        equivalent (command_line, rest, shell_command, notify platforms).
+        Check ``post_action`` in the response: most keys need a full HA
+        restart; template, mqtt, and group support reload. Preserves YAML
+        comments and HA tags (``!include``, ``!secret``) on round-trip;
+        ``replace`` swaps the subtree as-is.
 
-        Safeguards: file backup, YAML validation, top-level key whitelist,
-        path traversal blocking, post-edit config check.
-
-        IMPORTANT: Check 'post_action' in the response. Most keys require
-        a full HA restart ('restart_required'). Only template, mqtt, and
-        group support reload ('reload_available' with 'reload_service').
-
-        Preserves YAML comments on sibling keys, file-level comments,
-        and Home Assistant tags (!include, !secret, etc.). The 'replace' action
-        substitutes the subtree as-is, so comments from the old subtree
-        do not carry over.
+        For detailed routing guidance, use ha_get_skill_home_assistant_best_practices.
         """
         try:
             # Validate action

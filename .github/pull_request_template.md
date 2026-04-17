@@ -7,6 +7,7 @@
 - [ ] ✨ New feature
 - [ ] 📚 Documentation
 - [ ] 🔧 Maintenance/refactor
+- [ ] 🧪 Tests only
 - [ ] 💥 Breaking change
 
 ## Testing
