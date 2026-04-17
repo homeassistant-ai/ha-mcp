@@ -1569,3 +1569,21 @@ class TestSetHelperNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_input_select_requires_options(self, mcp_client) -> None:
+        """Rejects input_select when options is absent.
+
+        Guard: tools_config_helpers.py — raises VALIDATION_INVALID_PARAMETER
+        before any WebSocket I/O when helper_type is "input_select" and
+        options is falsy.
+        """
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_select",
+                "name": "Missing Options",
+            },
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
