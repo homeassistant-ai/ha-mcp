@@ -37,9 +37,7 @@ def generate_secret_path() -> str:
 
 
 _SECRET_PATH_RE = re.compile(r"^/(?!.*://)\S{7,}$")
-_SECRET_PATH_HINT = (
-    "Path must start with '/', contain no '://', and be at least 8 characters."
-)
+_SECRET_PATH_HINT = "Path must start with '/', contain no '://', and be at least 8 characters."
 
 
 def _is_valid_secret_path(path: str) -> bool:
@@ -65,9 +63,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         if not path.startswith("/"):
             path = "/" + path
         if not _is_valid_secret_path(path):
-            log_error(
-                f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}"
-            )
+            log_error(f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}")
         else:
             log_info("Using custom secret path from configuration")
             # Update stored path for consistency
@@ -82,9 +78,7 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
                 log_info("Using existing auto-generated secret path")
                 return stored_path
             elif stored_path:
-                log_error(
-                    f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}"
-                )
+                log_error(f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}")
             else:
                 log_error("Stored secret path is empty, regenerating")
         except Exception as e:
@@ -110,29 +104,41 @@ def migrate_skills_as_tools_default(
     data_dir: Path,
     config_file: Path,
     stored_value: bool,
+    config_read_ok: bool,
 ) -> bool:
     """One-time migration to force enable_skills_as_tools=true for existing users.
 
-    Commit 7e3f5c1 set enable_skills_as_tools=true by default, but a later
-    config refactor accidentally reverted it to false. This runs exactly once
-    per install (guarded by a marker file in /data) and forces the flag on for
-    users who still have false stored, then persists the new value to
+    The Pydantic default in src/ha_mcp/config.py was flipped to True in
+    #806, but the add-on's config.yaml was never updated at the same time.
+    For add-on installs the env var is written from options.json before
+    ha-mcp reads its Pydantic settings, so the new Python default never
+    took effect for existing users. This runs exactly once per install
+    (guarded by a marker file in /data) and forces the flag on for users
+    who still have False stored, then persists the new value to
     options.json so the supervisor UI reflects it. On subsequent boots the
-    marker is present and the stored value is respected — users who
+    marker is present and the stored value is respected, so users who
     deliberately toggle it off will not be re-forced.
+
+    config_read_ok must be False when the caller could not load
+    options.json (file unreadable or malformed JSON). In that case the
+    marker is not created, so the migration can run again on a later
+    boot once options.json is readable and expose the user's real
+    stored value.
     """
     marker = data_dir / SKILLS_AS_TOOLS_MIGRATION_MARKER
     if marker.exists():
         return stored_value
 
-    # First run after this update. Create the marker unconditionally so the
-    # migration never loops, then force-on + persist only if the user is
-    # currently on false.
+    # First run after this update. Force-on + persist only if the user is
+    # currently on False, then create the marker so the migration does
+    # not loop — but skip marker creation when the caller could not
+    # verify the stored value (see config_read_ok in the docstring).
     if not stored_value:
         log_info(
             "One-time migration: forcing enable_skills_as_tools=true. "
-            "Earlier add-on versions shipped this as the default but a "
-            "config refactor accidentally reverted it. Future user-initiated "
+            "The Pydantic default was set to True in #806 but the add-on's "
+            "config.yaml was not updated alongside it, so this value stayed "
+            "False for existing add-on installs. Future user-initiated "
             "changes to this setting will be respected."
         )
         if config_file.exists():
@@ -145,6 +151,12 @@ def migrate_skills_as_tools_default(
                         json.dump(opts, f, indent=2)
                         f.write("\n")
                     log_info("Persisted enable_skills_as_tools=true to options.json")
+                else:
+                    log_error(
+                        "Cannot persist migration to options.json: top-level "
+                        f"is {type(opts).__name__}, expected dict. Runtime "
+                        "override still applied for this session."
+                    )
             except (OSError, json.JSONDecodeError) as e:
                 log_error(
                     f"Failed to persist migration to options.json "
@@ -153,13 +165,14 @@ def migrate_skills_as_tools_default(
                 )
         stored_value = True
 
-    try:
-        marker.touch()
-    except OSError as e:
-        log_error(
-            f"Failed to create migration marker "
-            f"(operation: create_skills_as_tools_marker): {e}"
-        )
+    if config_read_ok:
+        try:
+            marker.touch()
+        except OSError as e:
+            log_error(
+                f"Failed to create migration marker "
+                f"(operation: create_skills_as_tools_marker): {e}"
+            )
 
     return stored_value
 
@@ -177,6 +190,7 @@ def main() -> int:
     enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    config_read_ok = True
 
     if config_file.exists():
         try:
@@ -187,26 +201,22 @@ def main() -> int:
             raw_skills = config.get("enable_skills", True)
             enable_skills = raw_skills if isinstance(raw_skills, bool) else True
             raw_skills_as_tools = config.get("enable_skills_as_tools", True)
-            enable_skills_as_tools = (
-                raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
-            )
+            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
             raw_tool_search = config.get("enable_tool_search", False)
-            enable_tool_search = (
-                raw_tool_search if isinstance(raw_tool_search, bool) else False
-            )
+            enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
-            enable_yaml_config_editing = (
-                raw_yaml_config if isinstance(raw_yaml_config, bool) else False
-            )
+            enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
+            config_read_ok = False
 
-    # One-time migration for existing users whose stored value is still
-    # False from the accidental refactor revert. See 7e3f5c1.
+    # One-time migration: add-on users whose stored value is False predate
+    # this release's config.yaml default flip. See migrate_skills_as_tools_default.
     enable_skills_as_tools = migrate_skills_as_tools_default(
         data_dir=data_dir,
         config_file=config_file,
         stored_value=enable_skills_as_tools,
+        config_read_ok=config_read_ok,
     )
 
     # Generate or retrieve secret path
@@ -249,7 +259,6 @@ def main() -> int:
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging
-
     logging.basicConfig(level=logging.INFO)
 
     # Import and register browser landing before server start
@@ -288,9 +297,7 @@ def main() -> int:
         cause = e.__cause__ or e.__context__
         if cause:
             log_error(f"Caused by: {cause}")
-            traceback.print_exception(
-                type(cause), cause, cause.__traceback__, file=sys.stderr
-            )
+            traceback.print_exception(type(cause), cause, cause.__traceback__, file=sys.stderr)
         if isinstance(e, SystemExit):
             return int(e.code) if isinstance(e.code, int) else 1
         return 1

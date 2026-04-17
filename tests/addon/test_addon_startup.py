@@ -76,11 +76,9 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
-        assert (
-            self.addon._is_valid_secret_path("/custom") is False
-        )  # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False  # too short
+        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
+        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False    # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
@@ -90,10 +88,11 @@ class TestSecretPathValidation:
 class TestSkillsAsToolsMigration:
     """Unit tests for one-time enable_skills_as_tools default migration.
 
-    Background: commit 7e3f5c1 set enable_skills_as_tools to True by default,
-    but a later config refactor accidentally reverted it to False. This
-    migration flips it back on once for existing users who have False stored,
-    then respects their choice on subsequent boots.
+    Background: the Pydantic default for enable_skills_as_tools was flipped
+    to True in #806, but the add-on's config.yaml was never updated at the
+    same time, so add-on users silently stayed on False. This migration
+    flips the stored value to True once for existing installs, then
+    respects the user's choice on subsequent boots.
     """
 
     MARKER_NAME = ".skills_as_tools_default_migration_v1"
@@ -118,6 +117,7 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=False,
+            config_read_ok=True,
         )
 
         assert result is True
@@ -135,6 +135,7 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=False,
+            config_read_ok=True,
         )
 
         assert result is False
@@ -153,6 +154,7 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=True,
+            config_read_ok=True,
         )
 
         assert result is True
@@ -167,34 +169,42 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=False,
+            config_read_ok=True,
         )
 
         assert result is True
         assert (tmp_path / self.MARKER_NAME).exists()
 
-    def test_migration_survives_options_json_write_failure(self, tmp_path, monkeypatch):
-        """If persisting to options.json fails (e.g., read-only filesystem),
-        the runtime override is still applied and the marker is still
-        created so the migration does not loop forever."""
+    def test_migration_survives_options_json_write_failure(self, tmp_path):
+        """If persisting to options.json fails (read-only filesystem), the
+        runtime override is still applied, the marker is still created so
+        the migration does not loop, and the on-disk options.json is left
+        unmodified."""
         config_file = self._make_options(tmp_path, False)
+        # Make the file read-only so the migration's write fails at the OS
+        # layer rather than via a mock coupled to the current open() call
+        # sites. chmod on the file alone is sufficient on POSIX because
+        # open(..., "w") rechecks file permissions.
+        config_file.chmod(0o444)
 
-        real_open = open
-
-        def failing_open(path, mode="r", *args, **kwargs):
-            if str(path).endswith("options.json") and "w" in mode:
-                raise OSError("Simulated read-only filesystem")
-            return real_open(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr("builtins.open", failing_open)
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-        )
+        try:
+            result = self.addon.migrate_skills_as_tools_default(
+                data_dir=tmp_path,
+                config_file=config_file,
+                stored_value=False,
+                config_read_ok=True,
+            )
+        finally:
+            # Restore write permission so tmp_path cleanup works on all
+            # runners.
+            config_file.chmod(0o644)
 
         assert result is True
         assert (tmp_path / self.MARKER_NAME).exists()
+        # options.json must remain unmodified — verifies the write failed
+        # before touching disk, not merely that the function didn't crash.
+        with open(config_file) as f:
+            assert json.load(f)["enable_skills_as_tools"] is False
 
     def test_migration_respects_marker_with_stored_true(self, tmp_path):
         """Marker exists, stored True: respect stored, no rewrite."""
@@ -205,6 +215,7 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=True,
+            config_read_ok=True,
         )
 
         assert result is True
@@ -220,10 +231,58 @@ class TestSkillsAsToolsMigration:
             data_dir=tmp_path,
             config_file=config_file,
             stored_value=False,
+            config_read_ok=True,
         )
 
         assert result is True
         assert (tmp_path / self.MARKER_NAME).exists()
+
+    @pytest.mark.parametrize("payload", ["[]", '"just a string"', "null", "42"])
+    def test_migration_logs_non_dict_top_level(self, tmp_path, payload, capsys):
+        """Parsed-but-non-dict options.json (list, string, null, number) is
+        observable in logs rather than silently skipped, and options.json
+        stays in its original state."""
+        config_file = tmp_path / "options.json"
+        config_file.write_text(payload, encoding="utf-8")
+
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=False,
+            config_read_ok=True,
+        )
+
+        # Runtime override still applied, marker still created.
+        assert result is True
+        assert (tmp_path / self.MARKER_NAME).exists()
+        # options.json untouched.
+        assert config_file.read_text(encoding="utf-8") == payload
+        # The non-dict branch must log something observable.
+        captured = capsys.readouterr()
+        assert "options.json" in (captured.out + captured.err)
+        assert "expected dict" in (captured.out + captured.err)
+
+    def test_migration_skips_marker_when_config_unreadable(self, tmp_path):
+        """If main() could not read options.json (malformed JSON or I/O
+        error), the migration must not create the marker. Otherwise, once
+        options.json recovers with the user's real stored False, the
+        migration would never run and the intended force-to-true would be
+        silently lost."""
+        config_file = tmp_path / "options.json"
+        # Does not exist — simulates an unreadable file. The important
+        # signal is config_read_ok=False, which is the flag main() would
+        # set after a json.JSONDecodeError.
+        result = self.addon.migrate_skills_as_tools_default(
+            data_dir=tmp_path,
+            config_file=config_file,
+            stored_value=True,  # fallback default used by main()
+            config_read_ok=False,
+        )
+
+        # Runtime default still applied, but marker must NOT be created so
+        # the migration can run again on a later boot.
+        assert result is True
+        assert not (tmp_path / self.MARKER_NAME).exists()
 
 
 IMAGE_TAG = "ha-mcp-addon-test"
@@ -234,16 +293,11 @@ def _build_addon_image():
     """Build the addon test image via docker CLI (supports BuildKit)."""
     result = subprocess.run(
         [
-            "docker",
-            "build",
-            "-t",
-            IMAGE_TAG,
-            "-f",
-            DOCKERFILE,
-            "--build-arg",
-            "BUILD_VERSION=1.0.0-test",
-            "--build-arg",
-            "BUILD_ARCH=amd64",
+            "docker", "build",
+            "-t", IMAGE_TAG,
+            "-f", DOCKERFILE,
+            "--build-arg", "BUILD_VERSION=1.0.0-test",
+            "--build-arg", "BUILD_ARCH=amd64",
             ".",
         ],
         capture_output=True,
@@ -307,10 +361,7 @@ class TestAddonStartup:
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
             assert "Secret Path: /private_" in logs
-            assert (
-                "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!"
-                in logs
-            )
+            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -359,10 +410,7 @@ class TestAddonStartup:
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
-            assert (
-                "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
-                in logs
-            )
+            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
             assert "Secret Path: /my_custom_secret" in logs
 
         finally:
