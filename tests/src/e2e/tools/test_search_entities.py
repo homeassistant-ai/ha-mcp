@@ -94,11 +94,26 @@ async def test_search_entities_whitespace_query_with_domain_filter(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_search_entities_all_filters_empty_rejected(mcp_client):
-    """Calling with no query and no filters returns a validation error."""
-    logger.info("Testing validation: all filter params empty/omitted")
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"query": ""},
+        {"query": "   "},
+        {"query": None},
+        {"query": "", "domain_filter": None, "area_filter": None},
+    ],
+    ids=["all-omitted", "empty-query", "whitespace-query", "null-query", "all-none"],
+)
+async def test_search_entities_all_filters_empty_rejected(mcp_client, params):
+    """Calling with no usable query and no filters returns a validation error.
 
-    data = await safe_call_tool(mcp_client, "ha_search_entities", {})
+    Locks down the equivalence of empty / whitespace / None / omitted forms
+    through the ``query = query or ""`` + ``.strip()`` normalization.
+    """
+    logger.info(f"Testing validation: {params}")
+
+    data = await safe_call_tool(mcp_client, "ha_search_entities", params)
     inner = data.get("data", data)
 
     assert inner.get("success") is False, f"Should fail validation: {inner}"
@@ -107,7 +122,30 @@ async def test_search_entities_all_filters_empty_rejected(mcp_client):
         f"Should be VALIDATION_FAILED: {inner}"
     )
 
-    logger.info("Validation correctly rejects empty-filters call")
+
+@pytest.mark.asyncio
+async def test_search_entities_area_filter_only(mcp_client):
+    """area_filter alone (no query, no domain_filter) returns entities in that area.
+
+    Smoke test for the standalone form legitimized by the new docstring.
+    Accepts zero matches (demo env may lack areas) as long as search_type
+    is 'area_only' and success=True.
+    """
+    logger.info("Testing area_filter alone")
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": "kitchen", "limit": 10},
+    )
+    raw_data = assert_mcp_success(result, "area_filter alone")
+    data = raw_data.get("data", raw_data)
+
+    assert data.get("success") is True
+    assert data.get("search_type") == "area_only", (
+        f"Expected search_type 'area_only', got '{data.get('search_type')}'"
+    )
+
+    logger.info(f"area_filter='kitchen' returned {data.get('total_matches', 0)} matches")
 
 
 @pytest.mark.asyncio
