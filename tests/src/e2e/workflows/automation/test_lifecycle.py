@@ -1424,6 +1424,9 @@ class TestAutomationDestructiveNegativeInputs:
         assert not data.get("success"), (
             f"Expected failure for nonexistent automation, got success=True: {data}"
         )
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data.get('error')}"
+        )
         error_msg = str(data.get("error", "")).lower()
         assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
             f"Expected 'not found'/'does not exist'/'404' in error, got: {data.get('error')}"
@@ -1477,6 +1480,9 @@ class TestAutomationDestructiveNegativeInputs:
         assert not second_delete.get("success"), (
             f"Second delete of {entity_id} returned success=True — "
             f"expected structured error: {second_delete}"
+        )
+        assert second_delete["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND on second delete, got: {second_delete.get('error')}"
         )
         error_msg = str(second_delete.get("error", "")).lower()
         assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
