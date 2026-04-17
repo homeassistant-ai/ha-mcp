@@ -150,7 +150,7 @@ class TestBulkControl:
         # Search for multiple lights
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "light", "limit": 5},
+            {"domain_filter": "light", "limit": 5},
         )
         search_data = parse_mcp_result(search_result)
 
@@ -268,7 +268,7 @@ class TestBulkControl:
         # Search for light and switch entities
         light_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "light", "limit": 2},
+            {"domain_filter": "light", "limit": 2},
         )
         light_data = parse_mcp_result(light_result)
         if "data" in light_data:
@@ -278,7 +278,7 @@ class TestBulkControl:
 
         switch_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "switch", "limit": 2},
+            {"domain_filter": "switch", "limit": 2},
         )
         switch_data = parse_mcp_result(switch_result)
         if "data" in switch_data:
@@ -339,7 +339,7 @@ class TestBulkControl:
         # Search for lights
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "light", "limit": 3},
+            {"domain_filter": "light", "limit": 3},
         )
         search_data = parse_mcp_result(search_result)
 
@@ -374,7 +374,7 @@ class TestBulkControl:
         # Search for lights
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "light", "limit": 3},
+            {"domain_filter": "light", "limit": 3},
         )
         search_data = parse_mcp_result(search_result)
 

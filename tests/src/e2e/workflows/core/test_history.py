@@ -116,7 +116,7 @@ class TestGetHistory:
         # Search for a sensor to add to the query
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "sensor", "limit": 2},
+            {"domain_filter": "sensor", "limit": 2},
         )
         search_data = parse_mcp_result(search_result)
 
@@ -373,7 +373,7 @@ class TestGetHistoryStatisticsSource:
             # Fallback: try any sensor
             search_result = await mcp_client.call_tool(
                 "ha_search_entities",
-                {"query": "", "domain_filter": "sensor", "limit": 5},
+                {"domain_filter": "sensor", "limit": 5},
             )
             search_data = parse_mcp_result(search_result)
             if "data" in search_data:
@@ -426,7 +426,7 @@ class TestGetHistoryStatisticsSource:
         # Find a sensor
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "sensor", "limit": 1},
+            {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
         if "data" in search_data:
@@ -469,7 +469,7 @@ class TestGetHistoryStatisticsSource:
         # Find a sensor
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "sensor", "limit": 1},
+            {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
         if "data" in search_data:
