@@ -142,6 +142,7 @@ async def _supervisor_api_call(
             and endpoint.startswith("/addons/")
             and endpoint.endswith("/options")
             and type(e) is Exception
+            and str(e).startswith("Command failed:")
         ):
             raise_tool_error(
                 create_error_response(
