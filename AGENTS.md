@@ -134,24 +134,27 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
 
 # Check inline review comments (specific to code lines)
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, author: .author.login, created_at: .created_at}'
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {id: .id, path: .path, line: .line, author: .user.login, created_at: .created_at}'
+
+# Get review-thread IDs (needed to resolve threads). Match by comment databaseId:
+gh api graphql -f query='{ repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:<PR>) { reviewThreads(first:50) { nodes { id isResolved comments(first:1) { nodes { databaseId } } } } } } }'
 
 # Check for unresolved review threads
 gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
 ```
 
 **Resolve threads:**
-After addressing a comment, **ALWAYS post a comment explaining the resolution, then mark the thread as resolved**:
+After addressing a comment, **ALWAYS post an inline reply on the specific thread explaining the resolution, then mark the thread as resolved**:
 
 ```bash
-# 1. FIRST: Post comment explaining what was done
-gh pr review <PR> --comment --body "✅ Fixed in [commit]. [Explanation]"
+# 1. FIRST: Post inline reply on the thread (not a general PR comment)
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<COMMENT_ID>/replies -f body="Fixed in [commit]. [Explanation]"
 # OR for dismissed suggestions:
-gh pr review <PR> --comment --body "📝 Not addressing because [reason]."
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<COMMENT_ID>/replies -f body="Not addressing because [reason]."
 
 # 2. THEN: Resolve the thread
 gh api graphql -f query='mutation($threadId: ID!) {
-  resolveReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+  resolveReviewThread(input: {threadId: $threadId}) {
     thread { id isResolved }
   }
 }' -f threadId=<thread_id>
