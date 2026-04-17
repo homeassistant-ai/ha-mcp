@@ -134,7 +134,7 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
 
 # Check inline review comments (specific to code lines)
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, author: .author.login, created_at: .created_at}'
+gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {id, path, line, author: .user.login, created_at}'
 
 # Check for unresolved review threads
 gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
