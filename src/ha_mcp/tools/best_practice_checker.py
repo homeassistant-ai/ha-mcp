@@ -216,6 +216,27 @@ def _check_template_string(
 # ---------------------------------------------------------------------------
 
 
+def _check_choose_actions(
+    choose: Any, warnings: list[str], skill_prefix: str | None
+) -> None:
+    for option in _as_list(choose):
+        if isinstance(option, dict):
+            _check_condition_templates(
+                option.get("conditions", []), warnings, skill_prefix
+            )
+            _check_action_tree(
+                option.get("sequence", []), warnings, skill_prefix
+            )
+
+
+def _check_repeat_actions(
+    repeat: dict, warnings: list[str], skill_prefix: str | None
+) -> None:
+    _check_condition_templates(repeat.get("while", []), warnings, skill_prefix)
+    _check_condition_templates(repeat.get("until", []), warnings, skill_prefix)
+    _check_action_tree(repeat.get("sequence", []), warnings, skill_prefix)
+
+
 def _check_action_tree(
     actions: Any, warnings: list[str], skill_prefix: str | None
 ) -> None:
@@ -235,14 +256,7 @@ def _check_action_tree(
 
         # Nested conditions in choose/if/repeat
         if "choose" in action:
-            for option in _as_list(action["choose"]):
-                if isinstance(option, dict):
-                    _check_condition_templates(
-                        option.get("conditions", []), warnings, skill_prefix
-                    )
-                    _check_action_tree(
-                        option.get("sequence", []), warnings, skill_prefix
-                    )
+            _check_choose_actions(action["choose"], warnings, skill_prefix)
 
         if "if" in action:
             _check_condition_templates(action["if"], warnings, skill_prefix)
@@ -253,16 +267,7 @@ def _check_action_tree(
                 _check_action_tree(nested, warnings, skill_prefix)
 
         if "repeat" in action and isinstance(action["repeat"], dict):
-            repeat = action["repeat"]
-            _check_condition_templates(
-                repeat.get("while", []), warnings, skill_prefix
-            )
-            _check_condition_templates(
-                repeat.get("until", []), warnings, skill_prefix
-            )
-            _check_action_tree(
-                repeat.get("sequence", []), warnings, skill_prefix
-            )
+            _check_repeat_actions(action["repeat"], warnings, skill_prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +352,20 @@ def _check_mode_motion(
         )
 
 
+def _has_delay_or_wait_in_nested(action: dict) -> bool:
+    for key in ("then", "else", "default", "sequence"):
+        if key in action and _has_delay_or_wait(action[key]):
+            return True
+    if "choose" in action:
+        for opt in _as_list(action["choose"]):
+            if isinstance(opt, dict) and _has_delay_or_wait(opt.get("sequence", [])):
+                return True
+    if "repeat" in action and isinstance(action["repeat"], dict):
+        if _has_delay_or_wait(action["repeat"].get("sequence", [])):
+            return True
+    return False
+
+
 def _has_delay_or_wait(actions: Any) -> bool:
     """Recursively check if any action uses delay or wait."""
     for action in _as_list(actions):
@@ -354,18 +373,8 @@ def _has_delay_or_wait(actions: Any) -> bool:
             continue
         if any(k in action for k in ("delay", "wait_for_trigger", "wait_template")):
             return True
-        for key in ("then", "else", "default", "sequence"):
-            if key in action and _has_delay_or_wait(action[key]):
-                return True
-        if "choose" in action:
-            for opt in _as_list(action["choose"]):
-                if isinstance(opt, dict) and _has_delay_or_wait(
-                    opt.get("sequence", [])
-                ):
-                    return True
-        if "repeat" in action and isinstance(action["repeat"], dict):
-            if _has_delay_or_wait(action["repeat"].get("sequence", [])):
-                return True
+        if _has_delay_or_wait_in_nested(action):
+            return True
     return False
 
 

@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_BACKUP_MAX_WAIT_S = 120
+_BACKUP_POLL_INTERVAL_S = 2
+
 
 def _get_backup_hint_text() -> str:
     """
@@ -85,6 +88,80 @@ async def _get_backup_password(
     return cast(str, default_password)
 
 
+async def _poll_backup_completion(
+    ws_client: HomeAssistantWebSocketClient,
+    name: str,
+    backup_job_id: str,
+    max_wait_seconds: int,
+    poll_interval: int,
+) -> dict[str, Any]:
+    """Poll backup/info until the named backup completes, fails, or times out.
+
+    Raises ToolError on backup failure or timeout.
+    """
+    waited = 0
+
+    while waited < max_wait_seconds:
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+
+        info_result = await ws_client.send_command("backup/info")
+        if info_result.get("success"):
+            state = info_result.get("result", {}).get("state")
+            last_event = info_result.get("result", {}).get("last_action_event", {})
+            event_state = last_event.get("state")
+
+            logger.debug(
+                f"Backup state: {state}, event_state: {event_state}, waited: {waited}s"
+            )
+
+            if state == "idle" and event_state == "completed":
+                backups = info_result.get("result", {}).get("backups", [])
+                created_backup = None
+                for backup in backups:
+                    if backup.get("name") == name:
+                        created_backup = backup
+                        break
+
+                if created_backup:
+                    logger.info(
+                        f"Backup completed successfully: {created_backup.get('backup_id')}"
+                    )
+                    return {
+                        "success": True,
+                        "backup_id": created_backup.get("backup_id"),
+                        "backup_job_id": backup_job_id,
+                        "name": name,
+                        "date": created_backup.get("date"),
+                        "size_bytes": created_backup.get("agents", {})
+                        .get("hassio.local", {})
+                        .get("size"),
+                        "status": "Backup completed successfully",
+                        "duration_seconds": waited,
+                        "note": "Backup uses your Home Assistant's default backup password",
+                    }
+                else:
+                    logger.warning(
+                        "Backup completed but not found in backup list yet, waiting..."
+                    )
+                    continue
+
+            elif event_state == "failed":
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Backup creation failed",
+                    context={"backup_job_id": backup_job_id},
+                ))
+
+    logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
+    raise_tool_error(create_error_response(
+        ErrorCode.TIMEOUT_OPERATION,
+        f"Backup creation timed out after {max_wait_seconds} seconds",
+        context={"backup_job_id": backup_job_id, "name": name},
+        suggestions=["Backup may still be in progress. Check Home Assistant backup status."],
+    ))
+
+
 async def create_backup(
     client: HomeAssistantClient, name: str | None = None
 ) -> dict[str, Any]:
@@ -140,76 +217,13 @@ async def create_backup(
         backup_job_id = result.get("result", {}).get("backup_job_id")
         logger.info(f"Backup job started: {backup_job_id}, waiting for completion...")
 
-        # Wait for backup to complete by polling backup/info
-        max_wait_seconds = 120  # 2 minutes max wait
-        poll_interval = 2  # Check every 2 seconds
-        waited = 0
-
-        while waited < max_wait_seconds:
-            await asyncio.sleep(poll_interval)
-            waited += poll_interval
-
-            # Check backup status
-            info_result = await ws_client.send_command("backup/info")
-            if info_result.get("success"):
-                state = info_result.get("result", {}).get("state")
-                last_event = info_result.get("result", {}).get("last_action_event", {})
-                event_state = last_event.get("state")
-
-                logger.debug(
-                    f"Backup state: {state}, event_state: {event_state}, waited: {waited}s"
-                )
-
-                # Check if backup is complete
-                if state == "idle" and event_state == "completed":
-                    # Find the backup that was just created
-                    backups = info_result.get("result", {}).get("backups", [])
-                    created_backup = None
-                    for backup in backups:
-                        if backup.get("name") == name:
-                            created_backup = backup
-                            break
-
-                    if created_backup:
-                        logger.info(
-                            f"Backup completed successfully: {created_backup.get('backup_id')}"
-                        )
-                        return {
-                            "success": True,
-                            "backup_id": created_backup.get("backup_id"),
-                            "backup_job_id": backup_job_id,
-                            "name": name,
-                            "date": created_backup.get("date"),
-                            "size_bytes": created_backup.get("agents", {})
-                            .get("hassio.local", {})
-                            .get("size"),
-                            "status": "Backup completed successfully",
-                            "duration_seconds": waited,
-                            "note": "Backup uses your Home Assistant's default backup password",
-                        }
-                    else:
-                        # Backup completed but not found in list yet
-                        logger.warning(
-                            "Backup completed but not found in backup list yet, waiting..."
-                        )
-                        continue
-
-                # Check if backup failed
-                elif event_state == "failed":
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Backup creation failed",
-                        context={"backup_job_id": backup_job_id},
-                    ))
-
-        # Timeout waiting for backup
-        logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
-        raise_tool_error(create_error_response(
-            ErrorCode.TIMEOUT_OPERATION,
-            f"Backup creation timed out after {max_wait_seconds} seconds",
-            context={"backup_job_id": backup_job_id, "name": name},
-            suggestions=["Backup may still be in progress. Check Home Assistant backup status."],
-        ))
+        return await _poll_backup_completion(
+            ws_client,
+            name,
+            backup_job_id,
+            max_wait_seconds=_BACKUP_MAX_WAIT_S,
+            poll_interval=_BACKUP_POLL_INTERVAL_S,
+        )
 
     except ToolError:
         raise
@@ -227,6 +241,43 @@ async def create_backup(
                 await ws_client.disconnect()
             except Exception:
                 pass  # Ignore errors during cleanup
+
+
+async def _create_safety_backup(
+    ws_client: HomeAssistantWebSocketClient,
+    password: str | None,
+) -> str | None:
+    """Create a pre-restore safety backup.
+
+    Returns the safety backup ID, or None when password is None (backup intentionally
+    skipped). Raises ToolError if backup creation fails.
+    """
+    if password is None:
+        return None
+
+    now = datetime.now()
+    safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
+
+    safety_backup = await ws_client.send_command(
+        "backup/generate",
+        name=safety_backup_name,
+        password=password,
+        agent_ids=["hassio.local"],
+        include_homeassistant=True,
+        include_database=True,
+        include_all_addons=True,
+    )
+
+    if not safety_backup.get("success"):
+        raise_tool_error(create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            safety_backup.get("error", "Failed to create safety backup before restore"),
+            suggestions=["Cannot proceed with restore without safety backup"],
+        ))
+
+    safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
+    logger.info(f"Safety backup created: {safety_backup_id}")
+    return cast(str, safety_backup_id)
 
 
 async def restore_backup(
@@ -277,38 +328,14 @@ async def restore_backup(
 
         # Create safety backup BEFORE restoring
         logger.info("Creating safety backup before restore...")
-        now = datetime.now()
-        safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
-
-        # Get backup password
         try:
             password = await _get_backup_password(ws_client)
         except ToolError:
             # Password error - log warning but continue (restore might still work)
             logger.warning("No default password - proceeding without safety backup")
             password = None
-            safety_backup_id = None
 
-        if password is not None:
-            safety_backup = await ws_client.send_command(
-                "backup/generate",
-                name=safety_backup_name,
-                password=password,
-                agent_ids=["hassio.local"],
-                include_homeassistant=True,
-                include_database=True,  # Full backup for safety
-                include_all_addons=True,
-            )
-
-            if not safety_backup.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    safety_backup.get("error", "Failed to create safety backup before restore"),
-                    suggestions=["Cannot proceed with restore without safety backup"],
-                ))
-
-            safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
-            logger.info(f"Safety backup created: {safety_backup_id}")
+        safety_backup_id = await _create_safety_backup(ws_client, password)
 
         # Perform restore
         restore_params = {
