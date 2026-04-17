@@ -1082,17 +1082,41 @@ class TestManageAddon:
         assert mock_sup.call_args[1]["data"]["network"] == {"5800/tcp": 8082}
 
     @pytest.mark.asyncio
-    async def test_config_mode_supervisor_error_raises(self, manage_addon_tool):
-        """Config mode: Supervisor error maps to VALIDATION_FAILED with actionable suggestion."""
+    async def test_config_mode_supervisor_schema_error_raises(self, manage_addon_tool):
+        """Config mode: Supervisor schema error on POST /options maps to VALIDATION_FAILED.
+
+        Raised internally by _supervisor_api_call's pre-classifier (issue #993).
+        Earlier revisions mocked a dict return from _supervisor_api_call, which
+        was unreachable in production (send_command raises on success=False).
+        """
+        # Simulate the realistic path: ws_client.send_command raises a plain
+        # Exception with the Supervisor vol.Invalid message as its text.
+        # Mock at _supervisor_api_call level by raising ToolError directly,
+        # matching what the pre-classifier produces.
+        from ha_mcp.errors import ErrorCode, create_error_response
+        from ha_mcp.tools.helpers import raise_tool_error
+
+        def schema_reject(*args, **kwargs):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Supervisor rejected configuration: schema validation failed",
+                    details="Command failed: Missing option 'authorized_keys' in ssh",
+                )
+            )
+
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
-            return_value={"success": False, "error": "boot_config locked"},
+            side_effect=schema_reject,
         ), pytest.raises(ToolError) as exc_info:
-            await manage_addon_tool(slug="test_addon", boot="auto")
+            await manage_addon_tool(
+                slug="test_addon",
+                config={"options": {"ssh": {"sftp": True}}},
+            )
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
         assert payload["error"]["code"] == "VALIDATION_FAILED"
-        assert "rejected" in payload["error"]["message"]
+        assert "schema validation failed" in payload["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_config_mode_all_five_params(self, manage_addon_tool):
@@ -1251,3 +1275,76 @@ class TestManageAddon:
         error = _parse_tool_error(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "method" in error["error"]["message"] or "INVALID" in error["error"]["message"]
+
+
+class TestSupervisorApiCall:
+    """Tests for _supervisor_api_call pre-classifier (issue #993).
+
+    The pre-classifier catches Supervisor schema validation errors before the
+    generic exception classifier mis-routes them via greedy substring matching.
+    Gated on endpoint (POST /addons/*/options) and exception type (plain
+    Exception) to avoid intercepting typed exceptions from other sources.
+    """
+
+    @pytest.mark.asyncio
+    async def test_post_options_plain_exception_classified_as_validation_failed(self):
+        """Plain Exception on POST /addons/*/options => VALIDATION_FAILED."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(
+            side_effect=Exception(
+                "Command failed: Missing option 'authorized_keys' in ssh in SSH (core_ssh)"
+            )
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ), pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                _make_mock_client(),
+                "/addons/core_ssh/options",
+                method="POST",
+                data={"options": {"ssh": {"sftp": True}}},
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert "schema validation failed" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_non_options_endpoint_passes_through_to_generic_classifier(self):
+        """Same schema-like message on a non-/options endpoint is NOT pre-classified.
+
+        Bidirectional assertion: ensures endpoint gating actually restricts the
+        pre-classifier to its intended path. A plain Exception on /info must
+        fall through to exception_to_structured_error's classifier.
+        """
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(
+            side_effect=Exception(
+                "Command failed: Missing option 'authorized_keys' in ssh"
+            )
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ), pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                _make_mock_client(),
+                "/addons/core_ssh/info",
+                method="GET",
+            )
+        payload = _parse_tool_error(exc_info)
+        # Pre-classifier must NOT fire — fallback classifier handles it.
+        # "authorized_keys" contains "auth", so greedy _classify_by_message
+        # routes to AUTH_INVALID_TOKEN. This asserts the known misclassification
+        # still occurs outside the pre-classifier's scope (documenting the
+        # boundary, to be addressed in a follow-up).
+        assert payload["error"]["code"] != "VALIDATION_FAILED"
+
