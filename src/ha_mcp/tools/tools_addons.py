@@ -144,13 +144,14 @@ async def _supervisor_api_call(
             and type(e) is Exception
             and str(e).startswith("Command failed:")
         ):
+            slug = endpoint.split("/")[2] if endpoint.startswith("/addons/") else ""
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_FAILED,
                     "Supervisor rejected configuration: schema validation failed",
                     details=str(e),
                     suggestions=[
-                        "Fetch current options via ha_get_addon(slug) to see the schema",
+                        f"Fetch current options via ha_get_addon(slug='{slug}') to see the schema",
                         "Re-submit all required option fields together",
                     ],
                 )
