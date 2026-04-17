@@ -124,8 +124,12 @@ class HomeAssistantClient:
                 except Exception:
                     error_data = {"message": response.text}
 
+                message = error_data.get("message")
+                if not message or not message.strip():
+                    message = response.reason_phrase or "<empty body>"
+
                 raise HomeAssistantAPIError(
-                    f"API error: {response.status_code} - {error_data.get('message', 'Unknown error')}",
+                    f"API error: {response.status_code} - {message}",
                     status_code=response.status_code,
                     response_data=error_data,
                 )

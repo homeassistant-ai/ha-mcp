@@ -559,14 +559,16 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except HomeAssistantAPIError as e:
-            # 400/404 usually mean unknown slug or addon not installed
             status = getattr(e, "status_code", None)
-            is_not_found = status in (400, 404)
-            first_suggestion = (
-                f"Add-on '{slug}' not found or not installed"
-                if is_not_found
-                else f"Verify add-on slug '{slug}' is correct"
-            )
+            if status == 404:
+                first_suggestion = f"Add-on '{slug}' not found or not installed"
+            elif status == 400:
+                first_suggestion = (
+                    f"Supervisor rejected the request for '{slug}' — verify slug "
+                    "format or that the add-on is installed and running"
+                )
+            else:
+                first_suggestion = f"Verify add-on slug '{slug}' is correct"
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
@@ -586,6 +588,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"source": "supervisor", "slug": slug},
                 suggestions=[
                     "Check Home Assistant connection",
+                    f"Verify add-on slug '{slug}' is correct",
+                    "Use ha_get_addon() to list installed add-on slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
