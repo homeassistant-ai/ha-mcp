@@ -321,8 +321,15 @@ class TestGetSupervisorLogWrapper:
         assert payload.get("source") == "supervisor"
 
     @pytest.mark.asyncio
-    async def test_400_uses_distinct_suggestion(self, client_with_logs):
-        """400 means Supervisor rejected the request — not the same as 404."""
+    async def test_400_uses_distinct_suggestion_and_service_error_code(
+        self, client_with_logs
+    ):
+        """400 means Supervisor rejected the request, not caller input validation.
+
+        The default `exception_to_structured_error` path would map 400 →
+        VALIDATION_INVALID_PARAMETER; for a downstream proxy rejection,
+        SERVICE_CALL_FAILED is more accurate.
+        """
         client_with_logs.get_addon_logs.side_effect = HomeAssistantAPIError(
             "API error: 400 - bad request",
             status_code=400,
@@ -340,6 +347,7 @@ class TestGetSupervisorLogWrapper:
         # 400 must NOT say "not found or not installed" — different root cause.
         assert not any("not found or not installed" in s for s in suggestions)
         assert any("Supervisor rejected" in s for s in suggestions)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
 
     @pytest.mark.asyncio
     async def test_connection_error_keeps_slug_hint(self, client_with_logs):

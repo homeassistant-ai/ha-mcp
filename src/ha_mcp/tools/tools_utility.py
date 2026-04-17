@@ -560,13 +560,28 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             raise
         except HomeAssistantAPIError as e:
             status = getattr(e, "status_code", None)
+            if status == 400:
+                # Supervisor-side rejection — not caller validation. The default
+                # `exception_to_structured_error` path would map 400 →
+                # VALIDATION_INVALID_PARAMETER, which reads as "caller passed
+                # bad input"; a downstream proxy rejection is better modelled
+                # as SERVICE_CALL_FAILED.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(e),
+                        context={"source": "supervisor", "slug": slug},
+                        suggestions=[
+                            f"Supervisor rejected the request for '{slug}' — "
+                            "verify slug format or that the add-on is installed "
+                            "and running",
+                            "Use ha_get_addon() to list installed add-on slugs",
+                            "Ensure Supervisor is available (HA OS or Supervised install)",
+                        ],
+                    )
+                )
             if status == 404:
                 first_suggestion = f"Add-on '{slug}' not found or not installed"
-            elif status == 400:
-                first_suggestion = (
-                    f"Supervisor rejected the request for '{slug}' — verify slug "
-                    "format or that the add-on is installed and running"
-                )
             else:
                 first_suggestion = f"Verify add-on slug '{slug}' is correct"
             exception_to_structured_error(
