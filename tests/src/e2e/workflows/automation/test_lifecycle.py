@@ -33,43 +33,8 @@ class TestAutomationLifecycle:
     """Test complete automation management workflows."""
 
     async def _find_test_light_entity(self, mcp_client) -> str:
-        """
-        Find a suitable light entity for testing.
-
-        Prefers demo entities, falls back to any available light.
-        Returns entity_id of a suitable light for testing.
-        """
-        # Search for light entities
-        search_result = await mcp_client.call_tool(
-            "ha_search_entities",
-            {"query": "light", "domain_filter": "light", "limit": 20},
-        )
-
-        search_data = parse_mcp_result(search_result)
-
-        # Handle nested data structure
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
-
-        if not results:
-            pytest.skip("No light entities available for testing")
-
-        # Prefer demo entities
-        for entity in results:
-            entity_id = entity.get("entity_id", "")
-            if "demo" in entity_id.lower() or "test" in entity_id.lower():
-                logger.info(f"🔍 Using demo/test light: {entity_id}")
-                return entity_id
-
-        # Fall back to first available light
-        entity_id = results[0].get("entity_id", "")
-        if not entity_id:
-            pytest.skip("No valid light entity found for testing")
-
-        logger.info(f"🔍 Using first available light: {entity_id}")
-        return entity_id
+        """Delegates to the module-level helper (kept for existing call sites)."""
+        return await _find_test_light_entity(mcp_client)
 
     async def _find_test_binary_sensors(self, mcp_client) -> list[str]:
         """
@@ -1239,6 +1204,9 @@ class TestConfigHashMismatch:
         assert result["success"] is False, f"expected failure with stale hash: {result}"
         assert result["error"]["code"] == "SERVICE_CALL_FAILED", (
             f"expected SERVICE_CALL_FAILED, got: {result['error']['code']}"
+        )
+        assert "modified since last read" in result["error"]["message"], (
+            f"expected guard message pin, got: {result['error']['message']}"
         )
         logger.info("Stale hash correctly rejected")
 
