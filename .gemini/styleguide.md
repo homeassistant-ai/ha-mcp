@@ -108,7 +108,6 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
 - Multi-line docstring does not follow the structure template: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, (4) caveats. See AGENTS.md "Tool Docstrings" for details.
-- Uses loaded framing ("wrong answer", "escape hatch", "last resort") or reader-directed imperatives ("STOP", "THINK BEFORE") instead of factual description. Tool descriptions should read as you would explain the tool to a new colleague.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
