@@ -7,7 +7,7 @@ callers are already authenticated MCP users with full HA access.
 """
 
 import ast
-from typing import Any
+from typing import Any, cast
 
 
 class PythonSandboxError(Exception):
@@ -323,7 +323,13 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
         >>> safe_execute("config['views'][0]['cards'][0]['icon'] = 'new'", config)
         {'views': [{'cards': [{'icon': 'new'}]}]}
     """
-    return safe_execute_expression(expr, {"config": config}, "config")
+    # safe_execute_expression returns Any (generic over result_key); at this
+    # call site the result is always the dict bound to `config`, so narrow
+    # for mypy and existing callers that depend on the dict interface.
+    return cast(
+        dict[str, Any],
+        safe_execute_expression(expr, {"config": config}, "config"),
+    )
 
 
 def get_security_documentation() -> str:
