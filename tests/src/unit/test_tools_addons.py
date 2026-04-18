@@ -1085,29 +1085,42 @@ class TestManageAddon:
     async def test_config_mode_supervisor_schema_error_raises(self, manage_addon_tool):
         """Config mode: Supervisor schema error on POST /options maps to VALIDATION_FAILED.
 
-        Raised internally by _supervisor_api_call's pre-classifier (issue #993).
-        Earlier revisions mocked a dict return from _supervisor_api_call, which
-        was unreachable in production (send_command raises on success=False).
+        The real pipeline: ws_client.send_command raises
+        HomeAssistantCommandError → _supervisor_api_call funnels it
+        through exception_to_structured_error → _classify_by_message's
+        schema branch recognises the vol.Invalid markers and routes to
+        VALIDATION_FAILED (issue #993 fix).
+
+        This test mocks _supervisor_api_call directly and injects the
+        already-classified ToolError at the /options boundary. End-to-end
+        coverage of the classifier itself (HomeAssistantCommandError →
+        VALIDATION_FAILED) lives in TestSupervisorApiCall.
         """
-        # Simulate the realistic path: ws_client.send_command raises a plain
-        # Exception with the Supervisor vol.Invalid message as its text.
-        # Mock at _supervisor_api_call level by raising ToolError directly,
-        # matching what the pre-classifier produces.
-        from ha_mcp.errors import ErrorCode, create_error_response
+        from ha_mcp.errors import create_validation_error
         from ha_mcp.tools.helpers import raise_tool_error
 
-        def schema_reject(*args, **kwargs):
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {"ssh": {"sftp": False}},
+                        "schema": [{"name": "ssh", "required": True, "type": "dict"}],
+                    },
+                }
+            # POST /addons/test_addon/options with a partial nested update:
+            # Supervisor rejects with vol.Invalid, classifier produces
+            # VALIDATION_FAILED.
             raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Supervisor rejected configuration: schema validation failed",
-                    details="Command failed: Missing option 'authorized_keys' in ssh",
+                create_validation_error(
+                    "Command failed: Missing option 'authorized_keys' in ssh "
+                    "in SSH (core_ssh)",
                 )
             )
 
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
-            side_effect=schema_reject,
+            side_effect=mock_supervisor_api,
         ), pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
                 slug="test_addon",
@@ -1116,7 +1129,6 @@ class TestManageAddon:
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
         assert payload["error"]["code"] == "VALIDATION_FAILED"
-        assert "schema validation failed" in payload["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_config_mode_all_five_params(self, manage_addon_tool):
@@ -1278,24 +1290,27 @@ class TestManageAddon:
 
 
 class TestSupervisorApiCall:
-    """Tests for _supervisor_api_call pre-classifier (issue #993).
+    """Tests for Supervisor schema error classification via _classify_by_message.
 
-    The pre-classifier catches Supervisor schema validation errors before the
-    generic exception classifier mis-routes them via greedy substring matching.
-    Gated on endpoint (POST /addons/*/options) and exception type (plain
-    Exception) to avoid intercepting typed exceptions from other sources.
+    The generic classifier in helpers.py routes Supervisor vol.Invalid
+    errors to VALIDATION_FAILED regardless of endpoint (issue #993).
+    These tests pin that behaviour so the greedy "auth" substring bug
+    stays fixed at the source — not patched at a single call site.
     """
 
     @pytest.mark.asyncio
-    async def test_post_options_plain_exception_classified_as_validation_failed(self):
-        """Plain Exception on POST /addons/*/options => VALIDATION_FAILED."""
+    async def test_schema_error_on_options_endpoint_classified_as_validation_failed(self):
+        """POST /addons/*/options schema reject => VALIDATION_FAILED via classifier."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
         mock_ws = MagicMock()
         mock_ws.disconnect = AsyncMock()
         mock_ws.send_command = AsyncMock(
-            side_effect=Exception(
-                "Command failed: Missing option 'authorized_keys' in ssh in SSH (core_ssh)"
+            side_effect=HomeAssistantCommandError(
+                "Command failed: Missing option 'authorized_keys' in ssh "
+                "in SSH (core_ssh)",
+                code="unknown_error",
             )
         )
 
@@ -1311,23 +1326,26 @@ class TestSupervisorApiCall:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
-        assert "schema validation failed" in payload["error"]["message"]
 
     @pytest.mark.asyncio
-    async def test_non_options_endpoint_passes_through_to_generic_classifier(self):
-        """Same schema-like message on a non-/options endpoint is NOT pre-classified.
+    async def test_schema_error_on_non_options_endpoint_also_classified(self):
+        """Same schema message on a non-/options endpoint => VALIDATION_FAILED.
 
-        Bidirectional assertion: ensures endpoint gating actually restricts the
-        pre-classifier to its intended path. A plain Exception on /info must
-        fall through to exception_to_structured_error's classifier.
+        Bidirectional assertion: fixes the root cause on every endpoint,
+        not just POST /options. The greedy "auth" substring bug at
+        helpers.py previously misclassified this as AUTH_INVALID_TOKEN
+        because "authorized_keys" contains "auth"; the phrase-list fix
+        in _classify_by_message closes that without endpoint gating.
         """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
         mock_ws = MagicMock()
         mock_ws.disconnect = AsyncMock()
         mock_ws.send_command = AsyncMock(
-            side_effect=Exception(
-                "Command failed: Missing option 'authorized_keys' in ssh"
+            side_effect=HomeAssistantCommandError(
+                "Command failed: Missing option 'authorized_keys' in ssh",
+                code="unknown_error",
             )
         )
 
@@ -1341,10 +1359,5 @@ class TestSupervisorApiCall:
                 method="GET",
             )
         payload = _parse_tool_error(exc_info)
-        # Pre-classifier must NOT fire — fallback classifier handles it.
-        # "authorized_keys" contains "auth", so greedy _classify_by_message
-        # routes to AUTH_INVALID_TOKEN. This asserts the known misclassification
-        # still occurs outside the pre-classifier's scope (documenting the
-        # boundary, to be addressed in a follow-up).
-        assert payload["error"]["code"] != "VALIDATION_FAILED"
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
 

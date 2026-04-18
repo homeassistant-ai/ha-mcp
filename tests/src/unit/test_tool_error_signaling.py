@@ -220,3 +220,64 @@ class TestIntegrationWithMCPProtocol:
         error_data = json.loads(error_message)
         assert error_data["success"] is False
         assert "VALIDATION" in error_data["error"]["code"]
+
+
+class TestSchemaAndAuthClassification:
+    """Tests for _classify_by_message schema and auth branches (issue #993).
+
+    Pins two behaviours at the classifier boundary:
+    1. Supervisor vol.Invalid messages route to VALIDATION_FAILED via
+       the "Command failed: ... missing option" branch.
+    2. Messages that merely contain the substring "auth" (e.g.
+       "Did not receive auth_required message", "authorized_keys")
+       are NOT misclassified as AUTH_INVALID_TOKEN. Only the phrase
+       list (unauthorized, authentication, invalid token, access
+       denied) matches the auth branch.
+    """
+
+    def test_command_error_with_schema_marker_is_validation_failed(self):
+        """HomeAssistantCommandError carrying vol.Invalid markers => VALIDATION_FAILED."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        exc = HomeAssistantCommandError(
+            "Command failed: Missing option 'authorized_keys' in ssh",
+            code="unknown_error",
+        )
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_authorized_keys_substring_not_auth_error(self):
+        """Plain Exception mentioning 'authorized_keys' must not be AUTH_INVALID_TOKEN.
+
+        Covers the root cause of #993: the old
+        ``"auth" in error_str`` greedy match caught this as an auth
+        failure purely because the word "authorized_keys" contains
+        "auth".
+        """
+        exc = Exception("Command failed: Missing option 'authorized_keys' in ssh")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
+
+    def test_auth_required_handshake_not_auth_error(self):
+        """Handshake failure message containing 'auth_required' is not AUTH_INVALID_TOKEN.
+
+        websocket_client.py raises ``Exception("Did not receive
+        auth_required message")`` during the connect handshake — this
+        is a transport problem, not an auth failure. The phrase list
+        refuses to match it.
+        """
+        exc = Exception("Did not receive auth_required message")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
+
+    def test_genuine_auth_phrase_still_classified(self):
+        """Actual auth failure vocabulary still routes to AUTH_INVALID_TOKEN."""
+        exc = Exception("unauthorized: invalid bearer token")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
+
+    def test_401_status_still_classified_as_auth(self):
+        """401 numeric signal in error text remains an auth error."""
+        exc = Exception("Server returned 401")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
