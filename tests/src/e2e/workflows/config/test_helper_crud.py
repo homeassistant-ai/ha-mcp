@@ -1642,12 +1642,14 @@ class TestHelperRegistryClear:
             f"Area was not assigned on create: expected {area_id!r}, got {assigned!r}"
         )
 
-        # Clear area using empty string
+        # Clear area using empty string. `name` is required by the tool schema
+        # even on update; we pass the existing name as a no-op rename.
         clear_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "helper_id": entity_id,
+                "name": "E2E Clear Area Helper",
                 "area_id": "",
             },
         )
@@ -1708,12 +1710,13 @@ class TestHelperRegistryClear:
             f"Label was not assigned on create: expected {label_id!r} in labels, got {assigned_labels!r}"
         )
 
-        # Clear labels using empty list
+        # Clear labels using empty list. `name` required by schema even on update.
         clear_result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_boolean",
                 "helper_id": entity_id,
+                "name": "E2E Clear Labels Helper",
                 "labels": [],
             },
         )
@@ -1797,11 +1800,14 @@ class TestHelperRegistryClear:
             # The options flow needs valid config to proceed, so we re-supply
             # the same entity_ids + type — the clear is driven purely by the
             # top-level area_id="" parameter, not by the config payload.
+            # `name` is required by the tool schema (docstring notes it is
+            # typically ignored on flow-based updates).
             clear_result = await mcp_client.call_tool(
                 "ha_config_set_helper",
                 {
                     "helper_type": "min_max",
                     "helper_id": entry_id,
+                    "name": "E2E Flow Clear Area Helper",
                     "config": {
                         "entity_ids": [
                             "sensor.demo_temperature",

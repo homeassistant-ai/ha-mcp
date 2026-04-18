@@ -97,7 +97,12 @@ async def test_simple_clear_area(mcp):
         assert_success(
             await mcp.call_tool(
                 "ha_config_set_helper",
-                {"helper_type": "input_boolean", "helper_id": entity_id, "area_id": ""},
+                {
+                    "helper_type": "input_boolean",
+                    "helper_id": entity_id,
+                    "name": "E2E Clear Area Helper",
+                    "area_id": "",
+                },
             ),
             "Clear helper area",
         )
@@ -167,7 +172,12 @@ async def test_simple_clear_labels(mcp):
         assert_success(
             await mcp.call_tool(
                 "ha_config_set_helper",
-                {"helper_type": "input_boolean", "helper_id": entity_id, "labels": []},
+                {
+                    "helper_type": "input_boolean",
+                    "helper_id": entity_id,
+                    "name": "E2E Clear Labels Helper",
+                    "labels": [],
+                },
             ),
             "Clear helper labels",
         )
@@ -248,6 +258,7 @@ async def test_flow_clear_area(mcp):
                 {
                     "helper_type": "min_max",
                     "helper_id": entry_id,
+                    "name": "E2E Flow Clear Area Helper",
                     "config": {
                         "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
                         "type": "min",
