@@ -680,3 +680,38 @@ class TestFlowHelperRouting:
         )
 
         assert captured_config.get("name") == "my_helper_name"
+
+    async def test_simple_type_rejects_config_param(
+        self, register_tools, mock_client
+    ):
+        """Passing config for a simple helper type raises VALIDATION_INVALID_PARAMETER.
+
+        Silent-ignore would mislead agents into thinking the payload took effect.
+        Empty dict and empty string are tolerated (explicit 'nothing').
+        """
+        from fastmcp.exceptions import ToolError
+
+        # Non-empty config on simple type → reject
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="probe",
+                config={"some_key": "some_value"},
+            )
+        err_text = str(excinfo.value)
+        assert "VALIDATION_INVALID_PARAMETER" in err_text
+        assert "flow-based" in err_text.lower()
+
+        # Empty dict → tolerated (would proceed to simple path). We only check
+        # that no ToolError with VALIDATION_INVALID_PARAMETER for the config
+        # reason is raised; the call itself may fail downstream due to mocks.
+        try:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="probe_empty",
+                config={},
+            )
+        except ToolError as e:
+            assert "flow-based" not in str(e).lower(), (
+                f"empty config should not trigger the flow-based-rejection message: {e}"
+            )

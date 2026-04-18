@@ -220,25 +220,34 @@ async def _handle_flow_helper(
     if action == "update":
         result["updated"] = True
 
-    # Optionally wait for entity registration (create only — update keeps entities).
-    wait_bool = coerce_bool_param(wait, "wait", default=True)
-    if action == "create" and wait_bool and entry_id:
-        # Poll the registry briefly for at least one entity under the new entry.
-        deadline = 5.0
-        step = 0.25
-        elapsed = 0.0
-        while elapsed < deadline:
-            entities = await _get_entities_for_config_entry(client, entry_id)
-            if entities:
-                break
-            await asyncio.sleep(step)
-            elapsed += step
-
     # Resolve all entities for this config entry (multi-entity helpers handled naturally).
+    # For create with wait=True, poll briefly for at least one entity to appear —
+    # otherwise a single fetch is enough (update keeps entities; create without wait
+    # is caller-opted into not waiting).
+    #
+    # Graduated polling: short intervals for the first retries catch local/small
+    # instances quickly; steady 500ms matches typical entity_registry/list latency
+    # on larger remote setups without missing entities near the deadline.
     warnings: list[str] = []
-    entities = (
-        await _get_entities_for_config_entry(client, entry_id) if entry_id else []
-    )
+    wait_bool = coerce_bool_param(wait, "wait", default=True)
+    entities: list[dict[str, Any]] = []
+    if entry_id:
+        if action == "create" and wait_bool:
+            deadline = 5.0
+            intervals = [0.2, 0.3]  # first two retries faster
+            steady_interval = 0.5
+            elapsed = 0.0
+            attempt = 0
+            while elapsed < deadline:
+                entities = await _get_entities_for_config_entry(client, entry_id)
+                if entities:
+                    break
+                step = intervals[attempt] if attempt < len(intervals) else steady_interval
+                await asyncio.sleep(step)
+                elapsed += step
+                attempt += 1
+        else:
+            entities = await _get_entities_for_config_entry(client, entry_id)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
     result["entity_ids"] = entity_ids
 
@@ -448,7 +457,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ],
             Field(description="Type of helper entity to create or update"),
         ],
-        name: Annotated[str, Field(description="Display name for the helper")],
+        name: Annotated[
+            str,
+            Field(
+                description=(
+                    "Display name for the helper. For flow-based helper types on update "
+                    "(template, group, utility_meter, ...), this is typically ignored — "
+                    "options flows don't expose renaming. Rename a flow helper by "
+                    "deleting and recreating instead."
+                ),
+            ),
+        ],
         helper_id: Annotated[
             str | None,
             Field(
@@ -732,8 +751,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
              })
 
         ROUTING: Flow-based helpers require the config parameter. The name parameter
-        is passed into config automatically if not already present.
+        is passed into config automatically on create if not already present — but is
+        typically ignored on update, because options flows don't expose renaming.
         For flow-based updates, pass helper_id set to the entry_id of the existing entry.
+        To rename a flow helper, delete it and recreate with the new name.
 
         For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
         """
@@ -756,6 +777,23 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     labels=labels,
                     category=category,
                     wait=wait,
+                )
+
+            # Simple helper types use explicit parameters (name, options, min_value, ...).
+            # The `config` parameter only applies to flow-based types; silently ignoring
+            # it here would let the caller believe the payload took effect.
+            if config not in (None, {}, ""):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"The 'config' parameter is only valid for flow-based helper types. "
+                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
+                        context={"helper_type": helper_type},
+                        suggestions=[
+                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
+                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
+                        ],
+                    )
                 )
 
             # Parse JSON list parameters if provided as strings
