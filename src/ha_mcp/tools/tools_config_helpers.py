@@ -15,15 +15,253 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .tools_config_entry_flow import (
+    FLOW_HELPER_TYPES,
+    create_flow_helper,
+    update_flow_helper,
+)
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
+    parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
 )
 
+# Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
+# (not Config Entry Flow). Kept in parallel with FLOW_HELPER_TYPES for routing.
+SIMPLE_HELPER_TYPES: frozenset[str] = frozenset({
+    "input_button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "input_text",
+    "input_datetime",
+    "counter",
+    "timer",
+    "schedule",
+    "zone",
+    "person",
+    "tag",
+})
+
 logger = logging.getLogger(__name__)
+
+
+async def _get_entities_for_config_entry(
+    client: Any, entry_id: str
+) -> list[dict[str, Any]]:
+    """Return all entity_registry entries linked to the given config_entry_id.
+
+    Uses the config/entity_registry/list WebSocket API and filters client-side
+    by config_entry_id. Multi-entity helpers (e.g. utility_meter with tariffs)
+    are handled naturally — all entities for the same entry are returned.
+    """
+    result = await client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    entries = result if isinstance(result, list) else result.get("result", [])
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if e.get("config_entry_id") == entry_id]
+
+
+async def _apply_registry_updates_to_entity(
+    client: Any,
+    entity_id: str,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Apply area_id/labels (single WS call) and category (shared helper) to one entity.
+
+    Appends human-readable warning strings to `warnings` on any failure.
+    Returns a small dict summarizing what was applied (for result building).
+    """
+    applied: dict[str, Any] = {"entity_id": entity_id}
+
+    # area_id + labels in one entity_registry/update
+    if area_id or labels:
+        update_message: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": entity_id,
+        }
+        if area_id:
+            update_message["area_id"] = area_id
+        if labels:
+            update_message["labels"] = labels
+        ws_result = await client.send_websocket_message(update_message)
+        if ws_result.get("success"):
+            if area_id:
+                applied["area_id"] = area_id
+            if labels:
+                applied["labels"] = labels
+        else:
+            error_detail = ws_result.get("error", {})
+            error_msg = (
+                error_detail.get("message", "Unknown error")
+                if isinstance(error_detail, dict)
+                else str(error_detail)
+            )
+            warnings.append(
+                f"{entity_id}: entity registry update failed: {error_msg}"
+            )
+
+    # category via shared helper (consistent with simple helpers / automations / scripts)
+    if category:
+        cat_ack: dict[str, Any] = {}
+        await apply_entity_category(
+            client,
+            entity_id,
+            category,
+            "helpers",
+            cat_ack,
+            "helper",
+        )
+        if "category" in cat_ack:
+            applied["category"] = cat_ack["category"]
+        elif "category_warning" in cat_ack:
+            warnings.append(f"{entity_id}: {cat_ack['category_warning']}")
+
+    return applied
+
+
+async def _handle_flow_helper(
+    client: Any,
+    helper_type: str,
+    name: str,
+    helper_id: str | None,
+    config: str | dict | None,
+    area_id: str | None,
+    labels: str | list[str] | None,
+    category: str | None,
+    wait: bool | str,
+) -> dict[str, Any]:
+    """Create or update a flow-based helper and apply registry updates to all entities.
+
+    Routes between create_flow_helper and update_flow_helper based on helper_id,
+    then resolves the resulting config_entry_id to its entity(ies) and applies
+    area_id / labels / category across the full set.
+
+    For utility_meter with tariffs, this means the same label/area is applied
+    to every tariff sensor (and the select entity) uniformly.
+    """
+    action = "update" if helper_id else "create"
+
+    # Normalize config into a dict (accepts JSON string or dict).
+    if isinstance(config, str):
+        parsed = parse_json_param(config)
+        if not isinstance(parsed, dict):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config must be a JSON object (dict) for flow-based helpers",
+                suggestions=['Example: {"name": "my_helper", "source": "sensor.x"}'],
+                context={"helper_type": helper_type},
+            ))
+        config_dict: dict[str, Any] = parsed
+    elif isinstance(config, dict):
+        config_dict = dict(config)  # shallow copy — we may mutate
+    elif config is None:
+        config_dict = {}
+    else:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"config must be a dict or JSON string, got {type(config).__name__}",
+            context={"helper_type": helper_type},
+        ))
+
+    # Fold the top-level `name` parameter into config_dict only for create:
+    # options (update) flows are strict about extra keys and will reject `name`
+    # with 400 "extra keys not allowed @ data['name']" — names on existing flow
+    # helpers are not renamed through the options flow.
+    if action == "create" and name and "name" not in config_dict:
+        config_dict["name"] = name
+
+    # Normalize labels to a list for registry updates below.
+    try:
+        labels_list = parse_string_list_param(labels, "labels")
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Invalid labels parameter: {e}",
+            context={"helper_type": helper_type},
+        ))
+
+    # Dispatch to the shared flow machinery.
+    if action == "create":
+        if not config_dict.get("name"):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "name is required for create action",
+                suggestions=[
+                    "Pass the name argument directly or include 'name' in config",
+                ],
+                context={"helper_type": helper_type},
+            ))
+        flow_result = await create_flow_helper(client, helper_type, config_dict)
+    else:
+        # For updates, helper_id is the config entry_id (flow-based helpers)
+        flow_result = await update_flow_helper(
+            client, helper_type, config_dict, helper_id  # type: ignore[arg-type]
+        )
+
+    entry_id = flow_result.get("entry_id")
+    result: dict[str, Any] = {
+        "success": True,
+        "action": action,
+        "helper_type": helper_type,
+        "method": "config_flow",
+        "entry_id": entry_id,
+        "title": flow_result.get("title"),
+        "message": flow_result.get("message"),
+    }
+    if action == "update":
+        result["updated"] = True
+
+    # Optionally wait for entity registration (create only — update keeps entities).
+    wait_bool = coerce_bool_param(wait, "wait", default=True)
+    if action == "create" and wait_bool and entry_id:
+        # Poll the registry briefly for at least one entity under the new entry.
+        deadline = 5.0
+        step = 0.25
+        elapsed = 0.0
+        while elapsed < deadline:
+            entities = await _get_entities_for_config_entry(client, entry_id)
+            if entities:
+                break
+            await asyncio.sleep(step)
+            elapsed += step
+
+    # Resolve all entities for this config entry (multi-entity helpers handled naturally).
+    warnings: list[str] = []
+    entities = (
+        await _get_entities_for_config_entry(client, entry_id) if entry_id else []
+    )
+    entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
+    result["entity_ids"] = entity_ids
+
+    # Apply registry updates (area_id / labels / category) to every entity.
+    if entity_ids and (area_id or labels_list or category):
+        applied_per_entity: list[dict[str, Any]] = []
+        for eid in entity_ids:
+            applied = await _apply_registry_updates_to_entity(
+                client, eid, area_id, labels_list, category, warnings
+            )
+            applied_per_entity.append(applied)
+        if area_id:
+            result["area_id"] = area_id
+        if labels_list:
+            result["labels"] = labels_list
+        if category:
+            result["category"] = category
+        result["applied"] = applied_per_entity
+
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
 
 
 def _format_schedule_days(
@@ -180,18 +418,33 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_config_set_helper(
         helper_type: Annotated[
             Literal[
-                "input_button",
-                "input_boolean",
-                "input_select",
-                "input_number",
-                "input_text",
-                "input_datetime",
                 "counter",
-                "timer",
-                "schedule",
-                "zone",
+                "derivative",
+                "filter",
+                "generic_hygrostat",
+                "generic_thermostat",
+                "group",
+                "input_boolean",
+                "input_button",
+                "input_datetime",
+                "input_number",
+                "input_select",
+                "input_text",
+                "integration",
+                "min_max",
                 "person",
+                "random",
+                "schedule",
+                "statistics",
+                "switch_as_x",
                 "tag",
+                "template",
+                "threshold",
+                "timer",
+                "tod",
+                "trend",
+                "utility_meter",
+                "zone",
             ],
             Field(description="Type of helper entity to create or update"),
         ],
@@ -412,6 +665,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        config: Annotated[
+            str | dict | None,
+            Field(
+                description=(
+                    "Config dict for flow-based helper types "
+                    "(template, group, utility_meter, derivative, min_max, threshold, "
+                    "integration, statistics, trend, random, filter, tod, "
+                    "generic_thermostat, switch_as_x, generic_hygrostat). "
+                    "Accepts JSON string or dict. Ignored for simple helper types. "
+                    "Use ha_get_helper_schema(helper_type) to discover required fields."
+                ),
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -421,12 +688,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update Home Assistant helper entities.
+        Create or update Home Assistant helper entities (27 types, unified interface).
 
         Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
         Parameters are validated by Home Assistant - errors return clear messages.
 
-        QUICK EXAMPLES:
+        SIMPLE HELPER TYPES (structured params, WebSocket API):
+        - input_boolean, input_button, input_select, input_number, input_text, input_datetime
+        - counter, timer, schedule, zone, person, tag
+
+        FLOW-BASED HELPER TYPES (config: dict, Config Entry Flow API):
+        - template, group, utility_meter, derivative, min_max, threshold, integration
+        - statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat
+
+        QUICK EXAMPLES (simple):
         - ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
         - ha_config_set_helper("counter", "My Counter", initial=0, step=1)
         - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
@@ -434,9 +709,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
         - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
 
+        QUICK EXAMPLES (flow-based, pass config as dict):
+        - ha_config_set_helper("min_max", "Avg Temp", config={"entity_ids": ["sensor.t1","sensor.t2"], "type": "mean"})
+        - ha_config_set_helper("utility_meter", "Daily kWh", config={"source": "sensor.energy", "cycle": "daily", "tariffs": [], "offset": 0, "net_consumption": False, "delta_values": False, "periodically_resetting": True})
+        - ha_config_set_helper("group", "All Lights", config={"group_type": "light", "entities": ["light.a","light.b"], "hide_members": False})
+        - ha_config_set_helper("template", "My Sensor", config={"next_step_id": "sensor", "name": "My Sensor", "state": "{{ states('sensor.foo') }}"})
+
         TEMPLATE SENSORS AND BINARY SENSORS:
-        Use ha_set_config_entry_helper(helper_type="template", ...) — not this tool.
-        Template helpers are managed via the Config Entry Flow API.
         Before reaching for a template, check if a simpler built-in exists:
         - min_max instead of template for combining sensors
         - group instead of template binary sensor for any/all logic
@@ -444,17 +723,41 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - input_number instead of template for storing values
         - schedule instead of template with weekday checks
         Workflow:
-          1. ha_get_helper_schema("template") → see available sub-types
-          2. ha_get_helper_schema("template", menu_option="sensor") → see form fields
-          3. ha_set_config_entry_helper("template", {
+          1. ha_get_helper_schema("template") -> see available sub-types
+          2. ha_get_helper_schema("template", menu_option="sensor") -> see form fields
+          3. ha_config_set_helper("template", "My Sensor", config={
                "next_step_id": "sensor",
                "name": "My Sensor",
                "state": "{{ states('sensor.foo') }}",
              })
 
+        ROUTING: Flow-based helpers require the config parameter. The name parameter
+        is passed into config automatically if not already present.
+        For flow-based updates, pass helper_id set to the entry_id of the existing entry.
+
         For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
         """
         try:
+            # Determine if this is a create or update — set early so the
+            # outer exception handler's context dict can reference it even
+            # if an exception bubbles out of the flow-helper branch below.
+            action = "update" if helper_id else "create"
+
+            # Route flow-based helpers to Config Entry Flow API.
+            # Simple helpers continue through the WebSocket {type}/create+update path below.
+            if helper_type in FLOW_HELPER_TYPES:
+                return await _handle_flow_helper(
+                    client=client,
+                    helper_type=helper_type,
+                    name=name,
+                    helper_id=helper_id,
+                    config=config,
+                    area_id=area_id,
+                    labels=labels,
+                    category=category,
+                    wait=wait,
+                )
+
             # Parse JSON list parameters if provided as strings
             try:
                 labels = parse_string_list_param(labels, "labels")
@@ -467,8 +770,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            # Determine if this is a create or update based on helper_id
-            action = "update" if helper_id else "create"
+            # (action already determined above)
 
             if action == "create":
                 if not name:

@@ -432,3 +432,251 @@ class TestEntityRegistryFallback:
         # Should use entity registry, not {type}/update
         update_call = ws_calls[0][0][0]
         assert update_call["type"] == "config/entity_registry/update"
+
+
+class TestFlowHelperRouting:
+    """Verify that ha_config_set_helper routes flow-based helper types (#967)
+    to the Config Entry Flow API, not to the WebSocket {type}/create path.
+
+    Covers the unified-tool routing added in #967: types in FLOW_HELPER_TYPES
+    (template, group, utility_meter, ...) are delegated to create_flow_helper /
+    update_flow_helper; entity resolution and registry updates then run against
+    all entities of the resulting config entry.
+    """
+
+    async def test_flow_helper_create_routes_via_config_flow(
+        self, register_tools, mock_client
+    ):
+        """Creating a min_max helper uses start_config_flow, not WebSocket create."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-1",
+                "result": {
+                    "entry_id": "entry-1",
+                    "title": "avg_temp",
+                    "domain": "min_max",
+                },
+            }
+        )
+        # entity_registry/list returns one entity for our entry.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "sensor.avg_temp",
+                        "config_entry_id": "entry-1",
+                    }
+                ],
+            }
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="avg_temp",
+            config={"entity_ids": ["sensor.a", "sensor.b"], "type": "mean"},
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "create"
+        assert result["method"] == "config_flow"
+        assert result["entry_id"] == "entry-1"
+        assert result["entity_ids"] == ["sensor.avg_temp"]
+        mock_client.start_config_flow.assert_awaited_once_with("min_max")
+
+    async def test_flow_helper_update_routes_via_options_flow(
+        self, register_tools, mock_client
+    ):
+        """Updating a flow helper (helper_id set) uses start_options_flow."""
+        mock_client.get_config_entry = AsyncMock(
+            return_value={"domain": "min_max", "entry_id": "entry-1"}
+        )
+        mock_client.start_options_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-2",
+                "result": {"entry_id": "entry-1", "title": "avg_temp"},
+            }
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="avg_temp",
+            config={"entity_ids": ["sensor.c"], "type": "max"},
+            helper_id="entry-1",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "update"
+        assert result["updated"] is True
+        assert result["method"] == "config_flow"
+        mock_client.start_options_flow.assert_awaited_once_with("entry-1")
+
+    async def test_flow_helper_multi_entity_registry_updates_apply_to_all(
+        self, register_tools, mock_client
+    ):
+        """utility_meter with 2 tariffs creates 3 entities; area_id/labels
+        must be applied to every one of them (#967 scope by kp13)."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-um",
+                "result": {
+                    "entry_id": "entry-um",
+                    "title": "daily_kwh",
+                    "domain": "utility_meter",
+                },
+            }
+        )
+
+        # Simulate HA: first call lists 3 entities (select + 2 tariff sensors);
+        # subsequent calls are entity_registry/update, all succeed.
+        responses = [
+            {
+                "success": True,
+                "result": [
+                    {"entity_id": "select.daily_kwh", "config_entry_id": "entry-um"},
+                    {
+                        "entity_id": "sensor.daily_kwh_peak",
+                        "config_entry_id": "entry-um",
+                    },
+                    {
+                        "entity_id": "sensor.daily_kwh_offpeak",
+                        "config_entry_id": "entry-um",
+                    },
+                ],
+            },
+        ]
+        responses.extend([{"success": True}] * 10)  # plenty of headroom
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="utility_meter",
+            name="daily_kwh",
+            config={"source": "sensor.energy", "cycle": "daily", "tariffs": ["peak", "offpeak"]},
+            area_id="kitchen",
+            labels=["metered"],
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert sorted(result["entity_ids"]) == sorted([
+            "select.daily_kwh",
+            "sensor.daily_kwh_peak",
+            "sensor.daily_kwh_offpeak",
+        ])
+        assert result["area_id"] == "kitchen"
+        assert result["labels"] == ["metered"]
+        assert len(result["applied"]) == 3
+
+        # Verify every entity received a config/entity_registry/update call
+        update_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/entity_registry/update"
+        ]
+        updated_entities = {c["entity_id"] for c in update_calls}
+        assert updated_entities == {
+            "select.daily_kwh",
+            "sensor.daily_kwh_peak",
+            "sensor.daily_kwh_offpeak",
+        }
+
+    async def test_flow_helper_registry_update_failure_collects_warning(
+        self, register_tools, mock_client
+    ):
+        """Partial registry-update failure surfaces as per-entity warning, not hard error."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-g",
+                "result": {"entry_id": "entry-g", "title": "grp", "domain": "group"},
+            }
+        )
+        # One entity, registry/update fails
+        responses = [
+            {
+                "success": True,
+                "result": [
+                    {"entity_id": "light.grp", "config_entry_id": "entry-g"},
+                ],
+            },
+            {"success": False, "error": {"message": "registry unavailable"}},
+        ]
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="group",
+            name="grp",
+            config={"group_type": "light", "entities": [], "hide_members": False},
+            area_id="hallway",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any("light.grp" in w for w in result["warnings"])
+
+    async def test_flow_helper_create_requires_name(
+        self, register_tools, mock_client
+    ):
+        """Flow helper create without name (neither top-level nor in config) errors."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            await register_tools["ha_config_set_helper"](
+                helper_type="min_max",
+                name="",  # explicit empty
+                config={"entity_ids": ["sensor.x"], "type": "mean"},
+                wait=False,
+            )
+
+    async def test_flow_helper_name_param_folded_into_config(
+        self, register_tools, mock_client
+    ):
+        """Top-level name param is injected into config dict when not already present."""
+        captured_config: dict = {}
+
+        async def capture_start(helper_type):
+            # called by create_flow_helper; return minimal success
+            return {
+                "type": "create_entry",
+                "flow_id": "flow-c",
+                "result": {"entry_id": "entry-c", "title": "t", "domain": helper_type},
+            }
+
+        async def capture_submit(flow_id, data):
+            captured_config.update(data)
+            return {
+                "type": "create_entry",
+                "result": {"entry_id": "entry-c", "title": "t", "domain": "min_max"},
+            }
+
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "flow-c",
+                "step_id": "user",
+            }
+        )
+        mock_client.submit_config_flow_step = AsyncMock(side_effect=capture_submit)
+        mock_client.abort_config_flow = AsyncMock(return_value={})
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="my_helper_name",
+            config={"entity_ids": ["sensor.x"], "type": "mean"},
+            wait=False,
+        )
+
+        assert captured_config.get("name") == "my_helper_name"
