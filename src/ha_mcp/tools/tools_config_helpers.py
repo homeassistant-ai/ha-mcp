@@ -725,53 +725,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Create or update Home Assistant helper entities (27 types, unified interface).
 
         Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
-        Parameters are validated by Home Assistant - errors return clear messages.
 
-        SIMPLE HELPER TYPES (structured params, WebSocket API):
-        - input_boolean, input_button, input_select, input_number, input_text, input_datetime
-        - counter, timer, schedule, zone, person, tag
+        SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
+        input_select, input_number, input_text, input_datetime, counter, timer, schedule,
+        zone, person, tag.
 
-        FLOW-BASED HELPER TYPES (config: dict, Config Entry Flow API):
-        - template, group, utility_meter, derivative, min_max, threshold, integration
-        - statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat
+        FLOW types (pass `config` dict, Config Entry Flow API): template, group,
+        utility_meter, derivative, min_max, threshold, integration, statistics, trend,
+        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.
 
-        QUICK EXAMPLES (simple):
-        - ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
-        - ha_config_set_helper("counter", "My Counter", initial=0, step=1)
-        - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
-        - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
-        - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
-        - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
+        For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
+        reject the `name` key on update — to rename a flow helper, delete and recreate.
 
-        QUICK EXAMPLES (flow-based, pass config as dict):
-        - ha_config_set_helper("min_max", "Avg Temp", config={"entity_ids": ["sensor.t1","sensor.t2"], "type": "mean"})
-        - ha_config_set_helper("utility_meter", "Daily kWh", config={"source": "sensor.energy", "cycle": "daily", "tariffs": [], "offset": 0, "net_consumption": False, "delta_values": False, "periodically_resetting": True})
-        - ha_config_set_helper("group", "All Lights", config={"group_type": "light", "entities": ["light.a","light.b"], "hide_members": False})
-        - ha_config_set_helper("template", "My Sensor", config={"next_step_id": "sensor", "name": "My Sensor", "state": "{{ states('sensor.foo') }}"})
-
-        TEMPLATE SENSORS AND BINARY SENSORS:
-        Before reaching for a template, check if a simpler built-in exists:
-        - min_max instead of template for combining sensors
-        - group instead of template binary sensor for any/all logic
-        - counter instead of template with math for counting
-        - input_number instead of template for storing values
-        - schedule instead of template with weekday checks
-        Workflow:
-          1. ha_get_helper_schema("template") -> see available sub-types
-          2. ha_get_helper_schema("template", menu_option="sensor") -> see form fields
-          3. ha_config_set_helper("template", "My Sensor", config={
-               "next_step_id": "sensor",
-               "name": "My Sensor",
-               "state": "{{ states('sensor.foo') }}",
-             })
-
-        ROUTING: Flow-based helpers require the config parameter. The name parameter
-        is passed into config automatically on create if not already present — but is
-        typically ignored on update, because options flows don't expose renaming.
-        For flow-based updates, pass helper_id set to the entry_id of the existing entry.
-        To rename a flow helper, delete it and recreate with the new name.
-
-        For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
+        For complex schemas and per-type parameter details, use ha_get_helper_schema.
         """
         try:
             # Determine if this is a create or update — set early so the
@@ -822,8 +788,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         f"Invalid list parameter: {e}",
                     )
                 )
-
-            # (action already determined above)
 
             if action == "create":
                 if not name:
@@ -1676,6 +1640,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         SUPPORTED HELPER TYPES:
         - input_button, input_boolean, input_select, input_number, input_text, input_datetime
         - counter, timer, schedule, zone, person, tag
+
+        For flow-based helper types (template, group, utility_meter, derivative,
+        min_max, threshold, integration, statistics, trend, random, filter, tod,
+        generic_thermostat, switch_as_x, generic_hygrostat) use ha_delete_config_entry.
 
         EXAMPLES:
         - Delete button: ha_config_remove_helper("input_button", "my_button")
