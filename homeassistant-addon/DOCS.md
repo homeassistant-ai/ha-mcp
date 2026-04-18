@@ -432,7 +432,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
 - `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_search_entities` — PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+- `ha_search_entities` — Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
 
 ### Service & Device Control
 - `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
