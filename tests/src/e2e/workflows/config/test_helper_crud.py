@@ -1840,3 +1840,183 @@ class TestHelperRegistryClear:
                 "ha_delete_config_entry",
                 {"entry_id": entry_id, "confirm": True},
             )
+
+    async def test_helper_clear_area_and_labels_together(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Clearing area and labels in a single call: neither clear silently swallows the other.
+
+        Targets the interaction between area_id and labels updates in
+        _apply_registry_updates_to_entity — a single registry-update WS call
+        carries both payloads, so a bug in one field could regress the other.
+        """
+        logger.info("Testing combined area+labels clear in one call")
+
+        # Create area + label
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area", {"name": "E2E Combined Clear Area"}
+        )
+        area_data = assert_mcp_success(area_result, "Create test area")
+        area_id = area_data.get("area_id")
+        assert area_id, f"Missing area_id: {area_data}"
+        cleanup_tracker.track("area", area_id)
+
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label", {"name": "E2E Combined Clear Label"}
+        )
+        label_data = assert_mcp_success(label_result, "Create test label")
+        label_id = label_data.get("label_id")
+        assert label_id, f"Missing label_id: {label_data}"
+        cleanup_tracker.track("label", label_id)
+
+        # Create helper with both
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Combined Clear Helper",
+                "area_id": area_id,
+                "labels": [label_id],
+            },
+        )
+        data = assert_mcp_success(create_result, "Create helper with area+labels")
+        entity_id = get_entity_id_from_response(data, "input_boolean")
+        assert entity_id, f"Missing entity_id: {data}"
+        cleanup_tracker.track("input_boolean", entity_id)
+
+        # Verify both set
+        before = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": entity_id}
+            ),
+            "Get entity before clear",
+        )
+        assert before.get("entity_entry", {}).get("area_id") == area_id
+        assert label_id in (before.get("entity_entry", {}).get("labels") or [])
+
+        # Clear both in a single call
+        clear_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "helper_id": entity_id,
+                "name": "E2E Combined Clear Helper",
+                "area_id": "",
+                "labels": [],
+            },
+        )
+        assert_mcp_success(clear_result, "Clear area+labels in one call")
+
+        # Verify both cleared
+        after = assert_mcp_success(
+            await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": entity_id}
+            ),
+            "Get entity after combined clear",
+        )
+        cleared_area = after.get("entity_entry", {}).get("area_id")
+        cleared_labels = after.get("entity_entry", {}).get("labels") or []
+        assert cleared_area is None, (
+            f"Combined clear dropped area_id: expected None, got {cleared_area!r}"
+        )
+        assert cleared_labels == [], (
+            f"Combined clear dropped labels: expected [], got {cleared_labels!r}"
+        )
+
+        logger.info("Combined area+labels clear in one call works correctly")
+
+    @pytest.mark.slow
+    async def test_flow_helper_clear_labels_with_empty_list(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Clearing labels on a FLOW helper (min_max) via labels=[] works.
+
+        Symmetric to test_flow_helper_clear_area_with_empty_string but exercises
+        the labels clear path through _handle_flow_helper.
+        """
+        logger.info("Testing FLOW helper labels clear via empty list")
+
+        # Create label
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label", {"name": "E2E Flow Clear Label"}
+        )
+        label_data = assert_mcp_success(label_result, "Create test label")
+        label_id = label_data.get("label_id")
+        assert label_id, f"Missing label_id: {label_data}"
+        cleanup_tracker.track("label", label_id)
+
+        # Create min_max helper with label assigned — FLOW path
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "min_max",
+                "name": "E2E Flow Clear Labels Helper",
+                "config": {
+                    "name": "E2E Flow Clear Labels Helper",
+                    "entity_ids": [
+                        "sensor.demo_temperature",
+                        "sensor.demo_outside_temperature",
+                    ],
+                    "type": "min",
+                },
+                "labels": [label_id],
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create min_max with labels")
+        entry_id = create_data.get("entry_id")
+        assert entry_id, f"Missing entry_id: {create_data}"
+        entity_ids = create_data.get("entity_ids") or []
+        assert entity_ids, f"Flow helper returned no entity_ids: {create_data}"
+        target_entity = entity_ids[0]
+
+        try:
+            # Verify label assigned
+            before = assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_get_entity", {"entity_id": target_entity}
+                ),
+                "Get flow entity before clear",
+            )
+            assigned_labels = before.get("entity_entry", {}).get("labels") or []
+            assert label_id in assigned_labels, (
+                f"Label not assigned on flow create: expected {label_id!r} in {assigned_labels!r}"
+            )
+
+            # Clear labels on flow helper
+            clear_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "min_max",
+                    "helper_id": entry_id,
+                    "name": "E2E Flow Clear Labels Helper",
+                    "config": {
+                        "entity_ids": [
+                            "sensor.demo_temperature",
+                            "sensor.demo_outside_temperature",
+                        ],
+                        "type": "min",
+                    },
+                    "labels": [],
+                },
+            )
+            assert_mcp_success(clear_result, "Clear flow helper labels")
+
+            # Verify labels cleared
+            after = assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_get_entity", {"entity_id": target_entity}
+                ),
+                "Get flow entity after clear",
+            )
+            cleared_labels = after.get("entity_entry", {}).get("labels") or []
+            assert cleared_labels == [], (
+                f"Flow labels not cleared: expected [], got {cleared_labels!r}"
+            )
+
+            logger.info("Flow helper labels cleared successfully via empty list")
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_delete_config_entry",
+                {"entry_id": entry_id, "confirm": True},
+            )
