@@ -99,9 +99,11 @@ class SearchKeywordsTransform(Transform):
 
 # Proxy description suffix (shared across all proxies)
 _PROXY_PARAMS_SUFFIX = (
-    "Params: name (str) = tool name, arguments (dict) = tool parameters. "
-    "These are separate top-level params, not nested.\n"
-    "IMPORTANT: Call this tool SEQUENTIALLY, not in parallel with other proxy calls."
+    "Params (separate top-level, NOT nested):\n"
+    "  name (str): tool name from search results (starts with 'ha_'). "
+    "NOT a Home Assistant service like 'light.turn_on' or an entity_id.\n"
+    "  arguments (dict): the tool's own parameters.\n"
+    "IMPORTANT: Call sequentially, not in parallel."
 )
 
 
@@ -109,20 +111,25 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
     """Build proxy descriptions that reference the configured search tool name."""
     return {
         "read": (
-            f"Execute a read-only tool discovered via {search_tool_name}. "
-            f"Safe — does not modify any data or state.\n"
+            f"Execute a read-only tool you already discovered via {search_tool_name}. "
+            f"Safe — does not modify data.\n"
+            f"Example: ha_call_read_tool(name='ha_get_state', "
+            f"arguments={{'entity_id': 'light.bed_light'}})\n"
             f"{_PROXY_PARAMS_SUFFIX}"
         ),
         "write": (
-            f"Execute a write tool discovered via {search_tool_name}. "
-            f"Creates or updates data. Use for any tool that modifies "
-            f"state but does not delete/remove resources.\n"
+            f"Execute a write tool you already discovered via {search_tool_name}. "
+            f"Creates or updates state (not delete/remove).\n"
+            f"Example: ha_call_write_tool(name='ha_call_service', "
+            f"arguments={{'domain': 'light', 'service': 'turn_on', "
+            f"'entity_id': 'light.bed_light'}})\n"
             f"{_PROXY_PARAMS_SUFFIX}"
         ),
         "delete": (
-            f"Execute a delete/remove tool discovered via {search_tool_name}. "
-            f"Permanently removes data. Use for tools that delete or "
-            f"remove resources (areas, automations, devices, etc.).\n"
+            f"Execute a delete/remove tool you already discovered via {search_tool_name}. "
+            f"Permanently removes resources (areas, automations, devices, etc.).\n"
+            f"Example: ha_call_delete_tool(name='ha_config_remove_area', "
+            f"arguments={{'area_id': 'living_room'}})\n"
             f"{_PROXY_PARAMS_SUFFIX}"
         ),
     }

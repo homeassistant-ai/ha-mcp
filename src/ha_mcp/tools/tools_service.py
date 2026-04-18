@@ -205,40 +205,35 @@ class ServiceTools:
         wait: bool | str = True,
     ) -> dict[str, Any]:
         """
-        Execute Home Assistant services to control entities and trigger automations.
+        Execute a Home Assistant service (e.g. turn a light on, set a climate setpoint).
 
-        This is the universal tool for controlling all Home Assistant entities. Services follow
-        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
+        HA services are written as `domain.service` in docs (e.g. `light.turn_on`), but
+        this tool takes them as TWO SEPARATE PARAMETERS. Split on the dot:
+          light.turn_on  →  domain="light", service="turn_on"
+          climate.set_temperature  →  domain="climate", service="set_temperature"
 
-        **Basic Usage:**
-        ```python
-        # Turn on a light
-        ha_call_service("light", "turn_on", entity_id="light.living_room")
+        WRONG: ha_call_service(service="light.turn_on", entity_id="light.bed_light")
+        RIGHT: ha_call_service(domain="light", service="turn_on", entity_id="light.bed_light")
 
-        # Set temperature with parameters
-        ha_call_service("climate", "set_temperature",
-                      entity_id="climate.thermostat", data={"temperature": 22})
+        Examples:
+          ha_call_service(domain="light", service="turn_on", entity_id="light.living_room")
+          ha_call_service(domain="climate", service="set_temperature",
+                          entity_id="climate.thermostat", data={"temperature": 22})
+          ha_call_service(domain="automation", service="trigger",
+                          entity_id="automation.morning_routine")
+          ha_call_service(domain="homeassistant", service="toggle",
+                          entity_id="switch.porch_light")  # universal
 
-        # Trigger automation
-        ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
+        Params:
+          domain (str): service domain ONLY, no dot (e.g. "light", "climate").
+          service (str): service name ONLY, no dot (e.g. "turn_on", "set_temperature").
+          entity_id (str, opt): target entity. Omit to target the whole domain.
+          data (dict, opt): service-specific parameters.
+          return_response (bool): True for services that return data.
+          wait (bool): wait for state change (default True). False for fire-and-forget
+            or bulk operations.
 
-        # Universal controls work with any entity
-        ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
-        ```
-
-        **Parameters:**
-        - **domain**: Service domain (light, climate, automation, etc.)
-        - **service**: Service name (turn_on, set_temperature, trigger, etc.)
-        - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
-        - **data**: Optional dict of service-specific parameters
-        - **return_response**: Set to True for services that return data
-        - **wait**: Wait for the entity state to change after the service call (default: True).
-          Only applies to state-changing services on a single entity. Set to False for
-          fire-and-forget calls, bulk operations, or services without observable state changes.
-
-        **For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**
-
-        Common patterns: Use ha_get_state() to check current values before making changes.
+        For detailed per-service parameters: ha_get_skill_home_assistant_best_practices.
         Use ha_search_entities() to find correct entity IDs.
         """
         try:
