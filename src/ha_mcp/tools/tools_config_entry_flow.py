@@ -286,7 +286,7 @@ async def update_flow_helper(
         try:
             await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
         except Exception as abort_err:
-            logger.debug(f"Failed to abort options flow {flow_id} after error: {abort_err}")
+            logger.warning(f"Failed to abort options flow {flow_id} after error: {abort_err}")
         raise
 
     entry = result["entry"].get("result", {})
@@ -327,7 +327,7 @@ async def create_flow_helper(
         try:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
         except Exception as abort_err:
-            logger.debug(f"Failed to abort config flow {flow_id} after error: {abort_err}")
+            logger.warning(f"Failed to abort config flow {flow_id} after error: {abort_err}")
         raise
 
     entry = result["entry"].get("result", {})
@@ -429,7 +429,7 @@ class ConfigEntryFlowTools:
                 try:
                     await self._client.abort_config_flow(flow_id)
                 except Exception as abort_err:
-                    logger.debug(f"Failed to abort introspection flow {flow_id}: {abort_err}")
+                    logger.warning(f"Failed to abort introspection flow {flow_id}: {abort_err}")
 
     async def _get_schema_with_menu_option(
         self,
