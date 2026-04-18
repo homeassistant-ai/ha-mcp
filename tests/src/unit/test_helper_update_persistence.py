@@ -756,3 +756,119 @@ class TestFlowHelperRouting:
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-empty"
         mock_client.start_config_flow.assert_awaited_once_with("min_max")
+
+    async def test_flow_helper_clears_area_on_empty_string(
+        self, register_tools, mock_client
+    ):
+        """area_id='' must clear the area assignment (HA-WS 'area_id: null').
+
+        Mirrors ha_set_entity semantics (see test_set_area_clear and
+        test_entity_management.py::test_set_entity_clear_area): the consolidated
+        update convention treats None as 'not provided', empty string as 'explicit clear'.
+        The outer guard must use `is not None` so the empty-string case reaches the
+        WebSocket call, and the payload must carry area_id: None for HA to clear it.
+        """
+        ws_calls: list[dict] = []
+
+        async def ws_handler(msg: dict) -> dict:
+            ws_calls.append(msg)
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "sensor.probe",
+                            "config_entry_id": "entry-clear-area",
+                        }
+                    ],
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-clear-area",
+                "result": {
+                    "entry_id": "entry-clear-area",
+                    "title": "probe",
+                    "domain": "min_max",
+                },
+            }
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="probe",
+            config={"entity_ids": ["sensor.a"], "type": "mean"},
+            area_id="",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        # Find the entity_registry/update call
+        updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
+        assert len(updates) == 1, f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        assert "area_id" in updates[0], (
+            f"area_id must be present in payload (even when clearing): {updates[0]}"
+        )
+        assert updates[0]["area_id"] is None, (
+            f"area_id='' must translate to area_id: None for HA clear semantics, got {updates[0]['area_id']!r}"
+        )
+
+    async def test_flow_helper_clears_labels_on_empty_list(
+        self, register_tools, mock_client
+    ):
+        """labels=[] must clear all labels (HA-WS 'labels: []').
+
+        Mirrors ha_set_entity::test_set_labels_empty_list_clears and
+        test_label_crud.py usage of 'labels: []' as the clear payload.
+        """
+        ws_calls: list[dict] = []
+
+        async def ws_handler(msg: dict) -> dict:
+            ws_calls.append(msg)
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "sensor.probe",
+                            "config_entry_id": "entry-clear-labels",
+                        }
+                    ],
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-clear-labels",
+                "result": {
+                    "entry_id": "entry-clear-labels",
+                    "title": "probe",
+                    "domain": "min_max",
+                },
+            }
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="probe",
+            config={"entity_ids": ["sensor.a"], "type": "mean"},
+            labels=[],
+            wait=False,
+        )
+
+        assert result["success"] is True
+        updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
+        assert len(updates) == 1, f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        assert "labels" in updates[0], (
+            f"labels must be present in payload (even when clearing): {updates[0]}"
+        )
+        assert updates[0]["labels"] == [], (
+            f"labels=[] must pass through as [] for HA clear semantics, got {updates[0]['labels']!r}"
+        )

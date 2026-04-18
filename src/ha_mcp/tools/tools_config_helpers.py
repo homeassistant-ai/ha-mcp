@@ -82,21 +82,23 @@ async def _apply_registry_updates_to_entity(
     """
     applied: dict[str, Any] = {"entity_id": entity_id}
 
-    # area_id + labels in one entity_registry/update
-    if area_id or labels:
+    # area_id + labels in one entity_registry/update.
+    # Use `is not None` to distinguish "not provided" (no change) from
+    # "explicit clear" (empty string / empty list). Mirrors ha_set_entity.
+    if area_id is not None or labels is not None:
         update_message: dict[str, Any] = {
             "type": "config/entity_registry/update",
             "entity_id": entity_id,
         }
-        if area_id:
-            update_message["area_id"] = area_id
-        if labels:
+        if area_id is not None:
+            update_message["area_id"] = area_id if area_id else None
+        if labels is not None:
             update_message["labels"] = labels
         ws_result = await client.send_websocket_message(update_message)
         if ws_result.get("success"):
-            if area_id:
-                applied["area_id"] = area_id
-            if labels:
+            if area_id is not None:
+                applied["area_id"] = area_id if area_id else None
+            if labels is not None:
                 applied["labels"] = labels
         else:
             error_detail = ws_result.get("error", {})
@@ -258,16 +260,21 @@ async def _handle_flow_helper(
     result["entity_ids"] = entity_ids
 
     # Apply registry updates (area_id / labels / category) to every entity.
-    if entity_ids and (area_id or labels_list or category):
+    # Use `is not None` so an explicit empty value (area_id="" or labels=[])
+    # reaches _apply_registry_updates_to_entity, which forwards the clear
+    # semantics (area_id: None / labels: []) to Home Assistant.
+    if entity_ids and (
+        area_id is not None or labels_list is not None or category is not None
+    ):
         applied_per_entity: list[dict[str, Any]] = []
         for eid in entity_ids:
             applied = await _apply_registry_updates_to_entity(
                 client, eid, area_id, labels_list, category, warnings
             )
             applied_per_entity.append(applied)
-        if area_id:
-            result["area_id"] = area_id
-        if labels_list:
+        if area_id is not None:
+            result["area_id"] = area_id if area_id else None
+        if labels_list is not None:
             result["labels"] = labels_list
         if category:
             result["category"] = category
@@ -1028,22 +1035,24 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
 
                     # Update entity registry if area_id or labels specified
-                    if (area_id or labels) and entity_id:
+                    if (area_id is not None or labels is not None) and entity_id:
                         update_message: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
                         }
-                        if area_id:
-                            update_message["area_id"] = area_id
-                        if labels:
+                        if area_id is not None:
+                            update_message["area_id"] = area_id if area_id else None
+                        if labels is not None:
                             update_message["labels"] = labels
 
                         update_result = await client.send_websocket_message(
                             update_message
                         )
                         if update_result.get("success"):
-                            helper_data["area_id"] = area_id
-                            helper_data["labels"] = labels
+                            if area_id is not None:
+                                helper_data["area_id"] = area_id if area_id else None
+                            if labels is not None:
+                                helper_data["labels"] = labels
                         else:
                             error_detail = update_result.get("error", {})
                             error_msg = (
@@ -1492,16 +1501,16 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         updated_data = result.get("result", {})
 
                     # Also update entity registry for icon, area, and labels
-                    if icon or area_id or labels:
+                    if icon is not None or area_id is not None or labels is not None:
                         registry_update: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
                         }
-                        if icon:
-                            registry_update["icon"] = icon
-                        if area_id:
-                            registry_update["area_id"] = area_id
-                        if labels:
+                        if icon is not None:
+                            registry_update["icon"] = icon if icon else None
+                        if area_id is not None:
+                            registry_update["area_id"] = area_id if area_id else None
+                        if labels is not None:
                             registry_update["labels"] = labels
                         reg_result = await client.send_websocket_message(
                             registry_update
@@ -1539,12 +1548,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
 
                     if name is not None:
-                        update_msg["name"] = name
-                    if icon:
-                        update_msg["icon"] = icon
-                    if area_id:
-                        update_msg["area_id"] = area_id
-                    if labels:
+                        update_msg["name"] = name if name else None
+                    if icon is not None:
+                        update_msg["icon"] = icon if icon else None
+                    if area_id is not None:
+                        update_msg["area_id"] = area_id if area_id else None
+                    if labels is not None:
                         update_msg["labels"] = labels
 
                     result = await client.send_websocket_message(update_msg)
