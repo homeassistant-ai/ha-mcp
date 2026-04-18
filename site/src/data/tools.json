@@ -2215,18 +2215,19 @@
   {
     "name": "ha_search_entities",
     "title": "Search Entities",
-    "description": "PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.\n\nFor searching *inside* automation/script/helper configurations, use ha_deep_search instead.\n\n**Listing Entities by Domain:**\nUse domain_filter with an empty query to list all entities of a specific type:\n- ha_search_entities(query=\"\", domain_filter=\"calendar\") - List all calendars\n- ha_search_entities(query=\"\", domain_filter=\"todo\") - List all todo lists\n- ha_search_entities(query=\"\", domain_filter=\"scene\") - List all scenes\n- ha_search_entities(query=\"\", domain_filter=\"zone\") - List all zones (as entities)\n\n**BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:\n- Smart home size and scale (total entities, domains, areas)\n- Language used in entity naming (French/English/mixed)\n- Available areas/rooms and their entity distribution\n\nChoose overview detail level based on task:\n- 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches\n- 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks\n- 'full': Maximum detail (includes states, device types, services) - for deep analysis",
+    "description": "Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.\n\nWhen NOT to use: for searching inside automation, script, helper, or dashboard\n*configurations* (e.g. which automations call a service or reference an entity),\nuse `ha_deep_search`.\n\nTo enumerate all entities of a domain, omit `query` and pass `domain_filter`. For\nexample, `ha_search_entities(domain_filter=\"calendar\")` lists all calendars. At\nleast one of `query`, `domain_filter`, or `area_filter` must be set.",
     "inputSchema": {
       "properties": {
         "query": {
-          "type": "str"
+          "type": "Annotated[str | None, Field(default=None, description='Entity name to search for (fuzzy or exact match). Omit to list entities; `domain_filter` or `area_filter` must be set in that mode.')]",
+          "default": null
         },
         "domain_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description=\"Limit to a single domain (e.g. 'light', 'sensor', 'calendar').\")]",
           "default": null
         },
         "area_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description='Limit to entities in a specific area (area ID or name).')]",
           "default": null
         },
         "limit": {
@@ -2245,10 +2246,7 @@
           "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
           "default": true
         }
-      },
-      "required": [
-        "query"
-      ]
+      }
     },
     "annotations": {
       "idempotentHint": true,
