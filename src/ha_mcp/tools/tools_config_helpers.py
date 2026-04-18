@@ -50,19 +50,55 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_entities_for_config_entry(
-    client: Any, entry_id: str
+    client: Any, entry_id: str, warnings: list[str] | None = None
 ) -> list[dict[str, Any]]:
     """Return all entity_registry entries linked to the given config_entry_id.
 
     Uses the config/entity_registry/list WebSocket API and filters client-side
     by config_entry_id. Multi-entity helpers (e.g. utility_meter with tariffs)
     are handled naturally — all entities for the same entry are returned.
+
+    On WebSocket failure (e.g. HA mid-restart, auth lost, connection drop) the
+    caller would otherwise see `entity_ids: []` and be told that registry-update
+    targets like `area_id` / `labels` were silently dropped. If `warnings` is
+    provided, append a concrete message so the caller surfaces the partial
+    failure instead.
     """
-    result = await client.send_websocket_message(
-        {"type": "config/entity_registry/list"}
-    )
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+    except Exception as e:
+        if warnings is not None:
+            warnings.append(
+                f"entity_registry/list failed for config_entry_id={entry_id}: {e}"
+            )
+        return []
+
+    # Success path: message can come back as a bare list or wrapped in
+    # {"success": True, "result": [...]}. Treat a false success flag as an
+    # error that should surface in warnings rather than silently returning [].
+    if isinstance(result, dict) and result.get("success") is False:
+        if warnings is not None:
+            error_detail = result.get("error", "Unknown error")
+            error_msg = (
+                error_detail.get("message", str(error_detail))
+                if isinstance(error_detail, dict)
+                else str(error_detail)
+            )
+            warnings.append(
+                f"entity_registry/list failed for config_entry_id={entry_id}: "
+                f"{error_msg}"
+            )
+        return []
+
     entries = result if isinstance(result, list) else result.get("result", [])
     if not isinstance(entries, list):
+        if warnings is not None:
+            warnings.append(
+                f"entity_registry/list returned unexpected shape for "
+                f"config_entry_id={entry_id}"
+            )
         return []
     return [e for e in entries if e.get("config_entry_id") == entry_id]
 
@@ -94,7 +130,18 @@ async def _apply_registry_updates_to_entity(
             update_message["area_id"] = area_id if area_id else None
         if labels is not None:
             update_message["labels"] = labels
-        ws_result = await client.send_websocket_message(update_message)
+        try:
+            ws_result = await client.send_websocket_message(update_message)
+        except Exception as e:
+            # Transient raise (timeout, connection drop) mid-loop must not
+            # abort the remaining entities for a multi-entity flow helper
+            # (e.g. utility_meter with tariffs #3..#5 of 5). Record and
+            # continue; soft-failure via ws_result["success"]=False is
+            # already handled below.
+            warnings.append(
+                f"{entity_id}: entity registry update raised: {e}"
+            )
+            return applied
         if ws_result.get("success"):
             if area_id is not None:
                 applied["area_id"] = area_id if area_id else None
@@ -246,16 +293,29 @@ async def _handle_flow_helper(
             steady_interval = 0.5
             elapsed = 0.0
             attempt = 0
+            # Silent retries — a transient WS failure on attempt #1 often
+            # recovers by the deadline, and 14 identical warnings would
+            # just flood the response. Collect warnings only on the final
+            # attempt, when we know the poll has truly given up.
             while elapsed < deadline:
-                entities = await _get_entities_for_config_entry(client, entry_id)
+                poll_warnings: list[str] = []
+                entities = await _get_entities_for_config_entry(
+                    client, entry_id, poll_warnings
+                )
                 if entities:
                     break
                 step = intervals[attempt] if attempt < len(intervals) else steady_interval
                 await asyncio.sleep(step)
                 elapsed += step
                 attempt += 1
+            # Polled out without finding entities — surface the last
+            # attempt's warning so the caller sees why.
+            if not entities and poll_warnings:
+                warnings.extend(poll_warnings)
         else:
-            entities = await _get_entities_for_config_entry(client, entry_id)
+            entities = await _get_entities_for_config_entry(
+                client, entry_id, warnings
+            )
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
     result["entity_ids"] = entity_ids
 

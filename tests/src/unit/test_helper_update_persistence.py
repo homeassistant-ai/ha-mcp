@@ -624,6 +624,98 @@ class TestFlowHelperRouting:
         assert "warnings" in result
         assert any("light.grp" in w for w in result["warnings"])
 
+    async def test_flow_helper_registry_list_raises_surfaces_warning(
+        self, register_tools, mock_client
+    ):
+        """WS raises during entity_registry/list: don't silently return entity_ids=[]."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-r1",
+                "result": {"entry_id": "entry-r1", "title": "m", "domain": "min_max"},
+            }
+        )
+        # First (and only) send_websocket_message raises — simulates
+        # connection drop or HA mid-restart during the registry list.
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=ConnectionError("WebSocket closed")
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="m",
+            config={"entity_ids": ["sensor.a"], "type": "mean"},
+            area_id="hallway",
+            wait=False,
+        )
+
+        # Helper creation still reports success (config entry was created),
+        # but the caller must see that registry touchups didn't happen.
+        assert result["success"] is True
+        assert result["entity_ids"] == []
+        assert "warnings" in result
+        assert any(
+            "entity_registry/list" in w and "entry-r1" in w
+            for w in result["warnings"]
+        )
+
+    async def test_flow_helper_registry_update_raises_continues_loop(
+        self, register_tools, mock_client
+    ):
+        """WS raises mid-loop: remaining entities still get their registry update."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-w3",
+                "result": {"entry_id": "entry-w3", "title": "um", "domain": "utility_meter"},
+            }
+        )
+        # First call: registry/list returns 3 entities.
+        # Call #2: update for entity 1 raises.
+        # Call #3: update for entity 2 succeeds.
+        # Call #4: update for entity 3 succeeds.
+        responses: list = [
+            {
+                "success": True,
+                "result": [
+                    {"entity_id": "select.um", "config_entry_id": "entry-w3"},
+                    {"entity_id": "sensor.um_peak", "config_entry_id": "entry-w3"},
+                    {"entity_id": "sensor.um_offpeak", "config_entry_id": "entry-w3"},
+                ],
+            },
+            ConnectionError("WebSocket transient fault on update #1"),
+            {"success": True, "result": {}},
+            {"success": True, "result": {}},
+        ]
+
+        async def side_effect(*args, **kwargs):
+            val = responses.pop(0)
+            if isinstance(val, Exception):
+                raise val
+            return val
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=side_effect)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="utility_meter",
+            name="um",
+            config={
+                "source": "sensor.energy",
+                "cycle": "daily",
+                "tariffs": ["peak", "offpeak"],
+            },
+            area_id="hallway",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert len(result["entity_ids"]) == 3
+        assert "warnings" in result
+        # The raising entity must surface as a warning; the other two must not.
+        assert any("select.um" in w and "raised" in w for w in result["warnings"])
+        assert not any("sensor.um_peak" in w for w in result["warnings"])
+        assert not any("sensor.um_offpeak" in w for w in result["warnings"])
+
     async def test_flow_helper_create_requires_name(
         self, register_tools, mock_client
     ):
