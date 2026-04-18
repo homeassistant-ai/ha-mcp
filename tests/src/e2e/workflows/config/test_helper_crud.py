@@ -1587,3 +1587,250 @@ class TestSetHelperNegativeInputs:
         )
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+class TestHelperRegistryClear:
+    """Test clearing area/labels on helpers by passing empty string / empty list (#1012).
+
+    The consolidated ha_config_set_helper follows the same convention as
+    ha_set_entity: None means 'not provided' (no change), empty string / empty
+    list means 'explicit clear'. See test_entity_management.py::test_set_entity_clear_area
+    for the entity-level analogue.
+    """
+
+    async def test_helper_clear_area_with_empty_string(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Setting area_id='' on an existing helper clears the area assignment."""
+        logger.info("Testing helper area clear via empty string")
+
+        # Create a dedicated area
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": "E2E Helper Clear Area"},
+        )
+        area_data = assert_mcp_success(area_result, "Create test area")
+        area_id = area_data.get("area_id")
+        assert area_id, f"Missing area_id in response: {area_data}"
+        cleanup_tracker.track("area", area_id)
+
+        # Create helper assigned to that area
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Clear Area Helper",
+                "area_id": area_id,
+            },
+        )
+        data = assert_mcp_success(create_result, "Create helper with area")
+        entity_id = get_entity_id_from_response(data, "input_boolean")
+        assert entity_id, f"Missing entity_id: {data}"
+        cleanup_tracker.track("input_boolean", entity_id)
+
+        # Verify area was actually set on creation
+        get_after_create = await mcp_client.call_tool(
+            "ha_get_entity", {"entity_id": entity_id}
+        )
+        create_entry = assert_mcp_success(
+            get_after_create, "Get entity after create"
+        )
+        assigned = create_entry.get("entity_entry", {}).get("area_id")
+        assert assigned == area_id, (
+            f"Area was not assigned on create: expected {area_id!r}, got {assigned!r}"
+        )
+
+        # Clear area using empty string
+        clear_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "helper_id": entity_id,
+                "area_id": "",
+            },
+        )
+        assert_mcp_success(clear_result, "Clear helper area")
+
+        # Verify area is actually cleared (registry update does not round-trip
+        # area_id back into the tool response, so we re-read from HA)
+        get_after_clear = await mcp_client.call_tool(
+            "ha_get_entity", {"entity_id": entity_id}
+        )
+        clear_entry = assert_mcp_success(get_after_clear, "Get entity after clear")
+        cleared = clear_entry.get("entity_entry", {}).get("area_id")
+        assert cleared is None, (
+            f"Area was not cleared: expected None, got {cleared!r}"
+        )
+
+        logger.info("Helper area cleared successfully via empty string")
+
+    async def test_helper_clear_labels_with_empty_list(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Setting labels=[] on an existing helper clears all labels."""
+        logger.info("Testing helper labels clear via empty list")
+
+        # Create a dedicated label
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "E2E Helper Clear Label"},
+        )
+        label_data = assert_mcp_success(label_result, "Create test label")
+        label_id = label_data.get("label_id")
+        assert label_id, f"Missing label_id in response: {label_data}"
+        cleanup_tracker.track("label", label_id)
+
+        # Create helper assigned to that label
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": "E2E Clear Labels Helper",
+                "labels": [label_id],
+            },
+        )
+        data = assert_mcp_success(create_result, "Create helper with labels")
+        entity_id = get_entity_id_from_response(data, "input_boolean")
+        assert entity_id, f"Missing entity_id: {data}"
+        cleanup_tracker.track("input_boolean", entity_id)
+
+        # Verify labels were actually set on creation
+        get_after_create = await mcp_client.call_tool(
+            "ha_get_entity", {"entity_id": entity_id}
+        )
+        create_entry = assert_mcp_success(
+            get_after_create, "Get entity after create"
+        )
+        assigned_labels = create_entry.get("entity_entry", {}).get("labels") or []
+        assert label_id in assigned_labels, (
+            f"Label was not assigned on create: expected {label_id!r} in labels, got {assigned_labels!r}"
+        )
+
+        # Clear labels using empty list
+        clear_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "helper_id": entity_id,
+                "labels": [],
+            },
+        )
+        assert_mcp_success(clear_result, "Clear helper labels")
+
+        # Verify labels are actually cleared (registry update does not round-trip
+        # labels back into the tool response, so we re-read from HA)
+        get_after_clear = await mcp_client.call_tool(
+            "ha_get_entity", {"entity_id": entity_id}
+        )
+        clear_entry = assert_mcp_success(get_after_clear, "Get entity after clear")
+        cleared_labels = clear_entry.get("entity_entry", {}).get("labels") or []
+        assert cleared_labels == [], (
+            f"Labels were not cleared: expected [], got {cleared_labels!r}"
+        )
+
+        logger.info("Helper labels cleared successfully via empty list")
+
+    @pytest.mark.slow
+    async def test_flow_helper_clear_area_with_empty_string(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Clearing area on a FLOW helper (min_max) via area_id='' works.
+
+        Covers the _handle_flow_helper branch of the fix (not the SIMPLE path
+        tested above). Uses min_max because it's a single-step form flow with
+        demo sensors guaranteed to exist in the test HA instance.
+        """
+        logger.info("Testing FLOW helper area clear via empty string")
+
+        # Create a dedicated area
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": "E2E Flow Clear Area"},
+        )
+        area_data = assert_mcp_success(area_result, "Create test area")
+        area_id = area_data.get("area_id")
+        assert area_id, f"Missing area_id in response: {area_data}"
+        cleanup_tracker.track("area", area_id)
+
+        # Create min_max helper with area assigned — FLOW path
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "min_max",
+                "name": "E2E Flow Clear Area Helper",
+                "config": {
+                    "name": "E2E Flow Clear Area Helper",
+                    "entity_ids": [
+                        "sensor.demo_temperature",
+                        "sensor.demo_outside_temperature",
+                    ],
+                    "type": "min",
+                },
+                "area_id": area_id,
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create min_max with area")
+        entry_id = create_data.get("entry_id")
+        assert entry_id, f"Missing entry_id: {create_data}"
+
+        entity_ids = create_data.get("entity_ids") or []
+        assert entity_ids, f"Flow helper returned no entity_ids: {create_data}"
+        target_entity = entity_ids[0]
+        logger.info(f"Created flow helper entry={entry_id}, entity={target_entity}")
+
+        try:
+            # Verify area was applied to the flow-generated entity
+            get_after_create = await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": target_entity}
+            )
+            create_entry = assert_mcp_success(
+                get_after_create, "Get flow entity after create"
+            )
+            assigned = create_entry.get("entity_entry", {}).get("area_id")
+            assert assigned == area_id, (
+                f"Area was not assigned on flow create: expected {area_id!r}, got {assigned!r}"
+            )
+
+            # Clear area using empty string on the same flow helper.
+            # The options flow needs valid config to proceed, so we re-supply
+            # the same entity_ids + type — the clear is driven purely by the
+            # top-level area_id="" parameter, not by the config payload.
+            clear_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "min_max",
+                    "helper_id": entry_id,
+                    "config": {
+                        "entity_ids": [
+                            "sensor.demo_temperature",
+                            "sensor.demo_outside_temperature",
+                        ],
+                        "type": "min",
+                    },
+                    "area_id": "",
+                },
+            )
+            assert_mcp_success(clear_result, "Clear flow helper area")
+
+            # Verify area is actually cleared on the entity
+            get_after_clear = await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": target_entity}
+            )
+            clear_entry = assert_mcp_success(
+                get_after_clear, "Get flow entity after clear"
+            )
+            cleared = clear_entry.get("entity_entry", {}).get("area_id")
+            assert cleared is None, (
+                f"Flow helper area was not cleared: expected None, got {cleared!r}"
+            )
+
+            logger.info("Flow helper area cleared successfully via empty string")
+        finally:
+            # Config-entry helpers are cleaned via ha_delete_config_entry (not cleanup_tracker)
+            await safe_call_tool(
+                mcp_client,
+                "ha_delete_config_entry",
+                {"entry_id": entry_id, "confirm": True},
+            )
