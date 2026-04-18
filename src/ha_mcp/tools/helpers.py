@@ -182,7 +182,30 @@ def _classify_by_message(
         result = create_timeout_error("operation", 30, details=error_msg, context=context)
     elif "connection" in error_str or "connect" in error_str:
         result = create_connection_error(error_msg, context=context)
-    elif "auth" in error_str or "token" in error_str or "401" in error_str:
+    elif "command failed:" in error_str and any(
+        marker in error_str
+        for marker in (
+            "missing option",
+            "extra keys not allowed",
+            "expected",
+            "unknown secret",
+            "unknown type",
+        )
+    ):
+        # Supervisor schema validation: vol.Invalid message arriving as a
+        # HomeAssistantCommandError via HA Core's hassio WS bridge. The
+        # markers cover the heterogeneous vol.Invalid vocabulary without
+        # relying on an error code (always unknown_error from the bridge).
+        result = create_validation_error(error_msg, context=context)
+    elif any(
+        phrase in error_str
+        for phrase in (
+            "unauthorized",
+            "authentication",
+            "invalid token",
+            "access denied",
+        )
+    ) or "401" in error_str:
         result = create_auth_error(error_msg, context=context)
     else:
         result = create_error_response(
