@@ -43,6 +43,34 @@ class HomeAssistantAPIError(HomeAssistantError):
         self.response_data = response_data
 
 
+
+class HomeAssistantCommandError(HomeAssistantError):
+    """WebSocket command returned success=False.
+
+    Raised by ``WebSocketClient.send_command`` when Home Assistant responds
+    with ``{type: "result", success: False}``. Carries the structured
+    ``{code, message}`` payload from the response so downstream
+    classification can dispatch on type + message without resorting to
+    ``str(exc)`` parsing.
+
+    Note: Supervisor API calls routed through HA Core's ``hassio/api`` WS
+    bridge always surface with ``code == "unknown_error"`` regardless of
+    the underlying Supervisor error kind (see
+    homeassistant/components/hassio/websocket_api.py). The discriminative
+    signal is the message payload, not the code.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.payload = payload
+
+
 class HomeAssistantClient:
     """Authenticated HTTP client for Home Assistant API."""
 

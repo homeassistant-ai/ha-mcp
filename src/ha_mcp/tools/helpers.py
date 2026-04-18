@@ -16,6 +16,7 @@ from fastmcp.exceptions import ToolError
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -142,6 +143,14 @@ def _classify_exception(
             )
         case HomeAssistantAPIError():
             result = _classify_api_status(error, error_msg, context)
+        case HomeAssistantCommandError():
+            # WebSocket command-failure. The ``error.code`` on Supervisor
+            # calls routed through HA Core's hassio WS bridge is always
+            # ``unknown_error`` (see homeassistant/components/hassio/
+            # websocket_api.py), so discrimination must come from the
+            # message. Fall through to ``_classify_by_message`` which
+            # pattern-matches schema, auth, not-found and timeout cases.
+            result = None
         case TimeoutError():
             operation = context.get("operation", "request") if context else "request"
             timeout_seconds = context.get("timeout_seconds", 30) if context else 30

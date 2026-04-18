@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import websockets
 
 from ..config import get_global_settings
+from .rest_client import HomeAssistantCommandError
 
 logger = logging.getLogger(__name__)
 
@@ -439,7 +440,11 @@ class HomeAssistantWebSocketClient:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    raise Exception(f"Command failed: {error_msg}")
+                    raise HomeAssistantCommandError(
+                        f"Command failed: {error_msg}",
+                        code=error.get("code") if isinstance(error, dict) else None,
+                        payload=error if isinstance(error, dict) else None,
+                    )
 
                 # Return success response according to HA WebSocket format
                 return {
@@ -516,7 +521,11 @@ class HomeAssistantWebSocketClient:
                 if isinstance(error, dict)
                 else str(error)
             )
-            raise Exception(f"Command failed: {error_msg}")
+            raise HomeAssistantCommandError(
+                f"Command failed: {error_msg}",
+                code=error.get("code") if isinstance(error, dict) else None,
+                payload=error if isinstance(error, dict) else None,
+            )
 
         try:
             event_response = await asyncio.wait_for(
