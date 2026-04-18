@@ -2020,3 +2020,113 @@ class TestHelperRegistryClear:
                 "ha_delete_config_entry",
                 {"entry_id": entry_id, "confirm": True},
             )
+
+
+class TestMultiEntityFlowHelper:
+    """Test that area_id / labels propagate to every entity of a multi-entity
+    flow helper (e.g. utility_meter with tariffs produces 1 select + N sensors
+    under a single config entry — see #1012).
+
+    The other TestHelperRegistryClear tests cover single-entity flow helpers
+    (min_max), which only exercise one iteration of the per-entity registry
+    update loop. This class exercises the loop itself.
+    """
+
+    async def test_utility_meter_tariffs_area_and_labels_propagate_to_all_entities(
+        self, mcp_client
+    ):
+        """utility_meter with 2 tariffs creates 3 entities; area_id and labels
+        applied to all of them.
+        """
+        logger.info("Testing utility_meter multi-entity area/labels propagation")
+
+        # Create a dedicated area + label
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": "E2E UM Multi-Entity Area"},
+        )
+        area_data = assert_mcp_success(area_result, "Create test area")
+        area_id = area_data.get("area_id")
+        assert area_id, f"Missing area_id: {area_data}"
+
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": "e2e_um_multi", "color": "blue"},
+        )
+        label_data = assert_mcp_success(label_result, "Create test label")
+        label_id = label_data.get("label_id") or label_data.get("name")
+        assert label_id, f"Missing label_id: {label_data}"
+
+        entry_id = None
+        try:
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "utility_meter",
+                    "name": "e2e_um_multi",
+                    "config": {
+                        # sensor.demo_temperature satisfies the sensor-domain
+                        # selector; the utility_meter flow does not validate
+                        # state_class at create time.
+                        "source": "sensor.demo_temperature",
+                        "cycle": "daily",
+                        "offset": 0,
+                        "tariffs": ["peak", "offpeak"],
+                        "net_consumption": False,
+                        "delta_values": False,
+                        "periodically_resetting": True,
+                    },
+                    "area_id": area_id,
+                    "labels": [label_id],
+                },
+            )
+            create_data = assert_mcp_success(
+                create_result, "Create utility_meter with 2 tariffs"
+            )
+            entry_id = create_data.get("entry_id")
+            assert entry_id, f"Missing entry_id: {create_data}"
+
+            entity_ids = create_data.get("entity_ids") or []
+            # 2 tariffs → 1 select (tariff chooser) + 2 sensor (one per tariff) = 3
+            assert len(entity_ids) == 3, (
+                f"Expected 3 entities (1 select + 2 tariff sensors), got "
+                f"{len(entity_ids)}: {entity_ids}"
+            )
+            logger.info(f"utility_meter multi-entity created: {entity_ids}")
+
+            # Assert area_id propagated to every entity
+            for eid in entity_ids:
+                get_result = await mcp_client.call_tool(
+                    "ha_get_entity", {"entity_id": eid}
+                )
+                get_data = assert_mcp_success(get_result, f"Get {eid}")
+                entry = get_data.get("entity_entry", {})
+                assigned_area = entry.get("area_id")
+                assert assigned_area == area_id, (
+                    f"Area not applied to {eid}: expected {area_id!r}, "
+                    f"got {assigned_area!r}"
+                )
+                assigned_labels = entry.get("labels") or []
+                assert label_id in assigned_labels, (
+                    f"Label not applied to {eid}: expected {label_id!r} "
+                    f"in {assigned_labels!r}"
+                )
+
+            logger.info("area_id and labels propagated to all 3 entities")
+        finally:
+            if entry_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_delete_config_entry",
+                    {"entry_id": entry_id, "confirm": True},
+                )
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_label",
+                {"label_id": label_id},
+            )
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_area",
+                {"area_id": area_id},
+            )
