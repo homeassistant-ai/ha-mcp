@@ -150,6 +150,12 @@ async def _handle_flow_helper(
     """
     action = "update" if helper_id else "create"
 
+    # Normalize empty string to None, matching ha_config_set_helper's treatment
+    # of config in (None, {}, "") as "nothing passed" (L785 simple-type branch).
+    # Without this, parse_json_param("") raises a confusing 'Invalid JSON' error.
+    if config == "":
+        config = None
+
     # Normalize config into a dict (accepts JSON string or dict).
     if isinstance(config, str):
         parsed = parse_json_param(config)

@@ -715,3 +715,44 @@ class TestFlowHelperRouting:
             assert "flow-based" not in str(e).lower(), (
                 f"empty config should not trigger the flow-based-rejection message: {e}"
             )
+
+    async def test_flow_type_accepts_empty_string_as_no_config(
+        self, register_tools, mock_client
+    ):
+        """Empty string config is tolerated for flow helpers, mirroring simple path.
+
+        ha_config_set_helper L785 treats config in (None, {}, "") as "nothing passed"
+        for simple types. The flow path must behave the same — passing config=""
+        (common when agents stringify a None) should not surface as
+        'Invalid JSON' from parse_json_param, which is confusing and inconsistent
+        with the simple-type branch.
+        """
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-empty",
+                "result": {
+                    "entry_id": "entry-empty",
+                    "title": "probe",
+                    "domain": "min_max",
+                },
+            }
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        # Should proceed like config=None / config={}: name folds into config_dict
+        # on create, flow is started, no 'Invalid JSON' error surfaces.
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="probe",
+            config="",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "create"
+        assert result["method"] == "config_flow"
+        assert result["entry_id"] == "entry-empty"
+        mock_client.start_config_flow.assert_awaited_once_with("min_max")
