@@ -872,3 +872,103 @@ class TestFlowHelperRouting:
         assert updates[0]["labels"] == [], (
             f"labels=[] must pass through as [] for HA clear semantics, got {updates[0]['labels']!r}"
         )
+
+
+class TestOptionalNameOnUpdate:
+    """Verify ha_config_set_helper accepts name=None on update (#1012 schema change).
+
+    Previously `name: str` was required at the Pydantic layer even though the
+    internal create/update branching only enforced it on create. Update-only
+    calls (clear area, clear labels) were rejected at schema validation before
+    reaching the tool body. Signature is now `name: str | None = None`,
+    matching the ha_set_entity convention.
+    """
+
+    async def test_simple_helper_update_without_name(
+        self, register_tools, mock_client
+    ):
+        """Clearing area on input_boolean without supplying name succeeds (SIMPLE path)."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=mock_client._make_ws_responses("input_boolean")
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            # No `name` param — must not raise schema validation error.
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                helper_id="my_toggle",
+                area_id="",
+            )
+
+        assert result["success"] is True, result
+        # registry update must have fired with area_id: None (clear)
+        ws_calls = mock_client.send_websocket_message.call_args_list
+        reg_update = next(
+            (c for c in ws_calls if c[0][0].get("type") == "config/entity_registry/update"),
+            None,
+        )
+        assert reg_update is not None, f"no registry update: {ws_calls}"
+        assert reg_update[0][0].get("area_id") is None, reg_update[0][0]
+
+    async def test_flow_helper_update_without_name(
+        self, register_tools, mock_client
+    ):
+        """Clearing area on min_max without supplying name succeeds (FLOW path)."""
+        mock_client.get_config_entry = AsyncMock(
+            return_value={"domain": "min_max", "entry_id": "entry-1"}
+        )
+        mock_client.start_options_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-1",
+                "result": {"entry_id": "entry-1", "title": "avg"},
+            }
+        )
+
+        ws_calls: list[dict] = []
+
+        async def ws_handler(msg: dict) -> dict:
+            ws_calls.append(msg)
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"entity_id": "sensor.avg", "config_entry_id": "entry-1"}
+                    ],
+                }
+            if msg_type == "config/entity_registry/update":
+                return {"success": True, "result": {}}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        # No `name` param on update — must not raise schema validation error.
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            helper_id="entry-1",
+            area_id="",
+            wait=False,
+        )
+
+        assert result["success"] is True, result
+        reg_updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
+        assert reg_updates, f"no registry update: {ws_calls}"
+        assert reg_updates[0].get("area_id") is None, reg_updates[0]
+
+    async def test_simple_helper_create_still_requires_name(
+        self, register_tools, mock_client
+    ):
+        """Creating a helper without name still fails (but at the tool logic, not Pydantic)."""
+        # No mocking needed: create path raises ToolError before any WS call
+        # when name is missing.
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError, match="name is required for create"):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+            )

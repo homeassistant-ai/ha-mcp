@@ -133,7 +133,7 @@ async def _apply_registry_updates_to_entity(
 async def _handle_flow_helper(
     client: Any,
     helper_type: str,
-    name: str,
+    name: str | None,
     helper_id: str | None,
     config: str | dict | None,
     area_id: str | None,
@@ -471,16 +471,18 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(description="Type of helper entity to create or update"),
         ],
         name: Annotated[
-            str,
+            str | None,
             Field(
                 description=(
-                    "Display name for the helper. For flow-based helper types on update "
-                    "(template, group, utility_meter, ...), this is typically ignored — "
-                    "options flows don't expose renaming. Rename a flow helper by "
-                    "deleting and recreating instead."
+                    "Display name for the helper. Required on create; optional on "
+                    "update (pass helper_id to skip). For flow-based helper types on "
+                    "update (template, group, utility_meter, ...), this is typically "
+                    "ignored — options flows don't expose renaming. Rename a flow "
+                    "helper by deleting and recreating instead."
                 ),
+                default=None,
             ),
-        ],
+        ] = None,
         helper_id: Annotated[
             str | None,
             Field(

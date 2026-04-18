@@ -26,6 +26,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 # Allow running from repo root without installing
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -36,31 +37,31 @@ from ha_mcp.client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 
 
-def parse_result(result):
+def parse_result(result: object) -> dict[str, Any]:
     """Extract dict from FastMCP result (handles both success and isError)."""
     if hasattr(result, "isError") and result.isError:
         if hasattr(result, "content") and result.content and hasattr(result.content[0], "text"):
             try:
-                return json.loads(result.content[0].text)
+                return cast(dict[str, Any], json.loads(result.content[0].text))
             except json.JSONDecodeError:
                 return {"success": False, "error": result.content[0].text}
         return {"success": False, "error": "isError with no content"}
     if hasattr(result, "content") and result.content and hasattr(result.content[0], "text"):
         try:
-            return json.loads(result.content[0].text)
+            return cast(dict[str, Any], json.loads(result.content[0].text))
         except json.JSONDecodeError:
             return {"raw": result.content[0].text}
     return {}
 
 
-def assert_success(result, label):
+def assert_success(result: object, label: str) -> dict[str, Any]:
     data = parse_result(result)
     if data.get("success") is not True:
         raise AssertionError(f"{label} failed: {json.dumps(data, indent=2)[:500]}")
     return data
 
 
-async def test_simple_clear_area(mcp):
+async def test_simple_clear_area(mcp: "Client") -> bool:
     print("\n[1/3] test_helper_clear_area_with_empty_string (SIMPLE)")
     area_id = None
     entity_id = None
@@ -135,7 +136,7 @@ async def test_simple_clear_area(mcp):
                 print(f"  (cleanup area: {e})")
 
 
-async def test_simple_clear_labels(mcp):
+async def test_simple_clear_labels(mcp: "Client") -> bool:
     print("\n[2/3] test_helper_clear_labels_with_empty_list (SIMPLE)")
     label_id = None
     entity_id = None
@@ -210,7 +211,7 @@ async def test_simple_clear_labels(mcp):
                 print(f"  (cleanup label: {e})")
 
 
-async def test_flow_clear_area(mcp):
+async def test_flow_clear_area(mcp: "Client") -> bool:
     print("\n[3/3] test_flow_helper_clear_area_with_empty_string (FLOW, min_max)")
     area_id = None
     entry_id = None
@@ -296,7 +297,7 @@ async def test_flow_clear_area(mcp):
                 print(f"  (cleanup area: {e})")
 
 
-async def test_simple_clear_combined(mcp):
+async def test_simple_clear_combined(mcp: "Client") -> bool:
     print("\n[4/5] test_helper_clear_area_and_labels_together (SIMPLE)")
     area_id = None
     label_id = None
@@ -392,7 +393,7 @@ async def test_simple_clear_combined(mcp):
                 print(f"  (cleanup area: {e})")
 
 
-async def test_flow_clear_labels(mcp):
+async def test_flow_clear_labels(mcp: "Client") -> bool:
     print("\n[5/5] test_flow_helper_clear_labels_with_empty_list (FLOW, min_max)")
     label_id = None
     entry_id = None
@@ -481,7 +482,7 @@ async def test_flow_clear_labels(mcp):
                 print(f"  (cleanup label: {e})")
 
 
-async def main():
+async def main() -> int:
     base_url = os.environ.get("HA_BASE_URL")
     token = os.environ.get("HA_TOKEN")
     if not base_url or not token:
