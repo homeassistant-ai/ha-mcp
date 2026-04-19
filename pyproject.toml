@@ -183,6 +183,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
+    "respx>=0.21.1",
     "lefthook>=1.10.0",
     "ruamel.yaml>=0.18.0",
     "ruff>=0.12.12",
