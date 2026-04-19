@@ -25,6 +25,7 @@ import shutil
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from testcontainers.core.container import DockerContainer
@@ -139,16 +140,49 @@ def _build_mcp_env(
     return env
 
 
-def write_stdio_mcp_config(
+def parse_mcp_env(
+    raw_mcp_env: list[str] | None,
+    base_url: str | None = None,
+    on_default_applied: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    """Parse ``KEY=VALUE`` pairs into a dict, with the local-model default.
+
+    A bare ``KEY`` (no ``=``) maps to an empty string — useful for
+    boolean-presence flags. When ``base_url`` is set (targeting a local
+    OpenAI-compatible endpoint), ``ENABLE_TOOL_SEARCH=true`` is injected
+    unless the caller already set it. Local models typically can't prefill
+    the full tool catalog, so tool search is the default for that path.
+    Override with an explicit ``ENABLE_TOOL_SEARCH=...`` pair.
+
+    If ``on_default_applied`` is provided, it is called with a human-readable
+    message each time a default is injected.
+    """
+    pairs = raw_mcp_env or []
+    env = {k: v for pair in pairs for k, _, v in [pair.partition("=")]}
+    if base_url and "ENABLE_TOOL_SEARCH" not in env:
+        env["ENABLE_TOOL_SEARCH"] = "true"
+        if on_default_applied:
+            on_default_applied(
+                "Defaulting ENABLE_TOOL_SEARCH=true for local model (--base-url set)"
+            )
+    return env
+
+
+def build_stdio_mcp_config(
     ha_url: str,
     ha_token: str,
     branch: str | None,
     extra_env: dict[str, str] | None = None,
-) -> Path:
-    """Write a temporary Claude MCP config JSON file."""
+) -> dict:
+    """Build the stdio MCP config dict (format shared with Claude's --mcp-config).
+
+    The dict can be passed directly to ``fastmcp.Client(config)`` for in-process
+    use, or serialized to a file via ``write_stdio_mcp_config`` for CLI agents
+    that expect a file path.
+    """
     cmd = mcp_server_command(branch)
     env = _build_mcp_env(ha_url, ha_token, extra_env)
-    config = {
+    return {
         "mcpServers": {
             "home-assistant": {
                 "command": cmd[0],
@@ -157,6 +191,16 @@ def write_stdio_mcp_config(
             }
         }
     }
+
+
+def write_stdio_mcp_config(
+    ha_url: str,
+    ha_token: str,
+    branch: str | None,
+    extra_env: dict[str, str] | None = None,
+) -> Path:
+    """Write the stdio MCP config to a temporary JSON file, return its path."""
+    config = build_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="claude_mcp_", delete=False
     ) as f:
@@ -618,13 +662,10 @@ async def run(args: argparse.Namespace) -> dict:
         log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
         log(f"Agents: {', '.join(active_agents)}")
 
-        # Parse --mcp-env pairs into a dict.  The format is KEY=VALUE, but bare
-        # KEY (no =) is also valid and intentionally sets the variable to an empty
-        # string — useful for boolean-presence flags like ENABLE_TOOL_SEARCH=.
-        raw_mcp_env = getattr(args, "mcp_env", None) or []
-        extra_env: dict[str, str] | None = (
-            {k: v for pair in raw_mcp_env for k, _, v in [pair.partition("=")]}
-            if raw_mcp_env else None
+        extra_env = parse_mcp_env(
+            getattr(args, "mcp_env", None),
+            base_url=getattr(args, "base_url", None),
+            on_default_applied=log,
         )
 
         # Run agents sequentially to avoid resource contention
