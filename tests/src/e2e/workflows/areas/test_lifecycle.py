@@ -517,6 +517,93 @@ class TestAreaFloorIntegration:
         await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": floor_id})
         logger.info("Cleanup completed")
 
+    async def test_home_topology_with_assignment(self, mcp_client, cleanup_tracker):
+        """
+        Test: Create floor -> Create area on floor -> ha_get_home_topology ->
+              Verify area appears nested under floor, not in unassigned_areas.
+        """
+        floor_name = generate_unique_name("test_topo_floor")
+        area_name = generate_unique_name("test_topo_area")
+        logger.info(f"Testing topology with assignment: {floor_name} -> {area_name}")
+
+        floor_result = await mcp_client.call_tool(
+            "ha_config_set_floor", {"name": floor_name, "level": 2}
+        )
+        floor_data = parse_mcp_result(floor_result)
+        assert floor_data.get("success"), f"Failed to create floor: {floor_data}"
+        floor_id = floor_data.get("floor_id")
+        cleanup_tracker.track("floor", floor_id)
+
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": area_name, "floor_id": floor_id, "icon": "mdi:sofa"},
+        )
+        area_data = parse_mcp_result(area_result)
+        assert area_data.get("success"), f"Failed to create area: {area_data}"
+        area_id = area_data.get("area_id")
+        cleanup_tracker.track("area", area_id)
+
+        topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+        topo_data = parse_mcp_result(topo_result)
+
+        assert topo_data.get("success"), f"Topology call failed: {topo_data}"
+        assert "floors" in topo_data and "unassigned_areas" in topo_data
+
+        target_floor = next(
+            (f for f in topo_data["floors"] if f.get("floor_id") == floor_id), None
+        )
+        assert target_floor is not None, f"Created floor not in topology: {floor_id}"
+        assert "areas" in target_floor, "Floor entry missing 'areas' key"
+
+        nested_area_ids = [a.get("area_id") for a in target_floor["areas"]]
+        assert area_id in nested_area_ids, (
+            f"Area {area_id} not nested under floor {floor_id}: {nested_area_ids}"
+        )
+
+        unassigned_ids = [a.get("area_id") for a in topo_data["unassigned_areas"]]
+        assert area_id not in unassigned_ids, (
+            f"Assigned area leaked into unassigned_areas: {area_id}"
+        )
+        logger.info(f"Topology verified: {area_id} nested under {floor_id}")
+
+        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": floor_id})
+
+    async def test_home_topology_unassigned_area(self, mcp_client, cleanup_tracker):
+        """
+        Test: Create area without floor_id -> ha_get_home_topology ->
+              Verify area appears in unassigned_areas, not nested under any floor.
+        """
+        area_name = generate_unique_name("test_topo_unassigned")
+        logger.info(f"Testing topology with unassigned area: {area_name}")
+
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area", {"name": area_name, "icon": "mdi:garage"}
+        )
+        area_data = parse_mcp_result(area_result)
+        assert area_data.get("success"), f"Failed to create area: {area_data}"
+        area_id = area_data.get("area_id")
+        cleanup_tracker.track("area", area_id)
+
+        topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+        topo_data = parse_mcp_result(topo_result)
+
+        assert topo_data.get("success"), f"Topology call failed: {topo_data}"
+
+        unassigned_ids = [a.get("area_id") for a in topo_data["unassigned_areas"]]
+        assert area_id in unassigned_ids, (
+            f"Unassigned area {area_id} not in unassigned_areas: {unassigned_ids}"
+        )
+
+        for floor in topo_data["floors"]:
+            floor_area_ids = [a.get("area_id") for a in floor.get("areas", [])]
+            assert area_id not in floor_area_ids, (
+                f"Unassigned area leaked into floor {floor.get('floor_id')}: {area_id}"
+            )
+        logger.info(f"Verified {area_id} is in unassigned_areas only")
+
+        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+
     @pytest.mark.slow
     async def test_multiple_areas_on_floor(self, mcp_client, cleanup_tracker):
         """
@@ -641,3 +728,43 @@ async def test_floor_list_empty_or_populated(mcp_client):
     )
 
     logger.info(f"Found {list_data['count']} existing floor(s)")
+
+
+@pytest.mark.area
+@pytest.mark.floor
+async def test_home_topology_schema(mcp_client):
+    """
+    Test: ha_get_home_topology returns a well-formed response on any HA instance
+    (populated or empty). Validates schema only, not content.
+    """
+    logger.info("Testing ha_get_home_topology schema")
+
+    topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+    topo_data = parse_mcp_result(topo_result)
+
+    assert topo_data.get("success"), f"Topology call failed: {topo_data}"
+    assert "floor_count" in topo_data, f"Missing floor_count: {topo_data}"
+    assert "area_count" in topo_data, f"Missing area_count: {topo_data}"
+    assert "unassigned_count" in topo_data, f"Missing unassigned_count: {topo_data}"
+    assert "floors" in topo_data, f"Missing floors: {topo_data}"
+    assert "unassigned_areas" in topo_data, f"Missing unassigned_areas: {topo_data}"
+    assert isinstance(topo_data["floors"], list), (
+        f"floors should be list: {type(topo_data['floors'])}"
+    )
+    assert isinstance(topo_data["unassigned_areas"], list), (
+        f"unassigned_areas should be list: {type(topo_data['unassigned_areas'])}"
+    )
+    assert isinstance(topo_data["floor_count"], int)
+    assert isinstance(topo_data["area_count"], int)
+    assert isinstance(topo_data["unassigned_count"], int)
+    # Each floor entry must carry its floor-registry fields plus the areas list
+    for floor in topo_data["floors"]:
+        assert "floor_id" in floor, f"Floor entry missing floor_id: {floor}"
+        assert "areas" in floor, f"Floor entry missing areas key: {floor}"
+        assert isinstance(floor["areas"], list)
+
+    logger.info(
+        f"Schema ok: {topo_data['floor_count']} floor(s), "
+        f"{topo_data['area_count']} area(s), "
+        f"{topo_data['unassigned_count']} unassigned"
+    )
