@@ -610,14 +610,22 @@ class TestGetHistoryNegativeInputs:
     """Negative-input tests for ha_get_history."""
 
     async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
-        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler."""
+        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler.
+
+        The empty string reaches the WS history handler which replies with
+        ``success=False``. That failure is raised as
+        ``HomeAssistantCommandError`` and classified by the terminal
+        ``command failed:`` branch as ``SERVICE_CALL_FAILED`` (a WS
+        command failure is a known failure mode, not an unexpected
+        internal error).
+        """
         result = await safe_call_tool(
             mcp_client,
             "ha_get_history",
             {"entity_ids": "", "start_time": "1h"},
         )
         assert result["success"] is False
-        assert result["error"]["code"] == "INTERNAL_ERROR"
+        assert result["error"]["code"] == "SERVICE_CALL_FAILED"
 
     async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
         """Rejects an empty list before any network call is made."""
