@@ -7,6 +7,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 import functools
 import json
 import logging
+import re
 import sys
 import time
 from typing import Any, Literal, NoReturn, overload
@@ -172,7 +173,29 @@ def _classify_by_message(
 ) -> dict[str, Any]:
     """Classify exception by error message patterns."""
     result: dict[str, Any]
-    if "not found" in error_str or "404" in error_str:
+    # Schema-branch must precede the "not found" / 404 branch (most-specific-first):
+    # a vol.Invalid message phrased like "Command failed: key X not found" would
+    # otherwise misclassify as RESOURCE_NOT_FOUND. The "command failed:" prefix
+    # gates the branch so non-schema WS errors fall through.
+    if "command failed:" in error_str and (
+        any(
+            marker in error_str
+            for marker in (
+                "missing option",
+                "extra keys not allowed",
+                "unknown secret",
+                "unknown type",
+            )
+        )
+        or re.search(r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str)
+    ):
+        # Supervisor schema validation: vol.Invalid message arriving as a
+        # HomeAssistantCommandError via HA Core's hassio WS bridge. The
+        # markers plus the "expected <type>" anchor regex cover the
+        # heterogeneous vol.Invalid vocabulary without relying on an
+        # error code (always unknown_error from the bridge).
+        result = create_validation_error(error_msg, context=context)
+    elif "not found" in error_str or "404" in error_str:
         entity_id = context.get("entity_id") if context else None
         if entity_id:
             result = create_entity_not_found_error(entity_id, details=error_msg)
@@ -182,21 +205,6 @@ def _classify_by_message(
         result = create_timeout_error("operation", 30, details=error_msg, context=context)
     elif "connection" in error_str or "connect" in error_str:
         result = create_connection_error(error_msg, context=context)
-    elif "command failed:" in error_str and any(
-        marker in error_str
-        for marker in (
-            "missing option",
-            "extra keys not allowed",
-            "expected",
-            "unknown secret",
-            "unknown type",
-        )
-    ):
-        # Supervisor schema validation: vol.Invalid message arriving as a
-        # HomeAssistantCommandError via HA Core's hassio WS bridge. The
-        # markers cover the heterogeneous vol.Invalid vocabulary without
-        # relying on an error code (always unknown_error from the bridge).
-        result = create_validation_error(error_msg, context=context)
     elif any(
         phrase in error_str
         for phrase in (
@@ -207,6 +215,13 @@ def _classify_by_message(
         )
     ) or "401" in error_str:
         result = create_auth_error(error_msg, context=context)
+    elif error_str.startswith("command failed:"):
+        # HomeAssistantCommandError fallback: WS ``success=False`` with a
+        # message that doesn't match any specific marker above. This is a
+        # known failure mode (the WS command itself failed), not an
+        # unexpected internal error — route to SERVICE_CALL_FAILED,
+        # mirroring the 4xx fallback in _classify_api_status.
+        result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
     else:
         result = create_error_response(
             ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", details=error_msg, context=context
