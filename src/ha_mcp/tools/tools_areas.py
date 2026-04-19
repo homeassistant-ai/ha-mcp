@@ -401,7 +401,7 @@ class AreaTools:
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Pre-joins the two registries on floor_id so the agent does not need to join in context.
 
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads.
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads — for example, an area whose floor_id no longer exists in the floors list will appear in unassigned_areas.
         """
         try:
             areas_result = await self._client.send_websocket_message(
@@ -419,17 +419,25 @@ class AreaTools:
                         "areas_success": areas_result.get("success"),
                         "floors_success": floors_result.get("success"),
                     },
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Verify WebSocket connection is active",
+                    ],
                 ))
 
             areas = areas_result.get("result", [])
             floors = floors_result.get("result", [])
 
-            # Group areas by floor_id; collect areas without floor assignment
+            # Guard against area.floor_id references that do not exist in the
+            # floors list (race between the two sequential reads, or manual
+            # .storage inconsistency). Such areas are routed to unassigned_areas
+            # rather than silently dropped from the response.
+            valid_floor_ids = {f.get("floor_id") for f in floors if f.get("floor_id")}
             floor_map: dict[str, list[dict[str, Any]]] = {}
             unassigned_areas: list[dict[str, Any]] = []
             for area in areas:
                 fid = area.get("floor_id")
-                if fid:
+                if fid and fid in valid_floor_ids:
                     floor_map.setdefault(fid, []).append(area)
                 else:
                     unassigned_areas.append(area)
