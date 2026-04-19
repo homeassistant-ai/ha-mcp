@@ -112,6 +112,34 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # Node-RED tools — opt-in module exposing Node-RED Admin API operations
+    # (flows, nodes, inject, deploy). Disabled by default. When enabled,
+    # NODERED_URL/USERNAME/PASSWORD must also be set.
+    enable_nodered_tools: bool = Field(False, alias="ENABLE_NODERED_TOOLS")
+    nodered_url: str = Field("", alias="NODERED_URL")
+    nodered_username: str = Field("", alias="NODERED_USERNAME")
+    nodered_password: str = Field("", alias="NODERED_PASSWORD")
+
+    @model_validator(mode="after")
+    def _nodered_credentials(self) -> "Settings":
+        """Require Node-RED credentials whenever the tools module is enabled."""
+        if not self.enable_nodered_tools:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("NODERED_URL", self.nodered_url),
+                ("NODERED_USERNAME", self.nodered_username),
+                ("NODERED_PASSWORD", self.nodered_password),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                "ENABLE_NODERED_TOOLS=true but missing: " + ", ".join(missing)
+            )
+        return self
+
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
         """Auto-enable skills (resources) when skills-as-tools is on.
