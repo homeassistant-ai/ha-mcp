@@ -258,17 +258,20 @@ class TestSchemaAndAuthClassification:
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
 
-    def test_auth_required_handshake_not_auth_error(self):
-        """Handshake failure message containing 'auth_required' is not AUTH_INVALID_TOKEN.
+    def test_auth_required_handshake_is_connection_error(self):
+        """Handshake failure carrying 'auth_required' classifies as CONNECTION_FAILED.
 
-        websocket_client.py raises ``Exception("Did not receive
-        auth_required message")`` during the connect handshake — this
-        is a transport problem, not an auth failure. The phrase list
-        refuses to match it.
+        websocket_client.py raises ``HomeAssistantConnectionError("Did not
+        receive auth_required message")`` during the connect handshake —
+        this is a transport problem, not an auth failure. Type-dispatch in
+        ``_classify_exception`` routes it to CONNECTION_FAILED directly,
+        skipping string classification.
         """
-        exc = Exception("Did not receive auth_required message")
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+        exc = HomeAssistantConnectionError("Did not receive auth_required message")
         result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
+        assert result["error"]["code"] == "CONNECTION_FAILED"
 
     def test_genuine_auth_phrase_still_classified(self):
         """Actual auth failure vocabulary still routes to AUTH_INVALID_TOKEN."""

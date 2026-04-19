@@ -1179,13 +1179,14 @@ class TestOAuthProxyClient:
     def test_oauth_proxy_client_no_token_raises_error(self):
         """Test that OAuthProxyClient raises error when no token in context."""
         from ha_mcp.__main__ import OAuthProxyClient
+        from ha_mcp.client.rest_client import HomeAssistantAuthError
 
         proxy = OAuthProxyClient("http://homeassistant.local:8123")
 
         # Mock get_access_token to return None
         with (
             patch("fastmcp.server.dependencies.get_access_token", return_value=None),
-            pytest.raises(RuntimeError, match="No OAuth token"),
+            pytest.raises(HomeAssistantAuthError, match="No OAuth token"),
         ):
             _ = proxy.get_state
 
@@ -1194,6 +1195,7 @@ class TestOAuthProxyClient:
         from fastmcp.server.auth.auth import AccessToken
 
         from ha_mcp.__main__ import OAuthProxyClient
+        from ha_mcp.client.rest_client import HomeAssistantAuthError
 
         # Token without claims
         token_no_claims = AccessToken(
@@ -1211,7 +1213,7 @@ class TestOAuthProxyClient:
                 "fastmcp.server.dependencies.get_access_token",
                 return_value=token_no_claims,
             ),
-            pytest.raises(RuntimeError, match="No Home Assistant credentials"),
+            pytest.raises(HomeAssistantAuthError, match="No Home Assistant credentials"),
         ):
             _ = proxy.get_state
 
