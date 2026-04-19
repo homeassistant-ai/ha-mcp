@@ -60,7 +60,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Top-level YAML key to modify. Only a narrow allowlist of "
                     "YAML-only integration keys is accepted (e.g., 'command_line', "
                     "'rest', 'shell_command', 'notify'). Not for template sensors "
-                    "(use ha_set_config_entry_helper), automations, scripts, "
+                    "(use ha_config_set_helper), automations, scripts, "
                     "scenes, or input_* helpers — those have dedicated tools."
                 ),
             ),
@@ -112,13 +112,13 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         almost every use case and should be preferred:
 
         - Template sensors (state-based or trigger-based) ->
-          ha_set_config_entry_helper(helper_type='template')
+          ha_config_set_helper(helper_type='template')
         - Automations -> ha_config_set_automation
         - Scripts -> ha_config_set_script
         - Scenes -> ha_config_set_scene
-        - Input helpers -> ha_config_set_helper
-        - Groups, min/max, threshold, derivative, statistics, utility_meter,
-          trend, filter, switch_as_x -> ha_set_config_entry_helper
+        - All 27 helper types (input_*, counter, timer, schedule, zone, person,
+          tag, group, min_max, threshold, derivative, statistics, utility_meter,
+          trend, filter, switch_as_x, etc.) -> ha_config_set_helper
 
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms).

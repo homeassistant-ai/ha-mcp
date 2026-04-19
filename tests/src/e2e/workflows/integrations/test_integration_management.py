@@ -143,8 +143,12 @@ class TestIntegrationManagement:
         }
 
         create_result = await mcp_client.call_tool(
-            "ha_set_config_entry_helper",
-            {"helper_type": "group", "config": config},
+            "ha_config_set_helper",
+            {
+                "helper_type": "group",
+                "name": "test_delete_regression_e2e",
+                "config": config,
+            },
         )
         data = assert_mcp_success(create_result, "Create light group for delete test")
         entry_id = data["entry_id"]

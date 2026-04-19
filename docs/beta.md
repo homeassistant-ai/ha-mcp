@@ -48,4 +48,4 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **Recommended prerequisites:**
 - Comfort with editing `configuration.yaml` via SSH or File Editor when things go wrong
-- Understanding that dedicated tools (`ha_set_config_entry_helper`, `ha_config_set_automation`, `ha_config_set_script`, `ha_config_set_scene`, etc.) should be preferred for anything they support
+- Understanding that dedicated tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_set_script`, `ha_config_set_scene`, etc.) should be preferred for anything they support

@@ -351,10 +351,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "conditions actions get show detail"
         ),
         # s09: "create helper" → ha_config_set_helper should outrank remove_helper
+        # Covers all 27 helper types (12 simple + 15 flow-based, unified in #967).
         "ha_config_set_helper": (
-            "create new add helper input_boolean input_number input_text "
-            "counter timer input_datetime input_select input_button "
-            "schedule zone group min_max"
+            "create update new add helper "
+            "input_boolean input_button input_number input_text input_datetime "
+            "input_select counter timer schedule zone person tag "
+            "template group utility_meter derivative min_max threshold "
+            "integration statistics trend random filter tod "
+            "generic_thermostat switch_as_x generic_hygrostat"
         ),
         # Boost tools that compete with ha_deep_search for common queries
         "ha_config_get_script": (
