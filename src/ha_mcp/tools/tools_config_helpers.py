@@ -793,9 +793,25 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         FLOW types (pass `config` dict, Config Entry Flow API): template, group,
         utility_meter, derivative, min_max, threshold, integration, statistics, trend,
         random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.
+        Note: `tod` is the purpose-built "is-current-time-in-range" indicator
+        (supports cross-midnight ranges, unlike `schedule`).
 
         For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
         reject the `name` key on update — to rename a flow helper, delete and recreate.
+
+        EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
+        - template sensor:
+            ha_config_set_helper("template", "Room Temp",
+                config={"next_step_id": "sensor",
+                        "state": "{{ states('sensor.x')|float }}",
+                        "unit_of_measurement": "°C"})
+        - group (light):
+            ha_config_set_helper("group", "Kitchen Lights",
+                config={"group_type": "light",
+                        "entities": ["light.a", "light.b"]})
+        - tod (time-of-day indicator, cross-midnight OK):
+            ha_config_set_helper("tod", "Quiet Hours",
+                config={"after_time": "22:00:00", "before_time": "07:00:00"})
 
         For complex schemas and per-type parameter details, use ha_get_helper_schema.
         """
