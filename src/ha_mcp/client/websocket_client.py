@@ -440,11 +440,7 @@ class HomeAssistantWebSocketClient:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    raise HomeAssistantCommandError(
-                        f"Command failed: {error_msg}",
-                        code=error.get("code") if isinstance(error, dict) else None,
-                        payload=error if isinstance(error, dict) else None,
-                    )
+                    raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
                 # Return success response according to HA WebSocket format
                 return {
@@ -521,11 +517,7 @@ class HomeAssistantWebSocketClient:
                 if isinstance(error, dict)
                 else str(error)
             )
-            raise HomeAssistantCommandError(
-                f"Command failed: {error_msg}",
-                code=error.get("code") if isinstance(error, dict) else None,
-                payload=error if isinstance(error, dict) else None,
-            )
+            raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
         try:
             event_response = await asyncio.wait_for(

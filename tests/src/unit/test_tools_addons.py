@@ -1310,7 +1310,6 @@ class TestSupervisorApiCall:
             side_effect=HomeAssistantCommandError(
                 "Command failed: Missing option 'authorized_keys' in ssh "
                 "in SSH (core_ssh)",
-                code="unknown_error",
             )
         )
 
@@ -1345,7 +1344,6 @@ class TestSupervisorApiCall:
         mock_ws.send_command = AsyncMock(
             side_effect=HomeAssistantCommandError(
                 "Command failed: Missing option 'authorized_keys' in ssh",
-                code="unknown_error",
             )
         )
 

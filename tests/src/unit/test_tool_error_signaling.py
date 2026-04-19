@@ -241,7 +241,6 @@ class TestSchemaAndAuthClassification:
 
         exc = HomeAssistantCommandError(
             "Command failed: Missing option 'authorized_keys' in ssh",
-            code="unknown_error",
         )
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "VALIDATION_FAILED"
