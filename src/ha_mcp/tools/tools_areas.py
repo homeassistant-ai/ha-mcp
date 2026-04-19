@@ -395,14 +395,13 @@ class AreaTools:
     @log_tool_usage
     async def ha_get_home_topology(self) -> dict[str, Any]:
         """
-        Get the hierarchical floor/area structure of the home.
+        Get floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
-        Returns floors sorted by level (basement first, upper floors last),
-        each with its assigned areas nested underneath, plus unassigned_areas
-        for areas without a floor assignment. Pre-joins data from
-        ha_config_list_floors and ha_config_list_areas into a single
-        hierarchy, useful for location-based queries (e.g., "which rooms
-        are on the ground floor").
+        Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
+
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Pre-joins the two registries on floor_id so the agent does not need to join in context.
+
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads.
         """
         try:
             areas_result = await self._client.send_websocket_message(
