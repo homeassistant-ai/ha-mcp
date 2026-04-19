@@ -225,37 +225,129 @@ class TestIntegrationWithMCPProtocol:
 class TestSchemaAndAuthClassification:
     """Tests for _classify_by_message schema and auth branches (issue #993).
 
-    Pins two behaviours at the classifier boundary:
-    1. Supervisor vol.Invalid messages route to VALIDATION_FAILED via
-       the "Command failed: ... missing option" branch.
+    Pins three behaviours at the classifier boundary:
+    1. Supervisor vol.Invalid messages prefixed with "Command failed:" and
+       carrying any of the schema markers route to VALIDATION_FAILED.
     2. Messages that merely contain the substring "auth" (e.g.
-       "Did not receive auth_required message", "authorized_keys")
-       are NOT misclassified as AUTH_INVALID_TOKEN. Only the phrase
-       list (unauthorized, authentication, invalid token, access
-       denied) matches the auth branch.
+       "authorized_keys") are NOT misclassified as AUTH_INVALID_TOKEN.
+       Only the phrase list (unauthorized, authentication, invalid token,
+       access denied) plus the 401 numeric signal match the auth branch.
+    3. Typed HA exceptions (HomeAssistantAuthError,
+       HomeAssistantConnectionError, HomeAssistantCommandError) route via
+       type dispatch in _classify_exception, skipping string
+       classification entirely.
     """
 
-    def test_command_error_with_schema_marker_is_validation_failed(self):
-        """HomeAssistantCommandError carrying vol.Invalid markers => VALIDATION_FAILED."""
+    # --- Schema branch: all 5 vol.Invalid markers + the "expected" regex ---
+
+    SCHEMA_MARKER_MESSAGES: tuple[tuple[str, str], ...] = (
+        # marker id, full message
+        ("missing_option", "Command failed: Missing option 'authorized_keys' in ssh"),
+        ("extra_keys", "Command failed: extra keys not allowed @ data['foo']"),
+        ("unknown_secret", "Command failed: Unknown secret 'api_key'"),
+        ("unknown_type", "Command failed: Unknown type 'timedelta'"),
+        ("expected_a", "Command failed: expected a string for dictionary value @ data['host']"),
+        ("expected_str", "Command failed: expected str for 'name'"),
+        ("expected_int", "Command failed: expected int for 'port'"),
+        ("expected_bool", "Command failed: expected bool"),
+        ("expected_dict", "Command failed: expected dict"),
+        ("expected_list", "Command failed: expected list of strings"),
+        ("expected_float", "Command failed: expected float value"),
+        ("expected_type", "Command failed: expected type 'str'"),
+        ("expected_one_of", "Command failed: expected one of ['a', 'b', 'c']"),
+    )
+
+    @pytest.mark.parametrize(
+        "marker_id,message",
+        SCHEMA_MARKER_MESSAGES,
+        ids=[m[0] for m in SCHEMA_MARKER_MESSAGES],
+    )
+    def test_schema_marker_classified_as_validation_failed(self, marker_id, message):
+        """Each vol.Invalid marker under "Command failed:" routes to VALIDATION_FAILED.
+
+        Mutation-testing-style coverage: drop any marker from the source
+        tuple in helpers.py and the corresponding parametrized case fails.
+        """
         from ha_mcp.client.rest_client import HomeAssistantCommandError
 
-        exc = HomeAssistantCommandError(
-            "Command failed: Missing option 'authorized_keys' in ssh",
-        )
+        exc = HomeAssistantCommandError(message)
         result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "VALIDATION_FAILED"
+        assert result["error"]["code"] == "VALIDATION_FAILED", (
+            f"marker {marker_id!r} did not route to VALIDATION_FAILED"
+        )
+
+    def test_schema_phrase_without_command_prefix_not_validation(self):
+        """Negative test for the "command failed:" outer gate.
+
+        A plain Exception containing a schema phrase but without the
+        "Command failed:" prefix must not route to VALIDATION_FAILED.
+        Drop the gate and this test catches it.
+        """
+        exc = Exception("Missing option 'foo' in bar")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] != "VALIDATION_FAILED"
+
+    # --- Auth branch: all 4 phrases + 401 numeric signal ---
+
+    AUTH_PHRASE_MESSAGES: tuple[tuple[str, str], ...] = (
+        ("unauthorized", "unauthorized: invalid bearer token"),
+        ("authentication", "authentication required"),
+        ("invalid_token", "token rejected: invalid token format"),
+        ("access_denied", "access denied for user"),
+    )
+
+    @pytest.mark.parametrize(
+        "phrase_id,message",
+        AUTH_PHRASE_MESSAGES,
+        ids=[m[0] for m in AUTH_PHRASE_MESSAGES],
+    )
+    def test_auth_phrase_classified(self, phrase_id, message):
+        """Each auth phrase routes to AUTH_INVALID_TOKEN.
+
+        Mutation-testing coverage: drop any phrase from the source tuple
+        in helpers.py and the corresponding case fails.
+        """
+        exc = Exception(message)
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN", (
+            f"phrase {phrase_id!r} did not route to AUTH_INVALID_TOKEN"
+        )
+
+    def test_401_status_still_classified_as_auth(self):
+        """401 numeric signal in error text remains an auth error."""
+        exc = Exception("Server returned 401")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
+
+    # --- Regression tests: substrings that must NOT trigger auth ---
 
     def test_authorized_keys_substring_not_auth_error(self):
         """Plain Exception mentioning 'authorized_keys' must not be AUTH_INVALID_TOKEN.
 
-        Covers the root cause of #993: the old
-        ``"auth" in error_str`` greedy match caught this as an auth
-        failure purely because the word "authorized_keys" contains
-        "auth".
+        Covers the root cause of #993: the old ``"auth" in error_str``
+        greedy match caught this as an auth failure purely because the
+        word "authorized_keys" contains "auth".
         """
         exc = Exception("Command failed: Missing option 'authorized_keys' in ssh")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
+
+    # --- Command-failed fallback: known failure, not INTERNAL_ERROR ---
+
+    def test_command_error_unknown_message_is_service_call_failed(self):
+        """HomeAssistantCommandError without a specific marker => SERVICE_CALL_FAILED.
+
+        A WS ``success=False`` is a known failure mode, not "unexpected".
+        Classification falls through to the terminal ``command failed:``
+        branch rather than INTERNAL_ERROR.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        exc = HomeAssistantCommandError("Command failed: light unreachable")
+        result = exception_to_structured_error(exc, raise_error=False)
+        assert result["error"]["code"] == "SERVICE_CALL_FAILED"
+
+    # --- Typed exceptions: type dispatch skips string classification ---
 
     def test_auth_required_handshake_is_connection_error(self):
         """Handshake failure carrying 'auth_required' classifies as CONNECTION_FAILED.
@@ -272,14 +364,28 @@ class TestSchemaAndAuthClassification:
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "CONNECTION_FAILED"
 
-    def test_genuine_auth_phrase_still_classified(self):
-        """Actual auth failure vocabulary still routes to AUTH_INVALID_TOKEN."""
-        exc = Exception("unauthorized: invalid bearer token")
+    def test_typed_auth_error_classified_as_auth(self):
+        """HomeAssistantAuthError routes to AUTH_INVALID_TOKEN via type dispatch.
+
+        Covers __main__.py raise sites (OAuth token missing, HA credentials
+        missing in claims). Message text doesn't match the auth phrase
+        list, but the type wins before string classification runs.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantAuthError
+
+        exc = HomeAssistantAuthError("No OAuth token in request context")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 
-    def test_401_status_still_classified_as_auth(self):
-        """401 numeric signal in error text remains an auth error."""
-        exc = Exception("Server returned 401")
+    def test_typed_connection_error_classified_as_connection(self):
+        """HomeAssistantConnectionError routes to CONNECTION_FAILED via type dispatch.
+
+        Covers websocket_client.py raise sites (WebSocket state guards).
+        Message "WebSocket not authenticated" does not match any phrase in
+        the auth list — the type dispatch determines the classification.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+        exc = HomeAssistantConnectionError("WebSocket not authenticated")
         result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
+        assert result["error"]["code"] == "CONNECTION_FAILED"
