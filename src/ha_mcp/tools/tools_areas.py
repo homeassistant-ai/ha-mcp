@@ -388,6 +388,93 @@ class AreaTools:
             ])
 
     @tool(
+        name="ha_get_home_topology",
+        tags={"Areas & Floors"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Home Topology"},
+    )
+    @log_tool_usage
+    async def ha_get_home_topology(self) -> dict[str, Any]:
+        """
+        Get floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+
+        Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
+
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Pre-joins the two registries on floor_id so the agent does not need to join in context.
+
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads — for example, an area whose floor_id no longer exists in the floors list will appear in unassigned_areas.
+        """
+        try:
+            areas_result = await self._client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            )
+            floors_result = await self._client.send_websocket_message(
+                {"type": "config/floor_registry/list"}
+            )
+
+            if not (areas_result.get("success") and floors_result.get("success")):
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to retrieve area or floor registry",
+                    context={
+                        "areas_success": areas_result.get("success"),
+                        "floors_success": floors_result.get("success"),
+                    },
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Verify WebSocket connection is active",
+                    ],
+                ))
+
+            areas = areas_result.get("result", [])
+            floors = floors_result.get("result", [])
+
+            # Guard against area.floor_id references that do not exist in the
+            # floors list (race between the two sequential reads, or manual
+            # .storage inconsistency). Such areas are routed to unassigned_areas
+            # rather than silently dropped from the response.
+            valid_floor_ids = {f.get("floor_id") for f in floors if f.get("floor_id")}
+            floor_map: dict[str, list[dict[str, Any]]] = {}
+            unassigned_areas: list[dict[str, Any]] = []
+            for area in areas:
+                fid = area.get("floor_id")
+                if fid and fid in valid_floor_ids:
+                    floor_map.setdefault(fid, []).append(area)
+                else:
+                    unassigned_areas.append(area)
+
+            # Build nested hierarchy, preserving all floor-registry fields for
+            # forward compatibility with future HA Core additions
+            topology = [
+                {**floor, "areas": floor_map.get(floor.get("floor_id"), [])}
+                for floor in floors
+            ]
+
+            # Sort by level ascending; None treated as 0 (Python sort fails on None/int mix)
+            topology.sort(key=lambda f: f.get("level") or 0)
+
+            return {
+                "success": True,
+                "floor_count": len(topology),
+                "area_count": len(areas),
+                "unassigned_count": len(unassigned_areas),
+                "floors": topology,
+                "unassigned_areas": unassigned_areas,
+                "message": (
+                    f"Found {len(topology)} floor(s), {len(areas)} area(s), "
+                    f"{len(unassigned_areas)} unassigned"
+                ),
+            }
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting home topology: {e}")
+            exception_to_structured_error(e, context={"operation": "get_home_topology"}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ])
+
+    @tool(
         name="ha_config_set_floor",
         tags={"Areas & Floors"},
         annotations={"destructiveHint": True, "title": "Create or Update Floor"},
