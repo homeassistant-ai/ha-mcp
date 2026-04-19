@@ -37,10 +37,12 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
     fetch_entity_category,
+    merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -641,6 +643,13 @@ class AutomationConfigTools:
                 config_dict, skill_prefix=_get_skill_prefix()
             )
 
+            # Cross-check literal service and entity references against
+            # the live registries. Soft warnings only — the write still
+            # happens, even when references don't resolve (#940).
+            validation_meta = await validate_config_references(
+                self._client, config_dict
+            )
+
             result = await self._client.upsert_automation_config(config_dict, identifier)
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
@@ -676,6 +685,8 @@ class AutomationConfigTools:
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
+
+            merge_validation_meta(result, validation_meta)
 
             return {
                 "success": True,
