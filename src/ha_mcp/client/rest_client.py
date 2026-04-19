@@ -43,6 +43,17 @@ class HomeAssistantAPIError(HomeAssistantError):
         self.response_data = response_data
 
 
+class HomeAssistantCommandError(HomeAssistantError):
+    """WebSocket command returned success=False.
+
+    Raised by ``WebSocketClient.send_command`` when Home Assistant responds
+    with ``{type: "result", success: False}``. Used as a type marker in
+    ``_classify_exception``'s match dispatch; classification then falls
+    through to ``_classify_by_message`` for pattern matching on the
+    error message.
+    """
+
+
 class HomeAssistantClient:
     """Authenticated HTTP client for Home Assistant API."""
 
