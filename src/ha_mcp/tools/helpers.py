@@ -7,6 +7,7 @@ Centralized utilities that can be shared across multiple tool implementations.
 import functools
 import json
 import logging
+import re
 import sys
 import time
 from typing import Any, Literal, NoReturn, overload
@@ -16,6 +17,7 @@ from fastmcp.exceptions import ToolError
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
@@ -98,6 +100,160 @@ async def get_connected_ws_client(
     return ws_client, None
 
 
+
+def _classify_api_status(
+    error: HomeAssistantAPIError,
+    error_msg: str,
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify HomeAssistantAPIError by HTTP status code."""
+    match error.status_code:
+        case 404:
+            entity_id = context.get("entity_id") if context else None
+            if entity_id:
+                result = create_entity_not_found_error(entity_id, details=error_msg)
+            else:
+                result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+        case 401 | 403:
+            result = create_auth_error(error_msg, context=context)
+        case 400:
+            result = create_validation_error(error_msg, context=context)
+        case _:
+            result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+    return result
+
+
+def _classify_exception(
+    error: Exception,
+    error_str: str,
+    error_msg: str,
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify exception into structured error response by type, then message."""
+    result: dict[str, Any] | None = None
+
+    # Type-based classification
+    match error:
+        case HomeAssistantConnectionError():
+            result = create_connection_error(
+                error_msg, timeout="timeout" in error_str, context=context
+            )
+        case HomeAssistantAuthError():
+            result = create_auth_error(
+                error_msg, expired="expired" in error_str, context=context
+            )
+        case HomeAssistantAPIError():
+            result = _classify_api_status(error, error_msg, context)
+        case HomeAssistantCommandError():
+            # WebSocket command-failure. The ``error.code`` on Supervisor
+            # calls routed through HA Core's hassio WS bridge is always
+            # ``unknown_error`` (see homeassistant/components/hassio/
+            # websocket_api.py), so discrimination must come from the
+            # message. Fall through to ``_classify_by_message`` which
+            # pattern-matches schema, auth, not-found and timeout cases.
+            result = None
+        case TimeoutError():
+            operation = context.get("operation", "request") if context else "request"
+            timeout_seconds = context.get("timeout_seconds", 30) if context else 30
+            result = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
+        case ValueError():
+            result = create_validation_error(error_msg, context=context)
+
+    if result is not None:
+        return result
+
+    # Message-based classification fallback
+    return _classify_by_message(error_str, error_msg, context)
+
+
+def _classify_by_message(
+    error_str: str,
+    error_msg: str,
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify exception by error message patterns."""
+    result: dict[str, Any]
+    # Schema-branch must precede the "not found" / 404 branch (most-specific-first):
+    # a vol.Invalid message phrased like "Command failed: key X not found" would
+    # otherwise misclassify as RESOURCE_NOT_FOUND. The "command failed:" prefix
+    # gates the branch so non-schema WS errors fall through.
+    if "command failed:" in error_str and (
+        any(
+            marker in error_str
+            for marker in (
+                "missing option",
+                "extra keys not allowed",
+                "unknown secret",
+                "unknown type",
+            )
+        )
+        or re.search(r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str)
+    ):
+        # Supervisor schema validation: vol.Invalid message arriving as a
+        # HomeAssistantCommandError via HA Core's hassio WS bridge. The
+        # markers plus the "expected <type>" anchor regex cover the
+        # heterogeneous vol.Invalid vocabulary without relying on an
+        # error code (always unknown_error from the bridge).
+        result = create_validation_error(error_msg, context=context)
+    elif "not found" in error_str or "404" in error_str:
+        entity_id = context.get("entity_id") if context else None
+        if entity_id:
+            result = create_entity_not_found_error(entity_id, details=error_msg)
+        else:
+            result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+    elif "timeout" in error_str:
+        result = create_timeout_error("operation", 30, details=error_msg, context=context)
+    elif "connection" in error_str or "connect" in error_str:
+        result = create_connection_error(error_msg, context=context)
+    elif any(
+        phrase in error_str
+        for phrase in (
+            "unauthorized",
+            "authentication",
+            "invalid token",
+            "access denied",
+        )
+    ) or "401" in error_str:
+        result = create_auth_error(error_msg, context=context)
+    elif error_str.startswith("command failed:"):
+        # HomeAssistantCommandError fallback: WS ``success=False`` with a
+        # message that doesn't match any specific marker above. This is a
+        # known failure mode (the WS command itself failed), not an
+        # unexpected internal error — route to SERVICE_CALL_FAILED,
+        # mirroring the 4xx fallback in _classify_api_status.
+        result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+    else:
+        result = create_error_response(
+            ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", details=error_msg, context=context
+        )
+    return result
+
+
+def _append_macos_hints(error_response: dict[str, Any]) -> None:
+    if not (
+        sys.platform == "darwin"
+        and "error" in error_response
+        and isinstance(error_response["error"], dict)
+        and error_response["error"].get("code")
+        in (ErrorCode.CONNECTION_FAILED, ErrorCode.CONNECTION_TIMEOUT)
+    ):
+        return
+    macos_hints = [
+        "macOS may block local network access for Claude Desktop subprocesses "
+        "(System Settings > Privacy & Security > Local Network)",
+        "Try an SSH tunnel: ssh -N -L 8123:localhost:8123 user@ha-server, "
+        "then use http://localhost:8123",
+        "Ensure you are using http:// (not https://) unless SSL/TLS is configured",
+    ]
+    # Handle both "suggestions" (plural, 2+ items) and "suggestion" (singular, 1 item)
+    existing = error_response["error"].get("suggestions") or []
+    if not existing:
+        single = error_response["error"].get("suggestion")
+        if single:
+            existing = [single]
+    error_response["error"]["suggestions"] = existing + macos_hints
+
+
 @overload
 def exception_to_structured_error(
     error: Exception,
@@ -149,111 +305,14 @@ def exception_to_structured_error(
     error_str = str(error).lower()
     error_msg = str(error)
 
-    error_response: dict[str, Any]
-
-    # Handle specific exception types
-    if isinstance(error, HomeAssistantConnectionError):
-        if "timeout" in error_str:
-            error_response = create_connection_error(error_msg, timeout=True, context=context)
-        else:
-            error_response = create_connection_error(error_msg, context=context)
-
-    elif isinstance(error, HomeAssistantAuthError):
-        if "expired" in error_str:
-            error_response = create_auth_error(error_msg, expired=True, context=context)
-        else:
-            error_response = create_auth_error(error_msg, context=context)
-
-    elif isinstance(error, HomeAssistantAPIError):
-        # Check for specific error patterns
-        match error.status_code:
-            case 404:
-                # Entity or resource not found
-                entity_id = context.get("entity_id") if context else None
-                if entity_id:
-                    error_response = create_entity_not_found_error(entity_id, details=error_msg)
-                else:
-                    error_response = create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        error_msg,
-                        context=context,
-                    )
-            case 401 | 403:
-                error_response = create_auth_error(error_msg, context=context)
-            case 400:
-                error_response = create_validation_error(error_msg, context=context)
-            case _:
-                # Generic API error
-                error_response = create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    error_msg,
-                    context=context,
-                )
-
-    elif isinstance(error, TimeoutError):
-        operation = context.get("operation", "request") if context else "request"
-        timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-        error_response = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
-
-    elif isinstance(error, ValueError):
-        error_response = create_validation_error(error_msg, context=context)
-
-    # Check for common error patterns in error message
-    elif "not found" in error_str or "404" in error_str:
-        entity_id = context.get("entity_id") if context else None
-        if entity_id:
-            error_response = create_entity_not_found_error(entity_id, details=error_msg)
-        else:
-            error_response = create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                error_msg,
-                context=context,
-            )
-
-    elif "timeout" in error_str:
-        error_response = create_timeout_error("operation", 30, details=error_msg, context=context)
-
-    elif "connection" in error_str or "connect" in error_str:
-        error_response = create_connection_error(error_msg, context=context)
-
-    elif "auth" in error_str or "token" in error_str or "401" in error_str:
-        error_response = create_auth_error(error_msg, context=context)
-
-    else:
-        # Default to internal error -- use generic message to avoid leaking internals
-        error_response = create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            "An unexpected error occurred",
-            details=error_msg,
-            context=context,
-        )
+    error_response = _classify_exception(error, error_str, error_msg, context)
 
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
         error_response["error"]["suggestions"] = suggestions
 
     # Append macOS-specific hints for connection failures (after all other processing
     # so hints survive regardless of whether caller provided explicit suggestions)
-    if (
-        sys.platform == "darwin"
-        and "error" in error_response
-        and isinstance(error_response["error"], dict)
-        and error_response["error"].get("code")
-        in (ErrorCode.CONNECTION_FAILED, ErrorCode.CONNECTION_TIMEOUT)
-    ):
-        macos_hints = [
-            "macOS may block local network access for Claude Desktop subprocesses "
-            "(System Settings > Privacy & Security > Local Network)",
-            "Try an SSH tunnel: ssh -N -L 8123:localhost:8123 user@ha-server, "
-            "then use http://localhost:8123",
-            "Ensure you are using http:// (not https://) unless SSL/TLS is configured",
-        ]
-        # Handle both "suggestions" (plural, 2+ items) and "suggestion" (singular, 1 item)
-        existing = error_response["error"].get("suggestions") or []
-        if not existing:
-            single = error_response["error"].get("suggestion")
-            if single:
-                existing = [single]
-        error_response["error"]["suggestions"] = existing + macos_hints
+    _append_macos_hints(error_response)
 
     if raise_error:
         raise_tool_error(error_response)

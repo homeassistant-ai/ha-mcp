@@ -981,7 +981,7 @@ async def test_helper_search_and_discovery(mcp_client):
     for domain in helper_domains:
         logger.info(f"🔍 Searching for {domain} helpers...")
         search_result = await mcp_client.call_tool(
-            "ha_search_entities", {"query": "", "domain_filter": domain, "limit": 10}
+            "ha_search_entities", {"domain_filter": domain, "limit": 10}
         )
 
         search_data = parse_mcp_result(search_result)

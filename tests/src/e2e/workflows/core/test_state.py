@@ -121,7 +121,7 @@ async def test_get_state_sensor_with_numeric_value(mcp_client):
     # Search for a sensor to test
     search_result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "sensor", "limit": 5},
+        {"domain_filter": "sensor", "limit": 5},
     )
 
     search_data = parse_mcp_result(search_result)
@@ -167,7 +167,7 @@ async def test_get_state_automation_entity(mcp_client):
     # Search for an automation
     search_result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "automation", "limit": 5},
+        {"domain_filter": "automation", "limit": 5},
     )
 
     search_data = parse_mcp_result(search_result)
@@ -218,7 +218,7 @@ async def test_get_state_binary_sensor(mcp_client):
     # Search for a binary sensor
     search_result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "binary_sensor", "limit": 5},
+        {"domain_filter": "binary_sensor", "limit": 5},
     )
 
     search_data = parse_mcp_result(search_result)

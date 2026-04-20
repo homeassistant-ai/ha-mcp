@@ -84,7 +84,7 @@ class IntegrationTools:
             bool | str,
             Field(
                 description="When entry_id is set, also return the options flow schema "
-                "(available fields and their types). Use before ha_set_config_entry_helper "
+                "(available fields and their types). Use before ha_config_set_helper "
                 "to understand what can be updated. Only applies when supports_options=true.",
                 default=False,
             ),

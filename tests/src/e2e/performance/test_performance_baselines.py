@@ -151,7 +151,7 @@ async def test_search_entities_domain_filter_performance(mcp_client, perf_metric
     results = await run_performance_iterations(
         mcp_client,
         tool_name="ha_search_entities",
-        params={"query": "", "domain_filter": "light", "limit": 50},
+        params={"domain_filter": "light", "limit": 50},
         iterations=5,
         warmup=1,
     )
@@ -368,7 +368,7 @@ async def test_performance_report_generation(mcp_client):
         ("ha_get_overview", {"detail_level": "full"}),
         ("ha_get_overview", {"detail_level": "minimal"}),
         ("ha_search_entities", {"query": "light", "limit": 10}),
-        ("ha_search_entities", {"query": "", "domain_filter": "sensor", "limit": 20}),
+        ("ha_search_entities", {"domain_filter": "sensor", "limit": 20}),
         ("ha_deep_search", {"query": "light", "limit": 5}),
         ("ha_get_state", {"entity_id": "sun.sun"}),
     ]

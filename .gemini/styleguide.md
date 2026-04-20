@@ -107,6 +107,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
+- Multi-line docstring does not follow the structure template: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, (4) caveats. See AGENTS.md "Tool Docstrings" for details.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)

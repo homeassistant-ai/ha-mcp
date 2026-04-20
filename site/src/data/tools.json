@@ -1333,7 +1333,7 @@
   {
     "name": "ha_config_remove_helper",
     "title": "Remove Helper",
-    "description": "Delete a Home Assistant helper entity.\n\nSUPPORTED HELPER TYPES:\n- input_button, input_boolean, input_select, input_number, input_text, input_datetime\n- counter, timer, schedule, zone, person, tag\n\nEXAMPLES:\n- Delete button: ha_config_remove_helper(\"input_button\", \"my_button\")\n- Delete counter: ha_config_remove_helper(\"counter\", \"my_counter\")\n- Delete timer: ha_config_remove_helper(\"timer\", \"my_timer\")\n- Delete schedule: ha_config_remove_helper(\"schedule\", \"work_hours\")\n\n**WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.\nUse ha_search_entities() to verify the helper exists before attempting to delete it.",
+    "description": "Delete a Home Assistant helper entity.\n\nSUPPORTED HELPER TYPES:\n- input_button, input_boolean, input_select, input_number, input_text, input_datetime\n- counter, timer, schedule, zone, person, tag\n\nFor flow-based helper types (template, group, utility_meter, derivative,\nmin_max, threshold, integration, statistics, trend, random, filter, tod,\ngeneric_thermostat, switch_as_x, generic_hygrostat) use ha_delete_config_entry.\n\nEXAMPLES:\n- Delete button: ha_config_remove_helper(\"input_button\", \"my_button\")\n- Delete counter: ha_config_remove_helper(\"counter\", \"my_counter\")\n- Delete timer: ha_config_remove_helper(\"timer\", \"my_timer\")\n- Delete schedule: ha_config_remove_helper(\"schedule\", \"work_hours\")\n\n**WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.\nUse ha_search_entities() to verify the helper exists before attempting to delete it.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -1364,14 +1364,15 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities.\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\nParameters are validated by Home Assistant - errors return clear messages.\n\nQUICK EXAMPLES:\n- ha_config_set_helper(\"input_boolean\", \"My Switch\", icon=\"mdi:toggle-switch\")\n- ha_config_set_helper(\"counter\", \"My Counter\", initial=0, step=1)\n- ha_config_set_helper(\"timer\", \"Laundry\", duration=\"0:45:00\")\n- ha_config_set_helper(\"zone\", \"Office\", latitude=37.77, longitude=-122.41, radius=100)\n- ha_config_set_helper(\"schedule\", \"Work\", monday=[{\"from\": \"09:00\", \"to\": \"17:00\"}])\n- ha_config_set_helper(\"schedule\", \"Light\", monday=[{\"from\": \"07:00\", \"to\": \"22:00\", \"data\": {\"brightness\": \"100\", \"mode\": \"comfort\"}}])\n\nTEMPLATE SENSORS AND BINARY SENSORS:\nUse ha_set_config_entry_helper(helper_type=\"template\", ...) — not this tool.\nTemplate helpers are managed via the Config Entry Flow API.\nBefore reaching for a template, check if a simpler built-in exists:\n- min_max instead of template for combining sensors\n- group instead of template binary sensor for any/all logic\n- counter instead of template with math for counting\n- input_number instead of template for storing values\n- schedule instead of template with weekday checks\nWorkflow:\n  1. ha_get_helper_schema(\"template\") → see available sub-types\n  2. ha_get_helper_schema(\"template\", menu_option=\"sensor\") → see form fields\n  3. ha_set_config_entry_helper(\"template\", {\n       \"next_step_id\": \"sensor\",\n       \"name\": \"My Sensor\",\n       \"state\": \"{{ states('sensor.foo') }}\",\n     })\n\nFor detailed parameter info, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(\"template\", \"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(\"group\", \"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(\"tod\", \"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
     "inputSchema": {
       "properties": {
         "helper_type": {
-          "type": "Annotated[Literal['input_button', 'input_boolean', 'input_select', 'input_number', 'input_text', 'input_datetime', 'counter', 'timer', 'schedule', 'zone', 'person', 'tag'], Field(description='Type of helper entity to create or update')]"
+          "type": "Annotated[Literal['counter', 'derivative', 'filter', 'generic_hygrostat', 'generic_thermostat', 'group', 'input_boolean', 'input_button', 'input_datetime', 'input_number', 'input_select', 'input_text', 'integration', 'min_max', 'person', 'random', 'schedule', 'statistics', 'switch_as_x', 'tag', 'template', 'threshold', 'timer', 'tod', 'trend', 'utility_meter', 'zone'], Field(description='Type of helper entity to create or update')]"
         },
         "name": {
-          "type": "Annotated[str, Field(description='Display name for the helper')]"
+          "type": "Annotated[str | None, Field(description=\"Display name for the helper. Required on create; optional on update (pass helper_id to skip). For flow-based helper types on update (template, group, utility_meter, ...), this is typically ignored — options flows don't expose renaming. Rename a flow helper by deleting and recreating instead.\", default=None)]",
+          "default": null
         },
         "helper_id": {
           "type": "Annotated[str | None, Field(description=\"Helper ID for updates (e.g., 'my_button' or 'input_button.my_button'). If not provided, creates a new helper.\", default=None)]",
@@ -1501,14 +1502,17 @@
           "type": "Annotated[str | None, Field(description=\"Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
           "default": null
         },
+        "config": {
+          "type": "Annotated[str | dict | None, Field(description='Config dict for flow-based helper types (template, group, utility_meter, derivative, min_max, threshold, integration, statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat). Accepts JSON string or dict. Ignored for simple helper types. Use ha_get_helper_schema(helper_type) to discover required fields.', default=None)]",
+          "default": null
+        },
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       },
       "required": [
-        "helper_type",
-        "name"
+        "helper_type"
       ]
     },
     "annotations": {
@@ -1522,7 +1526,7 @@
   {
     "name": "ha_get_helper_schema",
     "title": "Get Helper Schema",
-    "description": "Get configuration schema for a helper type.\n\nReturns the form fields and their types needed to create this helper.\nUse before ha_set_config_entry_helper to understand required config.\n\nTwo-call workflow for menu-based helpers (template, group):\n\n  # Step 1 — discover sub-types:\n  ha_get_helper_schema(\"template\")\n  → {flow_type: \"menu\", menu_options: [\"sensor\", \"binary_sensor\", ...]}\n\n  # Step 2 — inspect form fields for a sub-type:\n  ha_get_helper_schema(\"template\", menu_option=\"sensor\")\n  → {flow_type: \"form\", menu_option: \"sensor\", data_schema: [{name: \"state\", ...}, ...]}\n\nFor form-based helpers (min_max, utility_meter, etc.), omit menu_option.",
+    "description": "Get configuration schema for a helper type.\n\nReturns the form fields and their types needed to create this helper.\nUse before ha_config_set_helper to understand required config.\n\nTwo-call workflow for menu-based helpers (template, group):\n\n  # Step 1 — discover sub-types:\n  ha_get_helper_schema(\"template\")\n  → {flow_type: \"menu\", menu_options: [\"sensor\", \"binary_sensor\", ...]}\n\n  # Step 2 — inspect form fields for a sub-type:\n  ha_get_helper_schema(\"template\", menu_option=\"sensor\")\n  → {flow_type: \"form\", menu_option: \"sensor\", data_schema: [{name: \"state\", ...}, ...]}\n\nFor form-based helpers (min_max, utility_meter, etc.), omit menu_option.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -1539,36 +1543,6 @@
     },
     "annotations": {
       "readOnlyHint": true
-    },
-    "tags": [
-      "Helper Entities"
-    ],
-    "source_file": "tools_config_entry_flow.py"
-  },
-  {
-    "name": "ha_set_config_entry_helper",
-    "title": "Set Config Entry Helper",
-    "description": "Create or update a Config Entry Flow helper (template, group, utility_meter, etc.).\n\nWithout entry_id: creates a new helper.\nWith entry_id: reconfigures an existing helper via its options flow.\n\nSupports 15 helper types that use Config Entry Flow API.\nUse ha_get_helper_schema(helper_type) to discover required config fields.\nUse ha_get_integration(entry_id=..., include_schema=True) before updating\nto inspect available fields.\n\nFor menu-based helpers (e.g. group), include the menu selection in config:\n- group: {\"group_type\": \"light\", \"name\": \"My Group\", \"entities\": [...]}\n- template sensor:\n    {\"next_step_id\": \"sensor\", \"name\": \"Vacuum Last Clean\",\n     \"state\": \"{{ states('sensor.vacuum_last_clean') }}\",\n     \"unit_of_measurement\": \"h\", \"device_class\": \"duration\"}\n- template binary sensor:\n    {\"next_step_id\": \"binary_sensor\", \"name\": \"Window Open\",\n     \"state\": \"{{ is_state('binary_sensor.window', 'on') }}\",\n     \"device_class\": \"window\"}",
-    "inputSchema": {
-      "properties": {
-        "helper_type": {
-          "type": "Annotated[SUPPORTED_HELPERS, Field(description='Helper type')]"
-        },
-        "config": {
-          "type": "Annotated[str | dict, Field(description='Helper config (JSON or dict)')]"
-        },
-        "entry_id": {
-          "type": "Annotated[str | None, Field(description='Config entry ID to update. If omitted, creates a new helper. Use ha_get_integration(domain=helper_type) to find entry IDs.', default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "helper_type",
-        "config"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
     },
     "tags": [
       "Helper Entities"
@@ -1783,7 +1757,7 @@
           "default": false
         },
         "include_schema": {
-          "type": "Annotated[bool | str, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_set_config_entry_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
+          "type": "Annotated[bool | str, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_config_set_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
           "default": false
         },
         "exact_match": {
@@ -2215,18 +2189,19 @@
   {
     "name": "ha_search_entities",
     "title": "Search Entities",
-    "description": "PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.\n\nFor searching *inside* automation/script/helper configurations, use ha_deep_search instead.\n\n**Listing Entities by Domain:**\nUse domain_filter with an empty query to list all entities of a specific type:\n- ha_search_entities(query=\"\", domain_filter=\"calendar\") - List all calendars\n- ha_search_entities(query=\"\", domain_filter=\"todo\") - List all todo lists\n- ha_search_entities(query=\"\", domain_filter=\"scene\") - List all scenes\n- ha_search_entities(query=\"\", domain_filter=\"zone\") - List all zones (as entities)\n\n**BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:\n- Smart home size and scale (total entities, domains, areas)\n- Language used in entity naming (French/English/mixed)\n- Available areas/rooms and their entity distribution\n\nChoose overview detail level based on task:\n- 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches\n- 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks\n- 'full': Maximum detail (includes states, device types, services) - for deep analysis",
+    "description": "Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.\n\nWhen NOT to use: for searching inside automation, script, helper, or dashboard\n*configurations* (e.g. which automations call a service or reference an entity),\nuse `ha_deep_search`.\n\nTo enumerate all entities of a domain, omit `query` and pass `domain_filter`. For\nexample, `ha_search_entities(domain_filter=\"calendar\")` lists all calendars. At\nleast one of `query`, `domain_filter`, or `area_filter` must be set.",
     "inputSchema": {
       "properties": {
         "query": {
-          "type": "str"
+          "type": "Annotated[str | None, Field(default=None, description='Entity name to search for (fuzzy or exact match). Omit to list entities; `domain_filter` or `area_filter` must be set in that mode.')]",
+          "default": null
         },
         "domain_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description=\"Limit to a single domain (e.g. 'light', 'sensor', 'calendar').\")]",
           "default": null
         },
         "area_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description='Limit to entities in a specific area (area ID or name).')]",
           "default": null
         },
         "limit": {
@@ -2245,10 +2220,7 @@
           "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
           "default": true
         }
-      },
-      "required": [
-        "query"
-      ]
+      }
     },
     "annotations": {
       "idempotentHint": true,
@@ -2453,11 +2425,11 @@
   {
     "name": "ha_config_set_yaml",
     "title": "Raw YAML Config Edit",
-    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_set_config_entry_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- Input helpers -> ha_config_set_helper\n- Groups, min/max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x -> ha_set_config_entry_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nCheck ``post_action`` in the response: most keys need a full HA\nrestart; template, mqtt, and group support reload. Preserves YAML\ncomments and HA tags (``!include``, ``!secret``) on round-trip;\n``replace`` swaps the subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_config_set_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- All 27 helper types (input_*, counter, timer, schedule, zone, person,\n  tag, group, min_max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x, etc.) -> ha_config_set_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nCheck ``post_action`` in the response: most keys need a full HA\nrestart; template, mqtt, and group support reload. Preserves YAML\ncomments and HA tags (``!include``, ``!secret``) on round-trip;\n``replace`` swaps the subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
-          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify. Only a narrow allowlist of YAML-only integration keys is accepted (e.g., 'command_line', 'rest', 'shell_command', 'notify'). Not for template sensors (use ha_set_config_entry_helper), automations, scripts, scenes, or input_* helpers — those have dedicated tools.\")]"
+          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify. Only a narrow allowlist of YAML-only integration keys is accepted (e.g., 'command_line', 'rest', 'shell_command', 'notify'). Not for template sensors (use ha_config_set_helper), automations, scripts, scenes, or input_* helpers — those have dedicated tools.\")]"
         },
         "action": {
           "type": "Annotated[str, Field(description=\"Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely).\")]"

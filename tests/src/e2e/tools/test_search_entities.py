@@ -94,6 +94,61 @@ async def test_search_entities_whitespace_query_with_domain_filter(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"query": ""},
+        {"query": "   "},
+        {"query": None},
+        {"query": "", "domain_filter": None, "area_filter": None},
+    ],
+    ids=["all-omitted", "empty-query", "whitespace-query", "null-query", "all-none"],
+)
+async def test_search_entities_all_filters_empty_rejected(mcp_client, params):
+    """Calling with no usable query and no filters returns a validation error.
+
+    Locks down the equivalence of empty / whitespace / None / omitted forms
+    through the ``query = query or ""`` + ``.strip()`` normalization.
+    """
+    logger.info(f"Testing validation: {params}")
+
+    data = await safe_call_tool(mcp_client, "ha_search_entities", params)
+    inner = data.get("data", data)
+
+    assert inner.get("success") is False, f"Should fail validation: {inner}"
+    error = inner.get("error", {})
+    assert isinstance(error, dict) and error.get("code") == "VALIDATION_FAILED", (
+        f"Should be VALIDATION_FAILED: {inner}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_entities_area_filter_only(mcp_client):
+    """area_filter alone (no query, no domain_filter) returns entities in that area.
+
+    Smoke test for the standalone form legitimized by the new docstring.
+    Accepts zero matches (demo env may lack areas) as long as search_type
+    is 'area_only' and success=True.
+    """
+    logger.info("Testing area_filter alone")
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": "kitchen", "limit": 10},
+    )
+    raw_data = assert_mcp_success(result, "area_filter alone")
+    data = raw_data.get("data", raw_data)
+
+    assert data.get("success") is True
+    assert data.get("search_type") == "area_only", (
+        f"Expected search_type 'area_only', got '{data.get('search_type')}'"
+    )
+
+    logger.info(f"area_filter='kitchen' returned {data.get('total_matches', 0)} matches")
+
+
+@pytest.mark.asyncio
 async def test_search_entities_domain_filter_with_query(mcp_client):
     """Test domain_filter combined with a non-empty query."""
     logger.info("Testing domain_filter with query")
@@ -127,7 +182,7 @@ async def test_search_entities_group_by_domain(mcp_client):
 
     result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "light", "group_by_domain": True, "limit": 50},
+        {"domain_filter": "light", "group_by_domain": True, "limit": 50},
     )
     raw_data = assert_mcp_success(result, "Group by domain")
     # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
@@ -151,7 +206,7 @@ async def test_search_entities_nonexistent_domain(mcp_client):
 
     result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "nonexistent_domain_xyz", "limit": 10},
+        {"domain_filter": "nonexistent_domain_xyz", "limit": 10},
     )
     raw_data = assert_mcp_success(result, "Nonexistent domain")
     # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
@@ -172,7 +227,7 @@ async def test_search_entities_limit_respected(mcp_client):
     # First, get all lights to see how many exist
     result_all = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "light", "limit": 1000},
+        {"domain_filter": "light", "limit": 1000},
     )
     raw_data_all = assert_mcp_success(result_all, "Get all lights")
     # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
@@ -185,7 +240,7 @@ async def test_search_entities_limit_respected(mcp_client):
     # Now test with a small limit
     result_limited = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "light", "limit": 2},
+        {"domain_filter": "light", "limit": 2},
     )
     raw_data_limited = assert_mcp_success(result_limited, "Limited lights")
     data_limited = raw_data_limited.get("data", raw_data_limited)
@@ -218,7 +273,7 @@ async def test_search_entities_multiple_domains(mcp_client):
     for domain in domains_to_test:
         result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": domain, "limit": 100},
+            {"domain_filter": domain, "limit": 100},
         )
         raw_data = parse_mcp_result(result)
         # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
@@ -415,7 +470,7 @@ async def test_search_entities_offset_pagination(mcp_client):
     # Get first page
     result1 = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "light", "limit": 2, "offset": 0},
+        {"domain_filter": "light", "limit": 2, "offset": 0},
     )
     raw_data1 = assert_mcp_success(result1, "First page")
     data1 = raw_data1.get("data", raw_data1)
@@ -427,7 +482,7 @@ async def test_search_entities_offset_pagination(mcp_client):
     # Get second page
     result2 = await mcp_client.call_tool(
         "ha_search_entities",
-        {"query": "", "domain_filter": "light", "limit": 2, "offset": 2},
+        {"domain_filter": "light", "limit": 2, "offset": 2},
     )
     raw_data2 = assert_mcp_success(result2, "Second page")
     data2 = raw_data2.get("data", raw_data2)

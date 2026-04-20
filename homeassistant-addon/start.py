@@ -97,6 +97,86 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
+SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
+
+
+def migrate_skills_as_tools_default(
+    data_dir: Path,
+    config_file: Path,
+    stored_value: bool,
+    config_read_ok: bool,
+) -> bool:
+    """One-time migration to force enable_skills_as_tools=true for existing users.
+
+    The Pydantic default in src/ha_mcp/config.py was flipped to True in
+    #806, but the add-on's config.yaml was never updated at the same time.
+    For add-on installs the env var is written from options.json before
+    ha-mcp reads its Pydantic settings, so the new Python default never
+    took effect for existing users. This runs exactly once per install
+    (guarded by a marker file in /data) and forces the flag on for users
+    who still have False stored, then persists the new value to
+    options.json so the supervisor UI reflects it. On subsequent boots the
+    marker is present and the stored value is respected, so users who
+    deliberately toggle it off will not be re-forced.
+
+    config_read_ok must be False when the caller could not load
+    options.json (file unreadable or malformed JSON). In that case the
+    marker is not created, so the migration can run again on a later
+    boot once options.json is readable and expose the user's real
+    stored value.
+    """
+    marker = data_dir / SKILLS_AS_TOOLS_MIGRATION_MARKER
+    if marker.exists():
+        return stored_value
+
+    # First run after this update. Force-on + persist only if the user is
+    # currently on False, then create the marker so the migration does
+    # not loop — but skip marker creation when the caller could not
+    # verify the stored value (see config_read_ok in the docstring).
+    if not stored_value:
+        log_info(
+            "One-time migration: forcing enable_skills_as_tools=true. "
+            "The Pydantic default was set to True in #806 but the add-on's "
+            "config.yaml was not updated alongside it, so this value stayed "
+            "False for existing add-on installs. Future user-initiated "
+            "changes to this setting will be respected."
+        )
+        if config_file.exists():
+            try:
+                with open(config_file, encoding="utf-8") as f:
+                    opts = json.load(f)
+                if isinstance(opts, dict):
+                    opts["enable_skills_as_tools"] = True
+                    with open(config_file, "w", encoding="utf-8") as f:
+                        json.dump(opts, f, indent=2)
+                        f.write("\n")
+                    log_info("Persisted enable_skills_as_tools=true to options.json")
+                else:
+                    log_error(
+                        "Cannot persist migration to options.json: top-level "
+                        f"is {type(opts).__name__}, expected dict. Runtime "
+                        "override still applied for this session."
+                    )
+            except (OSError, json.JSONDecodeError) as e:
+                log_error(
+                    f"Failed to persist migration to options.json "
+                    f"(operation: persist_skills_as_tools_migration): {e}. "
+                    "Runtime override still applied for this session."
+                )
+        stored_value = True
+
+    if config_read_ok:
+        try:
+            marker.touch()
+        except OSError as e:
+            log_error(
+                f"Failed to create migration marker "
+                f"(operation: create_skills_as_tools_marker): {e}"
+            )
+
+    return stored_value
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -107,9 +187,10 @@ def main() -> int:
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
-    enable_skills_as_tools = False  # default
+    enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    config_read_ok = True
 
     if config_file.exists():
         try:
@@ -119,14 +200,24 @@ def main() -> int:
             custom_secret_path = config.get("secret_path", "")
             raw_skills = config.get("enable_skills", True)
             enable_skills = raw_skills if isinstance(raw_skills, bool) else True
-            raw_skills_as_tools = config.get("enable_skills_as_tools", False)
-            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
+            raw_skills_as_tools = config.get("enable_skills_as_tools", True)
+            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
+            config_read_ok = False
+
+    # One-time migration: add-on users whose stored value is False predate
+    # this release's config.yaml default flip. See migrate_skills_as_tools_default.
+    enable_skills_as_tools = migrate_skills_as_tools_default(
+        data_dir=data_dir,
+        config_file=config_file,
+        stored_value=enable_skills_as_tools,
+        config_read_ok=config_read_ok,
+    )
 
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)

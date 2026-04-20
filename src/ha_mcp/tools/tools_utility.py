@@ -195,7 +195,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "The 'slug' parameter is required for source='supervisor'",
                     suggestions=[
                         "Provide the add-on slug, e.g. slug='core_mosquitto'",
-                        "Use ha_list_addons() to find available add-on slugs",
+                        "Use ha_get_addon() to list installed add-on slugs",
                     ],
                 )
             )
@@ -619,53 +619,17 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         limit: int | str | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
-        """Fetch add-on container logs via the Supervisor API."""
+        """Fetch add-on container logs via HA Core's Supervisor REST proxy.
+
+        Routes through `/api/hassio/addons/{slug}/logs` (returned as
+        text/plain) instead of the `supervisor/api` websocket path, which
+        always fails because HA Core's proxy tries to JSON-decode the
+        text body. See #950.
+        """
         effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
 
         try:
-            result = await client.send_websocket_message(
-                {
-                    "type": "supervisor/api",
-                    "endpoint": f"/addons/{slug}/logs",
-                    "method": "get",
-                }
-            )
-
-            if not result.get("success"):
-                error_msg = str(result.get("error", ""))
-                suggestions = [
-                    f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_list_addons() to find available add-on slugs",
-                ]
-                if "not_found" in error_msg.lower() or "unknown" in error_msg.lower():
-                    suggestions.insert(
-                        0,
-                        "Supervisor API not available - requires HA OS or Supervised install",
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get(
-                            "error", f"Failed to retrieve logs for add-on '{slug}'"
-                        ),
-                        context={"slug": slug},
-                        suggestions=suggestions,
-                    )
-                )
-
-            # Result may be a string (log text) or dict with result key
-            log_text = result.get("result", "")
-            if isinstance(log_text, dict):
-                if "data" in log_text:
-                    log_text = log_text["data"]
-                else:
-                    logger.warning(
-                        "Supervisor log for '%s' returned unexpected dict structure",
-                        slug,
-                    )
-                    log_text = ""
-            if not isinstance(log_text, str):
-                log_text = str(log_text)
+            log_text = await client.get_addon_logs(slug)
 
             lines = log_text.splitlines() if log_text else []
 
@@ -698,9 +662,43 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
+        except HomeAssistantAPIError as e:
+            status = getattr(e, "status_code", None)
+            if status == 400:
+                # Supervisor-side rejection — not caller validation. The default
+                # `exception_to_structured_error` path would map 400 →
+                # VALIDATION_INVALID_PARAMETER, which reads as "caller passed
+                # bad input"; a downstream proxy rejection is better modelled
+                # as SERVICE_CALL_FAILED.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(e),
+                        context={"source": "supervisor", "slug": slug},
+                        suggestions=[
+                            f"Supervisor rejected the request for '{slug}' — "
+                            "verify slug format or that the add-on is installed "
+                            "and running",
+                            "Use ha_get_addon() to list installed add-on slugs",
+                            "Ensure Supervisor is available (HA OS or Supervised install)",
+                        ],
+                    )
+                )
+            if status == 404:
+                first_suggestion = f"Add-on '{slug}' not found or not installed"
+            else:
+                first_suggestion = f"Verify add-on slug '{slug}' is correct"
+            exception_to_structured_error(
+                e,
+                context={"source": "supervisor", "slug": slug},
+                suggestions=[
+                    first_suggestion,
+                    "Use ha_get_addon() to list installed add-on slugs",
+                    "Ensure Supervisor is available (HA OS or Supervised install)",
+                ],
+            )
         except (
             HomeAssistantConnectionError,
-            HomeAssistantAPIError,
             TimeoutError,
             OSError,
         ) as e:
@@ -708,8 +706,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"source": "supervisor", "slug": slug},
                 suggestions=[
+                    "Check Home Assistant connection",
                     f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_list_addons() to find available add-on slugs",
+                    "Use ha_get_addon() to list installed add-on slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
