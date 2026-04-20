@@ -248,7 +248,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Enables the `HAMCP_ENABLE_FILESYSTEM_TOOLS` feature flag.
+Enables filesystem tools (ha_list_files, ha_read_file, ha_write_file, ha_delete_file) for managing files in the Home Assistant configuration directory.
 
 Requires add-on restart to take effect.
 
