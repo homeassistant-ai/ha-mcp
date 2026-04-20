@@ -701,19 +701,19 @@ async def run_stories(
     using_external_ha = bool(args.ha_url)
 
     from uat.run_uat import (
-        _preflight_check_base_url,
-        _preflight_check_docker,
         build_stdio_mcp_config,
         parse_mcp_env,
+        preflight_check_base_url,
+        preflight_check_docker,
     )
 
     if not using_external_ha:
-        err = _preflight_check_docker()
+        err = preflight_check_docker()
         if err:
             log(f"FATAL: {err}")
             return 2
     if args.base_url and "openai" in agent_list:
-        err = _preflight_check_base_url(args.base_url)
+        err = preflight_check_base_url(args.base_url)
         if err:
             log(f"FATAL: {err}")
             return 2
@@ -771,6 +771,7 @@ async def run_stories(
                         api_key=args.api_key,
                         model=args.model,
                     )
+                    agent_stack.push_async_callback(openai_client.close)
                 except Exception as e:
                     error_msg = f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
                     log(f"[{agent}] {error_msg}")

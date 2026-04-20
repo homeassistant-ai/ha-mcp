@@ -374,7 +374,10 @@ async def _main_async(args: argparse.Namespace) -> None:
     log(f"MCP config: {args.mcp_config}")
 
     try:
-        result = await run_agent(client, model, args)
+        try:
+            result = await run_agent(client, model, args)
+        finally:
+            await client.close()
     except Exception as e:
         log(f"ERROR ({type(e).__name__}): {e}")
         sys.exit(1)

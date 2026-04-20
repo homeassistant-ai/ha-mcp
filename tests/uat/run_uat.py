@@ -26,11 +26,10 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+import requests
 from testcontainers.core.container import DockerContainer
 
 # Resolve paths relative to repo root
@@ -134,7 +133,7 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
-def _preflight_check_docker(timeout: float = 5.0) -> str | None:
+def preflight_check_docker(timeout: float = 5.0) -> str | None:
     """Return an error string if the Docker daemon is unreachable, else None."""
     try:
         result = subprocess.run(
@@ -154,16 +153,14 @@ def _preflight_check_docker(timeout: float = 5.0) -> str | None:
     return None
 
 
-def _preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
+def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
     """Return an error string if the OpenAI endpoint is unreachable, else None."""
     url = f"{base_url.rstrip('/')}/models"
     try:
-        with urllib.request.urlopen(url, timeout=timeout):
-            return None
-    except urllib.error.URLError as e:
-        return f"OpenAI endpoint {base_url} is not reachable: {e.reason}"
-    except Exception as e:
+        requests.get(url, timeout=timeout)
+    except requests.RequestException as e:
         return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
+    return None
 
 
 def _build_mcp_env(
@@ -683,11 +680,11 @@ async def run(args: argparse.Namespace) -> dict:
     # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
     # rather than stalling inside container startup / model warmup.
     if not args.ha_url:
-        err = _preflight_check_docker()
+        err = preflight_check_docker()
         if err:
             raise RuntimeError(err)
     if "openai" in active_agents and getattr(args, "base_url", None):
-        err = _preflight_check_base_url(args.base_url)
+        err = preflight_check_base_url(args.base_url)
         if err:
             raise RuntimeError(err)
 
