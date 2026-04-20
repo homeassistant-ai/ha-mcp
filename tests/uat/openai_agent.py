@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import sys
+import traceback
 from pathlib import Path
 
 import openai
@@ -368,7 +369,7 @@ async def _main_async(args: argparse.Namespace) -> None:
         log(f"ERROR: Model warmup failed (BadRequestError): {e}")
         sys.exit(1)
     except Exception as e:
-        log(f"ERROR ({type(e).__name__}): {e}")
+        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
     log(f"MCP config: {args.mcp_config}")
@@ -379,7 +380,7 @@ async def _main_async(args: argparse.Namespace) -> None:
         finally:
             await client.close()
     except Exception as e:
-        log(f"ERROR ({type(e).__name__}): {e}")
+        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
     json.dump(result, sys.stdout, indent=2)

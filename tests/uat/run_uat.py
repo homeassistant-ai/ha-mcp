@@ -154,10 +154,18 @@ def preflight_check_docker(timeout: float = 5.0) -> str | None:
 
 
 def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
-    """Return an error string if the OpenAI endpoint is unreachable, else None."""
+    """Return an error string if the OpenAI endpoint is unreachable or broken, else None.
+
+    Catches both connection-level failures (ConnectionError, Timeout) and
+    HTTP error responses (4xx/5xx from ``raise_for_status``) — the latter
+    covers "up but wrong" cases like hitting the wrong port, a bad
+    auth token, or an upstream error, which would otherwise only surface
+    as an opaque warmup stall.
+    """
     url = f"{base_url.rstrip('/')}/models"
     try:
-        requests.get(url, timeout=timeout)
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
     except requests.RequestException as e:
         return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
     return None
