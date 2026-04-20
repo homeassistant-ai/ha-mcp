@@ -2,6 +2,7 @@
 Tests for ha_get_logs tool - log access with multiple sources and pagination.
 """
 
+import json
 import logging
 
 import pytest
@@ -429,6 +430,44 @@ async def test_logs_supervisor_missing_slug(mcp_client):
 
     assert "slug" in str(exc_info.value).lower()
     logger.info("Supervisor without slug correctly raises ToolError")
+
+
+@pytest.mark.asyncio
+async def test_logs_supervisor_propagates_api_error_to_structured_tool_error(
+    mcp_client,
+):
+    """Supervisor-less Core still pins the full error chain end-to-end.
+
+    The testcontainer runs HA Core with no Supervisor attached, so hitting
+    `/api/hassio/addons/<anything>/logs` returns a non-2xx that must travel
+    `_raw_request → HomeAssistantAPIError → exception_to_structured_error`
+    and surface as a `ToolError` whose payload carries the slug context and
+    the `ha_get_addon()` / Supervisor suggestions. Regression guard for the
+    #950 chain (see PR #951).
+    """
+    logger.info("Testing supervisor error path is translated to structured ToolError")
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_get_logs",
+            {"source": "supervisor", "slug": "nonexistent_addon_slug"},
+        )
+
+    # ToolError payload is JSON-serialized — parse to assert on structure.
+    payload = json.loads(str(exc_info.value))
+    assert payload["success"] is False
+    assert payload.get("slug") == "nonexistent_addon_slug"
+    assert payload.get("source") == "supervisor"
+
+    suggestions = payload["error"].get("suggestions") or []
+    # At minimum the error must point the caller at the add-on tool.
+    assert any("ha_get_addon" in s for s in suggestions), (
+        f"expected ha_get_addon() suggestion, got: {suggestions}"
+    )
+    assert any("Supervisor" in s for s in suggestions), (
+        f"expected Supervisor availability hint, got: {suggestions}"
+    )
+    logger.info("Supervisor error path correctly surfaces structured ToolError")
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-> ⚠️ **Breaking change in OAuth mode (v7.0.0)** — Set `HOMEASSISTANT_URL` server-side. The consent form now accepts only the token. [Migration guide →](docs/OAUTH.md#migrating-from-v6x)
+> **Breaking change (v7.3.0):** `ha_config_set_yaml` has been moved to [beta](docs/beta.md).
 
 <div align="center">
   <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-86-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-85-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -151,11 +151,11 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (86 tools)</b></summary>
+<summary><b>Complete Tool List (85 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
-| **Add-ons** | `ha_call_addon_api`, `ha_get_addon` |
+| **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
 | **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
@@ -167,14 +167,14 @@ Spend less time configuring, more time enjoying your smart home.
 | **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
 | **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
-| **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema`, `ha_set_config_entry_helper` |
+| **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
 | **Integrations** | `ha_delete_config_entry`, `ha_get_integration`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_search_entities` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml`, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
@@ -307,9 +307,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 - **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard.
-- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, docs sync automation, and file-read deduplication in check_sync.
+- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
+- **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
 
 ---
 

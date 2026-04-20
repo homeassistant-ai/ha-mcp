@@ -1,68 +1,8 @@
 [
   {
-    "name": "ha_call_addon_api",
-    "title": "Call Add-on API",
-    "description": "Call an add-on's HTTP or WebSocket API.\n\nSends requests directly to add-on containers. Use `websocket=true` for\nstreaming endpoints (e.g., ESPHome compile/validate). Use `port` to bypass\nNginx IP restrictions on community add-ons. Use ha_get_addon(slug=\"...\")\nto discover available ports and endpoints.\n\n**Examples:**\n- HTTP: ha_call_addon_api(slug=\"...\", path=\"/api/events\")\n- Direct port: ha_call_addon_api(slug=\"...\", path=\"/flows\", port=1880)\n- WebSocket: ha_call_addon_api(slug=\"...\", path=\"/validate\", port=6052, websocket=true, body={\"type\": \"spawn\", \"configuration\": \"device.yaml\"})",
-    "inputSchema": {
-      "properties": {
-        "slug": {
-          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). Use ha_get_addon() to find installed add-on slugs.\")]"
-        },
-        "path": {
-          "type": "Annotated[str, Field(description=\"API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats').\")]"
-        },
-        "method": {
-          "type": "Annotated[str, Field(description='HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.', default='GET')]",
-          "default": "GET"
-        },
-        "body": {
-          "type": "Annotated[dict[str, Any] | str | None, Field(description='Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.', default=None)]",
-          "default": null
-        },
-        "debug": {
-          "type": "Annotated[bool, Field(description='Include diagnostic info (request URL, headers sent, response headers). Default: false.', default=False)]",
-          "default": false
-        },
-        "port": {
-          "type": "Annotated[int | None, Field(description=\"Connect to this port instead of the Ingress port. Use ha_get_addon(slug='...') to find available ports.\", default=None)]",
-          "default": null
-        },
-        "offset": {
-          "type": "Annotated[int, Field(description='HTTP only. Skip this many items in a JSON array response. Default: 0.', default=0)]",
-          "default": 0
-        },
-        "limit": {
-          "type": "Annotated[int | None, Field(description='HTTP only. Return at most this many items from a JSON array response (e.g., limit=20).', default=None)]",
-          "default": null
-        },
-        "websocket": {
-          "type": "Annotated[bool, Field(description=\"Use WebSocket instead of HTTP. For streaming endpoints (e.g., ESPHome /compile, /validate). Sends 'body' as initial message, collects responses. Default: false.\", default=False)]",
-          "default": false
-        },
-        "wait_for_close": {
-          "type": "Annotated[bool, Field(description='WebSocket only. True: wait for server to close (for compile/validate). False: return after first response batch (for quick commands). Default: true.', default=True)]",
-          "default": true
-        }
-      },
-      "required": [
-        "slug",
-        "path"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "readOnlyHint": false
-    },
-    "tags": [
-      "Add-ons"
-    ],
-    "source_file": "tools_addons.py"
-  },
-  {
     "name": "ha_get_addon",
     "title": "Get Add-ons",
-    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, and state.\nUseful for discovering what APIs an add-on exposes before calling ha_call_addon_api.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"a0d7b954_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
+    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, and state.\nUseful for discovering what APIs an add-on exposes before calling ha_manage_addon.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"a0d7b954_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
     "inputSchema": {
       "properties": {
         "source": {
@@ -90,6 +30,86 @@
     "annotations": {
       "idempotentHint": true,
       "readOnlyHint": true
+    },
+    "tags": [
+      "Add-ons"
+    ],
+    "source_file": "tools_addons.py"
+  },
+  {
+    "name": "ha_manage_addon",
+    "title": "Manage Add-on",
+    "description": "Manage a Home Assistant add-on — update its configuration or call its internal API.\n\nTwo mutually exclusive operating modes:\n\n**Config mode** (when any of options/network/boot/auto_update/watchdog is provided):\nUpdates the add-on's Supervisor configuration via POST /addons/{slug}/options.\nAll config parameters are optional; only provided fields are updated — current values\nare fetched and merged automatically (including one level of nested dicts).\n\n**Proxy mode** (when path is provided):\nSends requests directly to the add-on container's own web API via HTTP or WebSocket.\nUse ha_get_addon(slug=\"...\") to discover available ports and endpoints.\n\n**WARNING:** Setting boot=\"auto\"/\"manual\" will fail for add-ons whose Supervisor\nmetadata locks the boot mode. The Supervisor returns an error in this case.\n\n**NOTE:** This tool only works with Home Assistant OS or Supervised installations.\n\n**Examples:**\n- Set add-on option: ha_manage_addon(slug=\"...\", options={\"log_level\": \"debug\"})\n  Note: only the fields you provide are updated — current values are fetched first\n  and merged automatically. Fields not in the add-on's schema are ignored with a warning.\n- Disable auto-update: ha_manage_addon(slug=\"...\", auto_update=False)\n- Change host port: ha_manage_addon(slug=\"...\", network={\"5800/tcp\": 8082})\n- Set boot mode: ha_manage_addon(slug=\"...\", boot=\"manual\")\n- Call HTTP API: ha_manage_addon(slug=\"...\", path=\"/api/events\")\n- Direct port: ha_manage_addon(slug=\"...\", path=\"/flows\", port=1880)\n- WebSocket: ha_manage_addon(slug=\"...\", path=\"/validate\", port=6052, websocket=True, body={\"type\": \"spawn\", \"configuration\": \"device.yaml\"})",
+    "inputSchema": {
+      "properties": {
+        "slug": {
+          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). Use ha_get_addon() to find installed add-on slugs.\")]"
+        },
+        "path": {
+          "type": "Annotated[str | None, Field(description=\"Proxy mode: API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats'). Required for proxy mode; mutually exclusive with config parameters.\", default=None)]",
+          "default": null
+        },
+        "method": {
+          "type": "Annotated[str, Field(description='Proxy mode only. HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.', default='GET')]",
+          "default": "GET"
+        },
+        "body": {
+          "type": "Annotated[dict[str, Any] | str | None, Field(description='Proxy mode only. Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.', default=None)]",
+          "default": null
+        },
+        "debug": {
+          "type": "Annotated[bool, Field(description='Proxy mode only. Include diagnostic info (request URL, headers sent, response headers). Default: false.', default=False)]",
+          "default": false
+        },
+        "port": {
+          "type": "Annotated[int | None, Field(description=\"Proxy mode only. Connect to this port instead of the Ingress port. Use ha_get_addon(slug='...') to find available ports.\", default=None)]",
+          "default": null
+        },
+        "offset": {
+          "type": "Annotated[int, Field(description='Proxy mode only. HTTP: skip this many items in a JSON array response. Default: 0.', default=0)]",
+          "default": 0
+        },
+        "limit": {
+          "type": "Annotated[int | None, Field(description='Proxy mode only. HTTP: return at most this many items from a JSON array response.', default=None)]",
+          "default": null
+        },
+        "websocket": {
+          "type": "Annotated[bool, Field(description=\"Proxy mode only. Use WebSocket instead of HTTP. For streaming endpoints (e.g., ESPHome /compile, /validate). Sends 'body' as initial message, collects responses. Default: false.\", default=False)]",
+          "default": false
+        },
+        "wait_for_close": {
+          "type": "Annotated[bool, Field(description='Proxy mode only. WebSocket: True: wait for server to close (for compile/validate). False: return after first response batch (for quick commands). Default: true.', default=True)]",
+          "default": true
+        },
+        "options": {
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Add-on configuration values (the 'Configuration' tab in the UI).\", default=None)]",
+          "default": null
+        },
+        "network": {
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).\", default=None)]",
+          "default": null
+        },
+        "boot": {
+          "type": "Annotated[str | None, Field(description=\"Config mode: Boot strategy — 'auto' (start with HA) or 'manual'.\", default=None)]",
+          "default": null
+        },
+        "auto_update": {
+          "type": "Annotated[bool | None, Field(description='Config mode: Enable or disable automatic updates for this add-on.', default=None)]",
+          "default": null
+        },
+        "watchdog": {
+          "type": "Annotated[bool | None, Field(description='Config mode: Enable or disable Supervisor watchdog (auto-restart on crash).', default=None)]",
+          "default": null
+        }
+      },
+      "required": [
+        "slug"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false
     },
     "tags": [
       "Add-ons"
@@ -299,14 +319,23 @@
   {
     "name": "ha_config_set_automation",
     "title": "Create or Update Automation",
-    "description": "Create or update a Home Assistant automation.\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n)\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
+    "description": "Create or update a Home Assistant automation.\n\nSupports two modes: full config replacement OR Python transformation.\n\nWHEN TO USE WHICH MODE:\n- python_transform: RECOMMENDED for edits to existing automations. Surgical updates.\n- config: Use for creating new automations or full restructures.\n\nIMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().\n\nPYTHON TRANSFORM EXAMPLES:\n- Update action: python_transform=\"config['action'][0]['data']['brightness'] = 255\"\n- Add trigger: python_transform=\"config['trigger'].append({'platform': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})\"\n- Remove last action: python_transform=\"config['action'].pop()\"\n\nCreates a new automation (if identifier omitted) or updates existing automation with provided configuration.\n\nAUTOMATION TYPES:\n\n1. Regular Automations - Define triggers and actions directly\n2. Blueprint Automations - Use pre-built templates with customizable inputs\n\nREQUIRED FIELDS (Regular Automations):\n- alias: Human-readable automation name\n- trigger: List of trigger conditions (time, state, event, etc.)\n- action: List of actions to execute\n\nREQUIRED FIELDS (Blueprint Automations):\n- alias: Human-readable automation name\n- use_blueprint: Blueprint configuration\n  - path: Blueprint file path (e.g., \"motion_light.yaml\")\n  - input: Dictionary of input values for the blueprint\n\nOPTIONAL CONFIG FIELDS (Regular Automations):\n- description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)\n- category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)\n- condition: Additional conditions that must be met\n- mode: 'single' (default), 'restart', 'queued', 'parallel'\n- max: Maximum concurrent executions (for queued/parallel modes)\n- initial_state: Whether automation starts enabled (true/false)\n- variables: Variables for use in automation\n\nBASIC EXAMPLES:\n\nSimple time-based automation:\nha_config_set_automation({\n    \"alias\": \"Morning Lights\",\n    \"description\": \"Turn on bedroom lights at 7 AM to help wake up\",\n    \"trigger\": [{\"platform\": \"time\", \"at\": \"07:00:00\"}],\n    \"action\": [{\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}}]\n})\n\nMotion-activated lighting with condition:\nha_config_set_automation({\n    \"alias\": \"Motion Light\",\n    \"trigger\": [{\"platform\": \"state\", \"entity_id\": \"binary_sensor.motion\", \"to\": \"on\"}],\n    \"condition\": [{\"condition\": \"sun\", \"after\": \"sunset\"}],\n    \"action\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.hallway\"}},\n        {\"delay\": {\"minutes\": 5}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.hallway\"}}\n    ],\n    \"mode\": \"restart\"\n})\n\nUpdate existing automation:\nha_config_set_automation(\n    identifier=\"automation.morning_routine\",\n    config={\n        \"alias\": \"Updated Morning Routine\",\n        \"trigger\": [{\"platform\": \"time\", \"at\": \"06:30:00\"}],\n        \"action\": [\n            {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n            {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n        ]\n    }\n)\n\nBLUEPRINT AUTOMATION EXAMPLES:\n\nCreate automation from blueprint:\nha_config_set_automation({\n    \"alias\": \"Motion Light Kitchen\",\n    \"use_blueprint\": {\n        \"path\": \"homeassistant/motion_light.yaml\",\n        \"input\": {\n            \"motion_entity\": \"binary_sensor.kitchen_motion\",\n            \"light_target\": {\"entity_id\": \"light.kitchen\"},\n            \"no_motion_wait\": 120\n        }\n    }\n})\n\nUpdate blueprint automation inputs:\nha_config_set_automation(\n    identifier=\"automation.motion_light_kitchen\",\n    config={\n        \"alias\": \"Motion Light Kitchen\",\n        \"use_blueprint\": {\n            \"path\": \"homeassistant/motion_light.yaml\",\n            \"input\": {\n                \"motion_entity\": \"binary_sensor.kitchen_motion\",\n                \"light_target\": {\"entity_id\": \"light.kitchen\"},\n                \"no_motion_wait\": 300\n            }\n        }\n    }\n)\n\nPREFER NATIVE SOLUTIONS OVER TEMPLATES:\nBefore using template triggers/conditions/actions, check if a native option exists:\n- Use `condition: state` with `state: [list]` instead of template for multiple states\n- Use `condition: state` with `attribute:` instead of template for attribute checks\n- Use `condition: numeric_state` instead of template for number comparisons\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use `choose` action instead of template-based service names\n\nTRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more\nCONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more\nACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel\n\nFor comprehensive automation documentation with all trigger/condition/action types and advanced examples:\n- Use: ha_get_skill_home_assistant_best_practices\n- Or visit: https://www.home-assistant.io/docs/automation/\n\nTROUBLESHOOTING:\n- Use ha_get_state() to verify entity_ids exist\n- Use ha_search_entities() to find correct entity_ids\n- Use ha_eval_template() to test Jinja2 templates before using in automations\n- Use ha_search_entities(domain_filter='automation') to find existing automations",
     "inputSchema": {
       "properties": {
         "config": {
-          "type": "Annotated[str | dict[str, Any], Field(description=\"Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'\")]"
+          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. Mutually exclusive with python_transform.\", default=None)]",
+          "default": null
         },
         "identifier": {
-          "type": "Annotated[str | None, Field(description='Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.', default=None)]",
+          "type": "Annotated[str | None, Field(description='Automation entity_id or unique_id for updates. Required for python_transform. Omit to create new automation with generated unique_id.', default=None)]",
+          "default": null
+        },
+        "python_transform": {
+          "type": "Annotated[str | None, Field(description='Python expression to transform existing automation config. Mutually exclusive with config. Requires identifier and config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config[\\'action\\'][0][\\'data\\'][\\'brightness\\'] = 255\" Pattern: python_transform=\"for a in config[\\'action\\']: if a.get(\\'alias\\') == \\'My Step\\': a[\\'data\\'][\\'value\\'] = 100\" \\n\\n' + get_security_documentation())]",
+          "default": null
+        },
+        "config_hash": {
+          "type": "Annotated[str | None, Field(description='Config hash from ha_config_get_automation for optimistic locking. REQUIRED for python_transform (validates automation unchanged). Optional for config updates (validates before full replacement if provided).')]",
           "default": null
         },
         "category": {
@@ -317,10 +346,7 @@
           "type": "Annotated[bool | str, Field(description='Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
-      },
-      "required": [
-        "config"
-      ]
+      }
     },
     "annotations": {
       "destructiveHint": true
@@ -1307,7 +1333,7 @@
   {
     "name": "ha_config_remove_helper",
     "title": "Remove Helper",
-    "description": "Delete a Home Assistant helper entity.\n\nSUPPORTED HELPER TYPES:\n- input_button, input_boolean, input_select, input_number, input_text, input_datetime\n- counter, timer, schedule, zone, person, tag\n\nEXAMPLES:\n- Delete button: ha_config_remove_helper(\"input_button\", \"my_button\")\n- Delete counter: ha_config_remove_helper(\"counter\", \"my_counter\")\n- Delete timer: ha_config_remove_helper(\"timer\", \"my_timer\")\n- Delete schedule: ha_config_remove_helper(\"schedule\", \"work_hours\")\n\n**WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.\nUse ha_search_entities() to verify the helper exists before attempting to delete it.",
+    "description": "Delete a Home Assistant helper entity.\n\nSUPPORTED HELPER TYPES:\n- input_button, input_boolean, input_select, input_number, input_text, input_datetime\n- counter, timer, schedule, zone, person, tag\n\nFor flow-based helper types (template, group, utility_meter, derivative,\nmin_max, threshold, integration, statistics, trend, random, filter, tod,\ngeneric_thermostat, switch_as_x, generic_hygrostat) use ha_delete_config_entry.\n\nEXAMPLES:\n- Delete button: ha_config_remove_helper(\"input_button\", \"my_button\")\n- Delete counter: ha_config_remove_helper(\"counter\", \"my_counter\")\n- Delete timer: ha_config_remove_helper(\"timer\", \"my_timer\")\n- Delete schedule: ha_config_remove_helper(\"schedule\", \"work_hours\")\n\n**WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.\nUse ha_search_entities() to verify the helper exists before attempting to delete it.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -1338,14 +1364,15 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities.\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\nParameters are validated by Home Assistant - errors return clear messages.\n\nQUICK EXAMPLES:\n- ha_config_set_helper(\"input_boolean\", \"My Switch\", icon=\"mdi:toggle-switch\")\n- ha_config_set_helper(\"counter\", \"My Counter\", initial=0, step=1)\n- ha_config_set_helper(\"timer\", \"Laundry\", duration=\"0:45:00\")\n- ha_config_set_helper(\"zone\", \"Office\", latitude=37.77, longitude=-122.41, radius=100)\n- ha_config_set_helper(\"schedule\", \"Work\", monday=[{\"from\": \"09:00\", \"to\": \"17:00\"}])\n- ha_config_set_helper(\"schedule\", \"Light\", monday=[{\"from\": \"07:00\", \"to\": \"22:00\", \"data\": {\"brightness\": \"100\", \"mode\": \"comfort\"}}])\n\nTEMPLATE SENSORS AND BINARY SENSORS:\nUse ha_set_config_entry_helper(helper_type=\"template\", ...) — not this tool.\nTemplate helpers are managed via the Config Entry Flow API.\nBefore reaching for a template, check if a simpler built-in exists:\n- min_max instead of template for combining sensors\n- group instead of template binary sensor for any/all logic\n- counter instead of template with math for counting\n- input_number instead of template for storing values\n- schedule instead of template with weekday checks\nWorkflow:\n  1. ha_get_helper_schema(\"template\") → see available sub-types\n  2. ha_get_helper_schema(\"template\", menu_option=\"sensor\") → see form fields\n  3. ha_set_config_entry_helper(\"template\", {\n       \"next_step_id\": \"sensor\",\n       \"name\": \"My Sensor\",\n       \"state\": \"{{ states('sensor.foo') }}\",\n     })\n\nFor detailed parameter info, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(\"template\", \"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(\"group\", \"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(\"tod\", \"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
     "inputSchema": {
       "properties": {
         "helper_type": {
-          "type": "Annotated[Literal['input_button', 'input_boolean', 'input_select', 'input_number', 'input_text', 'input_datetime', 'counter', 'timer', 'schedule', 'zone', 'person', 'tag'], Field(description='Type of helper entity to create or update')]"
+          "type": "Annotated[Literal['counter', 'derivative', 'filter', 'generic_hygrostat', 'generic_thermostat', 'group', 'input_boolean', 'input_button', 'input_datetime', 'input_number', 'input_select', 'input_text', 'integration', 'min_max', 'person', 'random', 'schedule', 'statistics', 'switch_as_x', 'tag', 'template', 'threshold', 'timer', 'tod', 'trend', 'utility_meter', 'zone'], Field(description='Type of helper entity to create or update')]"
         },
         "name": {
-          "type": "Annotated[str, Field(description='Display name for the helper')]"
+          "type": "Annotated[str | None, Field(description=\"Display name for the helper. Required on create; optional on update (pass helper_id to skip). For flow-based helper types on update (template, group, utility_meter, ...), this is typically ignored — options flows don't expose renaming. Rename a flow helper by deleting and recreating instead.\", default=None)]",
+          "default": null
         },
         "helper_id": {
           "type": "Annotated[str | None, Field(description=\"Helper ID for updates (e.g., 'my_button' or 'input_button.my_button'). If not provided, creates a new helper.\", default=None)]",
@@ -1475,14 +1502,17 @@
           "type": "Annotated[str | None, Field(description=\"Category ID to assign to this helper. Use ha_config_get_category(scope='helpers') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
           "default": null
         },
+        "config": {
+          "type": "Annotated[str | dict | None, Field(description='Config dict for flow-based helper types (template, group, utility_meter, derivative, min_max, threshold, integration, statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat). Accepts JSON string or dict. Ignored for simple helper types. Use ha_get_helper_schema(helper_type) to discover required fields.', default=None)]",
+          "default": null
+        },
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       },
       "required": [
-        "helper_type",
-        "name"
+        "helper_type"
       ]
     },
     "annotations": {
@@ -1496,7 +1526,7 @@
   {
     "name": "ha_get_helper_schema",
     "title": "Get Helper Schema",
-    "description": "Get configuration schema for a helper type.\n\nReturns the form fields and their types needed to create this helper.\nUse before ha_set_config_entry_helper to understand required config.\n\nTwo-call workflow for menu-based helpers (template, group):\n\n  # Step 1 — discover sub-types:\n  ha_get_helper_schema(\"template\")\n  → {flow_type: \"menu\", menu_options: [\"sensor\", \"binary_sensor\", ...]}\n\n  # Step 2 — inspect form fields for a sub-type:\n  ha_get_helper_schema(\"template\", menu_option=\"sensor\")\n  → {flow_type: \"form\", menu_option: \"sensor\", data_schema: [{name: \"state\", ...}, ...]}\n\nFor form-based helpers (min_max, utility_meter, etc.), omit menu_option.",
+    "description": "Get configuration schema for a helper type.\n\nReturns the form fields and their types needed to create this helper.\nUse before ha_config_set_helper to understand required config.\n\nTwo-call workflow for menu-based helpers (template, group):\n\n  # Step 1 — discover sub-types:\n  ha_get_helper_schema(\"template\")\n  → {flow_type: \"menu\", menu_options: [\"sensor\", \"binary_sensor\", ...]}\n\n  # Step 2 — inspect form fields for a sub-type:\n  ha_get_helper_schema(\"template\", menu_option=\"sensor\")\n  → {flow_type: \"form\", menu_option: \"sensor\", data_schema: [{name: \"state\", ...}, ...]}\n\nFor form-based helpers (min_max, utility_meter, etc.), omit menu_option.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -1513,36 +1543,6 @@
     },
     "annotations": {
       "readOnlyHint": true
-    },
-    "tags": [
-      "Helper Entities"
-    ],
-    "source_file": "tools_config_entry_flow.py"
-  },
-  {
-    "name": "ha_set_config_entry_helper",
-    "title": "Set Config Entry Helper",
-    "description": "Create or update a Config Entry Flow helper (template, group, utility_meter, etc.).\n\nWithout entry_id: creates a new helper.\nWith entry_id: reconfigures an existing helper via its options flow.\n\nSupports 15 helper types that use Config Entry Flow API.\nUse ha_get_helper_schema(helper_type) to discover required config fields.\nUse ha_get_integration(entry_id=..., include_schema=True) before updating\nto inspect available fields.\n\nFor menu-based helpers (e.g. group), include the menu selection in config:\n- group: {\"group_type\": \"light\", \"name\": \"My Group\", \"entities\": [...]}\n- template sensor:\n    {\"next_step_id\": \"sensor\", \"name\": \"Vacuum Last Clean\",\n     \"state\": \"{{ states('sensor.vacuum_last_clean') }}\",\n     \"unit_of_measurement\": \"h\", \"device_class\": \"duration\"}\n- template binary sensor:\n    {\"next_step_id\": \"binary_sensor\", \"name\": \"Window Open\",\n     \"state\": \"{{ is_state('binary_sensor.window', 'on') }}\",\n     \"device_class\": \"window\"}",
-    "inputSchema": {
-      "properties": {
-        "helper_type": {
-          "type": "Annotated[SUPPORTED_HELPERS, Field(description='Helper type')]"
-        },
-        "config": {
-          "type": "Annotated[str | dict, Field(description='Helper config (JSON or dict)')]"
-        },
-        "entry_id": {
-          "type": "Annotated[str | None, Field(description='Config entry ID to update. If omitted, creates a new helper. Use ha_get_integration(domain=helper_type) to find entry IDs.', default=None)]",
-          "default": null
-        }
-      },
-      "required": [
-        "helper_type",
-        "config"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
     },
     "tags": [
       "Helper Entities"
@@ -1595,7 +1595,7 @@
   {
     "name": "ha_get_history",
     "title": "Get Entity History or Statistics",
-    "description": "Retrieve historical data from Home Assistant's recorder.\n\n**Sources:**\n- \"history\" (default): Raw state changes, ~10 day retention, full resolution\n- \"statistics\": Pre-aggregated data, permanent retention, requires state_class\n\n**Shared params:** entity_ids, start_time, end_time\n**History params:** minimal_response, significant_changes_only, limit (ignored for statistics)\n**Statistics params:** period, statistic_types (ignored for history)\n\n**Default time range:** 24h for history, 30 days for statistics\n\n**Use ha_get_history (default) when:**\n- Troubleshooting why a value changed (\"Why was my bedroom cold last night?\")\n- Checking event sequences (\"Did my garage door open while I was away?\")\n- Analyzing recent patterns (\"What time does motion usually trigger?\")\n\n**Use ha_get_history(source=\"statistics\") when:**\n- Tracking long-term trends beyond 10 days (\"Energy use this month vs last month?\")\n- Computing period averages (\"Average living room temperature over 6 months?\")\n- Entities must have state_class (measurement, total, total_increasing)\n\n**Example -- history (default):**\n```python\nha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\nha_get_history(entity_ids=[\"sensor.temperature\", \"sensor.humidity\"], start_time=\"7d\", limit=500)\n```\n\n**Example -- statistics:**\n```python\nha_get_history(source=\"statistics\", entity_ids=\"sensor.total_energy_kwh\", start_time=\"30d\", period=\"day\")\nha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\",\n               start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])\n```",
+    "description": "Retrieve historical data from Home Assistant's recorder.\n\n**Sources:**\n- \"history\" (default): Raw state changes, ~10 day retention, full resolution\n- \"statistics\": Pre-aggregated data, permanent retention, requires state_class\n\n**Shared params:** entity_ids, start_time, end_time, limit, offset\n**History params:** minimal_response, significant_changes_only\n**Statistics params:** period, statistic_types\n\n**Default time range:** 24h for history, 30 days for statistics\n\n**Use ha_get_history (default) when:**\n- Troubleshooting why a value changed (\"Why was my bedroom cold last night?\")\n- Checking event sequences (\"Did my garage door open while I was away?\")\n- Analyzing recent patterns (\"What time does motion usually trigger?\")\n\n**Use ha_get_history(source=\"statistics\") when:**\n- Tracking long-term trends beyond 10 days (\"Energy use this month vs last month?\")\n- Computing period averages (\"Average living room temperature over 6 months?\")\n- Entities must have state_class (measurement, total, total_increasing)\n\n**WARNING:** limit and offset apply per entity (not globally across all entities).\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.\nUse has_more and next_offset from the response to paginate.\n\n**Example -- history (default):**\n```python\nha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\nha_get_history(entity_ids=[\"sensor.temperature\", \"sensor.humidity\"], start_time=\"7d\", limit=500)\nha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100)\n```\n\n**Example -- statistics:**\n```python\nha_get_history(source=\"statistics\", entity_ids=\"sensor.total_energy_kwh\", start_time=\"30d\", period=\"day\")\nha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\",\n               start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])\nha_get_history(source=\"statistics\", entity_ids=\"sensor.energy_kwh\",\n               start_time=\"30d\", period=\"5minute\", limit=100, offset=200)\n```",
     "inputSchema": {
       "properties": {
         "entity_ids": {
@@ -1622,11 +1622,15 @@
           "default": true
         },
         "limit": {
-          "type": "Annotated[int | str | None, Field(description='Max state changes per entity. Default: 100, Max: 1000. Ignored when source=\"statistics\"', default=None)]",
+          "type": "Annotated[int | str | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).', default=None)]",
+          "default": null
+        },
+        "offset": {
+          "type": "Annotated[int | str | None, Field(description='Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.', default=None)]",
           "default": null
         },
         "period": {
-          "type": "Annotated[str, Field(description='Aggregation period: \"5minute\", \"hour\", \"day\", \"week\", \"month\". Default: \"day\". Ignored when source=\"history\"', default='day')]",
+          "type": "Annotated[str, Field(description='Aggregation period: \"5minute\", \"hour\", \"day\", \"week\", \"month\", \"year\". Default: \"day\". Ignored when source=\"history\"', default='day')]",
           "default": "day"
         },
         "statistic_types": {
@@ -1753,7 +1757,7 @@
           "default": false
         },
         "include_schema": {
-          "type": "Annotated[bool | str, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_set_config_entry_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
+          "type": "Annotated[bool | str, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_config_set_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
           "default": false
         },
         "exact_match": {
@@ -2028,14 +2032,23 @@
   {
     "name": "ha_config_set_script",
     "title": "Create or Update Script",
-    "description": "Create or update a Home Assistant script.\n\nCreates a new script or updates an existing one with the provided configuration.\nSupports both regular scripts (with sequence) and blueprint-based scripts.\n\nRequired config fields (choose one):\n    - sequence: List of actions to execute (for regular scripts)\n    - use_blueprint: Blueprint configuration (for blueprint-based scripts)\n\nOptional config fields:\n    - alias: Display name (defaults to script_id)\n    - description: Script description\n    - icon: Icon to display\n    - mode: Execution mode ('single', 'restart', 'queued', 'parallel')\n    - max: Maximum concurrent executions (for queued/parallel modes)\n    - fields: Input parameters for the script\n\nIMPORTANT: The 'config' parameter must be passed as a proper dictionary/object.\n\nEXAMPLES:\n\nCreate basic delay script:\nha_config_set_script(\"wait_script\", {\n    \"sequence\": [{\"delay\": {\"seconds\": 5}}],\n    \"alias\": \"Wait 5 Seconds\",\n    \"description\": \"Simple delay script\"\n})\n\nCreate service call script:\nha_config_set_script(\"blink_light\", {\n    \"sequence\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.living_room\"}},\n        {\"delay\": {\"seconds\": 2}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.living_room\"}}\n    ],\n    \"alias\": \"Light Blink\",\n    \"mode\": \"single\"\n})\n\nCreate script with parameters:\nha_config_set_script(\"backup_script\", {\n    \"alias\": \"Backup with Reference\",\n    \"description\": \"Create backup with optional reference parameter\",\n    \"fields\": {\n        \"reference\": {\n            \"name\": \"Reference\",\n            \"description\": \"Optional reference for backup identification\",\n            \"selector\": {\"text\": None}\n        }\n    },\n    \"sequence\": [\n        {\n            \"action\": \"hassio.backup_partial\",\n            \"data\": {\n                \"compressed\": False,\n                \"homeassistant\": True,\n                \"homeassistant_exclude_database\": True,\n                \"name\": \"Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}\"\n            }\n        }\n    ]\n})\n\nUpdate script:\nha_config_set_script(\"morning_routine\", {\n    \"sequence\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n        {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n    ],\n    \"alias\": \"Updated Morning Routine\"\n})\n\nCreate blueprint-based script:\nha_config_set_script(\"notification_script\", {\n    \"alias\": \"My Notification Script\",\n    \"use_blueprint\": {\n        \"path\": \"notification_script.yaml\",\n        \"input\": {\n            \"message\": \"Hello World\",\n            \"title\": \"Test Notification\"\n        }\n    }\n})\n\nUpdate blueprint script inputs:\nha_config_set_script(\"notification_script\", {\n    \"alias\": \"My Notification Script\",\n    \"use_blueprint\": {\n        \"path\": \"notification_script.yaml\",\n        \"input\": {\n            \"message\": \"Updated message\",\n            \"title\": \"Updated Title\"\n        }\n    }\n})\n\nPREFER NATIVE ACTIONS OVER TEMPLATES:\nBefore using template-based logic in scripts, check if native actions exist:\n- Use `choose` action instead of template-based service names\n- Use `if/then/else` action instead of template conditions\n- Use `repeat` action with `for_each` instead of template loops\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use native action variables instead of complex template calculations\n\nFor detailed script configuration help, use ha_get_skill_home_assistant_best_practices.\n\nNote: Scripts use Home Assistant's action syntax. Check the documentation for advanced\nfeatures like conditions, variables, parallel execution, and service call options.",
+    "description": "Create or update a Home Assistant script.\n\nSupports two modes: full config replacement OR Python transformation.\n\nWHEN TO USE WHICH MODE:\n- python_transform: RECOMMENDED for edits to existing scripts. Surgical updates.\n- config: Use for creating new scripts or full restructures.\n\nIMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().\n\nPYTHON TRANSFORM EXAMPLES:\n- Update step: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\"\n- Add step: python_transform=\"config['sequence'].append({'delay': {'seconds': 5}})\"\n- Remove last step: python_transform=\"config['sequence'].pop()\"\n\nCreates a new script or updates an existing one with the provided configuration.\nSupports both regular scripts (with sequence) and blueprint-based scripts.\n\nRequired config fields (choose one):\n    - sequence: List of actions to execute (for regular scripts)\n    - use_blueprint: Blueprint configuration (for blueprint-based scripts)\n\nOptional config fields:\n    - alias: Display name (defaults to script_id)\n    - description: Script description\n    - icon: Icon to display\n    - mode: Execution mode ('single', 'restart', 'queued', 'parallel')\n    - max: Maximum concurrent executions (for queued/parallel modes)\n    - fields: Input parameters for the script\n\nIMPORTANT: The 'config' parameter must be passed as a proper dictionary/object.\n\nEXAMPLES:\n\nCreate basic delay script:\nha_config_set_script(\"wait_script\", {\n    \"sequence\": [{\"delay\": {\"seconds\": 5}}],\n    \"alias\": \"Wait 5 Seconds\",\n    \"description\": \"Simple delay script\"\n})\n\nCreate service call script:\nha_config_set_script(\"blink_light\", {\n    \"sequence\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"entity_id\": \"light.living_room\"}},\n        {\"delay\": {\"seconds\": 2}},\n        {\"service\": \"light.turn_off\", \"target\": {\"entity_id\": \"light.living_room\"}}\n    ],\n    \"alias\": \"Light Blink\",\n    \"mode\": \"single\"\n})\n\nCreate script with parameters:\nha_config_set_script(\"backup_script\", {\n    \"alias\": \"Backup with Reference\",\n    \"description\": \"Create backup with optional reference parameter\",\n    \"fields\": {\n        \"reference\": {\n            \"name\": \"Reference\",\n            \"description\": \"Optional reference for backup identification\",\n            \"selector\": {\"text\": None}\n        }\n    },\n    \"sequence\": [\n        {\n            \"action\": \"hassio.backup_partial\",\n            \"data\": {\n                \"compressed\": False,\n                \"homeassistant\": True,\n                \"homeassistant_exclude_database\": True,\n                \"name\": \"Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}\"\n            }\n        }\n    ]\n})\n\nUpdate script:\nha_config_set_script(\"morning_routine\", {\n    \"sequence\": [\n        {\"service\": \"light.turn_on\", \"target\": {\"area_id\": \"bedroom\"}},\n        {\"service\": \"climate.set_temperature\", \"target\": {\"entity_id\": \"climate.bedroom\"}, \"data\": {\"temperature\": 22}}\n    ],\n    \"alias\": \"Updated Morning Routine\"\n})\n\nCreate blueprint-based script:\nha_config_set_script(\"notification_script\", {\n    \"alias\": \"My Notification Script\",\n    \"use_blueprint\": {\n        \"path\": \"notification_script.yaml\",\n        \"input\": {\n            \"message\": \"Hello World\",\n            \"title\": \"Test Notification\"\n        }\n    }\n})\n\nUpdate blueprint script inputs:\nha_config_set_script(\"notification_script\", {\n    \"alias\": \"My Notification Script\",\n    \"use_blueprint\": {\n        \"path\": \"notification_script.yaml\",\n        \"input\": {\n            \"message\": \"Updated message\",\n            \"title\": \"Updated Title\"\n        }\n    }\n})\n\nPREFER NATIVE ACTIONS OVER TEMPLATES:\nBefore using template-based logic in scripts, check if native actions exist:\n- Use `choose` action instead of template-based service names\n- Use `if/then/else` action instead of template conditions\n- Use `repeat` action with `for_each` instead of template loops\n- Use `wait_for_trigger` instead of `wait_template` when waiting for state changes\n- Use native action variables instead of complex template calculations\n\nFor detailed script configuration help, use ha_get_skill_home_assistant_best_practices.\n\nNote: Scripts use Home Assistant's action syntax. Check the documentation for advanced\nfeatures like conditions, variables, parallel execution, and service call options.",
     "inputSchema": {
       "properties": {
         "script_id": {
           "type": "Annotated[str, Field(description=\"Script identifier (e.g., 'morning_routine')\")]"
         },
         "config": {
-          "type": "Annotated[str | dict[str, Any], Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'\")]"
+          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. Mutually exclusive with python_transform.\", default=None)]",
+          "default": null
+        },
+        "python_transform": {
+          "type": "Annotated[str | None, Field(description='Python expression to transform existing script config. Mutually exclusive with config. Requires config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config[\\'sequence\\'][0][\\'data\\'][\\'message\\'] = \\'Hello\\'\" Pattern: python_transform=\"for step in config[\\'sequence\\']: if step.get(\\'alias\\') == \\'My Step\\': step[\\'data\\'][\\'value\\'] = 100\" \\n\\n' + get_security_documentation())]",
+          "default": null
+        },
+        "config_hash": {
+          "type": "Annotated[str | None, Field(description='Config hash from ha_config_get_script for optimistic locking. REQUIRED for python_transform (validates script unchanged). Optional for config updates (validates before full replacement if provided).')]",
+          "default": null
         },
         "category": {
           "type": "Annotated[str | None, Field(description=\"Category ID to assign to this script. Use ha_config_get_category(scope='script') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
@@ -2047,8 +2060,7 @@
         }
       },
       "required": [
-        "script_id",
-        "config"
+        "script_id"
       ]
     },
     "annotations": {
@@ -2073,11 +2085,11 @@
           "default": null
         },
         "limit": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=5, description='Maximum total results to return (default: 5)')]",
           "default": 5
         },
         "offset": {
-          "type": "int",
+          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         },
         "include_config": {
@@ -2177,18 +2189,19 @@
   {
     "name": "ha_search_entities",
     "title": "Search Entities",
-    "description": "PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.\n\nFor searching *inside* automation/script/helper configurations, use ha_deep_search instead.\n\n**Listing Entities by Domain:**\nUse domain_filter with an empty query to list all entities of a specific type:\n- ha_search_entities(query=\"\", domain_filter=\"calendar\") - List all calendars\n- ha_search_entities(query=\"\", domain_filter=\"todo\") - List all todo lists\n- ha_search_entities(query=\"\", domain_filter=\"scene\") - List all scenes\n- ha_search_entities(query=\"\", domain_filter=\"zone\") - List all zones (as entities)\n\n**BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:\n- Smart home size and scale (total entities, domains, areas)\n- Language used in entity naming (French/English/mixed)\n- Available areas/rooms and their entity distribution\n\nChoose overview detail level based on task:\n- 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches\n- 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks\n- 'full': Maximum detail (includes states, device types, services) - for deep analysis",
+    "description": "Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.\n\nWhen NOT to use: for searching inside automation, script, helper, or dashboard\n*configurations* (e.g. which automations call a service or reference an entity),\nuse `ha_deep_search`.\n\nTo enumerate all entities of a domain, omit `query` and pass `domain_filter`. For\nexample, `ha_search_entities(domain_filter=\"calendar\")` lists all calendars. At\nleast one of `query`, `domain_filter`, or `area_filter` must be set.",
     "inputSchema": {
       "properties": {
         "query": {
-          "type": "str"
+          "type": "Annotated[str | None, Field(default=None, description='Entity name to search for (fuzzy or exact match). Omit to list entities; `domain_filter` or `area_filter` must be set in that mode.')]",
+          "default": null
         },
         "domain_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description=\"Limit to a single domain (e.g. 'light', 'sensor', 'calendar').\")]",
           "default": null
         },
         "area_filter": {
-          "type": "str | None",
+          "type": "Annotated[str | None, Field(default=None, description='Limit to entities in a specific area (area ID or name).')]",
           "default": null
         },
         "limit": {
@@ -2207,10 +2220,7 @@
           "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
           "default": true
         }
-      },
-      "required": [
-        "query"
-      ]
+      }
     },
     "annotations": {
       "idempotentHint": true,
@@ -2414,12 +2424,12 @@
   },
   {
     "name": "ha_config_set_yaml",
-    "title": "Set YAML Config",
-    "description": "Add, replace, or remove a top-level key in configuration.yaml or package files.\n\nIMPORTANT: Only use when NO UI or API alternative exists. Prefer:\n- Template sensors -> ha_config_set_helper (Template Helper)\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Input helpers -> ha_config_set_helper\n- Scenes -> ha_config_set_scene\n\nThis tool is for YAML-only features with no UI/API path (e.g.,\ncommand_line sensors, platform-based MQTT sensors in YAML, rest\nsensors defined in packages).\n\nSafeguards: file backup, YAML validation, top-level key whitelist,\npath traversal blocking, post-edit config check.\n\nIMPORTANT: Check 'post_action' in the response. Most keys require\na full HA restart ('restart_required'). Only template, mqtt, and\ngroup support reload ('reload_available' with 'reload_service').\n\nPreserves YAML comments on sibling keys, file-level comments,\nand Home Assistant tags (!include, !secret, etc.). The 'replace' action\nsubstitutes the subtree as-is, so comments from the old subtree\ndo not carry over.",
+    "title": "Raw YAML Config Edit",
+    "description": "Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).\n\n**WARNING:** Destructive, disabled by default. Dedicated tools exist for\nalmost every use case and should be preferred:\n\n- Template sensors (state-based or trigger-based) ->\n  ha_config_set_helper(helper_type='template')\n- Automations -> ha_config_set_automation\n- Scripts -> ha_config_set_script\n- Scenes -> ha_config_set_scene\n- All 27 helper types (input_*, counter, timer, schedule, zone, person,\n  tag, group, min_max, threshold, derivative, statistics, utility_meter,\n  trend, filter, switch_as_x, etc.) -> ha_config_set_helper\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms).\nCheck ``post_action`` in the response: most keys need a full HA\nrestart; template, mqtt, and group support reload. Preserves YAML\ncomments and HA tags (``!include``, ``!secret``) on round-trip;\n``replace`` swaps the subtree as-is.\n\nFor detailed routing guidance, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
-          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify (e.g., 'template', 'sensor', 'input_boolean'). Only whitelisted keys are allowed.\")]"
+          "type": "Annotated[str, Field(description=\"Top-level YAML key to modify. Only a narrow allowlist of YAML-only integration keys is accepted (e.g., 'command_line', 'rest', 'shell_command', 'notify'). Not for template sensors (use ha_config_set_helper), automations, scripts, scenes, or input_* helpers — those have dedicated tools.\")]"
         },
         "action": {
           "type": "Annotated[str, Field(description=\"Action to perform: 'add' (insert/merge content under key), 'replace' (overwrite key with new content), or 'remove' (delete the key entirely).\")]"
@@ -2447,7 +2457,8 @@
       "idempotentHint": false
     },
     "tags": [
-      "System"
+      "System",
+      "beta"
     ],
     "source_file": "tools_yaml_config.py"
   },

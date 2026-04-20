@@ -26,7 +26,7 @@ class TestGetStates:
         # Find a sensor entity to pair with sun.sun
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "sensor", "limit": 1},
+            {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
 

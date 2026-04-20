@@ -157,9 +157,31 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_search_entities(
-        query: str,
-        domain_filter: str | None = None,
-        area_filter: str | None = None,
+        query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Entity name to search for (fuzzy or exact match). "
+                    "Omit to list entities; `domain_filter` or `area_filter` "
+                    "must be set in that mode."
+                ),
+            ),
+        ] = None,
+        domain_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Limit to a single domain (e.g. 'light', 'sensor', 'calendar').",
+            ),
+        ] = None,
+        area_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Limit to entities in a specific area (area ID or name).",
+            ),
+        ] = None,
         limit: int = 10,
         offset: Annotated[
             int | str,
@@ -181,26 +203,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+        """Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
 
-        For searching *inside* automation/script/helper configurations, use ha_deep_search instead.
+        When NOT to use: for searching inside automation, script, helper, or dashboard
+        *configurations* (e.g. which automations call a service or reference an entity),
+        use `ha_deep_search`.
 
-        **Listing Entities by Domain:**
-        Use domain_filter with an empty query to list all entities of a specific type:
-        - ha_search_entities(query="", domain_filter="calendar") - List all calendars
-        - ha_search_entities(query="", domain_filter="todo") - List all todo lists
-        - ha_search_entities(query="", domain_filter="scene") - List all scenes
-        - ha_search_entities(query="", domain_filter="zone") - List all zones (as entities)
-
-        **BEST PRACTICE:** Before performing searches, call ha_get_overview() first to understand:
-        - Smart home size and scale (total entities, domains, areas)
-        - Language used in entity naming (French/English/mixed)
-        - Available areas/rooms and their entity distribution
-
-        Choose overview detail level based on task:
-        - 'minimal': Quick orientation (10 entities per domain sample) - RECOMMENDED for searches
-        - 'standard': Complete picture (all entities, friendly names only) - for comprehensive tasks
-        - 'full': Maximum detail (includes states, device types, services) - for deep analysis"""
+        To enumerate all entities of a domain, omit `query` and pass `domain_filter`. For
+        example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
+        least one of `query`, `domain_filter`, or `area_filter` must be set.
+        """
+        # Normalize omitted/None query to empty string so downstream logic is unchanged
+        query = query or ""
+        if not query.strip() and not domain_filter and not area_filter:
+            raise_tool_error(
+                create_validation_error(
+                    "At least one of 'query', 'domain_filter', or 'area_filter' must be set.",
+                    parameter="query",
+                )
+            )
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = (
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
@@ -210,6 +231,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+            limit = coerce_int_param(limit, "limit", default=10, min_value=1)
 
             # If area_filter is provided, use area-based search
             if area_filter:
@@ -745,8 +767,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        limit: int = 5,
-        offset: int = 0,
+        limit: Annotated[
+            int | str,
+            Field(
+                default=5,
+                description="Maximum total results to return (default: 5)",
+            ),
+        ] = 5,
+        offset: Annotated[
+            int | str,
+            Field(
+                default=0,
+                description="Number of results to skip for pagination (default: 0)",
+            ),
+        ] = 0,
         include_config: Annotated[
             bool | str,
             Field(
@@ -801,6 +835,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
         exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
         try:
+            limit = coerce_int_param(limit, "limit", default=5, min_value=1)
+            offset = coerce_int_param(offset, "offset", default=0, min_value=0)
             result = await smart_tools.deep_search(
                 query,
                 parsed_search_types,
