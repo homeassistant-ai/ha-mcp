@@ -44,8 +44,13 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    import openai
+    from fastmcp import Client as MCPClient
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CATALOG_DIR = SCRIPT_DIR / "catalog"
@@ -390,8 +395,8 @@ def _run_test_prompt(
 async def _run_test_prompt_inline(
     prompt: str,
     agent_name: str,
-    openai_client,
-    mcp_client,
+    openai_client: openai.AsyncOpenAI,
+    mcp_client: MCPClient,
     model: str,
     openai_tools: list[dict],
     *,
@@ -695,10 +700,26 @@ async def run_stories(
     agent_list = [a.strip() for a in args.agents.split(",")]
     using_external_ha = bool(args.ha_url)
 
+    from uat.run_uat import (
+        _preflight_check_base_url,
+        _preflight_check_docker,
+        build_stdio_mcp_config,
+        parse_mcp_env,
+    )
+
+    if not using_external_ha:
+        err = _preflight_check_docker()
+        if err:
+            log(f"FATAL: {err}")
+            return 2
+    if args.base_url and "openai" in agent_list:
+        err = _preflight_check_base_url(args.base_url)
+        if err:
+            log(f"FATAL: {err}")
+            return 2
+
     all_results: list[tuple[str, str, dict, int, dict | None, str | None]] = []
     # Each entry: (agent, story_id, story, exit_code, summary, session_file)
-
-    from uat.run_uat import build_stdio_mcp_config, parse_mcp_env
 
     mcp_env_dict = parse_mcp_env(
         getattr(args, "mcp_env", None),
@@ -725,9 +746,9 @@ async def run_stories(
         # MCP server spawn and model warmup. Other agents take the subprocess
         # path via _run_test_prompt.
         use_inline = agent in INLINE_AGENTS
-        inline_mcp_client = None
-        openai_client = None
-        resolved_model = None
+        inline_mcp_client: MCPClient | None = None
+        openai_client: openai.AsyncOpenAI | None = None
+        resolved_model: str | None = None
         openai_tools: list[dict] = []
 
         async with contextlib.AsyncExitStack() as agent_stack:
@@ -745,7 +766,7 @@ async def run_stories(
                     ha_url, ha_token, args.branch, mcp_env_dict or None
                 )
                 try:
-                    openai_client, resolved_model = create_and_warm_openai_client(
+                    openai_client, resolved_model = await create_and_warm_openai_client(
                         base_url=args.base_url,
                         api_key=args.api_key,
                         model=args.model,
@@ -808,7 +829,13 @@ async def run_stories(
 
                 log(f"[{agent}/{sid}] Running test prompt...")
                 run_start = time.time()
+                summary: dict | None
                 if use_inline:
+                    assert (
+                        openai_client is not None
+                        and inline_mcp_client is not None
+                        and resolved_model is not None
+                    ), "inline setup invariant: clients/model are populated when use_inline is True"
                     rc, summary = await _run_test_prompt_inline(
                         story["prompt"],
                         agent_name=agent,

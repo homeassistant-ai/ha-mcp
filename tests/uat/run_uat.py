@@ -22,9 +22,12 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
@@ -129,6 +132,38 @@ def mcp_server_command(branch: str | None) -> list[str]:
             "ha-mcp",
         ]
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
+
+
+def _preflight_check_docker(timeout: float = 5.0) -> str | None:
+    """Return an error string if the Docker daemon is unreachable, else None."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return "'docker' CLI not found on PATH (install Docker or pass --ha-url)"
+    except subprocess.TimeoutExpired:
+        return f"Docker daemon did not respond within {timeout:.0f}s"
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip().splitlines()
+        hint = stderr[-1] if stderr else f"exit {result.returncode}"
+        return f"Docker daemon is not reachable: {hint}"
+    return None
+
+
+def _preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
+    """Return an error string if the OpenAI endpoint is unreachable, else None."""
+    url = f"{base_url.rstrip('/')}/models"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return None
+    except urllib.error.URLError as e:
+        return f"OpenAI endpoint {base_url} is not reachable: {e.reason}"
+    except Exception as e:
+        return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
 
 
 def _build_mcp_env(
@@ -644,6 +679,17 @@ async def run(args: argparse.Namespace) -> dict:
             "--base-url is required when using the openai agent. "
             "Example: --base-url http://localhost:1234/v1"
         )
+
+    # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
+    # rather than stalling inside container startup / model warmup.
+    if not args.ha_url:
+        err = _preflight_check_docker()
+        if err:
+            raise RuntimeError(err)
+    if "openai" in active_agents and getattr(args, "base_url", None):
+        err = _preflight_check_base_url(args.base_url)
+        if err:
+            raise RuntimeError(err)
 
     # Start HA (container or external)
     ha_url = args.ha_url
