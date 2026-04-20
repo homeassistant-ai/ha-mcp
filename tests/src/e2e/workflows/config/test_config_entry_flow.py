@@ -22,10 +22,15 @@ logger = logging.getLogger(__name__)
 async def _create_config_entry_helper(
     mcp_client, helper_type: str, config: dict, description: str
 ) -> str:
-    """Create a config entry helper, poll until registered, and return entry_id."""
+    """Create a config entry helper via unified ha_config_set_helper.
+
+    The unified tool expects either a top-level `name` param or a `name` key
+    in the `config` dict. The test fixtures place `name` inside `config`, so
+    we forward it as-is. Polls until the new entry is registered, returns entry_id.
+    """
     result = await mcp_client.call_tool(
-        "ha_set_config_entry_helper",
-        {"helper_type": helper_type, "config": config},
+        "ha_config_set_helper",
+        {"helper_type": helper_type, "name": config.get("name", ""), "config": config},
     )
     data = assert_mcp_success(result, f"Create {description}")
     assert data.get("success") is True
@@ -222,8 +227,13 @@ class TestConfigEntryFlow:
             "type": "max",
         }
         update_result = await mcp_client.call_tool(
-            "ha_set_config_entry_helper",
-            {"helper_type": "min_max", "config": updated_config, "entry_id": entry_id},
+            "ha_config_set_helper",
+            {
+                "helper_type": "min_max",
+                "name": "test_min_max_update_e2e",
+                "config": updated_config,
+                "helper_id": entry_id,  # unified tool normalizes entry_id -> helper_id for flow helpers
+            },
         )
         update_data = assert_mcp_success(update_result, "Update min_max helper")
         assert update_data.get("updated") is True
@@ -263,8 +273,8 @@ class TestConfigEntryFlow:
 
         data = await safe_call_tool(
             mcp_client,
-            "ha_set_config_entry_helper",
-            {"helper_type": "group", "config": config},
+            "ha_config_set_helper",
+            {"helper_type": "group", "name": "my_group", "config": config},
         )
         assert data.get("success") is not True, "Should fail without group_type"
         # The error should mention available options or the missing key
