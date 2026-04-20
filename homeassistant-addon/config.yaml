@@ -29,12 +29,16 @@ options:
   enable_skills: true
   enable_skills_as_tools: true
   enable_tool_search: false
+  enable_filesystem_tools: false
+  enable_custom_component_integration: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
+  enable_filesystem_tools: bool?
+  enable_custom_component_integration: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
