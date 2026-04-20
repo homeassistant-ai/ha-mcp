@@ -11,16 +11,18 @@ Feature flag: set ``ENABLE_NODERED_TOOLS=true`` along with ``NODERED_URL``,
 module is a no-op when the flag is off.
 
 Behaviour notes preserved from the prior hand-rolled server:
-- ``ha_nodered_patch_node`` and ``ha_nodered_patch_flow`` only mutate
+- ``ha_update_nodered_node`` and ``ha_update_nodered_flow_nodes`` only mutate
   *existing* node properties — they cannot change a node's type. Use
-  ``ha_nodered_replace_flow`` for structural rewrites.
-- ``ha_nodered_replace_flow`` requires the caller to supply the full new
+  ``ha_replace_nodered_flow_nodes`` for structural rewrites.
+- ``ha_replace_nodered_flow_nodes`` requires the caller to supply the full new
   list of nodes for the tab. Disabled nodes must carry ``"d": true``
   explicitly; there is no additive-insert mode.
-- ``ha_nodered_get_nodes`` filters by ``search_name`` (case-insensitive
+- ``ha_search_nodered_nodes`` filters by ``search_name`` (case-insensitive
   substring on ``name``) and/or ``node_type``.
 """
 
+import asyncio
+import atexit
 import logging
 from typing import Annotated, Any
 
@@ -44,6 +46,24 @@ logger = logging.getLogger(__name__)
 # install (thousands of nodes) cannot blow up an MCP response payload.
 _NODE_SEARCH_LIMIT = 100
 
+# Track the active client so atexit can release the underlying httpx connection
+# pool cleanly. FastMCP doesn't expose a public on_shutdown hook and upstream's
+# server.py constructs FastMCP without a custom lifespan, so atexit is the
+# least-invasive way to hook process teardown without modifying upstream files.
+_active_client: NodeRedClient | None = None
+
+
+def _close_active_client_atexit() -> None:
+    """Close the registered NodeRedClient at process exit."""
+    if _active_client is None:
+        return
+    try:
+        asyncio.run(_active_client.close())
+    except RuntimeError:
+        # Event loop already running or interpreter shutting down — httpx will
+        # release sockets on process teardown anyway. Log and move on.
+        logger.debug("NodeRedClient atexit close skipped (no usable event loop)")
+
 
 class NodeRedTools:
     """Node-RED Admin API tools."""
@@ -56,7 +76,7 @@ class NodeRedTools:
     # ------------------------------------------------------------------
 
     @tool(
-        name="ha_nodered_get_flows",
+        name="ha_list_nodered_flows",
         tags={"Node-RED"},
         annotations={
             "readOnlyHint": True,
@@ -65,7 +85,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_get_flows(self) -> dict[str, Any]:
+    async def ha_list_nodered_flows(self) -> dict[str, Any]:
         """List all Node-RED flow tabs with per-tab node counts."""
         try:
             flows = await self._client.get_flows()
@@ -116,7 +136,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_get_flow",
+        name="ha_get_nodered_flow",
         tags={"Node-RED"},
         annotations={
             "readOnlyHint": True,
@@ -125,7 +145,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_get_flow(
+    async def ha_get_nodered_flow(
         self,
         flow_id: Annotated[
             str,
@@ -166,7 +186,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_get_nodes",
+        name="ha_search_nodered_nodes",
         tags={"Node-RED"},
         annotations={
             "readOnlyHint": True,
@@ -175,7 +195,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_get_nodes(
+    async def ha_search_nodered_nodes(
         self,
         node_type: Annotated[
             str | None,
@@ -254,7 +274,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_get_settings",
+        name="ha_get_nodered_settings",
         tags={"Node-RED"},
         annotations={
             "readOnlyHint": True,
@@ -263,7 +283,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_get_settings(self) -> dict[str, Any]:
+    async def ha_get_nodered_settings(self) -> dict[str, Any]:
         """Get Node-RED runtime settings (version, palette categories, theme)."""
         try:
             settings = await self._client.get_settings()
@@ -290,7 +310,7 @@ class NodeRedTools:
     # ------------------------------------------------------------------
 
     @tool(
-        name="ha_nodered_inject_node",
+        name="ha_call_nodered_inject_node",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": False,
@@ -299,11 +319,11 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_inject_node(
+    async def ha_call_nodered_inject_node(
         self,
         node_id: Annotated[str, Field(description="ID of the inject node to trigger")],
     ) -> dict[str, Any]:
-        """Trigger a Node-RED inject node by ID."""
+        """Call a Node-RED inject node by ID to fire its configured payload."""
         try:
             await self._client.inject(node_id)
         except ToolError:
@@ -320,7 +340,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_patch_node",
+        name="ha_update_nodered_node",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": True,
@@ -329,7 +349,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_patch_node(
+    async def ha_update_nodered_node(
         self,
         node_id: Annotated[str, Field(description="ID of the node to patch")],
         patches: Annotated[
@@ -338,7 +358,7 @@ class NodeRedTools:
                 description=(
                     "Properties to overwrite on the node, e.g. "
                     "{'func': 'return msg;', 'name': 'My Name'}. Cannot "
-                    "change the node's 'type' — use ha_nodered_replace_flow "
+                    "change the node's 'type' — use ha_replace_nodered_flow_nodes "
                     "for structural changes."
                 )
             ),
@@ -368,7 +388,7 @@ class NodeRedTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Cannot change node 'type' via patch; use ha_nodered_replace_flow.",
+                    "Cannot change node 'type' via patch; use ha_replace_nodered_flow_nodes.",
                     context={"node_id": node_id, "current_type": target.get("type")},
                 )
             )
@@ -401,7 +421,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_patch_flow",
+        name="ha_update_nodered_flow_nodes",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": True,
@@ -410,7 +430,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_patch_flow(
+    async def ha_update_nodered_flow_nodes(
         self,
         flow_id: Annotated[
             str, Field(description="ID of the flow/tab containing the nodes to patch")
@@ -522,7 +542,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_replace_flow",
+        name="ha_replace_nodered_flow_nodes",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": True,
@@ -531,7 +551,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_replace_flow(
+    async def ha_replace_nodered_flow_nodes(
         self,
         flow_id: Annotated[
             str, Field(description="ID of the flow/tab to replace contents of")
@@ -603,7 +623,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_add_flow",
+        name="ha_create_nodered_flow",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": False,
@@ -612,7 +632,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_add_flow(
+    async def ha_create_nodered_flow(
         self,
         flow_tab: Annotated[
             dict[str, Any],
@@ -676,7 +696,7 @@ class NodeRedTools:
                     create_error_response(
                         ErrorCode.RESOURCE_ALREADY_EXISTS,
                         f"A node with ID '{flow_id}' already exists. "
-                        "Use ha_nodered_replace_flow to update it.",
+                        "Use ha_replace_nodered_flow_nodes to update it.",
                         context={"flow_id": flow_id},
                     )
                 )
@@ -708,7 +728,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_delete_flow",
+        name="ha_delete_nodered_flow",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": True,
@@ -717,7 +737,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_delete_flow(
+    async def ha_delete_nodered_flow(
         self,
         flow_id: Annotated[str, Field(description="ID of the flow/tab to delete")],
     ) -> dict[str, Any]:
@@ -768,7 +788,7 @@ class NodeRedTools:
         }
 
     @tool(
-        name="ha_nodered_update_flows",
+        name="ha_replace_nodered_flows",
         tags={"Node-RED"},
         annotations={
             "destructiveHint": True,
@@ -777,7 +797,7 @@ class NodeRedTools:
         },
     )
     @log_tool_usage
-    async def ha_nodered_update_flows(
+    async def ha_replace_nodered_flows(
         self,
         flows: Annotated[
             list[dict[str, Any]],
@@ -830,5 +850,15 @@ def register_nodered_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         password=settings.nodered_password,
         timeout=settings.timeout,
     )
+
+    global _active_client
+    if _active_client is None:
+        _active_client = nodered_client
+        atexit.register(_close_active_client_atexit)
+    else:
+        # Re-registration (e.g. test harness): swap the tracked client so the
+        # latest one is closed at exit. Old client is the caller's responsibility.
+        _active_client = nodered_client
+
     register_tool_methods(mcp, NodeRedTools(nodered_client))
     logger.info("Node-RED tools registered (11 tools)")

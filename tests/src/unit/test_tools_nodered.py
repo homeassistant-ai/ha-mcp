@@ -107,7 +107,7 @@ def _parse_tool_error(exc: ToolError) -> dict:
 
 @pytest.mark.asyncio
 async def test_get_flows_summarises_tabs_and_nodes(tools):
-    result = await _bare(tools.ha_nodered_get_flows)(tools)
+    result = await _bare(tools.ha_list_nodered_flows)(tools)
     assert result["success"] is True
     data = result["data"]
     assert data["total_tabs"] == 2
@@ -119,7 +119,7 @@ async def test_get_flows_summarises_tabs_and_nodes(tools):
 
 @pytest.mark.asyncio
 async def test_get_flow_returns_tab_with_nodes(tools):
-    result = await _bare(tools.ha_nodered_get_flow)(tools, flow_id="tab1")
+    result = await _bare(tools.ha_get_nodered_flow)(tools, flow_id="tab1")
     assert result["success"] is True
     data = result["data"]
     assert data["id"] == "tab1"
@@ -131,7 +131,7 @@ async def test_get_flow_returns_tab_with_nodes(tools):
 @pytest.mark.asyncio
 async def test_get_flow_unknown_id_raises_resource_not_found(tools):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_get_flow)(tools, flow_id="missing")
+        await _bare(tools.ha_get_nodered_flow)(tools, flow_id="missing")
     err = _parse_tool_error(exc.value)
     assert err["success"] is False
     assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -140,7 +140,7 @@ async def test_get_flow_unknown_id_raises_resource_not_found(tools):
 
 @pytest.mark.asyncio
 async def test_get_nodes_filters_by_type_and_name_substring(tools):
-    result = await _bare(tools.ha_nodered_get_nodes)(
+    result = await _bare(tools.ha_search_nodered_nodes)(
         tools, node_type="function", search_name="brightness"
     )
     assert result["success"] is True
@@ -152,21 +152,21 @@ async def test_get_nodes_filters_by_type_and_name_substring(tools):
 
 @pytest.mark.asyncio
 async def test_get_nodes_restricts_to_flow_id(tools):
-    result = await _bare(tools.ha_nodered_get_nodes)(tools, flow_id="tab2")
+    result = await _bare(tools.ha_search_nodered_nodes)(tools, flow_id="tab2")
     assert result["success"] is True
     assert {n["id"] for n in result["data"]["nodes"]} == {"n3"}
 
 
 @pytest.mark.asyncio
 async def test_get_nodes_search_is_case_insensitive(tools):
-    result = await _bare(tools.ha_nodered_get_nodes)(tools, search_name="MORNING")
+    result = await _bare(tools.ha_search_nodered_nodes)(tools, search_name="MORNING")
     ids = {n["id"] for n in result["data"]["nodes"]}
     assert "n1" in ids
 
 
 @pytest.mark.asyncio
 async def test_get_settings_passes_through_runtime_info(tools):
-    result = await _bare(tools.ha_nodered_get_settings)(tools)
+    result = await _bare(tools.ha_get_nodered_settings)(tools)
     assert result["data"]["version"] == "4.0.2"
     assert "common" in result["data"]["palette_categories"]
 
@@ -178,7 +178,7 @@ async def test_get_settings_passes_through_runtime_info(tools):
 
 @pytest.mark.asyncio
 async def test_inject_node_calls_client_and_reports_success(tools, mock_client):
-    result = await _bare(tools.ha_nodered_inject_node)(tools, node_id="n1")
+    result = await _bare(tools.ha_call_nodered_inject_node)(tools, node_id="n1")
     mock_client.inject.assert_awaited_once_with("n1")
     assert result["data"]["node_id"] == "n1"
 
@@ -190,7 +190,7 @@ async def test_inject_node_calls_client_and_reports_success(tools, mock_client):
 
 @pytest.mark.asyncio
 async def test_patch_node_updates_fields_and_redeploys(tools, mock_client):
-    result = await _bare(tools.ha_nodered_patch_node)(
+    result = await _bare(tools.ha_update_nodered_node)(
         tools, node_id="n2", patches={"name": "Renamed", "func": "return null;"}
     )
     assert result["success"] is True
@@ -204,7 +204,7 @@ async def test_patch_node_updates_fields_and_redeploys(tools, mock_client):
 @pytest.mark.asyncio
 async def test_patch_node_missing_raises_resource_not_found(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_patch_node)(
+        await _bare(tools.ha_update_nodered_node)(
             tools, node_id="ghost", patches={"name": "x"}
         )
     err = _parse_tool_error(exc.value)
@@ -215,7 +215,7 @@ async def test_patch_node_missing_raises_resource_not_found(tools, mock_client):
 @pytest.mark.asyncio
 async def test_patch_node_rejects_type_change(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_patch_node)(
+        await _bare(tools.ha_update_nodered_node)(
             tools, node_id="n1", patches={"type": "function"}
         )
     err = _parse_tool_error(exc.value)
@@ -230,7 +230,7 @@ async def test_patch_node_rejects_type_change(tools, mock_client):
 
 @pytest.mark.asyncio
 async def test_patch_flow_applies_multiple_patches(tools, mock_client):
-    result = await _bare(tools.ha_nodered_patch_flow)(
+    result = await _bare(tools.ha_update_nodered_flow_nodes)(
         tools,
         flow_id="tab1",
         node_patches=[
@@ -247,7 +247,7 @@ async def test_patch_flow_applies_multiple_patches(tools, mock_client):
 
 @pytest.mark.asyncio
 async def test_patch_flow_collects_item_errors_for_wrong_flow(tools, mock_client):
-    result = await _bare(tools.ha_nodered_patch_flow)(
+    result = await _bare(tools.ha_update_nodered_flow_nodes)(
         tools,
         flow_id="tab1",
         node_patches=[
@@ -266,7 +266,7 @@ async def test_patch_flow_collects_item_errors_for_wrong_flow(tools, mock_client
 @pytest.mark.asyncio
 async def test_patch_flow_unknown_flow_raises(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_patch_flow)(
+        await _bare(tools.ha_update_nodered_flow_nodes)(
             tools, flow_id="missing", node_patches=[{"node_id": "n1", "patches": {}}]
         )
     err = _parse_tool_error(exc.value)
@@ -277,7 +277,7 @@ async def test_patch_flow_unknown_flow_raises(tools, mock_client):
 @pytest.mark.asyncio
 async def test_patch_flow_all_failures_raises(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_patch_flow)(
+        await _bare(tools.ha_update_nodered_flow_nodes)(
             tools,
             flow_id="tab1",
             node_patches=[{"node_id": "ghost", "patches": {"name": "x"}}],
@@ -298,7 +298,7 @@ async def test_replace_flow_swaps_nodes_and_forces_z(tools, mock_client):
         {"id": "new1", "type": "inject", "name": "New Inject", "wires": []},
         {"id": "new2", "type": "debug", "name": "Dbg", "wires": []},
     ]
-    result = await _bare(tools.ha_nodered_replace_flow)(
+    result = await _bare(tools.ha_replace_nodered_flow_nodes)(
         tools, flow_id="tab1", new_flow_nodes=new_nodes
     )
     assert result["data"]["old_node_count"] == 2
@@ -318,7 +318,7 @@ async def test_replace_flow_swaps_nodes_and_forces_z(tools, mock_client):
 @pytest.mark.asyncio
 async def test_replace_flow_unknown_flow_raises(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_replace_flow)(
+        await _bare(tools.ha_replace_nodered_flow_nodes)(
             tools, flow_id="missing", new_flow_nodes=[]
         )
     err = _parse_tool_error(exc.value)
@@ -335,7 +335,7 @@ async def test_replace_flow_unknown_flow_raises(tools, mock_client):
 async def test_add_flow_appends_tab_and_nodes(tools, mock_client):
     new_tab = {"id": "tab3", "type": "tab", "label": "Garage"}
     new_nodes = [{"id": "g1", "type": "inject", "name": "Garage Trigger", "wires": []}]
-    result = await _bare(tools.ha_nodered_add_flow)(
+    result = await _bare(tools.ha_create_nodered_flow)(
         tools, flow_tab=new_tab, flow_nodes=new_nodes
     )
     assert result["data"]["flow_id"] == "tab3"
@@ -348,7 +348,7 @@ async def test_add_flow_appends_tab_and_nodes(tools, mock_client):
 @pytest.mark.asyncio
 async def test_add_flow_rejects_duplicate_id(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_add_flow)(
+        await _bare(tools.ha_create_nodered_flow)(
             tools,
             flow_tab={"id": "tab1", "type": "tab", "label": "dup"},
             flow_nodes=[],
@@ -369,7 +369,9 @@ async def test_add_flow_rejects_duplicate_id(tools, mock_client):
 )
 async def test_add_flow_validates_tab_shape(tools, mock_client, bad_tab, expected_code):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_add_flow)(tools, flow_tab=bad_tab, flow_nodes=[])
+        await _bare(tools.ha_create_nodered_flow)(
+            tools, flow_tab=bad_tab, flow_nodes=[]
+        )
     assert _parse_tool_error(exc.value)["error"]["code"] == expected_code
     mock_client.post_flows.assert_not_called()
 
@@ -381,7 +383,7 @@ async def test_add_flow_validates_tab_shape(tools, mock_client, bad_tab, expecte
 
 @pytest.mark.asyncio
 async def test_delete_flow_removes_tab_and_its_nodes(tools, mock_client):
-    result = await _bare(tools.ha_nodered_delete_flow)(tools, flow_id="tab1")
+    result = await _bare(tools.ha_delete_nodered_flow)(tools, flow_id="tab1")
     assert result["data"]["deleted_node_count"] == 3  # tab1 + n1 + n2
     deployed_ids = {n["id"] for n in mock_client.post_flows.await_args.args[0]}
     assert "tab1" not in deployed_ids
@@ -393,7 +395,7 @@ async def test_delete_flow_removes_tab_and_its_nodes(tools, mock_client):
 @pytest.mark.asyncio
 async def test_delete_flow_unknown_raises(tools, mock_client):
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_delete_flow)(tools, flow_id="missing")
+        await _bare(tools.ha_delete_nodered_flow)(tools, flow_id="missing")
     err = _parse_tool_error(exc.value)
     assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
     mock_client.post_flows.assert_not_called()
@@ -407,7 +409,7 @@ async def test_delete_flow_unknown_raises(tools, mock_client):
 @pytest.mark.asyncio
 async def test_update_flows_passes_through(tools, mock_client):
     payload = [{"id": "tabX", "type": "tab", "label": "Replacement"}]
-    result = await _bare(tools.ha_nodered_update_flows)(tools, flows=payload)
+    result = await _bare(tools.ha_replace_nodered_flows)(tools, flows=payload)
     mock_client.post_flows.assert_awaited_once_with(payload)
     assert result["data"]["node_count"] == 1
 
@@ -423,7 +425,7 @@ async def test_connection_error_maps_to_connection_failed(tools, mock_client):
         "connection refused on socket"
     )
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_get_flows)(tools)
+        await _bare(tools.ha_list_nodered_flows)(tools)
     code = _parse_tool_error(exc.value)["error"]["code"]
     assert code in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
 
@@ -437,7 +439,7 @@ async def test_timeout_message_maps_to_timeout_operation(tools, mock_client):
         "Node-RED request timeout after 30s"
     )
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_get_flows)(tools)
+        await _bare(tools.ha_list_nodered_flows)(tools)
     assert _parse_tool_error(exc.value)["error"]["code"] == "TIMEOUT_OPERATION"
 
 
@@ -445,7 +447,7 @@ async def test_timeout_message_maps_to_timeout_operation(tools, mock_client):
 async def test_auth_error_maps_to_auth_invalid_token(tools, mock_client):
     mock_client.get_flows.side_effect = NodeRedAuthError("auth failed 401")
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_get_flows)(tools)
+        await _bare(tools.ha_list_nodered_flows)(tools)
     code = _parse_tool_error(exc.value)["error"]["code"]
     assert code == "AUTH_INVALID_TOKEN"
 
@@ -456,7 +458,7 @@ async def test_api_error_classified_by_helpers(tools, mock_client):
         "Node-RED 500", status_code=500, response_text="boom"
     )
     with pytest.raises(ToolError) as exc:
-        await _bare(tools.ha_nodered_get_flows)(tools)
+        await _bare(tools.ha_list_nodered_flows)(tools)
     err = _parse_tool_error(exc.value)
     # Falls through to internal-error / service-call-failed via message classifier
     assert err["error"]["code"] in (
