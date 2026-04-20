@@ -244,6 +244,22 @@ Replaces the full tool catalog (~85 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### enable_filesystem_tools
+
+**Default:** `false`
+
+Enables the `HAMCP_ENABLE_FILESYSTEM_TOOLS` feature flag.
+
+Requires add-on restart to take effect.
+
+### enable_custom_component_integration
+
+**Default:** `false`
+
+Enables the `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` feature flag.
+
+Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml
