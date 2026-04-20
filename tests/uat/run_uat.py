@@ -22,11 +22,14 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
+import requests
 from testcontainers.core.container import DockerContainer
 
 # Resolve paths relative to repo root
@@ -130,6 +133,44 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
+def preflight_check_docker(timeout: float = 5.0) -> str | None:
+    """Return an error string if the Docker daemon is unreachable, else None."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return "'docker' CLI not found on PATH (install Docker or pass --ha-url)"
+    except subprocess.TimeoutExpired:
+        return f"Docker daemon did not respond within {timeout:.0f}s"
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip().splitlines()
+        hint = stderr[-1] if stderr else f"exit {result.returncode}"
+        return f"Docker daemon is not reachable: {hint}"
+    return None
+
+
+def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
+    """Return an error string if the OpenAI endpoint is unreachable or broken, else None.
+
+    Catches both connection-level failures (ConnectionError, Timeout) and
+    HTTP error responses (4xx/5xx from ``raise_for_status``) — the latter
+    covers "up but wrong" cases like hitting the wrong port, a bad
+    auth token, or an upstream error, which would otherwise only surface
+    as an opaque warmup stall.
+    """
+    url = f"{base_url.rstrip('/')}/models"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
+    return None
+
+
 def _build_mcp_env(
     ha_url: str, ha_token: str, extra_env: dict[str, str] | None
 ) -> dict[str, str]:
@@ -139,16 +180,49 @@ def _build_mcp_env(
     return env
 
 
-def write_stdio_mcp_config(
+def parse_mcp_env(
+    raw_mcp_env: list[str] | None,
+    base_url: str | None = None,
+    on_default_applied: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    """Parse ``KEY=VALUE`` pairs into a dict, with the local-model default.
+
+    A bare ``KEY`` (no ``=``) maps to an empty string — useful for
+    boolean-presence flags. When ``base_url`` is set (targeting a local
+    OpenAI-compatible endpoint), ``ENABLE_TOOL_SEARCH=true`` is injected
+    unless the caller already set it. Local models typically can't prefill
+    the full tool catalog, so tool search is the default for that path.
+    Override with an explicit ``ENABLE_TOOL_SEARCH=...`` pair.
+
+    If ``on_default_applied`` is provided, it is called with a human-readable
+    message each time a default is injected.
+    """
+    pairs = raw_mcp_env or []
+    env = {k: v for pair in pairs for k, _, v in [pair.partition("=")]}
+    if base_url and "ENABLE_TOOL_SEARCH" not in env:
+        env["ENABLE_TOOL_SEARCH"] = "true"
+        if on_default_applied:
+            on_default_applied(
+                "Defaulting ENABLE_TOOL_SEARCH=true for local model (--base-url set)"
+            )
+    return env
+
+
+def build_stdio_mcp_config(
     ha_url: str,
     ha_token: str,
     branch: str | None,
     extra_env: dict[str, str] | None = None,
-) -> Path:
-    """Write a temporary Claude MCP config JSON file."""
+) -> dict:
+    """Build the stdio MCP config dict (format shared with Claude's --mcp-config).
+
+    The dict can be passed directly to ``fastmcp.Client(config)`` for in-process
+    use, or serialized to a file via ``write_stdio_mcp_config`` for CLI agents
+    that expect a file path.
+    """
     cmd = mcp_server_command(branch)
     env = _build_mcp_env(ha_url, ha_token, extra_env)
-    config = {
+    return {
         "mcpServers": {
             "home-assistant": {
                 "command": cmd[0],
@@ -157,6 +231,16 @@ def write_stdio_mcp_config(
             }
         }
     }
+
+
+def write_stdio_mcp_config(
+    ha_url: str,
+    ha_token: str,
+    branch: str | None,
+    extra_env: dict[str, str] | None = None,
+) -> Path:
+    """Write the stdio MCP config to a temporary JSON file, return its path."""
+    config = build_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="claude_mcp_", delete=False
     ) as f:
@@ -601,6 +685,17 @@ async def run(args: argparse.Namespace) -> dict:
             "Example: --base-url http://localhost:1234/v1"
         )
 
+    # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
+    # rather than stalling inside container startup / model warmup.
+    if not args.ha_url:
+        err = preflight_check_docker()
+        if err:
+            raise RuntimeError(err)
+    if "openai" in active_agents and getattr(args, "base_url", None):
+        err = preflight_check_base_url(args.base_url)
+        if err:
+            raise RuntimeError(err)
+
     # Start HA (container or external)
     ha_url = args.ha_url
     ha_token = args.ha_token or TEST_TOKEN
@@ -618,13 +713,10 @@ async def run(args: argparse.Namespace) -> dict:
         log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
         log(f"Agents: {', '.join(active_agents)}")
 
-        # Parse --mcp-env pairs into a dict.  The format is KEY=VALUE, but bare
-        # KEY (no =) is also valid and intentionally sets the variable to an empty
-        # string — useful for boolean-presence flags like ENABLE_TOOL_SEARCH=.
-        raw_mcp_env = getattr(args, "mcp_env", None) or []
-        extra_env: dict[str, str] | None = (
-            {k: v for pair in raw_mcp_env for k, _, v in [pair.partition("=")]}
-            if raw_mcp_env else None
+        extra_env = parse_mcp_env(
+            getattr(args, "mcp_env", None),
+            base_url=getattr(args, "base_url", None),
+            on_default_applied=log,
         )
 
         # Run agents sequentially to avoid resource contention
