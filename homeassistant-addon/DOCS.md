@@ -256,7 +256,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Enables the `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` feature flag.
+Enables the ha_install_mcp_tools tool, which allows installing the required custom component via HACS. This component is necessary for advanced features like filesystem access.
 
 Requires add-on restart to take effect.
 
