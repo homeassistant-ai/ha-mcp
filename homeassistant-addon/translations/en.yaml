@@ -26,3 +26,20 @@ configuration:
       deferred tools or with smaller context windows. Tools are found via
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
+  enable_filesystem_tools:
+    name: Enable filesystem tools
+    description: >-
+      Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
+      access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct
+      file access to your system. Only enable if you trust the AI assistant
+      with file operations. Requires restart to take effect.
+  enable_custom_component_integration:
+    name: Enable custom component integration
+    description: >-
+      Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Required for the MCP
+      server to load and interact with the ha_mcp_tools custom component. Without
+      this flag enabled, the MCP server will not load the custom integration even
+      if it is installed. Also required for filesystem tools to function.
+      WARNING: This gives the MCP server sensitive direct access to your system
+      via the custom component. Only enable if you trust the AI assistant with
+      this level of access. Requires restart to take effect.
